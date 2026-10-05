@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 80,
+  "ignorePatterns": [
+    "target/",
+    "**/dist/",
+    "apps/mobile/ios/",
+    "apps/mobile/android/",
+    ".zerolux/",
+    "Cargo.lock",
+    "bun.lock",
+    "ZEROLUX.md",
+    "apps/web/generated/",
+    "apps/mobile/uniwind-types.d.ts"
+  ]
+}

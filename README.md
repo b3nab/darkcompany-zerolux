@@ -43,7 +43,7 @@ Hire agents from Team > Hire: pick a running session of pi, Claude Code or Codex
 bun run check
 ```
 
-It runs `cargo fmt`, Clippy, the Rust tests, Prettier, the typecheck, the JavaScript tests and the web build. It needs `livekit-server` on the PATH. Tests never call a real model.
+It runs `cargo fmt`, Clippy, the Rust tests, oxfmt, the typecheck, the JavaScript tests and the web build. It needs `livekit-server` on the PATH. Tests never call a real model.
 
 ## Layout
 

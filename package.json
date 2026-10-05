@@ -2,7 +2,6 @@
   "name": "zerolux",
   "private": true,
   "license": "MIT",
-  "packageManager": "bun@1.4.2",
   "workspaces": [
     "apps/*",
     "extensions/*",
@@ -13,14 +12,12 @@
     "build": "bun run --cwd apps/web build",
     "typecheck": "bun run --cwd packages/chat typecheck && bun run --cwd packages/bridge typecheck && bun run --cwd apps/web typecheck && bun run --cwd apps/mobile typecheck && bun run --cwd extensions/pi typecheck && bun run --cwd extensions/claude typecheck",
     "test": "bun run --cwd apps/web renderer && bun test packages/chat packages/bridge apps/web extensions/pi extensions/claude",
-    "format": "bun x --bun prettier --write .",
-    "format:check": "bun x --bun prettier --check .",
+    "format": "bun x --bun oxfmt",
+    "format:check": "bun x --bun oxfmt --check",
     "check": "livekit-server --version && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run format:check && bun run typecheck && bun run test && bun run build"
   },
   "devDependencies": {
-    "prettier": "^3.6.0"
+    "oxfmt": "^0.72.0"
   },
-  "patchedDependencies": {
-    "streamdown@2.7.0": "patches/streamdown@2.7.0.patch"
-  }
+  "packageManager": "bun@1.4.2"
 }
