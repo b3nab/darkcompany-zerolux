@@ -1,0 +1,10 @@
+/target/
+node_modules/
+**/dist/
+.zerolux/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+apps/web/generated/
