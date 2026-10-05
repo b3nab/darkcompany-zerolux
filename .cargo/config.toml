@@ -1,0 +1,3 @@
+[target.'cfg(target_vendor = "apple")']
+# Keep libwebrtc's Objective-C classes when linking the native LiveKit client.
+rustflags = ["-C", "link-arg=-ObjC"]
