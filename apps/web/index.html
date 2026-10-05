@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="theme-color"
+      media="(prefers-color-scheme: dark)"
+      content="#0a0b0d"
+    />
+    <meta
+      name="theme-color"
+      media="(prefers-color-scheme: light)"
+      content="#f6f5f2"
+    />
+    <!-- Scripts only from ZeroLux, images only inline: a message (Markdown, a diagram) never
+         makes this page load an image from anywhere, ZeroLux included. LiveKit needs ws. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data: blob:; font-src 'self' data:; connect-src 'self' ws: wss: http: https:; media-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self'"
+    />
+    <link rel="stylesheet" href="./src/fonts.css" />
+    <link rel="stylesheet" href="./generated/app.css" />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-320 -320 640 640'%3E%3Cstyle%3Epath%7Bstroke:%2305070B%7Dcircle%7Bfill:%230B8576%7D@media(prefers-color-scheme:dark)%7Bpath%7Bstroke:%23E8ECF3%7Dcircle%7Bfill:%233CF2D8%7D%7D%3C/style%3E%3Cpath d='M10.9 -207.7A208 208 0 1 0 207.7 -10.9' fill='none' stroke-width='100'/%3E%3Ccircle cx='147.1' cy='-147.1' r='66'/%3E%3C/svg%3E"
+    />
+    <title>ZeroLux — Company workspace</title>
+    <script type="module" src="./src/main.tsx"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

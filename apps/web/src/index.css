@@ -1,0 +1,79 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@zerolux/theme/theme.css";
+/* Shared logic names classes too, such as the author colors. */
+@source "../../../packages/chat/src";
+@source "../node_modules/streamdown/dist/*.js";
+
+/* As on mobile (Uniwind): the theme you chose on <html>, otherwise the system's. */
+@custom-variant dark {
+  &:where(.dark, .dark *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:not(:where(.light, .light *, .dark, .dark *)) {
+      @slot;
+    }
+  }
+}
+@custom-variant light {
+  &:where(.light, .light *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: light) {
+    &:not(:where(.light, .light *, .dark, .dark *)) {
+      @slot;
+    }
+  }
+}
+
+@theme {
+  /* Chivo speaks for people, Chivo Mono for machines: handles, IDs, times, code. */
+  --font-sans: "Chivo Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Chivo Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* shadcn/ui components also read the tokens by their unprefixed names. */
+:root {
+  --background: var(--color-background);
+  --foreground: var(--color-foreground);
+  --card: var(--color-card);
+  --card-foreground: var(--color-card-foreground);
+  --popover: var(--color-popover);
+  --popover-foreground: var(--color-popover-foreground);
+  --primary: var(--color-primary);
+  --primary-foreground: var(--color-primary-foreground);
+  --secondary: var(--color-secondary);
+  --secondary-foreground: var(--color-secondary-foreground);
+  --muted: var(--color-muted);
+  --muted-foreground: var(--color-muted-foreground);
+  --accent: var(--color-accent);
+  --accent-foreground: var(--color-accent-foreground);
+  --destructive: var(--color-destructive);
+  --destructive-foreground: var(--color-destructive-foreground);
+  --border: var(--color-border);
+  --input: var(--color-input);
+  --ring: var(--color-ring);
+  --radius: var(--radius-sm);
+  @variant dark {
+    color-scheme: dark;
+  }
+  @variant light {
+    color-scheme: light;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-input) transparent;
+  }
+  body {
+    @apply bg-background font-sans text-sm text-foreground antialiased;
+  }
+  ::selection {
+    @apply bg-human/30;
+  }
+}
