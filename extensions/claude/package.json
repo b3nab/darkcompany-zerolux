@@ -1,8 +1,8 @@
 {
   "name": "@zerolux/claude",
   "private": true,
-  "type": "module",
   "license": "MIT",
+  "type": "module",
   "scripts": {
     "typecheck": "bun x --bun tsc --noEmit"
   },

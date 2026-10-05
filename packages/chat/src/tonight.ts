@@ -5,7 +5,9 @@ import type { Workspace } from "./workspace";
 
 /** Where a client opens an item: a chat, a task in its project, or the agents' sessions. */
 export type Place =
-  { chat: string } | { project: string; task: string } | { team: true };
+  | { chat: string }
+  | { project: string; task: string }
+  | { team: true };
 type Activity = Pick<Chat, "approvals" | "sessions" | "conversations">;
 
 /** Something that waits for the owner. */

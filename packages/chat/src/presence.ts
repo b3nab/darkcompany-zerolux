@@ -7,7 +7,11 @@ import type { AgentConnection, Workspace } from "./workspace";
 
 /** What an actor or session is doing, as one word and a light that agrees with it. */
 export type Tone =
-  "working" | "connecting" | "connected" | "attention" | "stopped";
+  | "working"
+  | "connecting"
+  | "connected"
+  | "attention"
+  | "stopped";
 /** A member's light: a person is in ("on") or out, an agent has its sessions' tone. */
 export type MemberTone = Tone | "on";
 

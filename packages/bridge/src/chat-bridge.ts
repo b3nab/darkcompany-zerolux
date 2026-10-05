@@ -49,7 +49,8 @@ export interface Inbox {
 }
 /** Who wrote a batch: the owner, or another agent, whose message is peer input. */
 export type Sender =
-  { kind: "owner" } | { kind: "peer"; actor_id: string; name: string };
+  | { kind: "owner" }
+  | { kind: "peer"; actor_id: string; name: string };
 /** One sender's consecutive messages in one chat; its ID is the last delivery's. */
 export interface Batch {
   content: string;

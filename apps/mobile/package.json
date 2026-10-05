@@ -1,7 +1,14 @@
 {
   "name": "@zerolux/mobile",
   "version": "0.0.1",
+  "private": true,
   "main": "index.ts",
+  "scripts": {
+    "start": "bun x --bun expo start --dev-client",
+    "ios": "bun x --bun expo run:ios",
+    "android": "bun x --bun expo run:android",
+    "typecheck": "bun x --bun tsc --noEmit"
+  },
   "dependencies": {
     "@config-plugins/react-native-webrtc": "^15.0.2",
     "@expo-google-fonts/chivo": "^0.4.2",
@@ -55,12 +62,5 @@
   "devDependencies": {
     "@types/react": "~19.2.2",
     "typescript": "~6.0.3"
-  },
-  "scripts": {
-    "start": "bun x --bun expo start --dev-client",
-    "ios": "bun x --bun expo run:ios",
-    "android": "bun x --bun expo run:android",
-    "typecheck": "bun x --bun tsc --noEmit"
-  },
-  "private": true
+  }
 }

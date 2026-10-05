@@ -23,7 +23,10 @@ fs2 = "0.4"
 livekit-api = { version = "0.8.1", features = ["rustls-tls-native-roots"] }
 livekit = { version = "0.9.3", features = ["rustls-tls-native-roots"] }
 sha2 = "0.10"
-tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = [
+  "connect",
+  "handshake",
+] }
 futures-util = { version = "0.3", features = ["sink"] }
 url = "2"
 

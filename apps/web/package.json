@@ -8,7 +8,7 @@
     "dev:server": "bun --hot dev.ts",
     "css": "bun x --bun tailwindcss -i src/index.css -o generated/app.css",
     "renderer": "bun build renderer/code.ts renderer/mermaid.ts --outdir generated/renderer --target browser --production",
-    "build": "bun run typecheck && bun run css --minify && bun run renderer && bun build ./index.html --outdir \"${ZEROLUX_WEB_OUTDIR:-dist}\" --target browser --splitting --production --public-path / && bun compress.ts \"${ZEROLUX_WEB_OUTDIR:-dist}\"",
+    "build": "bun run typecheck && bun run css --minify && bun run renderer && bun build ./index.html --outdir \"${ZEROLUX_WEB_OUTDIR:-dist}\" --target browser --production --public-path / && bun compress.ts \"${ZEROLUX_WEB_OUTDIR:-dist}\"",
     "typecheck": "bun x --bun tsc --noEmit"
   },
   "dependencies": {

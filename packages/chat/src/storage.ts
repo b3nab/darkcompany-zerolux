@@ -73,7 +73,14 @@ export type Storage = ReturnType<typeof useStorage>;
 
 /** What kind of file it is, for its icon. */
 export type FileKind =
-  "image" | "audio" | "video" | "archive" | "sheet" | "code" | "text" | "file";
+  | "image"
+  | "audio"
+  | "video"
+  | "archive"
+  | "sheet"
+  | "code"
+  | "text"
+  | "file";
 export function fileKind(file: StoredFile): FileKind {
   const [type, subtype = ""] = file.content_type.split("/");
   if (type === "image" || type === "audio" || type === "video") return type;

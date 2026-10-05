@@ -212,7 +212,8 @@ function parseLine(line: string): unknown {
 /** The web steps in one line of Claude's stream-json: WebSearch and WebFetch tool uses. */
 export function claudeSteps(line: string): Step[] {
   const event = parseLine(line) as
-    { type?: string; message?: { content?: unknown } } | undefined;
+    | { type?: string; message?: { content?: unknown } }
+    | undefined;
   if (event?.type !== "assistant" || !Array.isArray(event.message?.content))
     return [];
   const steps: Step[] = [];
