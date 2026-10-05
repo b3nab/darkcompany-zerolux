@@ -1,0 +1,166 @@
+/*
+ * ZeroLux design tokens: the one source of colors and radii for every client.
+ * Two lights in a dark building: `human` (lamp amber) is people and what waits for them,
+ * `agent` (ion cyan) is agents at work. Nothing else is colored except status.
+ * Tailwind v4 reads them on the web, Uniwind on mobile: plain values, one set per theme.
+ * Names follow shadcn/ui; ours: `faint`, `human`, `agent`, `attention`, `window-*`, `logo-*`.
+ * A `-foreground` of a light is its readable text on the page, not text on its fill.
+ */
+@theme {
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  /* The color names, for Tailwind on the web; each theme below sets them. */
+  --color-background: unset;
+  --color-foreground: unset;
+  --color-card: unset;
+  --color-card-foreground: unset;
+  --color-popover: unset;
+  --color-popover-foreground: unset;
+  --color-primary: unset;
+  --color-primary-foreground: unset;
+  --color-secondary: unset;
+  --color-secondary-foreground: unset;
+  --color-muted: unset;
+  --color-muted-foreground: unset;
+  --color-faint: unset;
+  --color-accent: unset;
+  --color-accent-foreground: unset;
+  --color-destructive: unset;
+  --color-destructive-foreground: unset;
+  --color-success: unset;
+  --color-warning: unset;
+  --color-attention: unset;
+  --color-attention-foreground: unset;
+  --color-human: unset;
+  --color-human-foreground: unset;
+  --color-agent: unset;
+  --color-agent-foreground: unset;
+  --color-border: unset;
+  --color-input: unset;
+  --color-ring: unset;
+  --color-sidebar: unset;
+  --color-sidebar-foreground: unset;
+  --color-sidebar-primary: unset;
+  --color-sidebar-primary-foreground: unset;
+  --color-sidebar-accent: unset;
+  --color-sidebar-accent-foreground: unset;
+  --color-sidebar-border: unset;
+  --color-sidebar-ring: unset;
+  --color-window-off: unset;
+  --color-window-dim: unset;
+  --color-logo-ink: unset;
+  --color-logo-dot: unset;
+  --color-author-0: unset;
+  --color-author-1: unset;
+  --color-author-2: unset;
+  --color-author-3: unset;
+  --color-author-4: unset;
+  --color-author-5: unset;
+}
+
+@layer theme {
+  :root {
+    @variant dark {
+      --color-background: #0a0b0d;
+      --color-foreground: #edece8;
+      --color-card: #121417;
+      --color-card-foreground: #edece8;
+      --color-popover: #1b1e23;
+      --color-popover-foreground: #edece8;
+      --color-primary: #ffb42e;
+      --color-primary-foreground: #1a1204;
+      --color-secondary: #16191d;
+      --color-secondary-foreground: #edece8;
+      --color-muted: #16191d;
+      --color-muted-foreground: #a6a9af;
+      --color-faint: #7c8189;
+      --color-accent: rgba(237, 236, 232, 0.075);
+      --color-accent-foreground: #edece8;
+      --color-destructive: #f5475b;
+      --color-destructive-foreground: #1c0508;
+      --color-success: #3dd68c;
+      --color-warning: #ff7a3d;
+      --color-attention: #ffc95c;
+      --color-attention-foreground: #1a1204;
+      --color-human: #ffb42e;
+      --color-human-foreground: #ffc95c;
+      --color-agent: #62c4ea;
+      --color-agent-foreground: #8ed5f0;
+      --color-border: #1e2126;
+      --color-input: #2b2f36;
+      --color-ring: #ffb42e;
+      --color-sidebar: #08090b;
+      --color-sidebar-foreground: #edece8;
+      --color-sidebar-primary: #ffb42e;
+      --color-sidebar-primary-foreground: #1a1204;
+      --color-sidebar-accent: rgba(237, 236, 232, 0.075);
+      --color-sidebar-accent-foreground: #edece8;
+      --color-sidebar-border: #1e2126;
+      --color-sidebar-ring: #ffb42e;
+      /* The facade: one window per seat; lit ones use the lights above. */
+      --color-window-off: #14171b;
+      --color-window-dim: #1b3440;
+      /* The logo's own inks, never recolored. */
+      --color-logo-ink: #e8ecf3;
+      --color-logo-dot: #3cf2d8;
+      /* One steady color per author in group chats. */
+      --color-author-0: #98daf2;
+      --color-author-1: #ffdb8f;
+      --color-author-2: #6fe3a8;
+      --color-author-3: #ff9d6b;
+      --color-author-4: #c9a7ff;
+      --color-author-5: #ff8a97;
+    }
+    @variant light {
+      --color-background: #f6f5f2;
+      --color-foreground: #121417;
+      --color-card: #ffffff;
+      --color-card-foreground: #121417;
+      --color-popover: #ffffff;
+      --color-popover-foreground: #121417;
+      --color-primary: #ffb42e;
+      --color-primary-foreground: #1a1204;
+      --color-secondary: #ffffff;
+      --color-secondary-foreground: #121417;
+      --color-muted: #eeede8;
+      --color-muted-foreground: #4d535c;
+      --color-faint: #686d75;
+      --color-accent: rgba(18, 20, 23, 0.07);
+      --color-accent-foreground: #121417;
+      --color-destructive: #ba2336;
+      --color-destructive-foreground: #ffffff;
+      --color-success: #0f7446;
+      --color-warning: #c94c12;
+      --color-attention: #9a5b00;
+      --color-attention-foreground: #ffffff;
+      --color-human: #f59e0b;
+      --color-human-foreground: #9a5b00;
+      --color-agent: #1c93c8;
+      --color-agent-foreground: #125e84;
+      --color-border: #e5e3dd;
+      --color-input: #d8d5ce;
+      --color-ring: #f59e0b;
+      --color-sidebar: #eeede8;
+      --color-sidebar-foreground: #121417;
+      --color-sidebar-primary: #ffb42e;
+      --color-sidebar-primary-foreground: #1a1204;
+      --color-sidebar-accent: rgba(18, 20, 23, 0.07);
+      --color-sidebar-accent-foreground: #121417;
+      --color-sidebar-border: #e5e3dd;
+      --color-sidebar-ring: #f59e0b;
+      --color-window-off: #e5e3dd;
+      --color-window-dim: #bcddeb;
+      --color-logo-ink: #05070b;
+      --color-logo-dot: #0b8576;
+      --color-author-0: #125e84;
+      --color-author-1: #7a4904;
+      --color-author-2: #0f7446;
+      --color-author-3: #9e3b0c;
+      --color-author-4: #6b4bb8;
+      --color-author-5: #951b2b;
+    }
+  }
+}

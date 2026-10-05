@@ -1,0 +1,9 @@
+{
+  "name": "@zerolux/theme",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./theme.css": "./theme.css",
+    "./logo": "./logo.ts"
+  }
+}
