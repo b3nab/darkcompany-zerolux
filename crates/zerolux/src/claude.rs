@@ -240,10 +240,12 @@ fn turn_signal(line: &str) -> Option<&'static str> {
 }
 
 /// The session transcript, read forward only. Lines still being written are kept for the
-/// next read; a replaced or truncated file is read again from its start.
+/// next read; a replaced or truncated file is read again from its start. The file is held
+/// open, so a replacement never gets its inode back (Linux reuses freed ones at once), and
+/// while the path is missing the held file is still read.
 struct Transcript {
     path: PathBuf,
-    inode: u64,
+    file: tokio::fs::File,
     offset: u64,
     partial: Vec<u8>,
 }
@@ -262,11 +264,12 @@ impl Transcript {
     }
 
     async fn open(path: PathBuf, from_start: bool) -> Result<Self> {
-        let metadata = tokio::fs::metadata(&path).await?;
+        let file = tokio::fs::File::open(&path).await?;
+        let len = file.metadata().await?.len();
         Ok(Self {
             path,
-            inode: metadata.ino(),
-            offset: if from_start { 0 } else { metadata.len() },
+            file,
+            offset: if from_start { 0 } else { len },
             partial: Vec::new(),
         })
     }
@@ -284,16 +287,23 @@ impl Transcript {
     }
 
     async fn read_new(&mut self) -> Result<Vec<String>> {
-        let mut file = tokio::fs::File::open(&self.path).await?;
-        let metadata = file.metadata().await?;
-        if metadata.ino() != self.inode || metadata.len() < self.offset {
-            self.inode = metadata.ino();
-            self.offset = 0;
-            self.partial.clear();
+        let held = self.file.metadata().await?;
+        match tokio::fs::metadata(&self.path).await {
+            Ok(current) if (current.dev(), current.ino()) != (held.dev(), held.ino()) => {
+                self.file = tokio::fs::File::open(&self.path).await?;
+                self.offset = 0;
+                self.partial.clear();
+            }
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+            _ if held.len() < self.offset => {
+                self.offset = 0;
+                self.partial.clear();
+            }
+            _ => {}
         }
-        file.seek(SeekFrom::Start(self.offset)).await?;
+        self.file.seek(SeekFrom::Start(self.offset)).await?;
         let mut bytes = Vec::new();
-        self.offset += file.read_to_end(&mut bytes).await? as u64;
+        self.offset += self.file.read_to_end(&mut bytes).await? as u64;
         self.partial.extend(bytes);
         let mut lines = Vec::new();
         while let Some(end) = self.partial.iter().position(|b| *b == b'\n') {
@@ -1390,10 +1400,12 @@ mod tests {
         assert_eq!(transcript.read_new().await.unwrap(), ["two\n"]);
         let mut whole = Transcript::open(path.clone(), true).await.unwrap();
         assert_eq!(whole.read_new().await.unwrap().len(), 3);
-        // Truncated: read again from the start. Replaced: the new file, from its start.
+        // Truncated: read again from the start. Missing: nothing new, no error. Replaced by a
+        // longer file, even with the inode Linux just freed: the new file, from its start.
         std::fs::write(&path, "new\n").unwrap();
         assert_eq!(transcript.read_new().await.unwrap(), ["new\n"]);
         std::fs::remove_file(&path).unwrap();
+        assert!(transcript.read_new().await.unwrap().is_empty());
         std::fs::write(&path, "other\n").unwrap();
         assert_eq!(transcript.read_new().await.unwrap(), ["other\n"]);
     }
