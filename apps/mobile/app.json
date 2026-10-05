@@ -1,0 +1,131 @@
+{
+  "expo": {
+    "name": "ZeroLux",
+    "slug": "zerolux",
+    "scheme": "zerolux",
+    "version": "0.0.1",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "bundleIdentifier": "os.darkcompany.zerolux",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        },
+        "NSLocalNetworkUsageDescription": "ZeroLux talks to the kernel on your network."
+      },
+      "icon": {
+        "light": "./assets/icon.png",
+        "dark": "./assets/icon-dark.png",
+        "tinted": "./assets/icon-tinted.png"
+      }
+    },
+    "android": {
+      "package": "os.darkcompany.zerolux",
+      "adaptiveIcon": {
+        "backgroundColor": "#05070b",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "@livekit/react-native-expo-plugin",
+      "@config-plugins/react-native-webrtc",
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
+        "expo-font",
+        {
+          "ios": {
+            "fonts": [
+              "./node_modules/@expo-google-fonts/chivo/300Light/Chivo_300Light.ttf",
+              "./node_modules/@expo-google-fonts/chivo/400Regular/Chivo_400Regular.ttf",
+              "./node_modules/@expo-google-fonts/chivo/500Medium/Chivo_500Medium.ttf",
+              "./node_modules/@expo-google-fonts/chivo/600SemiBold/Chivo_600SemiBold.ttf",
+              "./node_modules/@expo-google-fonts/chivo/700Bold/Chivo_700Bold.ttf",
+              "./node_modules/@expo-google-fonts/chivo-mono/400Regular/ChivoMono_400Regular.ttf",
+              "./node_modules/@expo-google-fonts/chivo-mono/500Medium/ChivoMono_500Medium.ttf",
+              "./node_modules/@expo-google-fonts/chivo-mono/600SemiBold/ChivoMono_600SemiBold.ttf"
+            ]
+          },
+          "android": {
+            "fonts": [
+              {
+                "fontFamily": "Chivo",
+                "fontDefinitions": [
+                  {
+                    "path": "./node_modules/@expo-google-fonts/chivo/300Light/Chivo_300Light.ttf",
+                    "weight": 300
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/chivo/400Regular/Chivo_400Regular.ttf",
+                    "weight": 400
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/chivo/500Medium/Chivo_500Medium.ttf",
+                    "weight": 500
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/chivo/600SemiBold/Chivo_600SemiBold.ttf",
+                    "weight": 600
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/chivo/700Bold/Chivo_700Bold.ttf",
+                    "weight": 700
+                  }
+                ]
+              },
+              {
+                "fontFamily": "Chivo Mono",
+                "fontDefinitions": [
+                  {
+                    "path": "./node_modules/@expo-google-fonts/chivo-mono/400Regular/ChivoMono_400Regular.ttf",
+                    "weight": 400
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/chivo-mono/500Medium/ChivoMono_500Medium.ttf",
+                    "weight": 500
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/chivo-mono/600SemiBold/ChivoMono_600SemiBold.ttf",
+                    "weight": 600
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "ZeroLux records your voice for dictation and voice messages."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 96,
+          "backgroundColor": "#f6f5f2",
+          "dark": {
+            "image": "./assets/splash-icon-dark.png",
+            "backgroundColor": "#0a0b0d"
+          }
+        }
+      ]
+    ]
+  }
+}

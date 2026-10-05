@@ -1,0 +1,14 @@
+@import "tailwindcss";
+@import "uniwind";
+
+/* One source of tokens for every client: packages/theme, shared with the web and desktop apps. */
+@import "@zerolux/theme/theme.css";
+
+/* Class names written in the shared chat package (author colours) are scanned too. */
+@source "../../packages/chat/src";
+
+@theme {
+  /* Chivo speaks for people, Chivo Mono for machines; embedded by the expo-font plugin. */
+  --font-sans: "Chivo";
+  --font-mono: "Chivo Mono";
+}
