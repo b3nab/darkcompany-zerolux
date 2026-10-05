@@ -1,0 +1,55 @@
+name: Check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    env:
+      CC: clang-21
+      CXX: clang++-21
+      LIBCLANG_PATH: /usr/lib/llvm-21/lib
+    steps:
+      - uses: actions/checkout@v4
+      # webrtc-sys uses Chromium's hermetic libc++, which requires Clang 21+.
+      # https://github.com/livekit/rust-sdks#building
+      - name: Install LiveKit native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ca-certificates curl gnupg
+          curl --fail --silent --show-error --location https://apt.llvm.org/llvm-snapshot.gpg.key -o llvm.asc
+          fingerprint="$(gpg --batch --show-keys --with-colons llvm.asc | awk -F: '$1 == "fpr" { print $10; exit }')"
+          test "$fingerprint" = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
+          sudo install -m 0644 llvm.asc /usr/share/keyrings/apt-llvm.asc
+          echo "deb [signed-by=/usr/share/keyrings/apt-llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
+          rm llvm.asc
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential clang-21 libclang-21-dev libc6-dev libglib2.0-dev libjpeg-turbo8-dev pkg-config
+          clang-21 --version
+          pkg-config --exists glib-2.0 gobject-2.0 gio-2.0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ubuntu-24.04-clang-21
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: Install LiveKit server for integration tests
+        # Official v1.13.7 Linux amd64 asset and SHA-256:
+        # https://github.com/livekit/livekit/releases/expanded_assets/v1.13.7
+        run: |
+          livekit_archive="$RUNNER_TEMP/livekit_1.13.7_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location https://github.com/livekit/livekit/releases/download/v1.13.7/livekit_1.13.7_linux_amd64.tar.gz -o "$livekit_archive"
+          printf '%s  %s\n' '6634aeeb2fb1366b6723708ae4320b9d5408106a4c63457c5e845ae3979c90e2' "$livekit_archive" | sha256sum --check --strict
+          tar -xzf "$livekit_archive" -C "$RUNNER_TEMP" livekit-server
+          sudo install -m 0755 "$RUNNER_TEMP/livekit-server" /usr/local/bin/livekit-server
+          livekit-server --version
+      - run: bun install --frozen-lockfile
+      - run: bun run check
