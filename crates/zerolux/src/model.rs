@@ -308,6 +308,15 @@ pub struct Conversation {
     pub parent_id: Option<String>,
     pub root_message_id: Option<String>,
     pub closed_at: Option<i64>,
+    /// The newest message, for the list's preview and time; none in an empty chat.
+    pub last_message: Option<LastMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct LastMessage {
+    pub author_id: String,
+    pub text: String,
+    pub created_at: i64,
 }
 
 /// Opens a thread under a chat, or joins the open one rooted at the same message.

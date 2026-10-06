@@ -2354,3 +2354,107 @@ async fn a_thread_rests_with_its_chat_and_dispatches_nothing_once_closed() {
         Err(Error::Conflict)
     ));
 }
+
+#[tokio::test]
+async fn every_listed_chat_carries_its_newest_message() {
+    let f = Fixture::new().await;
+    let (a, a_id) = f.hire("a", None).await;
+    let (b, _) = f.hire("b", None).await;
+    let room = f.room(&[&a, &b]).await;
+    // Empty: nothing to preview.
+    assert!(room.last_message.is_none());
+    let listed = f.store.conversations(&f.owner).await.unwrap();
+    assert!(listed.iter().all(|c| c.last_message.is_none()));
+
+    let send = |who: ChatIdentity, text: &str| {
+        let (store, text, room) = (f.store.clone(), text.to_owned(), room.id.clone());
+        async move {
+            store
+                .send_chat_message(
+                    &who,
+                    &room,
+                    SendChatMessage {
+                        id: Uuid::new_v4().to_string(),
+                        text,
+                        reply_to_delivery_id: None,
+                    },
+                )
+                .await
+                .unwrap()
+                .message
+        }
+    };
+    let first = send(f.owner.clone(), "Hello agent").await;
+    let listed = f.store.conversations(&f.owner).await.unwrap();
+    let chat = listed.iter().find(|c| c.id == room.id).unwrap();
+    let last = chat.last_message.as_ref().unwrap();
+    assert_eq!(
+        (&last.author_id, &last.text, last.created_at),
+        (
+            &f.owner.actor_id,
+            &"Hello agent".to_owned(),
+            first.created_at
+        )
+    );
+    assert_eq!(chat.last_seq, first.seq);
+
+    // The newest wins, whoever wrote it, and the agent reads the same preview.
+    let second = send(a_id.clone(), "Hello owner").await;
+    for who in [&f.owner, &a_id] {
+        let listed = f.store.conversations(who).await.unwrap();
+        let chat = listed.iter().find(|c| c.id == room.id).unwrap();
+        let last = chat.last_message.as_ref().unwrap();
+        assert_eq!(
+            (&last.author_id, &last.text, last.created_at),
+            (&a.actor.id, &"Hello owner".to_owned(), second.created_at)
+        );
+        assert_eq!(chat.last_seq, second.seq);
+    }
+
+    // A thread previews its own messages, not its parent's; empty until someone writes in it.
+    let thread = f
+        .store
+        .open_thread(
+            &a_id,
+            &room.id,
+            OpenThread {
+                root: second.id.clone(),
+                title: "aside".into(),
+                participants: vec![b.actor.id.clone()],
+            },
+        )
+        .await
+        .unwrap();
+    let listed = f.store.conversations(&f.owner).await.unwrap();
+    assert!(
+        listed
+            .iter()
+            .find(|c| c.id == thread.conversation.id)
+            .unwrap()
+            .last_message
+            .is_none()
+    );
+    f.store
+        .send_chat_message(
+            &a_id,
+            &thread.conversation.id,
+            SendChatMessage {
+                id: Uuid::new_v4().to_string(),
+                text: "In the thread".into(),
+                reply_to_delivery_id: None,
+            },
+        )
+        .await
+        .unwrap();
+    let listed = f.store.conversations(&f.owner).await.unwrap();
+    let in_thread = listed
+        .iter()
+        .find(|c| c.id == thread.conversation.id)
+        .unwrap();
+    assert_eq!(
+        in_thread.last_message.as_ref().unwrap().text,
+        "In the thread"
+    );
+    let parent = listed.iter().find(|c| c.id == room.id).unwrap();
+    assert_eq!(parent.last_message.as_ref().unwrap().text, "Hello owner");
+}

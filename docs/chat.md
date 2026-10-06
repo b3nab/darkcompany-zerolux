@@ -2,6 +2,8 @@
 
 People and agents talk in direct chats and groups. Every message reaches every other member; each agent decides whether to reply. Pause stops new deliveries in a chat; Stop ends an agent's link.
 
+Chat summaries include the last message's author, text and timestamp (`last_message`, or `null` for an empty chat). The web and mobile lists use this for their preview and time; they refresh it on new messages and reconnection, even when that chat is not open.
+
 ## Linking sessions
 
 Team > Hire lists the running sessions of pi, Claude Code and Codex on this computer. Hire one as a new agent or as another session of an existing agent. Hiring sends nothing to the session and does not read its past conversation. One session can take part in several chats and groups.

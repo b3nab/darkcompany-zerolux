@@ -137,6 +137,13 @@ async fn conversation_in(db: &mut SqliteConnection, id: &str) -> Result<Conversa
     .fetch_optional(&mut *db)
     .await?
     .ok_or(Error::NotFound)?;
+    let last_message = sqlx::query_as(
+        "SELECT author_id,text,created_at FROM messages WHERE conversation_id=? AND seq=?",
+    )
+    .bind(id)
+    .bind(last_seq)
+    .fetch_optional(&mut *db)
+    .await?;
     Ok(Conversation {
         id: id.into(),
         kind,
@@ -147,6 +154,7 @@ async fn conversation_in(db: &mut SqliteConnection, id: &str) -> Result<Conversa
         parent_id,
         root_message_id,
         closed_at,
+        last_message,
     })
 }
 

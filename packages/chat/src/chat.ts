@@ -53,8 +53,8 @@ export interface Conversation {
   /** The message of the parent chat the thread is about: one thread per message. */
   root_message_id?: string | null;
   closed_at?: number | null;
-  // TODO: kernel: each chat in the list carries its last message, for the preview and its time.
-  last_message?: Pick<Message, "author_id" | "text" | "created_at"> | null;
+  /** The last stored message, or null when the chat is empty. */
+  last_message: Pick<Message, "author_id" | "text" | "created_at"> | null;
 }
 export type DeliveryStatus = "stored" | "uncertain" | "notified" | "read";
 export interface Delivery {
@@ -300,6 +300,20 @@ export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
   } catch {
     /* Not a chat event. */
   }
+}
+
+/** Keep a newer message preview when a list or action response arrives late. */
+export function mergeConversation(
+  current: Conversation | undefined,
+  incoming: Conversation,
+): Conversation {
+  return current?.id === incoming.id && current.last_seq > incoming.last_seq
+    ? {
+        ...incoming,
+        last_seq: current.last_seq,
+        last_message: current.last_message,
+      }
+    : incoming;
 }
 
 /** Merges pages by `seq`, newer copies replacing older ones (e.g. delivery states). */

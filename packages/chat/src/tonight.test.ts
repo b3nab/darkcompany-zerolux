@@ -57,6 +57,7 @@ const general: Conversation = {
   paused: false,
   members: [],
   last_seq: 1,
+  last_message: { author_id: "owner", text: "Hello", created_at: 1 },
 };
 const workspace: Workspace = {
   workspace: {

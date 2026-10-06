@@ -4,6 +4,7 @@ import type { ClaudeMode } from "./client";
 import {
   PAGE,
   freshness,
+  mergeConversation,
   mergeMessages,
   outbox,
   pageBefore,
@@ -82,7 +83,15 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     setConversations((cs) =>
       cs.map((c) =>
         c.id === conversation_id
-          ? { ...c, last_seq: Math.max(c.last_seq, sent.seq) }
+          ? mergeConversation(c, {
+              ...c,
+              last_seq: sent.seq,
+              last_message: {
+                author_id: sent.author_id,
+                text: sent.text,
+                created_at: sent.created_at,
+              },
+            })
           : c,
       ),
     );
@@ -107,7 +116,12 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
           for (const c of conversations) next[c.id] ??= first ? c.last_seq : 0;
           return next;
         });
-        setConversations(conversations);
+        setConversations((cs) => {
+          const current = new Map(cs.map((c) => [c.id, c]));
+          return conversations.map((c) =>
+            mergeConversation(current.get(c.id), c),
+          );
+        });
       },
     );
     return conversations;
@@ -155,6 +169,8 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
               : c,
           ),
         );
+        // Events carry IDs, not message text. Fetch previews even for closed chats.
+        void background(listConversations());
         if (open.current === event.conversation_id)
           void background(
             readFrom(
@@ -216,6 +232,18 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       : [...items, item];
   }
 
+  function applyConversation({ conversation }: { conversation: Conversation }) {
+    setConversations((cs) =>
+      replace(
+        cs,
+        mergeConversation(
+          cs.find((c) => c.id === conversation.id),
+          conversation,
+        ),
+      ),
+    );
+  }
+
   return {
     conversations,
     sessions,
@@ -243,7 +271,7 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
             `/conversations/${conversation.id}/pause`,
             { paused },
           ),
-        (result) => setConversations((cs) => replace(cs, result.conversation)),
+        applyConversation,
       );
     },
     /** The owner closes a thread: its agents stop coordinating there. */
@@ -255,7 +283,7 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
             `/conversations/${thread.id}/close`,
             {},
           ),
-        (result) => setConversations((cs) => replace(cs, result.conversation)),
+        applyConversation,
       );
     },
     async create(kind: Conversation["kind"], title: string, members: Member[]) {
@@ -267,7 +295,7 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
             title,
             members,
           }),
-        (result) => setConversations((cs) => replace(cs, result.conversation)),
+        applyConversation,
       );
       setSeen((s) => ({ ...s, [conversation.id]: conversation.last_seq }));
       // A new chat cannot be stale: it is listed even if a newer list came first.
@@ -288,7 +316,7 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
             `/conversations/${conversation.id}/members`,
             { actor_id, session_id },
           ),
-        (result) => setConversations((cs) => replace(cs, result.conversation)),
+        applyConversation,
       );
     },
     async rename(actorId: string, name: string) {

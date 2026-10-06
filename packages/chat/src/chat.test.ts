@@ -53,6 +53,7 @@ const group: Conversation = {
     { actor_id: "birch", session_id: "s-birch" },
   ],
   last_seq: 0,
+  last_message: null,
 };
 const dm: Conversation = {
   ...group,
@@ -382,6 +383,7 @@ test("the activity bubble shows only agents whose current turn serves this chat"
     title: "General",
     paused: false,
     last_seq: 1,
+    last_message: { author_id: "owner", text: "Hello", created_at: 1 },
     members: [
       { actor_id: "owner", session_id: null },
       { actor_id: "maple", session_id: "s-maple" },
@@ -437,6 +439,7 @@ test("a chat lists its threads, open ones first, and threads are not chats", () 
     paused: false,
     members: [],
     last_seq: 1,
+    last_message: { author_id: "owner", text: "Hello", created_at: 1 },
     ...extra,
   });
   const general = chat("general");

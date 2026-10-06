@@ -86,6 +86,7 @@ const group: Conversation = {
     { actor_id: BIRCH, session_id: "s-birch" },
   ],
   last_seq: 120,
+  last_message: { author_id: ASPEN, text: "Group update", created_at: 120 },
 };
 const dm: Conversation = {
   id: "c-dm",
@@ -97,6 +98,7 @@ const dm: Conversation = {
     { actor_id: ASPEN, session_id: "s-aspen-dm" },
   ],
   last_seq: 2,
+  last_message: { author_id: ASPEN, text: "Direct update", created_at: 2 },
 };
 const messages: Message[] = [
   {
@@ -469,6 +471,41 @@ test("hiring a stopped session again defaults to its previous agent", () => {
   expect(fresh).toMatch(/<option[^>]*selected=""[^>]*>A new agent<\/option>/);
   expect(fresh).toContain("Agent name");
   expect(fresh).toContain("Claude Code will be able to reply");
+});
+
+test("the chat list shows the last author, escaped text and timestamp, with no time for empty chats", () => {
+  const created_at = Date.UTC(2026, 9, 6, 9, 30);
+  const latest = {
+    ...group,
+    last_message: {
+      author_id: ASPEN,
+      text: "<b>Latest update</b>",
+      created_at,
+    },
+  };
+  const empty = {
+    ...group,
+    id: "empty",
+    title: "Empty chat",
+    last_seq: 0,
+    last_message: null,
+  };
+  const html = renderToStaticMarkup(
+    <Chats
+      chat={fakeChat({ conversations: [empty, latest] })}
+      actors={actors}
+      open={false}
+    >
+      <p>Selected chat</p>
+    </Chats>,
+  );
+  expect(html).toContain("aspen: &lt;b&gt;Latest update&lt;/b&gt;");
+  expect(html).toContain(new Date(created_at).toISOString());
+  expect(html.match(/<time\b/g)).toHaveLength(1);
+  expect(html.indexOf('href="/chats/c-group"')).toBeLessThan(
+    html.indexOf('href="/chats/empty"'),
+  );
+  noUuids(html);
 });
 
 test("the chats home marks finished steps; the list beside it shows every chat", () => {
@@ -859,6 +896,7 @@ test("a chat shows its threads under their message and lists the open ones; a th
     title: "Which tests fail",
     paused: false,
     last_seq: 3,
+    last_message: { author_id: ASPEN, text: "Thread update", created_at: 3 },
     parent_id: group.id,
     root_message_id: "m-21",
     closed_at: null,
