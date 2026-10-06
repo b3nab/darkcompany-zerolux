@@ -495,8 +495,8 @@ impl Store {
                 .bind(id).bind(&who.actor_id).bind(input.harness.id()).fetch_optional(&mut *tx).await?.ok_or(Error::Forbidden)?
         } else {
             let name = text(&input.name, "Agent name", 200, true)?;
-            sqlx::query_as("INSERT INTO actors(id,name,kind,owner_id,harness) VALUES (?,?,'agent',?,?) RETURNING *")
-                .bind(Uuid::new_v4().to_string()).bind(name).bind(&who.actor_id).bind(input.harness.id())
+            sqlx::query_as("INSERT INTO actors(id,name,kind,owner_id,harness,created_at) VALUES (?,?,'agent',?,?,?) RETURNING *")
+                .bind(Uuid::new_v4().to_string()).bind(name).bind(&who.actor_id).bind(input.harness.id()).bind(now_ms())
                 .fetch_one(&mut *tx).await?
         };
         let id = Uuid::new_v4().to_string();

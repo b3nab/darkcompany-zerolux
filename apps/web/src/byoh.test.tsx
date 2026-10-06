@@ -10,6 +10,7 @@ const pi: Actor = {
   kind: "agent",
   owner_id: "owner",
   harness: "pi",
+  created_at: 0,
   archived: false,
 };
 const connection: AgentConnection = {
@@ -44,6 +45,11 @@ test("worker instructions include the selected actor and explicit harness", () =
 
 test("BYOH UI separates existing pi attachment from a fresh process", () => {
   const workspace: Workspace = {
+    workspace: {
+      id: "workspace",
+      name: "Workspace",
+      created_at: 0,
+    },
     actors: [pi],
     projects: [],
     tasks: [],

@@ -2,6 +2,7 @@ use std::path::Path;
 
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
+use sha2::Digest;
 use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
@@ -234,11 +235,13 @@ async fn owner_uuid_is_unique_per_database_and_stable_across_concurrent_opens() 
     assert_ne!(a.actors[0].id, independent.actors[0].id);
     let pool = migrated_database(&path).await;
     assert!(
-        sqlx::query("INSERT INTO actors (id, name, kind) VALUES (?, 'Second owner', 'human')")
-            .bind(uuid::Uuid::new_v4().to_string())
-            .execute(&pool)
-            .await
-            .is_err()
+        sqlx::query(
+            "INSERT INTO actors (id, name, kind, created_at) VALUES (?, 'Second owner', 'human', 1)"
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .execute(&pool)
+        .await
+        .is_err()
     );
 }
 
@@ -299,7 +302,7 @@ async fn archived_agents_preserve_history_and_require_explicit_reassignment() {
     let path = dir.path().join("archived.db");
     let pool = migrated_database(&path).await;
     // Explicit fixture only: the kernel never seeds an agent or imports old databases.
-    sqlx::query("INSERT INTO actors (id, name, kind, owner_id, archived) SELECT 'local-agent', 'Archived fixture', 'agent', id, 1 FROM actors WHERE kind = 'human'").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO actors (id, name, kind, owner_id, archived, created_at) SELECT 'local-agent', 'Archived fixture', 'agent', id, 1, 1 FROM actors WHERE kind = 'human'").execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO projects VALUES ('project', 'Existing project', '', 1)")
         .execute(&pool)
         .await
@@ -464,7 +467,7 @@ async fn reopening_preserves_archived_connection_history_and_owner_name() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("history.db");
     let pool = migrated_database(&path).await;
-    sqlx::query("INSERT INTO actors (id, name, kind, owner_id, archived) SELECT 'local-agent', 'Archived fixture', 'agent', id, 1 FROM actors WHERE kind = 'human'").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO actors (id, name, kind, owner_id, archived, created_at) SELECT 'local-agent', 'Archived fixture', 'agent', id, 1, 1 FROM actors WHERE kind = 'human'").execute(&pool).await.unwrap();
     sqlx::query("UPDATE actors SET name = 'Existing custom name' WHERE kind = 'human'")
         .execute(&pool)
         .await
@@ -577,4 +580,262 @@ fn worker_requires_an_explicit_actor_instead_of_defaulting_to_placeholder() {
         .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("--actor"));
+}
+
+#[tokio::test]
+async fn the_workspace_and_every_actor_carry_a_creation_date() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dates.db");
+    let before = now_ms();
+    let server = Server::open(&path).await;
+    let workspace = server.workspace().await;
+    // Day 1: created with the owner on the first start, named neutrally until the owner renames it.
+    assert_eq!(workspace.workspace.name, "Workspace");
+    assert!(workspace.workspace.created_at >= before);
+    assert_eq!(
+        uuid::Uuid::parse_str(&workspace.workspace.id)
+            .unwrap()
+            .get_version_num(),
+        4
+    );
+    let owner = &workspace.actors[0];
+    assert!(owner.created_at >= before);
+    // The health endpoint names the company without a device token.
+    let health: Value = server
+        .client
+        .get(format!("{}/api/health", server.url))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(health["workspace"]["id"], json!(workspace.workspace.id));
+    assert_eq!(health["workspace"]["name"], json!("Workspace"));
+
+    server.name_owner().await;
+    let agent = server.hire().await;
+    assert!(agent.created_at >= owner.created_at);
+
+    // Renaming is explicit and validated; the date never moves.
+    let renamed: Value = server
+        .post("/workspace", json!({"name":"Dark Company"}))
+        .await
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(renamed["workspace"]["name"], json!("Dark Company"));
+    assert_eq!(
+        renamed["workspace"]["created_at"],
+        json!(workspace.workspace.created_at)
+    );
+    for bad in ["", "   ", "a\u{0}b"] {
+        assert_eq!(
+            server
+                .post("/workspace", json!({"name":bad}))
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+    // Reopening keeps the same workspace row: identity and day 1 are never regenerated.
+    drop(server);
+    let reopened = Server::open(&path).await.workspace().await;
+    assert_eq!(reopened.workspace.id, workspace.workspace.id);
+    assert_eq!(reopened.workspace.name, "Dark Company");
+    assert_eq!(
+        reopened.workspace.created_at,
+        workspace.workspace.created_at
+    );
+}
+
+#[tokio::test]
+async fn concurrent_first_opens_create_one_workspace_with_one_date() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("concurrent-workspace.db");
+    let pool = SqlitePoolOptions::new()
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    sqlx::migrate!().run(&pool).await.unwrap();
+    pool.close().await;
+    let (a, b) = tokio::join!(Store::open(&path), Store::open(&path));
+    let a = a.unwrap().workspace().await.unwrap();
+    let b = b.unwrap().workspace().await.unwrap();
+    assert_eq!(a.workspace.id, b.workspace.id);
+    assert_eq!(a.workspace.created_at, b.workspace.created_at);
+    // The owner and the workspace were born in the same instant, by the same open.
+    assert_eq!(a.workspace.created_at, a.actors[0].created_at);
+    let pool = migrated_database(&path).await;
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspace")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
+    // The schema itself refuses a second company.
+    assert!(
+        sqlx::query("INSERT INTO workspace (id, name, created_at) VALUES ('second', 'Other', 1)")
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn only_the_owner_renames_the_workspace_and_names_are_bytes_bounded() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rename.db");
+    let server = Server::open(&path).await;
+    server.name_owner().await;
+    let agent = server.hire().await;
+    // An agent session, with the token the kernel would have issued to it.
+    let pool = migrated_database(&path).await;
+    let token = "agent-token";
+    let hash = format!("{:x}", sha2::Sha256::digest(token.as_bytes()));
+    sqlx::query("INSERT INTO chat_sessions (id, actor_id, harness, native_session_id, title, workspace, native_locator_json, token_hash, status, created_at)
+        VALUES ('s1', ?, 'pi', 'native', 'pi', '/w', '{}', ?, 'connected', 1)")
+        .bind(&agent.id)
+        .bind(&hash)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let forbidden = server
+        .client
+        .post(format!("{}/api/workspace", server.url))
+        .bearer_auth(token)
+        .json(&json!({"name":"Hijacked"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+    let unknown = server
+        .client
+        .post(format!("{}/api/workspace", server.url))
+        .bearer_auth("no-such-token")
+        .json(&json!({"name":"Hijacked"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(server.workspace().await.workspace.name, "Workspace");
+
+    // Spaces and Unicode are names; the bound is 200 bytes after trimming, not 200 characters.
+    for name in ["Società  Oscura", "黒い会社", &"é".repeat(100)] {
+        let renamed: Value = server
+            .post("/workspace", json!({"name": format!("  {name}  ")}))
+            .await
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(renamed["workspace"]["name"], json!(name));
+    }
+    assert_eq!(
+        server
+            .post("/workspace", json!({"name": "é".repeat(101)}))
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        server
+            .post("/workspace", json!({"name": "a".repeat(201)}))
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn carried_over_dates_survive_reopen_rename_and_relink() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("carried.db");
+    let server = Server::open(&path).await;
+    server.name_owner().await;
+    let agent = server.hire().await;
+    drop(server);
+    // What a data pass writes for rows that predate the dates: the dates it found.
+    let pool = migrated_database(&path).await;
+    sqlx::query("UPDATE workspace SET created_at = 1000")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE actors SET created_at = 1000 WHERE kind = 'human'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE actors SET created_at = 2000 WHERE id = ?")
+        .bind(&agent.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // A date is never optional.
+    assert!(
+        sqlx::query("UPDATE actors SET created_at = NULL WHERE id = ?")
+            .bind(&agent.id)
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    pool.close().await;
+
+    let server = Server::open(&path).await;
+    let dated = |workspace: &Workspace| {
+        let owner = workspace.actors.iter().find(|a| a.kind == "human").unwrap();
+        let hired = workspace.actors.iter().find(|a| a.id == agent.id).unwrap();
+        (
+            workspace.workspace.created_at,
+            owner.created_at,
+            hired.created_at,
+        )
+    };
+    let expected = (1000, 1000, 2000);
+    assert_eq!(dated(&server.workspace().await), expected);
+    // Renaming the owner, the agent and the workspace moves no date.
+    server
+        .post("/onboarding/owner", json!({"name":"Ada Byron"}))
+        .await
+        .error_for_status()
+        .unwrap();
+    server
+        .post("/workspace", json!({"name":"Analytical Engines"}))
+        .await
+        .error_for_status()
+        .unwrap();
+    server
+        .post(
+            &format!("/actors/{}/name", agent.id),
+            json!({"name":"pi two"}),
+        )
+        .await
+        .error_for_status()
+        .unwrap();
+    assert_eq!(dated(&server.workspace().await), expected);
+    // A task connection (a relink of the same agent) is not a new birth either.
+    let project: Project = server
+        .post("/projects", json!({"name":"P"}))
+        .await
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let workspace_dir = dir.path().join("w");
+    std::fs::create_dir_all(&workspace_dir).unwrap();
+    server
+        .post("/connections", json!({"actor_id":agent.id, "project_id":project.id, "mode":"process", "workspace":workspace_dir}))
+        .await
+        .error_for_status()
+        .unwrap();
+    assert_eq!(dated(&server.workspace().await), expected);
+    // A newly hired agent, after the carried-over ones, gets the current time.
+    let fresh = server.hire().await;
+    assert!(fresh.created_at > 2000);
 }

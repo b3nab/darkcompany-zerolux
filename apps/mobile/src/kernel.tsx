@@ -1,9 +1,10 @@
 import * as SecureStore from "expo-secure-store";
-import { createContext, use, useEffect, useState } from "react";
+import { createContext, use, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   api,
   errorMessage,
+  renameWorkspace as rename,
   setKernelUrl,
   useChat,
   useStorage,
@@ -24,6 +25,7 @@ interface Session {
   chat: Chat;
   /** The whole company: projects, tasks, workers; undefined until the kernel answers. */
   workspace: Workspace | undefined;
+  renameWorkspace(name: string): Promise<void>;
   /** What this kernel can do, e.g. "storage-v1". */
   capabilities: string[];
   /** The kernel's version; undefined until it answers. */
@@ -66,6 +68,7 @@ async function verify(url: string) {
 function Connected({ url, children }: { url: string; children: ReactNode }) {
   useState(() => setKernelUrl(url));
   const [workspace, setWorkspace] = useState<Workspace>();
+  const workspaceVersion = useRef(0);
   const [health, setHealth] = useState<{
     version: string;
     capabilities: string[];
@@ -83,11 +86,14 @@ function Connected({ url, children }: { url: string; children: ReactNode }) {
   // one (a worker finishes): read the workspace on both, as the web app does.
   useEffect(() => {
     let current = true;
-    const read = () =>
-      api<Workspace>("/workspace").then(
-        (next) => current && setWorkspace(next),
+    const read = () => {
+      const version = workspaceVersion.current;
+      return api<Workspace>("/workspace").then(
+        (next) =>
+          current && version === workspaceVersion.current && setWorkspace(next),
         () => undefined,
       );
+    };
     void read();
     const timer = setInterval(read, 5000);
     return () => {
@@ -103,6 +109,14 @@ function Connected({ url, children }: { url: string; children: ReactNode }) {
         name: (id) => actors.find((actor) => actor.id === id)?.name ?? "…",
         chat,
         workspace,
+        async renameWorkspace(name) {
+          const info = await rename(name, url);
+          // A snapshot requested before the rename must not restore the old name.
+          workspaceVersion.current++;
+          setWorkspace(
+            (previous) => previous && { ...previous, workspace: info },
+          );
+        },
         capabilities,
         version: health?.version,
         storage,

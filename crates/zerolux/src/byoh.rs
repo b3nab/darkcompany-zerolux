@@ -20,12 +20,13 @@ impl Store {
         self.require_onboarding().await?;
         let name = text(&input.name, "Agent name", 200, true)?;
         sqlx::query_as(
-            "INSERT INTO actors (id, name, kind, owner_id, harness)
-            SELECT ?, ?, 'agent', id, ? FROM actors WHERE id = ? AND kind = 'human' AND archived = 0 RETURNING *",
+            "INSERT INTO actors (id, name, kind, owner_id, harness, created_at)
+            SELECT ?, ?, 'agent', id, ?, ? FROM actors WHERE id = ? AND kind = 'human' AND archived = 0 RETURNING *",
         )
         .bind(Uuid::new_v4().to_string())
         .bind(name)
         .bind(input.harness.id())
+        .bind(now_ms())
         .bind(input.owner_id)
         .fetch_optional(&self.pool)
         .await?

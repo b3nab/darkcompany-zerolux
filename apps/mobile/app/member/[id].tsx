@@ -4,6 +4,7 @@ import {
   activeActors,
   agentPresence,
   agentWork,
+  creationDateLabel,
   harnessLabels,
   memberTone,
 } from "@zerolux/chat";
@@ -62,6 +63,9 @@ export default function Member() {
             )}
           >
             {member.name}
+          </Text>
+          <Text className="text-xs text-faint">
+            {creationDateLabel(member)}
           </Text>
           <View className="flex-row items-center gap-2">
             <Lamp kind={member.kind} tone={tone(member)} />

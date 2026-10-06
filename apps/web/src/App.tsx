@@ -241,10 +241,10 @@ export function App({
               <MenuIcon />
             </Button>
           )}
-          {shell && workspace.name && (
+          {shell && (
             <>
               <span className="text-[13.5px] text-faint max-sm:hidden">
-                {workspace.name}
+                {workspace.workspace.name}
               </span>
               <ChevronRightIcon
                 aria-hidden

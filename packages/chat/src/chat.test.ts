@@ -33,6 +33,7 @@ const actor = (
   kind,
   owner_id: kind === "agent" ? "owner" : null,
   harness: kind === "agent" ? "claude-code" : null,
+  created_at: 0,
   archived: false,
 });
 const actors = [

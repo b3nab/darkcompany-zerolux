@@ -19,6 +19,7 @@ const owner: Actor = {
   kind: "human",
   owner_id: null,
   harness: null,
+  created_at: 0,
   archived: false,
 };
 const placeholder: Actor = {
@@ -27,6 +28,7 @@ const placeholder: Actor = {
   kind: "agent",
   owner_id: owner.id,
   harness: null,
+  created_at: 0,
   archived: true,
 };
 const pi: Actor = {
@@ -35,9 +37,15 @@ const pi: Actor = {
   kind: "agent",
   owner_id: owner.id,
   harness: "pi",
+  created_at: 0,
   archived: false,
 };
 const initial: Workspace = {
+  workspace: {
+    id: "workspace",
+    name: "Workspace",
+    created_at: 0,
+  },
   actors: [owner],
   projects: [],
   tasks: [],

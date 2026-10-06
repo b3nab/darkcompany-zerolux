@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router";
 import { cn } from "cn";
 import {
   agentWork,
+  creationDateLabel,
   memberTone,
   shiftLabels,
   shiftSegments,
@@ -469,6 +470,7 @@ function ProfileHead({
           {actor.name}
         </h2>
         <p className="text-sm text-muted-foreground">{role}</p>
+        <p className="text-xs text-faint">{creationDateLabel(actor)}</p>
       </div>
       <span className="flex items-center gap-2 text-xs text-muted-foreground">
         <Lamp kind={actor.kind} state={state} />

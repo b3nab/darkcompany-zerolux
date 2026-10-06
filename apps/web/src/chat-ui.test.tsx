@@ -41,6 +41,7 @@ const agent = (id: string, name: string): Actor => ({
   kind: "agent",
   owner_id: OWNER,
   harness: "claude-code",
+  created_at: 0,
   archived: false,
 });
 const actors: Actor[] = [
@@ -50,6 +51,7 @@ const actors: Actor[] = [
     kind: "human",
     owner_id: null,
     harness: null,
+    created_at: 0,
     archived: false,
   },
   agent(ASPEN, "aspen"),
@@ -629,10 +631,16 @@ test("the organization shows each person with the agents they own, and what each
     kind: "agent",
     owner_id: "ada",
     harness: "pi",
+    created_at: 0,
     archived: false,
   };
   const retired: Actor = { ...lin, id: "old", name: "retired", archived: true };
-  const workspace = {
+  const workspace: Workspace = {
+    workspace: {
+      id: "workspace",
+      name: "Workspace",
+      created_at: 0,
+    },
     actors: [...actors, ada, lin, retired],
     projects: [],
     tasks: [],
@@ -999,6 +1007,11 @@ const task = (
   updated_at: 2,
 });
 const company: Workspace = {
+  workspace: {
+    id: "workspace",
+    name: "Workspace",
+    created_at: 0,
+  },
   actors,
   projects: [
     { id: "p-zerolux", name: "ZeroLux", description: "", created_at: 1 },

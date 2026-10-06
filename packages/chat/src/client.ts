@@ -1,3 +1,5 @@
+import type { CreationDate } from "./dates";
+
 /** The kernel's HTTP API, for every client: the web app, the desktop and the mobile app. */
 export type Harness = "pi" | "claude-code" | "codex";
 export const harnessLabels: Record<Harness, string> = {
@@ -13,7 +15,7 @@ export const claudeModes = {
   auto: "Claude Code decides on its own",
 } as const;
 export type ClaudeMode = keyof typeof claudeModes;
-export interface Actor {
+export interface Actor extends CreationDate {
   id: string;
   name: string;
   kind: "human" | "agent";

@@ -112,7 +112,7 @@ pub fn router_exposed(
 
 fn app_router(state: AppState, web_dir: PathBuf) -> Router {
     let legacy = Router::new()
-        .route("/workspace", get(workspace))
+        .route("/workspace", get(workspace).post(set_workspace_name))
         .route("/onboarding/owner", post(set_owner_name))
         .route("/actors", post(create_agent))
         .route("/connections", post(connect_agent))
@@ -128,9 +128,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/worker/runs/{id}/finish", post(finish))
         .route_layer(middleware::from_fn(owner_only));
     let api = legacy
-        .route("/health", get(|| async {
-            Json(json!({ "name": "zerolux", "version": env!("CARGO_PKG_VERSION"), "capabilities": ["byoh-v1", "owner-onboarding-v1", "chat-v1"] }))
-        }))
+        .route("/health", get(health))
         .route("/sessions", get(discover_sessions))
         .route("/chat/hire", post(hire_session))
         .route("/chat/claude-sessions", post(create_claude_session))
@@ -140,12 +138,18 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/chat/sessions/{id}/stop", post(stop_session))
         .route("/chat/sessions/{id}/status", post(session_status))
         .route("/chat/sessions/{id}/activity", post(session_activity))
-        .route("/conversations", get(conversations).post(create_conversation))
+        .route(
+            "/conversations",
+            get(conversations).post(create_conversation),
+        )
         .route("/conversations/{id}/members", post(add_conversation_member))
         .route("/conversations/{id}/threads", post(open_thread))
         .route("/conversations/{id}/close", post(close_thread))
         .route("/conversations/{id}/pause", post(pause_conversation))
-        .route("/conversations/{id}/messages", get(messages).post(send_message))
+        .route(
+            "/conversations/{id}/messages",
+            get(messages).post(send_message),
+        )
         .route("/livekit/token", get(livekit_token))
         .route("/chat/inbox", get(chat_inbox))
         .route("/chat/deliveries/{id}/dispatch", post(dispatch_delivery))
@@ -770,11 +774,29 @@ async fn access(State(state): State<AppState>, request: Request, next: Next) -> 
 async fn workspace(State(store): State<Store>) -> Result<Json<Workspace>, Error> {
     Ok(Json(store.workspace().await?))
 }
+/// Reachable without a device token: what this kernel is, and the company it runs.
+async fn health(State(store): State<Store>) -> Result<Json<Value>, Error> {
+    let workspace = store.workspace_info().await?;
+    Ok(Json(json!({
+        "name": "zerolux",
+        "version": env!("CARGO_PKG_VERSION"),
+        "capabilities": ["byoh-v1", "owner-onboarding-v1", "chat-v1"],
+        "workspace": workspace,
+    })))
+}
 async fn set_owner_name(
     State(store): State<Store>,
     Json(input): Json<SetOwnerName>,
 ) -> Result<Json<Actor>, Error> {
     Ok(Json(store.set_owner_name(input).await?))
+}
+async fn set_workspace_name(
+    State(store): State<Store>,
+    Json(input): Json<SetWorkspaceName>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(
+        json!({ "workspace": store.set_workspace_name(input).await? }),
+    ))
 }
 async fn reassign_task(
     State(store): State<Store>,

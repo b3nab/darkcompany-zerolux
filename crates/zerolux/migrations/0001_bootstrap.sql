@@ -8,7 +8,18 @@ CREATE TABLE actors (
     harness TEXT CHECK (harness IN ('pi', 'claude-code', 'codex')),
     archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
     name_confirmed INTEGER NOT NULL DEFAULT 0 CHECK (name_confirmed IN (0, 1)),
+    -- When the actor was created, in milliseconds since the Unix epoch like every other date.
+    created_at INTEGER NOT NULL,
     CHECK ((kind = 'human' AND owner_id IS NULL) OR (kind = 'agent' AND owner_id IS NOT NULL))
+);
+
+-- The company this kernel runs: one row, created with the owner on the first start. Its name
+-- is set during or after onboarding; its creation date is day 1 for the whole workspace.
+CREATE TABLE workspace (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    only_one INTEGER NOT NULL DEFAULT 1 UNIQUE CHECK (only_one = 1)
 );
 
 -- Single-owner bootstrap. The kernel creates the human with a random UUID;

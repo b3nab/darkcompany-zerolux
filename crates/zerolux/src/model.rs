@@ -9,10 +9,24 @@ pub struct Actor {
     pub owner_id: Option<String>,
     pub harness: Option<String>,
     pub archived: bool,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SetOwnerName {
+    pub name: String,
+}
+
+/// The company this kernel runs. Its creation is day 1.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct WorkspaceInfo {
+    pub id: String,
+    pub name: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SetWorkspaceName {
     pub name: String,
 }
 
@@ -89,6 +103,7 @@ pub struct Run {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Workspace {
+    pub workspace: WorkspaceInfo,
     pub actors: Vec<Actor>,
     pub projects: Vec<Project>,
     pub tasks: Vec<Task>,

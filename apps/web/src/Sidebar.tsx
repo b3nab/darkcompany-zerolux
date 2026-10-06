@@ -20,7 +20,14 @@ import {
   UsersIcon,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { homeLabel, isThread } from "@zerolux/chat";
+import {
+  creationDateLabel,
+  errorMessage,
+  homeLabel,
+  isThread,
+  renameWorkspace,
+  workspaceAge,
+} from "@zerolux/chat";
 import type { Chat, Perform } from "@zerolux/chat";
 import { activeActors, api } from "./api";
 import type { Actor, Project, Workspace } from "./api";
@@ -32,6 +39,14 @@ import { Lamp } from "@/components/lamp";
 import { ActorMark, Eyebrow } from "@/components/presence";
 import type { Tone } from "@/components/presence";
 import { Button } from "@/components/ui/button";
+import { WorkspaceSettings } from "@/components/workspace-settings";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,8 +72,6 @@ export type Kernel = {
 
 const item =
   "flex h-7.5 w-full items-center gap-2.5 rounded-sm px-2 text-[13.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground aria-[current=page]:bg-accent aria-[current=page]:text-foreground [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-faint aria-[current=page]:[&>svg]:text-primary";
-
-const DAY = 24 * 60 * 60 * 1000;
 
 /** The workspace's rail: where you are, where to go, who works with you, and the kernel. */
 export function Sidebar({
@@ -103,7 +116,12 @@ export function Sidebar({
       >
         <Wordmark />
       </Link>
-      <WorkspaceMenu workspace={workspace} members={actors.length} />
+      <WorkspaceMenu
+        workspace={workspace}
+        members={actors.length}
+        busy={busy}
+        perform={perform}
+      />
       <button
         type="button"
         onClick={search}
@@ -257,58 +275,111 @@ function Section({
 function WorkspaceMenu({
   workspace,
   members,
+  busy,
+  perform,
 }: {
   workspace: Workspace;
   members: number;
+  busy: boolean;
+  perform: Perform;
 }) {
   const navigate = useNavigate();
-  // TODO: the kernel gives the workspace a name and its creation time.
-  const name = workspace.name ?? "Workspace";
-  const day =
-    workspace.created_at &&
-    Math.floor((Date.now() - workspace.created_at) / DAY) + 1;
-  const line = `${day ? `Day ${day} · ` : ""}${members} member${members === 1 ? "" : "s"}`;
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const info = workspace.workspace;
+  const { name } = info;
+  const line = `${workspaceAge(info)} · ${members} member${members === 1 ? "" : "s"}`;
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <button
-            type="button"
-            className="mb-1.5 flex w-full items-center gap-2.5 rounded-sm p-1.5 text-left transition-colors hover:bg-accent aria-expanded:bg-accent"
-          />
-        }
-      >
-        <span
-          aria-hidden
-          className="grid size-7 shrink-0 place-items-center rounded-md border border-input bg-secondary text-[13px] font-semibold"
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <button
+              type="button"
+              className="mb-1.5 flex w-full items-center gap-2.5 rounded-sm p-1.5 text-left transition-colors hover:bg-accent aria-expanded:bg-accent"
+            />
+          }
         >
-          {name.slice(0, 1).toUpperCase()}
-        </span>
-        <span className="flex min-w-0 flex-col gap-0.5">
-          <span className="truncate text-[13.5px] font-semibold">{name}</span>
-          <span className="truncate font-mono text-[11px] text-faint">
-            {line}
+          <span
+            aria-hidden
+            className="grid size-7 shrink-0 place-items-center rounded-md border border-input bg-secondary text-[13px] font-semibold"
+          >
+            {name.slice(0, 1).toUpperCase()}
           </span>
-        </span>
-        <ChevronsUpDownIcon
-          aria-hidden
-          className="ml-auto size-3.5 text-faint"
-        />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-56">
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>{name}</DropdownMenuLabel>
-          <DropdownMenuItem onClick={() => navigate("/team")}>
-            <UsersIcon />
-            Team
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => navigate("/team/hire")}>
-            <UserPlusIcon />
-            Hire an agent
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span className="truncate text-[13.5px] font-semibold">{name}</span>
+            <span
+              title={creationDateLabel(info)}
+              className="truncate font-mono text-[11px] text-faint"
+            >
+              {line}
+            </span>
+          </span>
+          <ChevronsUpDownIcon
+            aria-hidden
+            className="ml-auto size-3.5 text-faint"
+          />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-56">
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>{name}</DropdownMenuLabel>
+            <DropdownMenuItem
+              onClick={() => {
+                setError("");
+                setEditing(true);
+              }}
+            >
+              <SettingsIcon />
+              Workspace settings
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => navigate("/team")}>
+              <UsersIcon />
+              Team
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => navigate("/team/hire")}>
+              <UserPlusIcon />
+              Hire an agent
+            </DropdownMenuItem>
+          </DropdownMenuGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Dialog
+        open={editing}
+        onOpenChange={(open) => {
+          if (!busy && !saving) setEditing(open);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Workspace settings</DialogTitle>
+            <DialogDescription>
+              The company's name and creation date.
+            </DialogDescription>
+          </DialogHeader>
+          {editing && (
+            <WorkspaceSettings
+              workspace={info}
+              busy={busy || saving}
+              error={error}
+              save={async (name) => {
+                setSaving(true);
+                setError("");
+                try {
+                  await renameWorkspace(name);
+                  setEditing(false);
+                  await perform(async () => {});
+                } catch (error) {
+                  setError(errorMessage(error));
+                } finally {
+                  setSaving(false);
+                }
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

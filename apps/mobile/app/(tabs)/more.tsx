@@ -16,6 +16,7 @@ import { useCSSVariable } from "uniwind";
 import { Wordmark } from "@/components/brand";
 import { Eyebrow } from "@/components/meter";
 import { Screen } from "@/components/screen";
+import { WorkspaceSettings } from "@/components/workspace-settings";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
@@ -37,7 +38,7 @@ const realtime = {
 /** The rest of the workspace, your theme, and the kernel this phone talks to. */
 export default function More() {
   const { url, forget } = useKernel();
-  const { chat, version } = useSession();
+  const { chat, version, workspace, renameWorkspace } = useSession();
   const { chosen } = useTheme();
   const router = useRouter();
   const [muted, faint] = useCSSVariable([
@@ -68,6 +69,12 @@ export default function More() {
     <Screen title="More">
       <ScrollView contentContainerClassName="gap-6 px-5 pb-10">
         <Section title="Workspace">
+          {workspace && (
+            <WorkspaceSettings
+              workspace={workspace.workspace}
+              save={renameWorkspace}
+            />
+          )}
           {row(FolderIcon, "Storage", go("/storage"), next)}
           {row(PhoneIcon, "Meetings", go("/meetings"), next)}
         </Section>

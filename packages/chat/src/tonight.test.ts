@@ -15,6 +15,7 @@ const owner: Actor = {
   kind: "human",
   owner_id: null,
   harness: null,
+  created_at: 0,
   archived: false,
 };
 const agent = (id: string): Actor => ({
@@ -23,6 +24,7 @@ const agent = (id: string): Actor => ({
   kind: "agent",
   owner_id: "owner",
   harness: "claude-code",
+  created_at: 0,
   archived: false,
 });
 const task = (id: string, status: Task["status"]): Task => ({
@@ -57,6 +59,11 @@ const general: Conversation = {
   last_seq: 1,
 };
 const workspace: Workspace = {
+  workspace: {
+    id: "workspace",
+    name: "Workspace",
+    created_at: 0,
+  },
   actors: [owner, agent("lin")],
   projects: [{ id: "p", name: "ZeroLux", description: "", created_at: 1 }],
   tasks: [task("t1", "review"), task("t2", "running"), task("t3", "done")],

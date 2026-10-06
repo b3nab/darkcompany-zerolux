@@ -91,14 +91,25 @@ impl Store {
             .connect_with(options)
             .await?;
         sqlx::migrate!().run(&pool).await?;
-        // One atomic insert makes initialization safe across concurrent opens.
-        // Existing identity, name, and ownership links are never regenerated.
+        // One atomic insert each makes initialization safe across concurrent opens.
+        // Existing identity, name, dates and ownership links are never regenerated.
+        let now = now_ms();
         sqlx::query(
-            "INSERT INTO actors (id, name, kind)
-            SELECT ?, 'Local owner', 'human'
+            "INSERT INTO workspace (id, name, created_at)
+            SELECT ?, 'Workspace', ?
+            WHERE NOT EXISTS (SELECT 1 FROM workspace)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(now)
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO actors (id, name, kind, created_at)
+            SELECT ?, 'Local owner', 'human', ?
             WHERE NOT EXISTS (SELECT 1 FROM actors WHERE kind = 'human')",
         )
         .bind(Uuid::new_v4().to_string())
+        .bind(now)
         .execute(&pool)
         .await?;
         let store = Self { pool };
@@ -119,6 +130,25 @@ impl Store {
         .bind(name)
         .fetch_one(&self.pool)
         .await?)
+    }
+
+    pub async fn workspace_info(&self) -> Result<WorkspaceInfo> {
+        Ok(sqlx::query_as("SELECT * FROM workspace")
+            .fetch_one(&self.pool)
+            .await?)
+    }
+
+    pub async fn set_workspace_name(&self, input: SetWorkspaceName) -> Result<WorkspaceInfo> {
+        let name = text(&input.name, "Workspace name", 200, true)?;
+        if name.chars().any(char::is_control) {
+            return Err(Error::Invalid(
+                "Enter the workspace name without control characters".into(),
+            ));
+        }
+        Ok(sqlx::query_as("UPDATE workspace SET name = ? RETURNING *")
+            .bind(name)
+            .fetch_one(&self.pool)
+            .await?)
     }
 
     pub(crate) async fn require_onboarding(&self) -> Result<()> {
@@ -146,6 +176,9 @@ impl Store {
 
     pub async fn workspace(&self) -> Result<Workspace> {
         let mut tx = self.pool.begin().await?;
+        let workspace = sqlx::query_as("SELECT * FROM workspace")
+            .fetch_one(&mut *tx)
+            .await?;
         let actors = sqlx::query_as("SELECT * FROM actors ORDER BY kind DESC, name")
             .fetch_all(&mut *tx)
             .await?;
@@ -166,6 +199,7 @@ impl Store {
                 .await?;
         tx.commit().await?;
         Ok(Workspace {
+            workspace,
             actors,
             projects,
             tasks,

@@ -8,9 +8,13 @@
 - **Harnesses**: pi, Claude Code and Codex sessions join as agents. The kernel drives Codex through its app-server and Claude Code through its session inbox; pi runs the ZeroLux extension (`extensions/pi`). The Claude Code runner (`extensions/claude`) runs sessions that ZeroLux starts itself.
 - **Real time**: LiveKit carries small change events; clients then read messages and state over HTTP.
 
-## Actors
+## Workspace and actors
 
-Humans and agents are actors with generated UUIDs. Each agent has a human owner. The owner is found among the workspace actors, never by a fixed ID.
+The workspace has a generated ID, an editable name and a creation date, preserved across restarts. `GET /workspace` includes its metadata in `workspace`; the owner renames it with `POST /workspace {"name":"…"}`. Renaming changes neither its ID nor its date. The clients show these details in workspace settings.
+
+Humans and agents are actors with generated UUIDs and creation dates shown in their profiles. Each agent has a human owner. The owner is found among the workspace actors, never by a fixed ID.
+
+`created_at` stores a Unix timestamp in milliseconds. Displayed calendar dates use UTC; the company day counter starts at 1.
 
 ## Tasks
 
@@ -26,14 +30,14 @@ A successful run goes to review, never straight to done: a person approves it. A
 
 All routes are under `/api`. Main groups:
 
-| Routes                                               | Purpose                                               |
-| ---------------------------------------------------- | ----------------------------------------------------- |
-| `/health`, `/workspace`, `/onboarding/owner`         | Kernel status, workspace snapshot, owner name         |
-| `/actors`, `/projects`, `/tasks`                     | Agents, projects, tasks and their actions             |
-| `/connections`, `/worker`                            | Task workers: connect, claim, heartbeat, finish       |
-| `/sessions`, `/chat/hire`, `/chat/sessions`          | Discover and link harness sessions                    |
-| `/conversations`                                     | Chats, threads, members and messages                  |
-| `/chat/inbox`, `/chat/deliveries`, `/chat/approvals` | Delivery, receipts and permission requests for agents |
-| `/livekit/token`                                     | Real-time token for clients                           |
+| Routes                                               | Purpose                                                    |
+| ---------------------------------------------------- | ---------------------------------------------------------- |
+| `/health`, `/workspace`, `/onboarding/owner`         | Kernel status, workspace metadata and snapshot, owner name |
+| `/actors`, `/projects`, `/tasks`                     | Agents, projects, tasks and their actions                  |
+| `/connections`, `/worker`                            | Task workers: connect, claim, heartbeat, finish            |
+| `/sessions`, `/chat/hire`, `/chat/sessions`          | Discover and link harness sessions                         |
+| `/conversations`                                     | Chats, threads, members and messages                       |
+| `/chat/inbox`, `/chat/deliveries`, `/chat/approvals` | Delivery, receipts and permission requests for agents      |
+| `/livekit/token`                                     | Real-time token for clients                                |
 
 Timestamps are Unix milliseconds. Request bodies are limited to 1 MiB.

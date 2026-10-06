@@ -1,15 +1,34 @@
+import { kernelUrl, request } from "./client";
 import type { Actor } from "./client";
+import type { CreationDate } from "./dates";
+
+export interface WorkspaceInfo extends CreationDate {
+  id: string;
+  name: string;
+}
+
+export async function renameWorkspace(
+  name: string,
+  kernel = kernelUrl(),
+): Promise<WorkspaceInfo> {
+  const result = await request<{ workspace: WorkspaceInfo }>(
+    kernel,
+    "/workspace",
+    {
+      name: name.trim(),
+    },
+  );
+  return result.workspace;
+}
 
 /** The company as the kernel shares it with every client: actors, projects, tasks, workers. */
 export interface Workspace {
+  workspace: WorkspaceInfo;
   actors: Actor[];
   projects: Project[];
   tasks: Task[];
   connections: AgentConnection[];
   onboarding_required: boolean;
-  // TODO: kernel: the workspace's name and creation time (the company's day 1).
-  name?: string;
-  created_at?: number;
 }
 export const taskStatuses = [
   "draft",
