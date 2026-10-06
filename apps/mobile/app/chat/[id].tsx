@@ -26,11 +26,13 @@ import {
   clockTime,
   dayLabel,
   deliveryLabels,
+  draftOf,
   errorMessage,
   harnessLabels,
   newId,
   presenceLine,
   receipt,
+  saveDraft,
   threadsOf,
   transcribe,
   workingIn,
@@ -72,7 +74,8 @@ export default function ChatScreen() {
   const { chat, actors, name, storage, capabilities } = useSession();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [draft, setDraft] = useState("");
+  // The unsent text waits in its chat while you are elsewhere in the app.
+  const [draft, setDraft] = useState(() => draftOf(id));
   const [detail, setDetail] = useState<string>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -110,6 +113,7 @@ export default function ChatScreen() {
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [conversation?.id]),
   );
+  useEffect(() => saveDraft(id, draft), [id, draft]);
   // Opening a member from the panel leaves the chat: the sheet goes with it.
   const pathname = usePathname();
   useEffect(() => setAbout(false), [pathname]);

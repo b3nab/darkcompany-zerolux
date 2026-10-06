@@ -24,6 +24,7 @@ import {
   clockTime,
   dayLabel,
   deliveryLabels,
+  draftOf,
   directChat,
   errorMessage,
   harnessLabels,
@@ -35,6 +36,7 @@ import {
   presenceLine,
   receipt,
   receiptLabels,
+  saveDraft,
   threadsOf,
   transcribe,
   unreadIn,
@@ -766,7 +768,8 @@ function Composer({
   capabilities: string[];
   sent: () => void;
 }) {
-  const [text, setText] = useState("");
+  // The unsent text waits in its chat while you are elsewhere.
+  const [text, setText] = useState(() => draftOf(conversation.id));
   const [voice, setVoice] = useState<"dictation" | "message">();
   const [voiceError, setVoiceError] = useState("");
   const recorder = useRecorder();
@@ -775,9 +778,17 @@ function Composer({
   const box = useRef<HTMLTextAreaElement>(null);
   const files = useRef<HTMLInputElement>(null);
   useEffect(() => {
+    saveDraft(conversation.id, text);
     // An emptied composer shrinks back to one line.
     if (!text && box.current) box.current.style.height = "";
-  }, [text]);
+  }, [conversation.id, text]);
+  useEffect(() => {
+    // A draft brought back fits its box, as typed text does.
+    if (box.current?.value) {
+      box.current.style.height = "auto";
+      box.current.style.height = `${box.current.scrollHeight}px`;
+    }
+  }, []);
   const tooLong = new TextEncoder().encode(text).length > MAX_TEXT;
   const microphone = canRecord();
   const transcription = capabilities.includes("transcription-v1");

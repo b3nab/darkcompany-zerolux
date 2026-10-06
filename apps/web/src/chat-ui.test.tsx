@@ -25,7 +25,7 @@ import type {
   Discovery,
   Message,
 } from "@zerolux/chat";
-import { sessionState } from "@zerolux/chat";
+import { saveDraft, sessionState } from "@zerolux/chat";
 import type { Chat, Storage as Files, StoredFile } from "@zerolux/chat";
 
 /** Views render inside the app's router, as in the app. */
@@ -720,6 +720,27 @@ test("an agent's presence prefers a connected session, then a task worker, the s
     label: "Not connected",
     tone: "stopped",
   });
+});
+
+test("a chat shows the text you left unsent in it", () => {
+  saveDraft(group.id, "half a thought");
+  const html = renderToStaticMarkup(
+    <ChatView
+      chat={fakeChat({ openId: group.id })}
+      conversation={group}
+      actors={actors}
+      ownerId={OWNER}
+      busy={false}
+      perform={perform}
+      hire={() => {}}
+      storage={files()}
+      capabilities={[]}
+    />,
+  );
+  saveDraft(group.id, "");
+  expect(html).toMatch(
+    /<textarea[^>]*aria-label="Message"[^>]*>half a thought<\/textarea>/,
+  );
 });
 
 test("chat forms are sent by their own submit button", () => {
