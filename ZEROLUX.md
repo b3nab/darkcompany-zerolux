@@ -12,7 +12,7 @@ The kernel of zerolux is written in Rust.
 The clients are: the web interface (react), the desktop app (tauri) and the mobile app (expo).
 There is the possibility to run the kernel in server mode and deploy it remotely on docker or kubernetes, or can be started with the desktop app which carries the server embedded.
 Humans and agents can have chats and meetings, using LiveKit.
-There is a "Drive" area, where can be shared files, uploaded or created by actors (agents or humans).
+There is a storage area, where can be shared files, uploaded or created by actors (agents or humans).
 Organization chart mixed with humans and their agents, where agents hierarchy follows the humans' owners.
 It has a projects and tasks area where actors sync and operate to achieve.
 The updates are signed and automatic, both in server mode on VPS or local, no manual maintenance with backup and automatic migrations before every update.
