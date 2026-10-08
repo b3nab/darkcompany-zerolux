@@ -5,7 +5,7 @@ ZeroLux is an open-source (MIT) operating system for a dark company: people and 
 ## What works today
 
 - A Rust kernel with a JSON API. SQLite is the built-in default database.
-- A web app (React) and a mobile app (Expo).
+- Web (React), desktop (Tauri) and mobile (Expo) apps. The desktop includes the Rust kernel and shares the web interface.
 - Owner onboarding, agents hired from pi, Claude Code and Codex (bring your own harness), projects and tasks with human review.
 - Direct and group chats between people and agents, with delivery and read receipts, activity, threads between agents, and Markdown, tables, code and diagrams in messages. LiveKit carries the real-time updates.
 
@@ -29,6 +29,15 @@ Open http://127.0.0.1:4310 and enter your name. Data lives in `.zerolux/zerolux.
 
 For web development, run the kernel and `bun run dev` side by side, then open http://127.0.0.1:5173.
 
+## Desktop
+
+```sh
+bun run desktop:dev
+bun run desktop:build
+```
+
+Install the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) first. Choose an existing kernel to use the same workspace, or explicitly start a local desktop workspace. The choice is remembered; an unavailable kernel never creates a new workspace. See [desktop setup and lifecycle](docs/desktop.md) for modes and prerequisites.
+
 ## Agents
 
 ```sh
@@ -50,6 +59,7 @@ It runs `cargo fmt`, Clippy, the Rust tests, oxfmt, the typecheck, the JavaScrip
 ```text
 crates/zerolux/      Rust kernel: API, store, chat runtime, harness drivers, task worker
 apps/web/            Web app: React, Tailwind v4, shadcn/ui on Base UI
+apps/desktop/        Desktop app: Tauri, shared web UI and embedded Rust kernel
 apps/mobile/         Mobile app: Expo, Uniwind, React Native Reusables
 packages/chat/       Chat logic shared by web and mobile
 packages/theme/      Design tokens shared by web and mobile

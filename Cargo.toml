@@ -1,5 +1,6 @@
 [workspace]
-members = ["crates/zerolux"]
+members = ["crates/zerolux", "apps/desktop/src-tauri"]
+default-members = ["crates/zerolux"]
 resolver = "3"
 
 [workspace.package]
