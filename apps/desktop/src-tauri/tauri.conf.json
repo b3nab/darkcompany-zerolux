@@ -1,0 +1,44 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ZeroLux",
+  "version": "0.0.1-dev",
+  "identifier": "com.darkcompany.zerolux",
+  "build": {
+    "beforeDevCommand": "bun run assets",
+    "beforeBuildCommand": "bun run assets",
+    "frontendDist": "../dist/web"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "capabilities": [
+        {
+          "identifier": "desktop-startup",
+          "description": "Choose a workspace from the packaged startup page only; no remote kernel UI permission",
+          "local": true,
+          "windows": ["main"],
+          "permissions": ["allow-choose-workspace"]
+        }
+      ],
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; media-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "resources": {
+      "../dist/web/": "web/",
+      "../dist/claude/": "claude/"
+    },
+    "icon": [
+      "../dist/icons/32x32.png",
+      "../dist/icons/128x128.png",
+      "../dist/icons/128x128@2x.png",
+      "../dist/icons/icon.icns",
+      "../dist/icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@zerolux/desktop",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "assets": "bun prepare.ts",
+    "dev": "bun x --bun tauri dev",
+    "build": "bun x --bun tauri build",
+    "typecheck": "bun x --bun tsc --noEmit"
+  },
+  "devDependencies": {
+    "@tauri-apps/api": "2.10.1",
+    "@tauri-apps/cli": "2.12.1",
+    "@types/bun": "^1.3.0",
+    "typescript": "^5.9.0"
+  }
+}
