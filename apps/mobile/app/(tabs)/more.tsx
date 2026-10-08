@@ -6,6 +6,7 @@ import {
   FolderIcon,
   MonitorIcon,
   MoonIcon,
+  PaletteIcon,
   PhoneIcon,
   SunIcon,
 } from "lucide-react-native";
@@ -21,10 +22,11 @@ import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useKernel, useSession } from "../../src/kernel";
-import { chooseTheme, useTheme } from "../../src/theme";
-import type { Theme } from "../../src/theme";
+import { themes } from "@zerolux/theme/themes";
+import { chooseLight, chooseTheme, useTheme } from "../../src/theme";
+import type { Light } from "../../src/theme";
 
-const themes: [Theme, string, LucideIcon][] = [
+const lights: [Light, string, LucideIcon][] = [
   ["system", "System", MonitorIcon],
   ["light", "Daylight", SunIcon],
   ["dark", "Night", MoonIcon],
@@ -35,11 +37,11 @@ const realtime = {
   offline: "Kernel · realtime offline",
 };
 
-/** The rest of the workspace, your theme, and the kernel this phone talks to. */
+/** The rest of the workspace, your theme and its light, and the kernel this phone talks to. */
 export default function More() {
   const { url, forget } = useKernel();
   const { chat, version, workspace, renameWorkspace } = useSession();
-  const { chosen } = useTheme();
+  const { theme, light } = useTheme();
   const router = useRouter();
   const [muted, faint] = useCSSVariable([
     "--color-muted-foreground",
@@ -64,6 +66,7 @@ export default function More() {
   );
   const go = (href: Href) => () => router.push(href);
   const next = <ChevronRightIcon color={faint} size={18} strokeWidth={1.5} />;
+  const check = <CheckIcon color={muted} size={18} strokeWidth={2} />;
 
   return (
     <Screen title="More">
@@ -79,14 +82,22 @@ export default function More() {
           {row(PhoneIcon, "Meetings", go("/meetings"), next)}
         </Section>
         <Section title="Theme">
-          {themes.map(([theme, label, Icon]) =>
+          {themes.map((t) =>
+            row(
+              PaletteIcon,
+              t.name,
+              () => void chooseTheme(t.id),
+              theme === t.id ? check : null,
+            ),
+          )}
+        </Section>
+        <Section title="Light">
+          {lights.map(([value, label, Icon]) =>
             row(
               Icon,
               label,
-              () => void chooseTheme(theme),
-              chosen === theme ? (
-                <CheckIcon color={muted} size={18} strokeWidth={2} />
-              ) : null,
+              () => void chooseLight(value),
+              light === value ? check : null,
             ),
           )}
         </Section>

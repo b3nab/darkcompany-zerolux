@@ -12,8 +12,8 @@
     "build": "bun run --cwd apps/web build",
     "desktop:dev": "bun run --cwd apps/desktop dev",
     "desktop:build": "bun run --cwd apps/desktop build",
-    "typecheck": "bun run --cwd packages/chat typecheck && bun run --cwd packages/bridge typecheck && bun run --cwd apps/web typecheck && bun run --cwd apps/mobile typecheck && bun run --cwd extensions/pi typecheck && bun run --cwd extensions/claude typecheck && bun run --cwd apps/desktop typecheck",
-    "test": "bun run --cwd apps/web renderer && bun test packages/chat packages/bridge apps/web apps/desktop extensions/pi extensions/claude",
+    "typecheck": "bun run --cwd packages/theme typecheck && bun run --cwd packages/chat typecheck && bun run --cwd packages/bridge typecheck && bun run --cwd apps/web typecheck && bun run --cwd apps/mobile typecheck && bun run --cwd extensions/pi typecheck && bun run --cwd extensions/claude typecheck && bun run --cwd apps/desktop typecheck",
+    "test": "bun run --cwd apps/web renderer && bun test packages/theme packages/chat packages/bridge apps/web apps/desktop extensions/pi extensions/claude",
     "format": "bun x --bun oxfmt",
     "format:check": "bun x --bun oxfmt --check",
     "check": "livekit-server --version && bun run --cwd apps/desktop assets && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && bun run format:check && bun run typecheck && bun run test && bun run build"

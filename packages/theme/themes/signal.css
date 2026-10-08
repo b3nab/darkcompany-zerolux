@@ -1,0 +1,122 @@
+/*
+ * Signal: ink on warm paper, square corners, and one light, International Klein Blue.
+ * People are ink; the blue comes on for an agent at work or a decision that waits for you.
+ */
+@layer theme {
+  :root {
+    @variant signal-light {
+      --font-sans: "Schibsted Grotesk";
+      --font-mono: "Geist Mono";
+      --radius-xs: 1px;
+      --radius-sm: 2px;
+      --radius-md: 3px;
+      --radius-lg: 4px;
+      --radius-xl: 6px;
+      --background-image: none;
+      --surface-backdrop: none;
+      --color-background: #f2f1ec;
+      --color-foreground: #141517;
+      --color-card: #fbfbf9;
+      --color-card-foreground: #141517;
+      --color-popover: #ffffff;
+      --color-popover-foreground: #141517;
+      --color-primary: #002fa7;
+      --color-primary-foreground: #ffffff;
+      --color-secondary: #fbfbf9;
+      --color-secondary-foreground: #141517;
+      --color-muted: #e6e4de;
+      --color-muted-foreground: #55575c;
+      --color-faint: #6e7075;
+      --color-accent: rgba(20, 21, 23, 0.06);
+      --color-accent-foreground: #141517;
+      --color-destructive: #b42318;
+      --color-destructive-foreground: #ffffff;
+      --color-success: #0f7446;
+      --color-warning: #b54708;
+      --color-attention: #002fa7;
+      --color-attention-foreground: #ffffff;
+      --color-human: #141517;
+      --color-human-foreground: #141517;
+      --color-agent: #002fa7;
+      --color-agent-foreground: #002fa7;
+      --color-border: #d4d2cb;
+      --color-input: #c9c7c0;
+      --color-ring: #002fa7;
+      --color-sidebar: #eae9e3;
+      --color-sidebar-foreground: #141517;
+      --color-sidebar-primary: #002fa7;
+      --color-sidebar-primary-foreground: #ffffff;
+      --color-sidebar-accent: rgba(20, 21, 23, 0.06);
+      --color-sidebar-accent-foreground: #141517;
+      --color-sidebar-border: #d4d2cb;
+      --color-sidebar-ring: #002fa7;
+      --color-window-off: #e2e0da;
+      --color-window-dim: #c3cdea;
+      --color-logo-ink: #141517;
+      --color-logo-dot: #002fa7;
+      --color-author-0: #002fa7;
+      --color-author-1: #8a4b00;
+      --color-author-2: #0f6b3f;
+      --color-author-3: #6b2fb3;
+      --color-author-4: #9f1d3a;
+      --color-author-5: #0d6276;
+    }
+    @variant signal-dark {
+      --font-sans: "Schibsted Grotesk";
+      --font-mono: "Geist Mono";
+      --radius-xs: 1px;
+      --radius-sm: 2px;
+      --radius-md: 3px;
+      --radius-lg: 4px;
+      --radius-xl: 6px;
+      --background-image: none;
+      --surface-backdrop: none;
+      --color-background: #141517;
+      --color-foreground: #f2f1ec;
+      --color-card: #1b1c1f;
+      --color-card-foreground: #f2f1ec;
+      --color-popover: #232428;
+      --color-popover-foreground: #f2f1ec;
+      --color-primary: #3d63ff;
+      --color-primary-foreground: #ffffff;
+      --color-secondary: #1b1c1f;
+      --color-secondary-foreground: #f2f1ec;
+      --color-muted: #1e1f22;
+      --color-muted-foreground: #a3a5a9;
+      --color-faint: #84868b;
+      --color-accent: rgba(242, 241, 236, 0.07);
+      --color-accent-foreground: #f2f1ec;
+      --color-destructive: #ff6b6b;
+      --color-destructive-foreground: #1c0508;
+      --color-success: #4cc38a;
+      --color-warning: #ff8a4c;
+      --color-attention: #7d97ff;
+      --color-attention-foreground: #0a1033;
+      --color-human: #f2f1ec;
+      --color-human-foreground: #f2f1ec;
+      --color-agent: #4d72ff;
+      --color-agent-foreground: #9fb4ff;
+      --color-border: #2a2b2f;
+      --color-input: #3a3c41;
+      --color-ring: #4d72ff;
+      --color-sidebar: #101113;
+      --color-sidebar-foreground: #f2f1ec;
+      --color-sidebar-primary: #3d63ff;
+      --color-sidebar-primary-foreground: #ffffff;
+      --color-sidebar-accent: rgba(242, 241, 236, 0.07);
+      --color-sidebar-accent-foreground: #f2f1ec;
+      --color-sidebar-border: #2a2b2f;
+      --color-sidebar-ring: #4d72ff;
+      --color-window-off: #1b1c1f;
+      --color-window-dim: #1d2b66;
+      --color-logo-ink: #f2f1ec;
+      --color-logo-dot: #3d63ff;
+      --color-author-0: #9fb4ff;
+      --color-author-1: #ffc58a;
+      --color-author-2: #7fdcae;
+      --color-author-3: #c9a7ff;
+      --color-author-4: #ff9fb0;
+      --color-author-5: #8fd8e8;
+    }
+  }
+}

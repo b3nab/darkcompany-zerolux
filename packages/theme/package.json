@@ -4,6 +4,16 @@
   "type": "module",
   "exports": {
     "./theme.css": "./theme.css",
+    "./themes.css": "./themes.css",
+    "./themes": "./themes.ts",
+    "./themes.json": "./themes.json",
     "./logo": "./logo.ts"
+  },
+  "scripts": {
+    "typecheck": "bun x --bun tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.0",
+    "typescript": "^5.9.0"
   }
 }

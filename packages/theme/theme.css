@@ -1,17 +1,21 @@
 /*
- * ZeroLux design tokens: the one source of colors and radii for every client.
+ * ZeroLux design tokens: the one source of colors, fonts and radii for every client. These
+ * are the default theme, Boreal; the other themes are in themes/ and set the same tokens.
  * Two lights in a dark building: `human` (lamp amber) is people and what waits for them,
  * `agent` (ion cyan) is agents at work. Nothing else is colored except status.
- * Tailwind v4 reads them on the web, Uniwind on mobile: plain values, one set per theme.
+ * Tailwind v4 reads them on the web, Uniwind on mobile: plain values, one set per light.
  * Names follow shadcn/ui; ours: `faint`, `human`, `agent`, `attention`, `window-*`, `logo-*`.
  * A `-foreground` of a light is its readable text on the page, not text on its fill.
  */
 @theme {
-  --radius-xs: 2px;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
-  --radius-xl: 14px;
+  /* Fonts and radii belong to the theme, so each variant below sets them. */
+  --font-sans: unset;
+  --font-mono: unset;
+  --radius-xs: unset;
+  --radius-sm: unset;
+  --radius-md: unset;
+  --radius-lg: unset;
+  --radius-xl: unset;
   /* The color names, for Tailwind on the web; each theme below sets them. */
   --color-background: unset;
   --color-foreground: unset;
@@ -64,6 +68,17 @@
 @layer theme {
   :root {
     @variant dark {
+      /* Chivo speaks for people, Chivo Mono for machines: handles, IDs, times, code. */
+      --font-sans: "Chivo";
+      --font-mono: "Chivo Mono";
+      --radius-xs: 2px;
+      --radius-sm: 4px;
+      --radius-md: 6px;
+      --radius-lg: 10px;
+      --radius-xl: 14px;
+      /* What shows behind the page, and what surfaces do to it: nothing, in this theme. */
+      --background-image: none;
+      --surface-backdrop: none;
       --color-background: #0a0b0d;
       --color-foreground: #edece8;
       --color-card: #121417;
@@ -115,6 +130,17 @@
       --color-author-5: #ff8a97;
     }
     @variant light {
+      /* Chivo speaks for people, Chivo Mono for machines: handles, IDs, times, code. */
+      --font-sans: "Chivo";
+      --font-mono: "Chivo Mono";
+      --radius-xs: 2px;
+      --radius-sm: 4px;
+      --radius-md: 6px;
+      --radius-lg: 10px;
+      --radius-xl: 14px;
+      /* What shows behind the page, and what surfaces do to it: nothing, in this theme. */
+      --background-image: none;
+      --surface-backdrop: none;
       --color-background: #f6f5f2;
       --color-foreground: #121417;
       --color-card: #ffffff;

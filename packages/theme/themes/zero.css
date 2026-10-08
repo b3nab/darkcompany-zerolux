@@ -1,0 +1,122 @@
+/*
+ * Zero: black and white, and cyan, the logo's dot, as the one light.
+ * People are the page's ink; cyan is an agent at work or what waits for you.
+ */
+@layer theme {
+  :root {
+    @variant zero-light {
+      --font-sans: "Geist";
+      --font-mono: "Geist Mono";
+      --radius-xs: 4px;
+      --radius-sm: 8px;
+      --radius-md: 10px;
+      --radius-lg: 12px;
+      --radius-xl: 16px;
+      --background-image: none;
+      --surface-backdrop: none;
+      --color-background: #ffffff;
+      --color-foreground: #000000;
+      --color-card: #fafafa;
+      --color-card-foreground: #000000;
+      --color-popover: #ffffff;
+      --color-popover-foreground: #000000;
+      --color-primary: #000000;
+      --color-primary-foreground: #ffffff;
+      --color-secondary: #f5f5f5;
+      --color-secondary-foreground: #000000;
+      --color-muted: #f5f5f5;
+      --color-muted-foreground: #525252;
+      --color-faint: #737373;
+      --color-accent: rgba(0, 0, 0, 0.05);
+      --color-accent-foreground: #000000;
+      --color-destructive: #c81e2b;
+      --color-destructive-foreground: #ffffff;
+      --color-success: #0f7446;
+      --color-warning: #b54708;
+      --color-attention: #007a6c;
+      --color-attention-foreground: #ffffff;
+      --color-human: #000000;
+      --color-human-foreground: #000000;
+      --color-agent: #0a9e8a;
+      --color-agent-foreground: #007a6c;
+      --color-border: #e5e5e5;
+      --color-input: #d4d4d4;
+      --color-ring: #0a9e8a;
+      --color-sidebar: #fafafa;
+      --color-sidebar-foreground: #000000;
+      --color-sidebar-primary: #000000;
+      --color-sidebar-primary-foreground: #ffffff;
+      --color-sidebar-accent: rgba(0, 0, 0, 0.05);
+      --color-sidebar-accent-foreground: #000000;
+      --color-sidebar-border: #e5e5e5;
+      --color-sidebar-ring: #0a9e8a;
+      --color-window-off: #ededed;
+      --color-window-dim: #c4f2ea;
+      --color-logo-ink: #000000;
+      --color-logo-dot: #0b8576;
+      --color-author-0: #007a6c;
+      --color-author-1: #8a5300;
+      --color-author-2: #0f6b3f;
+      --color-author-3: #6b2fb3;
+      --color-author-4: #a8324a;
+      --color-author-5: #1d4ed8;
+    }
+    @variant zero-dark {
+      --font-sans: "Geist";
+      --font-mono: "Geist Mono";
+      --radius-xs: 4px;
+      --radius-sm: 8px;
+      --radius-md: 10px;
+      --radius-lg: 12px;
+      --radius-xl: 16px;
+      --background-image: none;
+      --surface-backdrop: none;
+      --color-background: #000000;
+      --color-foreground: #ffffff;
+      --color-card: #0a0a0a;
+      --color-card-foreground: #ffffff;
+      --color-popover: #141414;
+      --color-popover-foreground: #ffffff;
+      --color-primary: #ffffff;
+      --color-primary-foreground: #000000;
+      --color-secondary: #111111;
+      --color-secondary-foreground: #ffffff;
+      --color-muted: #111111;
+      --color-muted-foreground: #a3a3a3;
+      --color-faint: #8a8a8a;
+      --color-accent: rgba(255, 255, 255, 0.08);
+      --color-accent-foreground: #ffffff;
+      --color-destructive: #ff5a5f;
+      --color-destructive-foreground: #000000;
+      --color-success: #3ddc97;
+      --color-warning: #ff8f3d;
+      --color-attention: #3cf2d8;
+      --color-attention-foreground: #000000;
+      --color-human: #ffffff;
+      --color-human-foreground: #ffffff;
+      --color-agent: #3cf2d8;
+      --color-agent-foreground: #3cf2d8;
+      --color-border: #1f1f1f;
+      --color-input: #333333;
+      --color-ring: #3cf2d8;
+      --color-sidebar: #050505;
+      --color-sidebar-foreground: #ffffff;
+      --color-sidebar-primary: #ffffff;
+      --color-sidebar-primary-foreground: #000000;
+      --color-sidebar-accent: rgba(255, 255, 255, 0.08);
+      --color-sidebar-accent-foreground: #ffffff;
+      --color-sidebar-border: #1f1f1f;
+      --color-sidebar-ring: #3cf2d8;
+      --color-window-off: #141414;
+      --color-window-dim: #0f3a35;
+      --color-logo-ink: #ffffff;
+      --color-logo-dot: #3cf2d8;
+      --color-author-0: #7df5e4;
+      --color-author-1: #ffd27a;
+      --color-author-2: #8be9a8;
+      --color-author-3: #c9b2ff;
+      --color-author-4: #ff9aa8;
+      --color-author-5: #9fc9ff;
+    }
+  }
+}

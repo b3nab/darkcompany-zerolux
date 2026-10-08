@@ -57,7 +57,24 @@
               "./node_modules/@expo-google-fonts/chivo/700Bold/Chivo_700Bold.ttf",
               "./node_modules/@expo-google-fonts/chivo-mono/400Regular/ChivoMono_400Regular.ttf",
               "./node_modules/@expo-google-fonts/chivo-mono/500Medium/ChivoMono_500Medium.ttf",
-              "./node_modules/@expo-google-fonts/chivo-mono/600SemiBold/ChivoMono_600SemiBold.ttf"
+              "./node_modules/@expo-google-fonts/chivo-mono/600SemiBold/ChivoMono_600SemiBold.ttf",
+              "./node_modules/@expo-google-fonts/geist/300Light/Geist_300Light.ttf",
+              "./node_modules/@expo-google-fonts/geist/400Regular/Geist_400Regular.ttf",
+              "./node_modules/@expo-google-fonts/geist/500Medium/Geist_500Medium.ttf",
+              "./node_modules/@expo-google-fonts/geist/600SemiBold/Geist_600SemiBold.ttf",
+              "./node_modules/@expo-google-fonts/geist/700Bold/Geist_700Bold.ttf",
+              "./node_modules/@expo-google-fonts/geist-mono/400Regular/GeistMono_400Regular.ttf",
+              "./node_modules/@expo-google-fonts/geist-mono/500Medium/GeistMono_500Medium.ttf",
+              "./node_modules/@expo-google-fonts/geist-mono/600SemiBold/GeistMono_600SemiBold.ttf",
+              "./node_modules/@expo-google-fonts/onest/300Light/Onest_300Light.ttf",
+              "./node_modules/@expo-google-fonts/onest/400Regular/Onest_400Regular.ttf",
+              "./node_modules/@expo-google-fonts/onest/500Medium/Onest_500Medium.ttf",
+              "./node_modules/@expo-google-fonts/onest/600SemiBold/Onest_600SemiBold.ttf",
+              "./node_modules/@expo-google-fonts/onest/700Bold/Onest_700Bold.ttf",
+              "./node_modules/@expo-google-fonts/schibsted-grotesk/400Regular/SchibstedGrotesk_400Regular.ttf",
+              "./node_modules/@expo-google-fonts/schibsted-grotesk/500Medium/SchibstedGrotesk_500Medium.ttf",
+              "./node_modules/@expo-google-fonts/schibsted-grotesk/600SemiBold/SchibstedGrotesk_600SemiBold.ttf",
+              "./node_modules/@expo-google-fonts/schibsted-grotesk/700Bold/SchibstedGrotesk_700Bold.ttf"
             ]
           },
           "android": {
@@ -101,6 +118,94 @@
                   {
                     "path": "./node_modules/@expo-google-fonts/chivo-mono/600SemiBold/ChivoMono_600SemiBold.ttf",
                     "weight": 600
+                  }
+                ]
+              },
+              {
+                "fontFamily": "Geist",
+                "fontDefinitions": [
+                  {
+                    "path": "./node_modules/@expo-google-fonts/geist/300Light/Geist_300Light.ttf",
+                    "weight": 300
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/geist/400Regular/Geist_400Regular.ttf",
+                    "weight": 400
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/geist/500Medium/Geist_500Medium.ttf",
+                    "weight": 500
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/geist/600SemiBold/Geist_600SemiBold.ttf",
+                    "weight": 600
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/geist/700Bold/Geist_700Bold.ttf",
+                    "weight": 700
+                  }
+                ]
+              },
+              {
+                "fontFamily": "Geist Mono",
+                "fontDefinitions": [
+                  {
+                    "path": "./node_modules/@expo-google-fonts/geist-mono/400Regular/GeistMono_400Regular.ttf",
+                    "weight": 400
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/geist-mono/500Medium/GeistMono_500Medium.ttf",
+                    "weight": 500
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/geist-mono/600SemiBold/GeistMono_600SemiBold.ttf",
+                    "weight": 600
+                  }
+                ]
+              },
+              {
+                "fontFamily": "Onest",
+                "fontDefinitions": [
+                  {
+                    "path": "./node_modules/@expo-google-fonts/onest/300Light/Onest_300Light.ttf",
+                    "weight": 300
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/onest/400Regular/Onest_400Regular.ttf",
+                    "weight": 400
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/onest/500Medium/Onest_500Medium.ttf",
+                    "weight": 500
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/onest/600SemiBold/Onest_600SemiBold.ttf",
+                    "weight": 600
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/onest/700Bold/Onest_700Bold.ttf",
+                    "weight": 700
+                  }
+                ]
+              },
+              {
+                "fontFamily": "Schibsted Grotesk",
+                "fontDefinitions": [
+                  {
+                    "path": "./node_modules/@expo-google-fonts/schibsted-grotesk/400Regular/SchibstedGrotesk_400Regular.ttf",
+                    "weight": 400
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/schibsted-grotesk/500Medium/SchibstedGrotesk_500Medium.ttf",
+                    "weight": 500
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/schibsted-grotesk/600SemiBold/SchibstedGrotesk_600SemiBold.ttf",
+                    "weight": 600
+                  },
+                  {
+                    "path": "./node_modules/@expo-google-fonts/schibsted-grotesk/700Bold/SchibstedGrotesk_700Bold.ttf",
+                    "weight": 700
                   }
                 ]
               }

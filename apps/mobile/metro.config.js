@@ -1,6 +1,7 @@
 const path = require("node:path");
 const { getDefaultConfig } = require("expo/metro-config");
 const { withUniwindConfig } = require("uniwind/metro");
+const registry = require("@zerolux/theme/themes.json");
 
 const config = getDefaultConfig(__dirname);
 
@@ -16,7 +17,11 @@ config.resolver.resolveRequest = (context, name, platform) =>
   );
 
 // Outermost on purpose: Uniwind compiles global.css and generates the className types.
+// Every theme but the default is a named Uniwind theme, in a light and a dark variant.
 module.exports = withUniwindConfig(config, {
   cssEntryFile: "./global.css",
   dtsFile: "./uniwind-types.d.ts",
+  extraThemes: registry.themes
+    .filter((theme) => theme.id !== registry.default)
+    .flatMap((theme) => [`${theme.id}-light`, `${theme.id}-dark`]),
 });

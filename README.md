@@ -62,7 +62,7 @@ apps/web/            Web app: React, Tailwind v4, shadcn/ui on Base UI
 apps/desktop/        Desktop app: Tauri, shared web UI and embedded Rust kernel
 apps/mobile/         Mobile app: Expo, Uniwind, React Native Reusables
 packages/chat/       Chat logic shared by web and mobile
-packages/theme/      Design tokens shared by web and mobile
+packages/theme/      Themes shared by web and mobile
 packages/bridge/     Chat bridge shared by the pi extension and the Claude Code runner
 extensions/pi/       pi extension
 extensions/claude/   Runner for Claude Code sessions started by ZeroLux

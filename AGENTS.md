@@ -5,7 +5,7 @@ Read `ZEROLUX.md` first: it defines the product. Then `README.md` and `docs/`.
 ## Stack
 
 - Kernel: Rust, `crates/zerolux`.
-- Web: React and TypeScript in `apps/web`, Tailwind v4 and shadcn/ui on Base UI (`bun x --bun shadcn add`). Colors and radii come only from `packages/theme/theme.css`.
+- Web: React and TypeScript in `apps/web`, Tailwind v4 and shadcn/ui on Base UI (`bun x --bun shadcn add`). Colors, fonts and radii come only from the themes in `packages/theme`.
 - Mobile: Expo in `apps/mobile` (see its `AGENTS.md`).
 - JavaScript: Bun only, for packages, scripts, bundling, dev server and tests. No npm, npx, pnpm, yarn, Node scripts or Vite. Run package CLIs with `bun x --bun`.
 - Dependencies: add them with `bun add` or `cargo add`; lockfiles are their output.

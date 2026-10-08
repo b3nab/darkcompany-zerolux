@@ -2,8 +2,11 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@zerolux/theme/theme.css";
+@import "@zerolux/theme/themes.css";
 /* Shared logic names classes too, such as the author colors. */
 @source "../../../packages/chat/src";
+/* The packaged desktop manager reuses these components and styles. */
+@source "../../desktop";
 @source "../node_modules/streamdown/dist/*.js";
 
 /* As on mobile (Uniwind): the theme you chose on <html>, otherwise the system's. */
@@ -28,11 +31,13 @@
   }
 }
 
-@theme {
-  /* Chivo speaks for people, Chivo Mono for machines: handles, IDs, times, code. */
-  --font-sans: "Chivo Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Chivo Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
-}
+/* A named theme in one light: <html data-theme="signal" class="dark">. One pair per theme. */
+@custom-variant signal-light (&:where([data-theme="signal"].light));
+@custom-variant signal-dark (&:where([data-theme="signal"].dark));
+@custom-variant vibe-light (&:where([data-theme="vibe"].light));
+@custom-variant vibe-dark (&:where([data-theme="vibe"].dark));
+@custom-variant zero-light (&:where([data-theme="zero"].light));
+@custom-variant zero-dark (&:where([data-theme="zero"].dark));
 
 /* shadcn/ui components also read the tokens by their unprefixed names. */
 :root {
@@ -72,6 +77,16 @@
   }
   body {
     @apply bg-background font-sans text-sm text-foreground antialiased;
+    background-image: var(--background-image);
+    background-attachment: fixed;
+  }
+  /* Surfaces over the page: a theme may let what is behind them show through. */
+  [data-slot="card"],
+  [data-slot="popover-content"],
+  [data-slot="dropdown-menu-content"],
+  [data-slot="sheet-content"],
+  .bg-sidebar {
+    backdrop-filter: var(--surface-backdrop);
   }
   ::selection {
     @apply bg-human/30;

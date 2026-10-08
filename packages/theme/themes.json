@@ -1,0 +1,25 @@
+{
+  "default": "boreal",
+  "themes": [
+    {
+      "id": "signal",
+      "name": "Signal",
+      "description": "Ink on paper, and one blue light that tells you something."
+    },
+    {
+      "id": "vibe",
+      "name": "Vibe",
+      "description": "Frosted glass in daylight: amber for people, blue for agents."
+    },
+    {
+      "id": "boreal",
+      "name": "Boreal",
+      "description": "Amber and cyan lights in a dark building."
+    },
+    {
+      "id": "zero",
+      "name": "Zero",
+      "description": "Black and white, and the cyan dot of the logo."
+    }
+  ]
+}

@@ -1,19 +1,36 @@
 import { useSyncExternalStore } from "react";
+import { defaultTheme, knownTheme } from "@zerolux/theme/themes";
 
-export type Theme = "light" | "dark" | "system";
-const KEY = "zerolux-theme";
+/** Your light: daylight, night, or the system's. */
+export type Light = "light" | "dark" | "system";
+// The light keeps the key it had before there were themes, so nobody loses their choice.
+const LIGHT = "zerolux-theme";
+const THEME = "zerolux-theme-name";
 const DARK = "(prefers-color-scheme: dark)";
 
-function stored(): Theme {
+function read(key: string) {
   try {
-    const value = localStorage.getItem(KEY);
-    return value === "light" || value === "dark" ? value : "system";
+    return localStorage.getItem(key);
   } catch {
-    return "system";
+    return null;
   }
 }
 
-let current = stored();
+/** Kept in this browser; without storage a choice lasts until the page reloads. */
+function keep(key: string, value: string | null) {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {
+    // Nothing to keep it in.
+  }
+}
+
+const saved = read(LIGHT);
+let chosen = {
+  theme: knownTheme(read(THEME)),
+  light: (saved === "light" || saved === "dark" ? saved : "system") as Light,
+};
 const listeners = new Set<() => void>();
 const subscribe = (listener: () => void) => {
   listeners.add(listener);
@@ -25,31 +42,54 @@ const subscribeSystem = (listener: () => void) => {
   return () => query.removeEventListener("change", listener);
 };
 
-/** The chosen theme as a class on <html>; without one, the CSS follows the system. */
-export function applyTheme(theme: Theme = current) {
-  document.documentElement.classList.remove("light", "dark");
-  if (theme !== "system") document.documentElement.classList.add(theme);
+/**
+ * Your theme and light on <html>: `data-theme` names any theme but the default, and the light
+ * is always a class, the system's when that is your choice.
+ */
+function apply() {
+  const root = document.documentElement;
+  const light =
+    chosen.light === "system"
+      ? matchMedia(DARK).matches
+        ? "dark"
+        : "light"
+      : chosen.light;
+  root.classList.remove("light", "dark");
+  root.classList.add(light);
+  if (chosen.theme === defaultTheme) delete root.dataset.theme;
+  else root.dataset.theme = chosen.theme;
 }
 
-/** Sets your theme, kept in this browser: light, dark, or the system's. */
-export function chooseTheme(theme: Theme) {
-  try {
-    if (theme === "system") localStorage.removeItem(KEY);
-    else localStorage.setItem(KEY, theme);
-  } catch {
-    // Without storage the choice lasts until the page reloads.
-  }
-  current = theme;
-  applyTheme(theme);
+/** Applies your theme now, and again whenever the system's light changes. */
+export function startTheme() {
+  apply();
+  subscribeSystem(apply);
+}
+
+function change(next: Partial<typeof chosen>) {
+  chosen = { ...chosen, ...next };
+  apply();
   for (const listener of listeners) listener();
 }
 
-/** Your theme and the one in effect now. */
+/** Sets your light: light, dark, or the system's. */
+export function chooseLight(light: Light) {
+  keep(LIGHT, light === "system" ? null : light);
+  change({ light });
+}
+
+/** Sets your theme, one of themes.json. */
+export function chooseTheme(theme: string) {
+  keep(THEME, theme === defaultTheme ? null : theme);
+  change({ theme: knownTheme(theme) });
+}
+
+/** Your theme and light, and the light in effect now. */
 export function useTheme() {
-  const theme = useSyncExternalStore(
+  const { theme, light } = useSyncExternalStore(
     subscribe,
-    () => current,
-    () => "system" as Theme,
+    () => chosen,
+    () => chosen,
   );
   const systemDark = useSyncExternalStore(
     subscribeSystem,
@@ -57,6 +97,6 @@ export function useTheme() {
     () => true,
   );
   const resolved: "light" | "dark" =
-    theme === "system" ? (systemDark ? "dark" : "light") : theme;
-  return { theme, resolved, choose: chooseTheme } as const;
+    light === "system" ? (systemDark ? "dark" : "light") : light;
+  return { theme, light, resolved, chooseTheme, chooseLight } as const;
 }

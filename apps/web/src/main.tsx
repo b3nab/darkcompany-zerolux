@@ -4,19 +4,24 @@ import { BrowserRouter } from "react-router";
 import { App } from "./App";
 import { preloadRenderer } from "./components/message-text";
 import { keepDraftsIn } from "@zerolux/chat";
-import { applyTheme } from "./theme";
+import { startTheme } from "./theme";
 
-applyTheme();
+startTheme();
 // Unsent messages survive a reload, in this browser only.
 const DRAFTS = "zerolux-drafts";
 try {
-  keepDraftsIn(JSON.parse(localStorage.getItem(DRAFTS) ?? "{}"), (all) => {
-    try {
-      localStorage.setItem(DRAFTS, JSON.stringify(all));
-    } catch {
-      // Without storage a draft lasts until the page reloads.
-    }
-  });
+  const restored = window.zeroluxRestoredDrafts;
+  delete window.zeroluxRestoredDrafts;
+  keepDraftsIn(
+    restored ?? JSON.parse(localStorage.getItem(DRAFTS) ?? "{}"),
+    (all) => {
+      try {
+        localStorage.setItem(DRAFTS, JSON.stringify(all));
+      } catch {
+        // Without storage a draft lasts until the page reloads.
+      }
+    },
+  );
 } catch {
   // Unreadable or no storage: drafts start empty.
 }

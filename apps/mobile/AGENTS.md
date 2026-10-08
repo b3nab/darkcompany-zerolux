@@ -5,7 +5,7 @@ Expo (React Native) app for iOS and Android. It talks to a running kernel over H
 ## Stack
 
 - Expo Router: every file in `app/` is a screen, `_layout.tsx` files are navigators. Components, hooks and helpers live outside `app/`.
-- Styling: Tailwind v4 through Uniwind (`global.css`), tokens only from `packages/theme/theme.css`. Components from React Native Reusables (`components/ui`), lists with Legend List, keyboard handling with `react-native-keyboard-controller`.
+- Styling: Tailwind v4 through Uniwind (`global.css`), tokens only from the themes in `packages/theme`. Components from React Native Reusables (`components/ui`), lists with Legend List, keyboard handling with `react-native-keyboard-controller`.
 - Shared chat logic comes from `packages/chat`.
 - Messages render with `react-native-enriched-markdown`; Mermaid diagrams with the `mermaid` package inside an Expo DOM component.
 

@@ -10,6 +10,7 @@ import {
   MonitorIcon,
   MoonIcon,
   NetworkIcon,
+  PaletteIcon,
   PhoneIcon,
   PlusIcon,
   SettingsIcon,
@@ -32,8 +33,9 @@ import type { Chat, Perform } from "@zerolux/chat";
 import { activeActors, api } from "./api";
 import type { Actor, Project, Workspace } from "./api";
 import { agentPresence } from "./presence";
+import { themes } from "@zerolux/theme/themes";
 import { useTheme } from "./theme";
-import type { Theme } from "./theme";
+import type { Light } from "./theme";
 import { Mark } from "@/components/brand";
 import { Lamp } from "@/components/lamp";
 import { ActorMark } from "@/components/presence";
@@ -529,25 +531,25 @@ function KernelStatus({ kernel }: { kernel: Kernel }) {
 
 /** Night or daylight, in one click. */
 function ThemeSwitch() {
-  const { resolved, choose } = useTheme();
+  const { resolved, chooseLight } = useTheme();
   const other = resolved === "dark" ? "light" : "dark";
-  const label = other === "light" ? "Daylight theme" : "Night theme";
+  const label = other === "light" ? "Switch to daylight" : "Switch to night";
   return (
     <Button
       variant="ghost"
       size="icon"
       aria-label={label}
       title={label}
-      onClick={() => choose(other)}
+      onClick={() => chooseLight(other)}
     >
       {other === "light" ? <SunIcon /> : <MoonIcon />}
     </Button>
   );
 }
 
-/** You, the theme, and the team. */
+/** You, the theme and its light, and the team. */
 function UserMenu({ owner }: { owner: Actor }) {
-  const { theme, choose } = useTheme();
+  const { theme, light, chooseTheme, chooseLight } = useTheme();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -576,7 +578,26 @@ function UserMenu({ owner }: { owner: Actor }) {
           <DropdownMenuLabel>Theme</DropdownMenuLabel>
           <DropdownMenuRadioGroup
             value={theme}
-            onValueChange={(value) => choose(value as Theme)}
+            onValueChange={(value) => chooseTheme(value as string)}
+          >
+            {themes.map((t) => (
+              <DropdownMenuRadioItem
+                key={t.id}
+                value={t.id}
+                title={t.description}
+              >
+                <PaletteIcon />
+                {t.name}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Light</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={light}
+            onValueChange={(value) => chooseLight(value as Light)}
           >
             <DropdownMenuRadioItem value="system">
               <MonitorIcon />

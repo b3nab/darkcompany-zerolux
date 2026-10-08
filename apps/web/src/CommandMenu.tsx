@@ -6,6 +6,7 @@ import {
   MessagesSquareIcon,
   MoonIcon,
   NetworkIcon,
+  PaletteIcon,
   PhoneIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -22,6 +23,7 @@ import {
 } from "@zerolux/chat";
 import type { Chat, Discovery, Perform } from "@zerolux/chat";
 import type { Workspace } from "./api";
+import { themes } from "@zerolux/theme/themes";
 import { useTheme } from "./theme";
 import {
   Command,
@@ -65,7 +67,7 @@ export function CommandMenu({
   perform: Perform;
 }) {
   const navigate = useNavigate();
-  const { resolved, choose } = useTheme();
+  const { theme, resolved, chooseTheme, chooseLight } = useTheme();
   const [discovery, setDiscovery] = useState<Discovery>();
   const [looking, setLooking] = useState(false);
   const [error, setError] = useState("");
@@ -236,12 +238,24 @@ export function CommandMenu({
             </CommandItem>
             <CommandItem
               onSelect={() =>
-                run(() => choose(resolved === "dark" ? "light" : "dark"))
+                run(() => chooseLight(resolved === "dark" ? "light" : "dark"))
               }
             >
               {resolved === "dark" ? <SunIcon /> : <MoonIcon />}
-              {resolved === "dark" ? "Daylight theme" : "Night theme"}
+              {resolved === "dark" ? "Switch to daylight" : "Switch to night"}
             </CommandItem>
+            {themes
+              .filter((t) => t.id !== theme)
+              .map((t) => (
+                <CommandItem
+                  key={t.id}
+                  value={`Theme ${t.name}`}
+                  onSelect={() => run(() => chooseTheme(t.id))}
+                >
+                  <PaletteIcon />
+                  {`Theme: ${t.name}`}
+                </CommandItem>
+              ))}
           </CommandGroup>
         </CommandList>
         <footer className="flex items-center gap-4 border-t px-4 py-2.5 font-mono text-[11px] text-faint">
