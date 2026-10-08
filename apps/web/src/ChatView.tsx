@@ -66,53 +66,15 @@ import {
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { MessageText } from "@/components/message-text";
 import { ActorMark, Eyebrow } from "@/components/presence";
+import { SidePanel } from "@/components/side-panel";
+import { XL, useMedia } from "./media";
 
 const MAX_TEXT = 64 * 1024;
 // Messages from one author a few minutes apart read as one turn.
 const TURN = 5 * 60 * 1000;
 
-/** The chat page: your chats, and beside them the open one or a new one. */
-export function Chats({
-  chat,
-  actors,
-  open,
-  children,
-}: {
-  chat: Chat;
-  actors: Actor[];
-  /** On a phone the open chat takes the screen; otherwise the list does. */
-  open: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="grid min-h-0 flex-1 md:grid-cols-[18rem_minmax(0,1fr)]">
-      <ChatList
-        chat={chat}
-        actors={actors}
-        className={cn(open && "max-md:hidden")}
-      />
-      <div
-        className={cn(
-          "flex min-h-0 min-w-0 flex-col",
-          !open && "max-md:hidden",
-        )}
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
-
 /** Every chat, the newest activity first; the ones waiting for you are marked. */
-function ChatList({
-  chat,
-  actors,
-  className,
-}: {
-  chat: Chat;
-  actors: Actor[];
-  className?: string;
-}) {
+export function ChatList({ chat, actors }: { chat: Chat; actors: Actor[] }) {
   const [filter, setFilter] = useState<ChatFilter>("all");
   const name = (id: string) =>
     actors.find((a) => a.id === id)?.name ?? "Former member";
@@ -124,10 +86,7 @@ function ChatList({
   const shown = listChats(chat.conversations, filter, waiting);
 
   return (
-    <section
-      aria-label="Chats"
-      className={cn("flex min-h-0 flex-col md:border-r", className)}
-    >
+    <section aria-label="Chats" className="flex min-h-0 flex-1 flex-col">
       <header className="flex items-center justify-between px-4 pt-4 pb-3">
         <h2 className="text-lg font-semibold tracking-tight">Chats</h2>
         <Link
@@ -301,6 +260,7 @@ export function ChatView({
   // Beside the chat on a wide screen; over it, on request, on a narrower one.
   const [about, setAbout] = useState(true);
   const [aboutSheet, setAboutSheet] = useState(false);
+  const wide = useMedia(XL);
   const scroller = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLOListElement>(null);
   const last = chat.messages.at(-1)?.seq;
@@ -357,267 +317,273 @@ export function ChatView({
       actors={actors}
       sessions={chat.sessions}
       storage={storage}
-      className="h-full"
+      className="h-full border-l-0"
     />
   );
 
   return (
-    <div className="flex min-h-0 flex-1">
-      <section
-        aria-label={conversation.title}
-        className="flex min-h-0 min-w-0 flex-1 flex-col"
+    <>
+      <SidePanel
+        id="chat-about"
+        wide={wide}
+        panel={wide && about && aboutPanel}
+        size={288}
+        min={240}
+        max={480}
+        className="flex min-h-0 flex-1"
       >
-        <header className="flex min-h-14 shrink-0 items-center gap-3 border-b px-3 py-2 md:px-5">
-          <Link
-            to={parent ? `/chats/${parent.id}` : "/chats"}
-            aria-label={parent ? `Back to ${parent.title}` : "All chats"}
-            className={cn(
-              buttonVariants({ variant: "ghost", size: "icon-sm" }),
-              !thread && "md:hidden",
-            )}
-          >
-            <ChevronLeftIcon />
-          </Link>
-          <ChatMark
-            conversation={conversation}
-            actors={actors}
-            className="size-8 text-[13px] max-sm:hidden"
-          />
-          <div className="min-w-0 flex-1">
-            <h2 className="truncate text-[15px] font-semibold">
-              {conversation.title}
-            </h2>
-            <p
-              data-working={working || undefined}
-              className="truncate text-xs text-muted-foreground data-working:text-agent-foreground"
-            >
-              {thread &&
-                `Thread in «${parent?.title ?? "a chat"}»${conversation.closed_at ? " · closed" : ""} · `}
-              {presenceLine(conversation, chat.sessions, name)}
-            </p>
-          </div>
-          {!thread && (
+        <section
+          aria-label={conversation.title}
+          className="flex min-h-0 min-w-0 flex-1 flex-col"
+        >
+          <header className="flex min-h-14 shrink-0 items-center gap-3 border-b px-3 py-2 md:px-5">
             <Link
-              to={`/meetings?chat=${conversation.id}`}
+              to={parent ? `/chats/${parent.id}` : "/chats"}
+              aria-label={parent ? `Back to ${parent.title}` : "All chats"}
               className={cn(
-                buttonVariants({ variant: "outline", size: "sm" }),
-                "max-sm:hidden",
+                buttonVariants({ variant: "ghost", size: "icon-sm" }),
+                !thread && "md:hidden",
               )}
             >
-              <PhoneIcon />
-              Meet
+              <ChevronLeftIcon />
             </Link>
-          )}
-          {conversation.kind === "group" && (
-            <Button
-              variant="outline"
-              size="sm"
-              aria-expanded={adding}
-              onClick={() => setAdding(!adding)}
-            >
-              Add agent
-            </Button>
-          )}
-          {thread && !conversation.closed_at && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() => void perform(() => chat.close(conversation))}
-            >
-              Close thread
-            </Button>
-          )}
-          {!thread && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() =>
-                void perform(() =>
-                  chat.pause(conversation, !conversation.paused),
-                )
-              }
-            >
-              {conversation.paused ? "Resume" : "Pause"}
-            </Button>
-          )}
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="About this chat"
-            aria-pressed={about}
-            className="xl:aria-pressed:bg-accent"
-            onClick={() =>
-              matchMedia("(min-width: 80rem)").matches
-                ? setAbout(!about)
-                : setAboutSheet(true)
-            }
-          >
-            <PanelRightIcon />
-          </Button>
-        </header>
-        {open.length > 0 && (
-          <nav
-            aria-label="Open threads"
-            className="flex gap-2 overflow-x-auto border-b px-3 py-2 md:px-5"
-          >
-            {open.map((t) => (
-              <ThreadLink key={t.id} thread={t} name={name} />
-            ))}
-          </nav>
-        )}
-        {adding && (
-          <div className="border-b px-3 py-3 md:px-5">
-            <AddAgent
-              chat={chat}
+            <ChatMark
               conversation={conversation}
               actors={actors}
+              className="size-8 text-[13px] max-sm:hidden"
+            />
+            <div className="min-w-0 flex-1">
+              <h2 className="truncate text-[15px] font-semibold">
+                {conversation.title}
+              </h2>
+              <p
+                data-working={working || undefined}
+                className="truncate text-xs text-muted-foreground data-working:text-agent-foreground"
+              >
+                {thread &&
+                  `Thread in «${parent?.title ?? "a chat"}»${conversation.closed_at ? " · closed" : ""} · `}
+                {presenceLine(conversation, chat.sessions, name)}
+              </p>
+            </div>
+            {!thread && (
+              <Link
+                to={`/meetings?chat=${conversation.id}`}
+                className={cn(
+                  buttonVariants({ variant: "outline", size: "sm" }),
+                  "max-sm:hidden",
+                )}
+              >
+                <PhoneIcon />
+                Meet
+              </Link>
+            )}
+            {conversation.kind === "group" && (
+              <Button
+                variant="outline"
+                size="sm"
+                aria-expanded={adding}
+                onClick={() => setAdding(!adding)}
+              >
+                Add agent
+              </Button>
+            )}
+            {thread && !conversation.closed_at && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => void perform(() => chat.close(conversation))}
+              >
+                Close thread
+              </Button>
+            )}
+            {!thread && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() =>
+                  void perform(() =>
+                    chat.pause(conversation, !conversation.paused),
+                  )
+                }
+              >
+                {conversation.paused ? "Resume" : "Pause"}
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="About this chat"
+              aria-pressed={about}
+              className="xl:aria-pressed:bg-accent"
+              onClick={() => (wide ? setAbout(!about) : setAboutSheet(true))}
+            >
+              <PanelRightIcon />
+            </Button>
+          </header>
+          {open.length > 0 && (
+            <nav
+              aria-label="Open threads"
+              className="flex gap-2 overflow-x-auto border-b px-3 py-2 md:px-5"
+            >
+              {open.map((t) => (
+                <ThreadLink key={t.id} thread={t} name={name} />
+              ))}
+            </nav>
+          )}
+          {adding && (
+            <div className="border-b px-3 py-3 md:px-5">
+              <AddAgent
+                chat={chat}
+                conversation={conversation}
+                actors={actors}
+                busy={busy}
+                perform={perform}
+                hire={hire}
+                done={() => setAdding(false)}
+              />
+            </div>
+          )}
+          {conversation.paused && (
+            <p className="border-b bg-attention/10 px-3 py-2 text-sm text-attention md:px-5">
+              {thread
+                ? `Paused with «${parent?.title ?? "its chat"}»: no agent is woken here until you resume that chat.`
+                : "Paused: no agent is woken. New messages are saved and delivered when you resume."}
+            </p>
+          )}
+          <div
+            ref={scroller}
+            className="min-h-0 flex-1 overflow-y-auto px-3 py-4 md:px-6"
+            onScroll={(e) => {
+              const l = e.currentTarget;
+              // The browser also scrolls when content changes size (scroll anchoring): only a
+              // scroll over unchanged content is the reader moving.
+              if (l.scrollHeight !== height.current) return;
+              following.current =
+                l.scrollHeight - l.scrollTop - l.clientHeight < 80;
+            }}
+          >
+            <ol ref={list} className="mx-auto flex max-w-3xl flex-col gap-1">
+              {(chat.messages[0]?.seq ?? 1) > 1 && (
+                <li className="self-center pb-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void perform(chat.loadEarlier)}
+                  >
+                    Show earlier messages
+                  </Button>
+                </li>
+              )}
+              {chat.messages.map((m, i) => {
+                const previous = chat.messages[i - 1];
+                const day = dayLabel(m.created_at);
+                const newDay =
+                  !previous || dayLabel(previous.created_at) !== day;
+                return (
+                  <Fragment key={m.seq}>
+                    {newDay && <DayLabel>{day}</DayLabel>}
+                    <MessageRow
+                      message={m}
+                      mine={m.author_id === ownerId}
+                      continued={
+                        !newDay &&
+                        previous.author_id === m.author_id &&
+                        m.created_at - previous.created_at < TURN
+                      }
+                      author={actor(m.author_id)}
+                      name={name}
+                    >
+                      {threadOn(m.id) && (
+                        <ThreadLink thread={threadOn(m.id)!} name={name} />
+                      )}
+                    </MessageRow>
+                  </Fragment>
+                );
+              })}
+              {unsent.map((m) => (
+                <li
+                  key={m.id}
+                  data-mine
+                  data-unsent
+                  className="mt-1 max-w-[min(40rem,85%)] self-end rounded-md rounded-br-xs border border-dashed border-human/40 px-3.5 py-2"
+                >
+                  {/* As typed: it is formatted once ZeroLux has it. Rendering it now could load
+                    the renderer while ZeroLux is unreachable, and a failed load stays failed. */}
+                  <p className="text-sm break-words whitespace-pre-wrap">
+                    {m.text}
+                  </p>
+                  <span className="flex items-center justify-end gap-1 font-mono text-[11px] text-faint">
+                    Not sent yet: it goes out when ZeroLux is back
+                    <ClockIcon aria-hidden className="size-3" />
+                  </span>
+                </li>
+              ))}
+              {asks.map((a) => (
+                <li key={a.id} className="mt-3">
+                  <ApprovalCard
+                    approval={a}
+                    chat={chat}
+                    actors={actors}
+                    busy={busy}
+                    perform={perform}
+                  />
+                </li>
+              ))}
+              {busyHere.length > 0 && (
+                <li
+                  data-activity
+                  aria-live="polite"
+                  className="mt-2 flex items-center gap-2 self-start rounded-full border border-agent/30 bg-agent/10 px-3 py-1.5 font-mono text-[11.5px] text-agent-foreground"
+                >
+                  <span aria-hidden className="flex gap-1">
+                    {[0, 300, 600].map((delay) => (
+                      <span
+                        key={delay}
+                        style={{ animationDelay: `${delay}ms` }}
+                        className="size-1.5 animate-pulse rounded-[1.5px] bg-agent motion-reduce:animate-none"
+                      />
+                    ))}
+                  </span>
+                  {busyHere.map(name).join(", ")}{" "}
+                  {busyHere.length === 1 ? "is" : "are"} working
+                </li>
+              )}
+              {chat.messages.length === 0 && conversation.last_seq === 0 && (
+                <DayLabel>No messages yet. Say hello.</DayLabel>
+              )}
+            </ol>
+          </div>
+          {thread ? (
+            <p className="border-t px-3 py-3 text-xs text-muted-foreground md:px-5">
+              {conversation.closed_at
+                ? "This thread is closed."
+                : `Agents coordinate here; the answer comes in «${parent?.title ?? "the chat"}».`}
+            </p>
+          ) : (
+            <Composer
+              key={conversation.id}
+              chat={chat}
+              conversation={conversation}
+              agents={agents}
               busy={busy}
               perform={perform}
-              hire={hire}
-              done={() => setAdding(false)}
+              storage={storage}
+              capabilities={capabilities}
+              sent={() => (following.current = true)}
             />
-          </div>
-        )}
-        {conversation.paused && (
-          <p className="border-b bg-attention/10 px-3 py-2 text-sm text-attention md:px-5">
-            {thread
-              ? `Paused with «${parent?.title ?? "its chat"}»: no agent is woken here until you resume that chat.`
-              : "Paused: no agent is woken. New messages are saved and delivered when you resume."}
-          </p>
-        )}
-        <div
-          ref={scroller}
-          className="min-h-0 flex-1 overflow-y-auto px-3 py-4 md:px-6"
-          onScroll={(e) => {
-            const l = e.currentTarget;
-            // The browser also scrolls when content changes size (scroll anchoring): only a
-            // scroll over unchanged content is the reader moving.
-            if (l.scrollHeight !== height.current) return;
-            following.current =
-              l.scrollHeight - l.scrollTop - l.clientHeight < 80;
-          }}
-        >
-          <ol ref={list} className="mx-auto flex max-w-3xl flex-col gap-1">
-            {(chat.messages[0]?.seq ?? 1) > 1 && (
-              <li className="self-center pb-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => void perform(chat.loadEarlier)}
-                >
-                  Show earlier messages
-                </Button>
-              </li>
-            )}
-            {chat.messages.map((m, i) => {
-              const previous = chat.messages[i - 1];
-              const day = dayLabel(m.created_at);
-              const newDay = !previous || dayLabel(previous.created_at) !== day;
-              return (
-                <Fragment key={m.seq}>
-                  {newDay && <DayLabel>{day}</DayLabel>}
-                  <MessageRow
-                    message={m}
-                    mine={m.author_id === ownerId}
-                    continued={
-                      !newDay &&
-                      previous.author_id === m.author_id &&
-                      m.created_at - previous.created_at < TURN
-                    }
-                    author={actor(m.author_id)}
-                    name={name}
-                  >
-                    {threadOn(m.id) && (
-                      <ThreadLink thread={threadOn(m.id)!} name={name} />
-                    )}
-                  </MessageRow>
-                </Fragment>
-              );
-            })}
-            {unsent.map((m) => (
-              <li
-                key={m.id}
-                data-mine
-                data-unsent
-                className="mt-1 max-w-[min(40rem,85%)] self-end rounded-md rounded-br-xs border border-dashed border-human/40 px-3.5 py-2"
-              >
-                {/* As typed: it is formatted once ZeroLux has it. Rendering it now could load
-                    the renderer while ZeroLux is unreachable, and a failed load stays failed. */}
-                <p className="text-sm break-words whitespace-pre-wrap">
-                  {m.text}
-                </p>
-                <span className="flex items-center justify-end gap-1 font-mono text-[11px] text-faint">
-                  Not sent yet: it goes out when ZeroLux is back
-                  <ClockIcon aria-hidden className="size-3" />
-                </span>
-              </li>
-            ))}
-            {asks.map((a) => (
-              <li key={a.id} className="mt-3">
-                <ApprovalCard
-                  approval={a}
-                  chat={chat}
-                  actors={actors}
-                  busy={busy}
-                  perform={perform}
-                />
-              </li>
-            ))}
-            {busyHere.length > 0 && (
-              <li
-                data-activity
-                aria-live="polite"
-                className="mt-2 flex items-center gap-2 self-start rounded-full border border-agent/30 bg-agent/10 px-3 py-1.5 font-mono text-[11.5px] text-agent-foreground"
-              >
-                <span aria-hidden className="flex gap-1">
-                  {[0, 300, 600].map((delay) => (
-                    <span
-                      key={delay}
-                      style={{ animationDelay: `${delay}ms` }}
-                      className="size-1.5 animate-pulse rounded-[1.5px] bg-agent motion-reduce:animate-none"
-                    />
-                  ))}
-                </span>
-                {busyHere.map(name).join(", ")}{" "}
-                {busyHere.length === 1 ? "is" : "are"} working
-              </li>
-            )}
-            {chat.messages.length === 0 && conversation.last_seq === 0 && (
-              <DayLabel>No messages yet. Say hello.</DayLabel>
-            )}
-          </ol>
-        </div>
-        {thread ? (
-          <p className="border-t px-3 py-3 text-xs text-muted-foreground md:px-5">
-            {conversation.closed_at
-              ? "This thread is closed."
-              : `Agents coordinate here; the answer comes in «${parent?.title ?? "the chat"}».`}
-          </p>
-        ) : (
-          <Composer
-            key={conversation.id}
-            chat={chat}
-            conversation={conversation}
-            agents={agents}
-            busy={busy}
-            perform={perform}
-            storage={storage}
-            capabilities={capabilities}
-            sent={() => (following.current = true)}
-          />
-        )}
-      </section>
-      {about && <div className="w-72 shrink-0 max-xl:hidden">{aboutPanel}</div>}
+          )}
+        </section>
+      </SidePanel>
       <Sheet open={aboutSheet} onOpenChange={setAboutSheet}>
         <SheetContent side="right" className="w-80 gap-0 p-0">
           <SheetTitle className="sr-only">About this chat</SheetTitle>
           {aboutPanel}
         </SheetContent>
       </Sheet>
-    </div>
+    </>
   );
 }
 
@@ -745,8 +711,15 @@ function Stamp({
   );
 }
 
+/** Enter sends; Shift Enter adds a line; nothing goes while an input method composes a word. */
+export const sendsOnEnter = (key: {
+  key: string;
+  shiftKey: boolean;
+  isComposing: boolean;
+}) => key.key === "Enter" && !key.shiftKey && !key.isComposing;
+
 /**
- * Where you write: Enter adds a line, ⌘ Enter sends. Files, dictation and voice messages go
+ * Where you write: Enter sends, Shift Enter adds a line. Files, dictation and voice messages go
  * through the kernel; each control waits for the capability it needs.
  */
 function Composer({
@@ -790,6 +763,12 @@ function Composer({
     }
   }, []);
   const tooLong = new TextEncoder().encode(text).length > MAX_TEXT;
+  // What stops a message from going, or what went wrong with a recording or an upload.
+  const note = tooLong
+    ? "This message is too long (64 KB maximum)."
+    : !agents.length
+      ? "No agents in this chat."
+      : voiceError || storage.error;
   const microphone = canRecord();
   const transcription = capabilities.includes("transcription-v1");
   const edit = (change: () => void) => {
@@ -920,10 +899,9 @@ function Composer({
               edit(() => setText(e.target.value));
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                void submit();
-              }
+              if (!sendsOnEnter(e.nativeEvent)) return;
+              e.preventDefault();
+              void submit();
             }}
             rows={1}
             className="max-h-40 min-h-8.5 flex-1 resize-none bg-transparent px-1.5 py-1.5 text-sm outline-none placeholder:text-faint"
@@ -978,16 +956,7 @@ function Composer({
           <SendIcon data-icon="inline-end" />
         </Button>
       </div>
-      <p className="flex flex-wrap justify-between gap-x-4 font-mono text-[11px] text-faint">
-        <span>
-          {tooLong
-            ? "This message is too long (64 KB maximum)."
-            : !agents.length
-              ? "No agents in this chat."
-              : voiceError || storage.error}
-        </span>
-        <span className="max-sm:hidden">Enter adds a line · ⌘ Enter sends</span>
-      </p>
+      {note && <p className="font-mono text-[11px] text-faint">{note}</p>}
     </form>
   );
 }

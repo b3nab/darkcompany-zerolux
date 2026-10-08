@@ -17,6 +17,8 @@ import { buttonVariants } from "@/components/ui/button";
 import { Lamp } from "@/components/lamp";
 import type { LampState } from "@/components/lamp";
 import { ActorMark, Eyebrow } from "@/components/presence";
+import { SidePanel } from "@/components/side-panel";
+import { LG, useMedia } from "./media";
 
 type View = "everyone" | "people" | "agents" | "shift";
 const views: Record<View, { label: string; note: string }> = {
@@ -58,6 +60,7 @@ export function Organization({
     actors.find((a) => a.id === params.get("actor")) ?? owner ?? actors[0];
   const select = (actor: Actor) =>
     setParams({ actor: actor.id }, { replace: true });
+  const wide = useMedia(LG);
   const node = (actor: Actor, agents: Actor[] = []) => (
     <Node
       actor={actor}
@@ -68,11 +71,49 @@ export function Organization({
     />
   );
 
+  const profile = selected && (
+    <aside
+      aria-label={`${selected.name}'s profile`}
+      className="flex min-h-0 flex-1 flex-col border-t bg-card lg:overflow-y-auto lg:border-t-0"
+    >
+      {selected.kind === "human" ? (
+        <PersonProfile
+          person={selected}
+          isOwner={selected.id === owner?.id}
+          agents={agentsOf(selected)}
+          state={state}
+          presence={(a) =>
+            agentPresence(a.id, chat.sessions, workspace.connections).label
+          }
+          select={select}
+        />
+      ) : (
+        <AgentProfile
+          key={selected.id}
+          agent={selected}
+          owner={actors.find((a) => a.id === selected.owner_id)}
+          workspace={workspace}
+          chat={chat}
+          state={state(selected)}
+          select={select}
+        />
+      )}
+    </aside>
+  );
+
   return (
-    <div className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_22.5rem] lg:overflow-hidden">
+    <SidePanel
+      id="org"
+      wide={wide}
+      panel={profile}
+      size={360}
+      min={280}
+      max={560}
+      className="grid min-h-0 flex-1 overflow-y-auto"
+    >
       <section
         aria-label="Organization"
-        className="min-w-0 overflow-auto bg-background bg-[radial-gradient(var(--color-border)_1px,transparent_1px)] bg-size-[18px_18px] px-4 pt-6 pb-12 md:px-8"
+        className="min-h-0 min-w-0 flex-1 overflow-auto bg-background bg-[radial-gradient(var(--color-border)_1px,transparent_1px)] bg-size-[18px_18px] px-4 pt-6 pb-12 md:px-8"
       >
         <div className="mb-7 flex flex-wrap items-center gap-x-3.5 gap-y-2.5">
           <div
@@ -141,36 +182,7 @@ export function Organization({
           </ul>
         )}
       </section>
-      {selected && (
-        <aside
-          aria-label={`${selected.name}'s profile`}
-          className="flex min-h-0 flex-col border-t bg-card lg:overflow-y-auto lg:border-t-0 lg:border-l"
-        >
-          {selected.kind === "human" ? (
-            <PersonProfile
-              person={selected}
-              isOwner={selected.id === owner?.id}
-              agents={agentsOf(selected)}
-              state={state}
-              presence={(a) =>
-                agentPresence(a.id, chat.sessions, workspace.connections).label
-              }
-              select={select}
-            />
-          ) : (
-            <AgentProfile
-              key={selected.id}
-              agent={selected}
-              owner={actors.find((a) => a.id === selected.owner_id)}
-              workspace={workspace}
-              chat={chat}
-              state={state(selected)}
-              select={select}
-            />
-          )}
-        </aside>
-      )}
-    </div>
+    </SidePanel>
   );
 }
 

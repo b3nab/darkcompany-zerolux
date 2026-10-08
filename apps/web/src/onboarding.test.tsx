@@ -180,7 +180,7 @@ test("after onboarding the chats page shows the steps to a first chat", () => {
   expect(html).not.toContain("cargo run -- worker");
 });
 
-test("every page has its own address, and the sidebar links to them", () => {
+test("every page has its own address, and the bar links to them", () => {
   const app = (
     <App
       initialWorkspace={{
@@ -199,12 +199,22 @@ test("every page has its own address, and the sidebar links to them", () => {
     /<a[^>]*aria-label="New chat"[^>]*href="\/chats\/new"/,
   );
   const home = at("/", app);
-  for (const page of ["/chats", "/storage", "/org", "/meetings", "/approvals"])
+  for (const page of [
+    "/chats",
+    "/projects",
+    "/team",
+    "/org",
+    "/meetings",
+    "/storage",
+    "/approvals",
+  ])
     expect(home).toContain(`href="${page}"`);
-  expect(home).toMatch(
+  // Team's panel lists your agents, and hires one.
+  const team = at("/team", app);
+  expect(team).toContain(">Your agents</h2>");
+  expect(team).toMatch(
     /<a[^>]*aria-label="Hire an agent"[^>]*href="\/team\/hire"/,
   );
-  expect(home).toMatch(/<a[^>]*href="\/team"[^>]*>Your agents<\/a>/);
 });
 
 test("an older kernel without chat-v1 gets the project view and no chat controls", () => {
@@ -260,9 +270,9 @@ test("forms are sent by their own submit button", () => {
       ),
     ),
   ).toEqual(["Save name &amp; continue"]);
-  // With no project yet, the sidebar offers the project form.
-  const home = at(
-    "/",
+  // With no project yet, the Projects panel offers the project form.
+  const projects = at(
+    "/projects",
     <App
       initialWorkspace={{
         ...initial,
@@ -271,7 +281,7 @@ test("forms are sent by their own submit button", () => {
       }}
     />,
   );
-  expect(submits(home)).toEqual(["Create project"]);
+  expect(submits(projects)).toEqual(["Create project"]);
   const project = at(
     "/projects/project",
     <App

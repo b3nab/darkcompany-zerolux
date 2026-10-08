@@ -6,9 +6,10 @@ import { Approvals } from "./Approvals";
 import {
   AddAgent,
   ChatHome,
+  ChatList,
   ChatView,
-  Chats,
   NewConversation,
+  sendsOnEnter,
 } from "./ChatView";
 import { Meetings } from "./Meetings";
 import { Organization } from "./Org";
@@ -491,13 +492,10 @@ test("the chat list shows the last author, escaped text and timestamp, with no t
     last_message: null,
   };
   const html = renderToStaticMarkup(
-    <Chats
+    <ChatList
       chat={fakeChat({ conversations: [empty, latest] })}
       actors={actors}
-      open={false}
-    >
-      <p>Selected chat</p>
-    </Chats>,
+    />,
   );
   expect(html).toContain("aspen: &lt;b&gt;Latest update&lt;/b&gt;");
   expect(html).toContain(new Date(created_at).toISOString());
@@ -527,9 +525,7 @@ test("the chats home marks finished steps; the list beside it shows every chat",
   expect(chatting).toContain("Pick a chat.");
   expect(chatting.match(/data-done="true"/g)).toHaveLength(2);
   const list = renderToStaticMarkup(
-    <Chats chat={fakeChat()} actors={actors} open={false}>
-      {null}
-    </Chats>,
+    <ChatList chat={fakeChat()} actors={actors} />,
   );
   expect(list).toMatch(/<a[^>]*aria-label="New chat"[^>]*href="\/chats\/new"/);
   expect(list).toContain(">General<");
@@ -602,6 +598,31 @@ test("a message the kernel did not receive stays visible until it goes out", () 
   expect(html).toContain("sent while restarting");
   expect(html).toContain("Not sent yet: it goes out when ZeroLux is back");
   expect(html).not.toContain("another chat");
+});
+
+test("Enter sends, Shift Enter adds a line, and nothing goes while a word is being composed", () => {
+  const press = (key: string, shiftKey = false, isComposing = false) =>
+    sendsOnEnter({ key, shiftKey, isComposing });
+  expect(press("Enter")).toBe(true);
+  expect(press("Enter", true)).toBe(false);
+  expect(press("Enter", false, true)).toBe(false);
+  expect(press("a")).toBe(false);
+  const html = renderToStaticMarkup(
+    <ChatView
+      chat={fakeChat({ openId: group.id })}
+      conversation={group}
+      actors={actors}
+      ownerId={OWNER}
+      busy={false}
+      perform={perform}
+      hire={() => {}}
+      storage={files()}
+      capabilities={[]}
+    />,
+  );
+  expect(html).toContain('aria-label="Message"');
+  expect(html).not.toContain("Enter sends");
+  expect(html).not.toContain("adds a line");
 });
 
 test("the chat header shows how many messages have not reached each agent yet", () => {

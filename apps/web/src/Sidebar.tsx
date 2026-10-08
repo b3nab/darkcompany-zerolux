@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { SubmitEvent } from "react";
-import { Link, NavLink, useNavigate } from "react-router";
+import { Link, NavLink, useMatch, useNavigate } from "react-router";
 import { cn } from "cn";
 import {
   ChevronsUpDownIcon,
@@ -12,8 +12,8 @@ import {
   NetworkIcon,
   PhoneIcon,
   PlusIcon,
-  SearchIcon,
   SettingsIcon,
+  SquareKanbanIcon,
   StampIcon,
   SunIcon,
   UserPlusIcon,
@@ -34,9 +34,9 @@ import type { Actor, Project, Workspace } from "./api";
 import { agentPresence } from "./presence";
 import { useTheme } from "./theme";
 import type { Theme } from "./theme";
-import { Wordmark } from "@/components/brand";
+import { Mark } from "@/components/brand";
 import { Lamp } from "@/components/lamp";
-import { ActorMark, Eyebrow } from "@/components/presence";
+import { ActorMark } from "@/components/presence";
 import type { Tone } from "@/components/presence";
 import { Button } from "@/components/ui/button";
 import { WorkspaceSettings } from "@/components/workspace-settings";
@@ -59,7 +59,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -70,75 +69,57 @@ export type Kernel = {
   version?: string;
 };
 
-const item =
-  "flex h-7.5 w-full items-center gap-2.5 rounded-sm px-2 text-[13.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground aria-[current=page]:bg-accent aria-[current=page]:text-foreground [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-faint aria-[current=page]:[&>svg]:text-primary";
-
-/** The workspace's rail: where you are, where to go, who works with you, and the kernel. */
+/**
+ * The workspace's bar, as in Teams, ClickUp and VS Code: the workspace on top, one icon per
+ * section, and at the bottom search, the theme, the kernel and you. The open section's icon
+ * opens and closes its panel (`toggle` says whether there was one).
+ */
 export function Sidebar({
-  workspace,
   chat,
   owner,
   kernel,
-  busy,
-  perform,
-  search,
+  toggle,
 }: {
-  workspace: Workspace;
   chat: Chat;
   owner: Actor;
   kernel: Kernel;
-  busy: boolean;
-  perform: Perform;
-  search: () => void;
+  toggle: () => boolean;
 }) {
-  const actors = activeActors(workspace.actors);
   const unread = chat.conversations.filter(
     (c) => !isThread(c) && c.last_seq > (chat.seen[c.id] ?? 0),
   ).length;
   const pending = chat.approvals.filter((a) => a.status === "pending").length;
-  const agents = actors.filter(
-    (a) => a.kind === "agent" && a.owner_id === owner.id,
-  );
-  const dm = (actorId: string) =>
-    chat.conversations.find(
-      (c) => c.kind === "dm" && c.members.some((m) => m.actor_id === actorId),
-    );
-
   return (
     <nav
       aria-label="Workspace"
-      className="flex min-h-0 flex-1 flex-col gap-0.5"
+      className="flex min-h-0 flex-1 flex-col items-center gap-1 pb-2.5"
     >
+      {/* As tall as the page's header, so their lines meet. */}
       <Link
         to="/"
         aria-label="ZeroLux home"
-        className="mb-3 self-start px-2 pt-1.5"
+        className="mb-1.5 grid h-12 w-full shrink-0 place-items-center border-b"
       >
-        <Wordmark />
+        <Mark className="size-6" />
       </Link>
-      <WorkspaceMenu
-        workspace={workspace}
-        members={actors.length}
-        busy={busy}
-        perform={perform}
-      />
-      <button
-        type="button"
-        onClick={search}
-        className="mb-2.5 flex h-7.5 items-center gap-2 rounded-sm border border-input bg-card px-2.5 text-[13px] text-faint transition-colors hover:border-faint/60 hover:text-muted-foreground"
-      >
-        <SearchIcon aria-hidden className="size-3.5" />
-        Search or run
-        <KbdGroup className="ml-auto">
-          <Kbd>⌘</Kbd>
-          <Kbd>K</Kbd>
-        </KbdGroup>
-      </button>
       <Item to="/" end icon={LayoutDashboardIcon} label={homeLabel()} />
-      <Item to="/chats" icon={MessagesSquareIcon} label="Chat" count={unread} />
-      <Item to="/storage" icon={FolderIcon} label="Storage" />
-      <Item to="/org" icon={NetworkIcon} label="Org" count={actors.length} />
+      <Item
+        to="/chats"
+        icon={MessagesSquareIcon}
+        label="Chat"
+        count={unread}
+        toggle={toggle}
+      />
+      <Item
+        to="/projects"
+        icon={SquareKanbanIcon}
+        label="Projects"
+        toggle={toggle}
+      />
+      <Item to="/team" icon={UsersIcon} label="Team" toggle={toggle} />
+      <Item to="/org" icon={NetworkIcon} label="Org" />
       <Item to="/meetings" icon={PhoneIcon} label="Meetings" />
+      <Item to="/storage" icon={FolderIcon} label="Storage" />
       <Item
         to="/approvals"
         icon={StampIcon}
@@ -146,77 +127,12 @@ export function Sidebar({
         count={pending}
         attention
       />
-      <Projects workspace={workspace} busy={busy} perform={perform} />
-      <Section
-        title={
-          <Link to="/team" className="transition-colors hover:text-foreground">
-            Your agents
-          </Link>
-        }
-        action={
-          <Link
-            to="/team/hire"
-            aria-label="Hire an agent"
-            className="grid size-6 place-items-center rounded-sm text-faint transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <PlusIcon className="size-3.5" />
-          </Link>
-        }
-      >
-        {agents.map((agent) => {
-          const presence = agentPresence(
-            agent.id,
-            chat.sessions,
-            workspace.connections,
-          );
-          const chatWith = dm(agent.id);
-          return (
-            <Row
-              key={agent.id}
-              to={chatWith ? `/chats/${chatWith.id}` : "/team"}
-              title={presence.label}
-              className={item}
-            >
-              <ActorMark
-                kind="agent"
-                name={agent.name}
-                className="size-4.5 text-[9px]"
-              />
-              <span className="truncate font-mono text-[13px]">
-                {agent.name}
-              </span>
-              <Lamp
-                kind="agent"
-                state={presence.tone}
-                className="ml-auto size-1.5"
-              />
-            </Row>
-          );
-        })}
-        {agents.length === 0 && (
-          <Link to="/team/hire" className={item}>
-            <UserPlusIcon />
-            Hire an agent
-          </Link>
-        )}
-      </Section>
-      <div className="mt-auto flex flex-col gap-2 pt-4">
+      <div className="mt-auto flex flex-col items-center gap-1 pt-4">
+        <ThemeSwitch />
         <KernelStatus kernel={kernel} />
-        <UserBar owner={owner} />
+        <UserMenu owner={owner} />
       </div>
     </nav>
-  );
-}
-
-/** An agent's row: lit while its chat is open, never for the team page it falls back to. */
-function Row({
-  to,
-  ...props
-}: React.ComponentProps<typeof Link> & { to: string }) {
-  return to.startsWith("/chats/") ? (
-    <NavLink to={to} {...props} />
-  ) : (
-    <Link to={to} {...props} />
   );
 }
 
@@ -227,6 +143,7 @@ function Item({
   label,
   count,
   attention,
+  toggle,
 }: {
   to: string;
   end?: boolean;
@@ -234,56 +151,66 @@ function Item({
   label: string;
   count?: number;
   attention?: boolean;
+  /** For a section with a panel: opens or closes it, and says whether it did. */
+  toggle?: () => boolean;
 }) {
+  const open = useMatch({ path: to, end: !!end }) !== null;
   return (
-    <NavLink to={to} end={end} className={item}>
+    <NavLink
+      to={to}
+      end={end}
+      onClick={(event) => {
+        if (open && toggle?.()) event.preventDefault();
+      }}
+      className="relative flex w-14 shrink-0 flex-col items-center gap-1 rounded-md pt-2 pb-1.5 text-[10.5px] leading-none text-muted-foreground outline-none transition-colors before:absolute before:inset-y-2.5 before:-left-1.5 before:w-0.75 before:rounded-full hover:bg-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 aria-[current=page]:text-foreground aria-[current=page]:before:bg-primary [&>svg]:size-5 [&>svg]:text-faint aria-[current=page]:[&>svg]:text-primary"
+    >
       <Icon aria-hidden />
-      <span className="flex-1 truncate">{label}</span>
+      <span className="max-w-full truncate">{label}</span>
       {!!count && (
         <span
           data-attention={attention || undefined}
-          className="font-mono text-[11.5px] text-faint tabular-nums data-attention:grid data-attention:h-4.5 data-attention:min-w-4.5 data-attention:place-items-center data-attention:rounded-xs data-attention:bg-primary data-attention:px-1.5 data-attention:font-medium data-attention:text-primary-foreground data-attention:shadow-[0_0_10px_-2px_var(--color-human)]"
+          className="absolute top-0.5 right-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-foreground px-1 font-mono text-[10px] font-medium text-background tabular-nums data-attention:bg-primary data-attention:text-primary-foreground data-attention:shadow-[0_0_10px_-2px_var(--color-human)]"
         >
-          {count}
+          {count > 99 ? "99+" : count}
         </span>
       )}
     </NavLink>
   );
 }
 
-function Section({
+/** A panel's title and its one action, as at the top of the chat list. */
+function PanelHeader({
   title,
   action,
-  children,
 }: {
-  title: React.ReactNode;
-  action?: React.ReactNode;
-  children: React.ReactNode;
+  title: string;
+  action: React.ReactNode;
 }) {
   return (
-    <section className="mt-4 flex flex-col gap-0.5">
-      <div className="mb-1 flex h-6 items-center justify-between pr-1 pl-2">
-        <Eyebrow>{title}</Eyebrow>
-        {action}
-      </div>
-      {children}
-    </section>
+    <header className="flex items-center justify-between px-4 pt-4 pb-3">
+      <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+      {action}
+    </header>
   );
 }
 
+const row =
+  "flex h-8 w-full shrink-0 items-center gap-2.5 rounded-sm px-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground aria-[current=page]:bg-accent aria-[current=page]:text-foreground";
+const add =
+  "grid size-7 place-items-center rounded-sm text-faint transition-colors hover:bg-accent hover:text-foreground aria-expanded:bg-accent [&>svg]:size-4";
+
 /** The workspace you are in, how old it is and how many work in it. */
-function WorkspaceMenu({
+export function WorkspaceMenu({
   workspace,
-  members,
   busy,
   perform,
 }: {
   workspace: Workspace;
-  members: number;
   busy: boolean;
   perform: Perform;
 }) {
   const navigate = useNavigate();
+  const members = activeActors(workspace.actors).length;
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -297,33 +224,36 @@ function WorkspaceMenu({
           render={
             <button
               type="button"
-              className="mb-1.5 flex w-full items-center gap-2.5 rounded-sm p-1.5 text-left transition-colors hover:bg-accent aria-expanded:bg-accent"
+              title={`${name} · ${line}`}
+              className="flex h-8 min-w-0 items-center gap-2 rounded-md px-1.5 transition-colors hover:bg-accent aria-expanded:bg-accent"
             />
           }
         >
           <span
             aria-hidden
-            className="grid size-7 shrink-0 place-items-center rounded-md border border-input bg-secondary text-[13px] font-semibold"
+            className="grid size-6 shrink-0 place-items-center rounded-sm border border-input bg-secondary text-xs font-semibold"
           >
             {name.slice(0, 1).toUpperCase()}
           </span>
-          <span className="flex min-w-0 flex-col gap-0.5">
-            <span className="truncate text-[13.5px] font-semibold">{name}</span>
-            <span
-              title={creationDateLabel(info)}
-              className="truncate font-mono text-[11px] text-faint"
-            >
-              {line}
-            </span>
-          </span>
+          <span className="truncate text-[13.5px] font-semibold">{name}</span>
           <ChevronsUpDownIcon
             aria-hidden
-            className="ml-auto size-3.5 text-faint"
+            className="size-3.5 shrink-0 text-faint"
           />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuContent align="start" className="w-60">
           <DropdownMenuGroup>
-            <DropdownMenuLabel>{name}</DropdownMenuLabel>
+            <DropdownMenuLabel className="flex flex-col gap-0.5">
+              <span className="truncate text-[13.5px] font-semibold text-foreground">
+                {name}
+              </span>
+              <span
+                title={creationDateLabel(info)}
+                className="truncate font-mono text-[11px] font-normal"
+              >
+                {line}
+              </span>
+            </DropdownMenuLabel>
             <DropdownMenuItem
               onClick={() => {
                 setError("");
@@ -383,8 +313,8 @@ function WorkspaceMenu({
   );
 }
 
-/** Projects, each with the tasks still open; a new one starts here. */
-function Projects({
+/** The panel of Projects: each project with the tasks still open; a new one starts here. */
+export function ProjectList({
   workspace,
   busy,
   perform,
@@ -416,67 +346,151 @@ function Projects({
   }
 
   return (
-    <Section
-      title="Projects"
-      action={
-        <button
-          type="button"
-          aria-label="New project"
-          aria-expanded={adding}
-          onClick={() => setAdding(!adding)}
-          className="grid size-6 place-items-center rounded-sm text-faint transition-colors hover:bg-accent hover:text-foreground aria-expanded:bg-accent"
-        >
-          <PlusIcon className="size-3.5" />
-        </button>
-      }
-    >
-      {workspace.projects.map((p) => (
-        <NavLink key={p.id} to={`/projects/${p.id}`} className={item}>
-          <span
-            aria-hidden
-            className="grid size-4 place-items-center rounded-xs border border-input"
+    <section aria-label="Projects" className="flex min-h-0 flex-1 flex-col">
+      <PanelHeader
+        title="Projects"
+        action={
+          <button
+            type="button"
+            aria-label="New project"
+            aria-expanded={adding}
+            onClick={() => setAdding(!adding)}
+            className={add}
           >
-            <span className="size-1.5 rounded-[1px] bg-agent" />
-          </span>
-          <span className="flex-1 truncate">{p.name}</span>
-          {open(p.id) > 0 && (
-            <span className="font-mono text-[11.5px] text-faint">
-              {open(p.id)}
+            <PlusIcon />
+          </button>
+        }
+      />
+      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3">
+        {workspace.projects.map((p) => (
+          <NavLink key={p.id} to={`/projects/${p.id}`} className={row}>
+            <span
+              aria-hidden
+              className="grid size-4 shrink-0 place-items-center rounded-xs border border-input"
+            >
+              <span className="size-1.5 rounded-[1px] bg-agent" />
             </span>
-          )}
-        </NavLink>
-      ))}
-      {(adding || workspace.projects.length === 0) && (
-        <form
-          onSubmit={(e) => void create(e)}
-          className="mt-1 flex flex-col gap-2.5 rounded-md border bg-card p-2.5"
-        >
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="project-name">Project name</Label>
-            <Input
-              id="project-name"
-              name="name"
-              placeholder="ZeroLux"
-              required
-              maxLength={200}
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="project-context">Context</Label>
-            <Textarea
-              id="project-context"
-              name="description"
-              placeholder="What are we building?"
-              maxLength={20000}
-              rows={3}
-            />
-          </div>
-          <Button type="submit" size="sm" disabled={busy}>
-            Create project
-          </Button>
-        </form>
-      )}
-    </Section>
+            <span className="flex-1 truncate">{p.name}</span>
+            {open(p.id) > 0 && (
+              <span className="font-mono text-[11.5px] text-faint">
+                {open(p.id)}
+              </span>
+            )}
+          </NavLink>
+        ))}
+        {(adding || workspace.projects.length === 0) && (
+          <form
+            onSubmit={(e) => void create(e)}
+            className="mt-1 flex flex-col gap-2.5 rounded-md border bg-card p-2.5"
+          >
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="project-name">Project name</Label>
+              <Input
+                id="project-name"
+                name="name"
+                placeholder="ZeroLux"
+                required
+                maxLength={200}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="project-context">Context</Label>
+              <Textarea
+                id="project-context"
+                name="description"
+                placeholder="What are we building?"
+                maxLength={20000}
+                rows={3}
+              />
+            </div>
+            <Button type="submit" size="sm" disabled={busy}>
+              Create project
+            </Button>
+          </form>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** The panel of Team: your agents, lit while they work; each one opens its chat. */
+export function AgentList({
+  workspace,
+  chat,
+  owner,
+}: {
+  workspace: Workspace;
+  chat: Chat;
+  owner: Actor;
+}) {
+  const agents = activeActors(workspace.actors).filter(
+    (a) => a.kind === "agent" && a.owner_id === owner.id,
+  );
+  const dm = (actorId: string) =>
+    chat.conversations.find(
+      (c) => c.kind === "dm" && c.members.some((m) => m.actor_id === actorId),
+    );
+  return (
+    <section aria-label="Your agents" className="flex min-h-0 flex-1 flex-col">
+      <PanelHeader
+        title="Your agents"
+        action={
+          <Link to="/team/hire" aria-label="Hire an agent" className={add}>
+            <PlusIcon />
+          </Link>
+        }
+      />
+      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3">
+        {agents.map((agent) => {
+          const presence = agentPresence(
+            agent.id,
+            chat.sessions,
+            workspace.connections,
+          );
+          const chatWith = dm(agent.id);
+          return (
+            <Row
+              key={agent.id}
+              to={chatWith ? `/chats/${chatWith.id}` : "/team"}
+              className="flex items-center gap-3 rounded-md px-2 py-2 transition-colors hover:bg-accent"
+            >
+              <ActorMark
+                kind="agent"
+                name={agent.name}
+                className="size-8 text-xs"
+              />
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="truncate font-mono text-[13px]">
+                  {agent.name}
+                </span>
+                <span className="truncate text-xs text-muted-foreground">
+                  {presence.label}
+                </span>
+              </span>
+              <Lamp kind="agent" state={presence.tone} className="size-1.5" />
+            </Row>
+          );
+        })}
+        {agents.length === 0 && (
+          <Link to="/team/hire" className={row}>
+            <UserPlusIcon className="size-4 text-faint" />
+            Hire an agent
+          </Link>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** An agent's row: lit while its chat is open, never for the team page it falls back to. */
+function Row({
+  to,
+  ...props
+}: React.ComponentProps<typeof Link> & { to: string }) {
+  return to.startsWith("/chats/") ? (
+    <NavLink to={to} {...props} />
+  ) : (
+    <Link to={to} {...props} />
   );
 }
 
@@ -488,86 +502,102 @@ const light: Record<Tone, string> = {
   stopped: "bg-faint",
 };
 
-/** Which kernel this is, whether it answers, and its version. */
+/** Which kernel this is, whether it answers, and its version: a light, with words on hover. */
 function KernelStatus({ kernel }: { kernel: Kernel }) {
+  const details = [
+    kernel.label,
+    kernel.host,
+    kernel.version && `v${kernel.version}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <div
+    <span
       role="status"
       data-tone={kernel.tone}
-      className="flex flex-col gap-1 rounded-sm border bg-background px-2.5 py-2 font-mono text-[11px]"
+      title={details}
+      className="grid size-9 place-items-center"
     >
-      <span className="flex items-center gap-2 text-muted-foreground">
-        <span
-          aria-hidden
-          className={cn("size-1.5 rounded-full", light[kernel.tone])}
-        />
-        {kernel.label}
-      </span>
-      <span className="text-faint">
-        {[kernel.host, kernel.version && `v${kernel.version}`]
-          .filter(Boolean)
-          .join(" · ")}
-      </span>
-    </div>
+      <span
+        aria-hidden
+        className={cn("size-2 rounded-full", light[kernel.tone])}
+      />
+      <span className="sr-only">{details}</span>
+    </span>
   );
 }
 
-/** You, the theme, and the settings. */
-function UserBar({ owner }: { owner: Actor }) {
-  const { theme, resolved, choose } = useTheme();
+/** Night or daylight, in one click. */
+function ThemeSwitch() {
+  const { resolved, choose } = useTheme();
   const other = resolved === "dark" ? "light" : "dark";
+  const label = other === "light" ? "Daylight theme" : "Night theme";
   return (
-    <div className="flex items-center gap-1 border-t px-1 pt-2.5">
-      <ActorMark kind="human" name={owner.name} className="size-7" />
-      <span className="ml-1 flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-[13px] font-medium">{owner.name}</span>
-        <span className="text-[11.5px] text-faint">Owner</span>
-      </span>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label={other === "light" ? "Daylight theme" : "Night theme"}
-        title={other === "light" ? "Daylight theme" : "Night theme"}
-        onClick={() => choose(other)}
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label={label}
+      title={label}
+      onClick={() => choose(other)}
+    >
+      {other === "light" ? <SunIcon /> : <MoonIcon />}
+    </Button>
+  );
+}
+
+/** You, the theme, and the team. */
+function UserMenu({ owner }: { owner: Actor }) {
+  const { theme, choose } = useTheme();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button
+            type="button"
+            aria-label={`${owner.name}, settings`}
+            title={owner.name}
+            className="mt-1 rounded-full transition-opacity hover:opacity-80"
+          />
+        }
       >
-        {other === "light" ? <SunIcon /> : <MoonIcon />}
-      </Button>
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button variant="ghost" size="icon-sm" aria-label="Settings" />
-          }
-        >
-          <SettingsIcon />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" side="top" className="w-48">
-          <DropdownMenuGroup>
-            <DropdownMenuLabel>Theme</DropdownMenuLabel>
-            <DropdownMenuRadioGroup
-              value={theme}
-              onValueChange={(value) => choose(value as Theme)}
-            >
-              <DropdownMenuRadioItem value="system">
-                <MonitorIcon />
-                System
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="light">
-                <SunIcon />
-                Daylight
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="dark">
-                <MoonIcon />
-                Night
-              </DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-          </DropdownMenuGroup>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem render={<Link to="/team" />}>
-            <UsersIcon />
-            Team
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
+        <ActorMark kind="human" name={owner.name} className="size-8" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="right" align="end" className="w-52">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel className="flex flex-col gap-0.5">
+            <span className="truncate text-[13px] font-medium text-foreground">
+              {owner.name}
+            </span>
+            <span className="text-[11.5px] font-normal">Owner</span>
+          </DropdownMenuLabel>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Theme</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={theme}
+            onValueChange={(value) => choose(value as Theme)}
+          >
+            <DropdownMenuRadioItem value="system">
+              <MonitorIcon />
+              System
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="light">
+              <SunIcon />
+              Daylight
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="dark">
+              <MoonIcon />
+              Night
+            </DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem render={<Link to="/team" />}>
+          <UsersIcon />
+          Team
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

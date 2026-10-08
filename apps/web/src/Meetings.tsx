@@ -40,6 +40,8 @@ import {
 } from "@/components/ui/popover";
 import { Page } from "@/components/page";
 import { ActorMark, Eyebrow } from "@/components/presence";
+import { SidePanel } from "@/components/side-panel";
+import { LG, useMedia } from "./media";
 
 /** Meetings on LiveKit: start one or join a live one, then the room itself. */
 export function Meetings({
@@ -205,16 +207,33 @@ function Room({
   const inRoom = new Set(room.seats.map((s) => s.actorId));
   const invitable = agents.filter((a) => !inRoom.has(a.id));
   const control = "size-10 rounded-full [&_svg:not([class*='size-'])]:size-4.5";
+  const wide = useMedia(LG);
+  const transcriptPanel = transcript && (
+    <aside
+      aria-label="Transcript"
+      className="flex min-h-0 flex-1 flex-col border-t bg-card lg:border-t-0"
+    >
+      <header className="flex items-center gap-2 border-b px-4 py-3.5">
+        <CaptionsIcon className="size-4 text-faint" />
+        <h2 className="flex-1 font-semibold">Transcript</h2>
+      </header>
+      {/* TODO: kernel: the room's live transcript, each line with its speaker, and what agents do during the call. */}
+      <p className="p-4 text-sm text-muted-foreground">No transcript yet.</p>
+    </aside>
+  );
   return (
-    <div
-      className={cn(
-        "grid min-h-0 flex-1 bg-background",
-        transcript && "lg:grid-cols-[minmax(0,1fr)_21rem]",
-      )}
+    <SidePanel
+      id="meeting"
+      wide={wide}
+      panel={transcriptPanel}
+      size={336}
+      min={260}
+      max={520}
+      className="grid min-h-0 flex-1 bg-background"
     >
       <section
         aria-label={meeting?.title ?? "Meeting"}
-        className="flex min-h-0 min-w-0 flex-col px-5 pt-4 pb-4.5"
+        className="flex min-h-0 min-w-0 flex-1 flex-col px-5 pt-4 pb-4.5"
       >
         <header className="mb-4 flex flex-wrap items-center gap-2.5">
           <span className="rounded-xs bg-destructive px-1.5 py-0.5 font-mono text-[10px] font-medium tracking-wider text-background uppercase">
@@ -369,22 +388,7 @@ function Room({
             <Media key={s.identity} track={s.audio!} kind="audio" />
           ))}
       </section>
-      {transcript && (
-        <aside
-          aria-label="Transcript"
-          className="flex min-h-0 flex-col border-t bg-card lg:border-t-0 lg:border-l"
-        >
-          <header className="flex items-center gap-2 border-b px-4 py-3.5">
-            <CaptionsIcon className="size-4 text-faint" />
-            <h2 className="flex-1 font-semibold">Transcript</h2>
-          </header>
-          {/* TODO: kernel: the room's live transcript, each line with its speaker, and what agents do during the call. */}
-          <p className="p-4 text-sm text-muted-foreground">
-            No transcript yet.
-          </p>
-        </aside>
-      )}
-    </div>
+    </SidePanel>
   );
 }
 
