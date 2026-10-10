@@ -92,9 +92,15 @@ export default function NewChat() {
             Hire an agent to start chatting.
           </Text>
           <Text className="text-sm text-muted-foreground">
-            Hire the sessions you already use from ZeroLux on your computer;
-            they appear here.
+            Start a new one here, or hire the sessions you already use from
+            ZeroLux on your computer; they appear here.
           </Text>
+          <Button
+            className="self-start"
+            onPress={() => router.replace("/agent/new")}
+          >
+            <Text>New agent</Text>
+          </Button>
         </View>
       ) : (
         <ScrollView

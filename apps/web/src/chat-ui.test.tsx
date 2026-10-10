@@ -17,7 +17,7 @@ import { Storage } from "./Storage";
 import { Tonight } from "./Tonight";
 import { ChatAbout } from "./components/chat-about";
 import { agentPresence } from "./presence";
-import { Hire, HireForm, StartClaude, Team } from "./Team";
+import { Hire, HireForm, StartAgent, Team } from "./Team";
 import type { Actor, AgentConnection, Task, Workspace } from "./api";
 import type {
   Approval,
@@ -161,6 +161,7 @@ function fakeChat(overrides: Partial<Chat> = {}): Chat {
     openId: undefined,
     messages: [],
     unsent: [],
+    canLeave: () => true,
     seen: {},
     realtime: "live",
     error: "",
@@ -173,6 +174,9 @@ function fakeChat(overrides: Partial<Chat> = {}): Chat {
     discover: async () => ({ sessions: [], errors: [] }),
     hire: nothing,
     startClaude: nothing,
+    startCodex: nothing,
+    startPi: nothing,
+    takeoverPi: nothing,
     resume: nothing,
     stop: nothing,
     decide: nothing,
@@ -1017,9 +1021,9 @@ test("a chat shows its threads under their message and lists the open ones; a th
   expect(home).not.toContain("Which tests fail");
 });
 
-test("starting a Claude Code agent asks for an agent, a folder and how it asks permission", () => {
+test("starting an agent asks for a harness, an agent, a folder and how it asks permission", () => {
   const html = renderToStaticMarkup(
-    <StartClaude
+    <StartAgent
       chat={fakeChat({})}
       actors={actors}
       folders={["/home/owner/app", "/home/owner/app", "/home/owner/site"]}
@@ -1027,8 +1031,12 @@ test("starting a Claude Code agent asks for an agent, a folder and how it asks p
       perform={perform}
     />,
   );
-  expect(html).toContain("Start a new Claude Code agent");
+  expect(html).toContain("Start a new agent");
   expect(html).toContain("What you write in your chats reaches it as yours");
+  // Claude Code first; Codex can be chosen, with Codex's own settings as the default.
+  expect(html).toContain(">Claude Code<");
+  expect(html).toContain(">Codex<");
+  expect(html).toContain('value="pi">pi</option>');
   expect(html).toContain("Another session of aspen");
   expect(html).toContain(">Folder<");
   // Each folder suggested once.
@@ -1040,18 +1048,24 @@ test("starting a Claude Code agent asks for an agent, a folder and how it asks p
     "Claude Code decides on its own",
   ])
     expect(html).toContain(mode);
+  expect(html).not.toContain("Codex settings");
   // Nothing starts without a folder.
   expect(html).toMatch(/<button type="submit"[^>]*disabled=""[^>]*>Start</);
   noUuids(html);
 });
 
-test("a stopped or stuck session ZeroLux runs can be resumed; one the owner had cannot", () => {
+test("managed Claude and terminal pi offer Resume; other attached sessions do not", () => {
   const html = renderToStaticMarkup(
     <Team
       chat={fakeChat({
         sessions: [
           { ...session("s-owned", ASPEN, "stopped"), origin: "owned" },
           { ...session("s-stuck", BIRCH, "attention"), origin: "owned" },
+          {
+            ...session("s-terminal-pi", ASPEN, "stopped"),
+            harness: "pi",
+            origin: "attached",
+          },
           {
             ...session("s-had", BIRCH, "stopped"),
             origin: "attached",
@@ -1066,8 +1080,40 @@ test("a stopped or stuck session ZeroLux runs can be resumed; one the owner had 
       hire={() => {}}
     />,
   );
-  expect(html.match(/>Resume</g)).toHaveLength(2);
+  expect(html.match(/>Resume</g)).toHaveLength(3);
   expect(html).toContain("Stopped here; the running turn may still finish.");
+});
+
+test("only connected attached pi offers cooperative terminal takeover", () => {
+  const html = renderToStaticMarkup(
+    <Team
+      chat={fakeChat({
+        sessions: [
+          {
+            ...session("terminal", ASPEN, "connected"),
+            harness: "pi",
+            origin: "attached",
+          },
+          {
+            ...session("managed", BIRCH, "connected"),
+            harness: "pi",
+            origin: "owned",
+          },
+          {
+            ...session("unavailable", ASPEN, "attention"),
+            harness: "pi",
+            origin: "attached",
+          },
+          { ...session("claude", BIRCH, "connected"), origin: "attached" },
+        ],
+      })}
+      actors={actors}
+      busy={false}
+      perform={perform}
+      hire={() => {}}
+    />,
+  );
+  expect(html.match(/>Take over</g)).toHaveLength(1);
 });
 
 const task = (

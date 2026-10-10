@@ -503,16 +503,17 @@ export const sameMembers = (conversation: Conversation, ids: string[]) =>
 
 /**
  * What the team list shows: live sessions, those needing attention, and the latest stopped
- * session ZeroLux runs for each native session that is not live again, to resume it.
+ * resumable session (managed Claude or pi) that is not live again.
  */
 export const listedSessions = (sessions: ChatSession[]) =>
   sessions.filter(
     (s, i) =>
       s.status !== "stopped" ||
       Boolean(s.attention_reason) ||
-      (s.origin === "owned" &&
+      ((s.origin === "owned" || s.harness === "pi") &&
         !sessions.some(
           (o, j) =>
+            o.harness === s.harness &&
             o.native_session_id === s.native_session_id &&
             (o.status !== "stopped" || j > i),
         )),

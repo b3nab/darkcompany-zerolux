@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { useRouter } from "expo-router";
+import { BotIcon } from "lucide-react-native";
+import { useCSSVariable } from "uniwind";
 import {
   activeActors,
   harnessLabels,
@@ -45,7 +47,25 @@ export default function Org() {
   const { workspace, chat } = useSession();
   const router = useRouter();
   const [view, setView] = useState<Mode>("everyone");
-  if (!workspace) return <Screen title="Org">{null}</Screen>;
+  const ink = String(useCSSVariable("--color-foreground"));
+  // Starting an agent commands the kernel: it runs on the kernel's computer, not here.
+  const newAgent = (
+    <Pressable
+      onPress={() => router.push("/agent/new")}
+      accessibilityRole="button"
+      accessibilityLabel="New agent"
+      hitSlop={8}
+      className="size-10 items-center justify-center rounded-sm active:bg-accent"
+    >
+      <BotIcon color={ink} size={22} strokeWidth={1.5} />
+    </Pressable>
+  );
+  if (!workspace)
+    return (
+      <Screen title="Org" action={newAgent}>
+        {null}
+      </Screen>
+    );
   const actors = activeActors(workspace.actors);
   // TODO: kernel: people report to people; the chart nests them then. Today each person heads a tree.
   const people = actors.filter((a) => a.kind === "human");
@@ -55,7 +75,7 @@ export default function Org() {
     memberTone(actor, people[0]?.id, chat.sessions, workspace.connections);
   const open = (actor: Actor) => router.push(`/member/${actor.id}`);
   return (
-    <Screen title="Org">
+    <Screen title="Org" action={newAgent}>
       <View className="px-5 pb-3">
         <View className="flex-row rounded-lg border border-border bg-card p-0.5">
           {(Object.keys(views) as Mode[]).map((id) => (

@@ -15,6 +15,22 @@ export const claudeModes = {
   auto: "Claude Code decides on its own",
 } as const;
 export type ClaudeMode = keyof typeof claudeModes;
+/**
+ * What the owner may choose for a Codex session ZeroLux starts, in Codex's own terms. Left
+ * unset, Codex applies the user's own configuration: ZeroLux names no default of its own.
+ */
+export const codexApprovalPolicies = {
+  untrusted: "Asks you before anything not known to be safe",
+  "on-request": "Asks you when Codex decides it needs to",
+  never: "Never asks you",
+} as const;
+export type CodexApprovalPolicy = keyof typeof codexApprovalPolicies;
+export const codexSandboxes = {
+  "read-only": "Reads only",
+  "workspace-write": "Writes inside the folder",
+  "danger-full-access": "Full access, no sandbox",
+} as const;
+export type CodexSandbox = keyof typeof codexSandboxes;
 export interface Actor extends CreationDate {
   id: string;
   name: string;

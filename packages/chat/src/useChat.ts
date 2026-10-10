@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { errorMessage, kernelUrl, request } from "./client";
-import type { ClaudeMode } from "./client";
+import type { ClaudeMode, CodexApprovalPolicy, CodexSandbox } from "./client";
 import {
   PAGE,
   freshness,
@@ -337,6 +337,35 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     }) {
       await api("/chat/claude-sessions", input);
       await listSessions();
+    },
+    /** A new Codex session ZeroLux starts in a folder, through the user's own Codex. */
+    async startCodex(input: {
+      name: string;
+      workspace: string;
+      approval_policy?: CodexApprovalPolicy;
+      sandbox?: CodexSandbox;
+      actor_id?: string;
+    }) {
+      await api("/chat/codex-sessions", input);
+      await listSessions();
+    },
+    /** A new native pi identity using its own configuration, without an initial prompt. */
+    async startPi(input: {
+      name: string;
+      workspace: string;
+      actor_id?: string;
+    }) {
+      await api("/chat/pi-sessions", input);
+      await listSessions();
+    },
+    /** Cooperatively closes an idle terminal pi; recovery preserves its native identity. */
+    async takeoverPi(sessionId: string) {
+      try {
+        await api(`/chat/sessions/${sessionId}/takeover`, {});
+      } finally {
+        // A lost acknowledgement is not retried; show the authoritative session state.
+        await listSessions().catch(() => {});
+      }
     },
     /** Resumes a session ZeroLux runs: the same session, in the same permission mode. */
     async resume(sessionId: string) {

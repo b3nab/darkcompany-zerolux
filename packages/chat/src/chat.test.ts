@@ -578,8 +578,16 @@ test("the team lists live sessions, ones needing attention, and the latest stopp
     s("owned-new", "n4", "stopped", "owned"),
     s("owned-back", "n5", "stopped", "owned"),
     s("owned-live", "n5", "connected", "owned"),
+    { ...s("pi-old", "n1", "stopped", "attached"), harness: "pi" },
+    { ...s("pi-stopped", "n1", "stopped", "attached"), harness: "pi" },
   ]).map((x) => x.id);
-  expect(listed).toEqual(["live", "unconfirmed", "owned-new", "owned-live"]);
+  expect(listed).toEqual([
+    "live",
+    "unconfirmed",
+    "owned-new",
+    "owned-live",
+    "pi-stopped",
+  ]);
 });
 
 test("a new chat offers agents with a live session and reuses a direct chat", () => {

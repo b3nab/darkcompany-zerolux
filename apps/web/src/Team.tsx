@@ -6,12 +6,16 @@ import {
   ago,
   byProject,
   claudeModes,
+  codexApprovalPolicies,
+  codexSandboxes,
   listedSessions,
   sessionState,
 } from "@zerolux/chat";
 import type {
   ChatSession,
   ClaudeMode,
+  CodexApprovalPolicy,
+  CodexSandbox,
   DiscoveredSession,
   Discovery,
 } from "@zerolux/chat";
@@ -163,7 +167,7 @@ export function Hire({
           Hire an agent.
         </h1>
       </div>
-      <StartClaude
+      <StartAgent
         chat={chat}
         actors={actors}
         folders={[
@@ -221,7 +225,11 @@ export function Hire({
 }
 
 /** Starts a new Claude Code session ZeroLux runs in a folder. */
-export function StartClaude({
+/** A new native identity; recovery continues existing sessions instead. */
+const startable = ["claude-code", "codex", "pi"] as const;
+type Startable = (typeof startable)[number];
+
+export function StartAgent({
   chat,
   actors,
   folders,
@@ -235,8 +243,9 @@ export function StartClaude({
   busy: boolean;
   perform: Perform;
 }) {
+  const [harness, setHarness] = useState<Startable>("claude-code");
   const agents = actors.filter(
-    (a) => a.kind === "agent" && !a.archived && a.harness === "claude-code",
+    (a) => a.kind === "agent" && !a.archived && a.harness === harness,
   );
   // The chosen agent by its place in the list: no IDs in the page.
   const [pick, setPick] = useState("");
@@ -244,15 +253,27 @@ export function StartClaude({
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
   const [mode, setMode] = useState<ClaudeMode>("default");
+  // Codex: unset means Codex's own settings, never a choice made for the owner.
+  const [policy, setPolicy] = useState<CodexApprovalPolicy | "">("");
+  const [sandbox, setSandbox] = useState<CodexSandbox | "">("");
+  const label = harnessLabels[harness];
   async function submit(event: SubmitEvent) {
     event.preventDefault();
+    const common = {
+      name: name.trim() || label,
+      workspace: workspace.trim(),
+      ...(actorId ? { actor_id: actorId } : {}),
+    };
     const started = await perform(() =>
-      chat.startClaude({
-        name: name.trim() || "Claude Code",
-        workspace: workspace.trim(),
-        permission_mode: mode,
-        ...(actorId ? { actor_id: actorId } : {}),
-      }),
+      harness === "claude-code"
+        ? chat.startClaude({ ...common, permission_mode: mode })
+        : harness === "pi"
+          ? chat.startPi(common)
+          : chat.startCodex({
+              ...common,
+              ...(policy ? { approval_policy: policy } : {}),
+              ...(sandbox ? { sandbox } : {}),
+            }),
     );
     if (started) {
       setName("");
@@ -261,24 +282,40 @@ export function StartClaude({
   }
   return (
     <form
-      aria-label="Start a Claude Code agent"
+      aria-label="Start an agent"
       className="flex flex-col gap-4 rounded-xl border bg-card p-4"
       onSubmit={(e) => void submit(e)}
     >
       <div className="flex flex-col gap-1">
-        <h2 className="text-base font-semibold">
-          Start a new Claude Code agent
-        </h2>
+        <h2 className="text-base font-semibold">Start a new agent</h2>
         <p className="text-sm text-muted-foreground">
           ZeroLux runs it in the folder you choose. What you write in your chats
           reaches it as yours.
         </p>
       </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="start-harness">Harness</Label>
+        <NativeSelect
+          id="start-harness"
+          className="w-full"
+          value={harness}
+          onChange={(e) => {
+            setHarness(e.target.value as Startable);
+            setPick("");
+          }}
+        >
+          {startable.map((h) => (
+            <NativeSelectOption key={h} value={h}>
+              {harnessLabels[h]}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
       {agents.length > 0 && (
         <div className="flex flex-col gap-2">
-          <Label htmlFor="claude-agent">Agent</Label>
+          <Label htmlFor="start-agent">Agent</Label>
           <NativeSelect
-            id="claude-agent"
+            id="start-agent"
             className="w-full"
             value={pick}
             onChange={(e) => setPick(e.target.value)}
@@ -294,48 +331,93 @@ export function StartClaude({
       )}
       {!actorId && (
         <div className="flex flex-col gap-2">
-          <Label htmlFor="claude-name">Agent name</Label>
+          <Label htmlFor="start-name">Agent name</Label>
           <Input
-            id="claude-name"
+            id="start-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Claude Code"
+            placeholder={label}
             maxLength={200}
           />
         </div>
       )}
       <div className="flex flex-col gap-2">
-        <Label htmlFor="claude-folder">Folder</Label>
+        <Label htmlFor="start-folder">Folder</Label>
         <Input
-          id="claude-folder"
+          id="start-folder"
           value={workspace}
           onChange={(e) => setWorkspace(e.target.value)}
           placeholder="/Users/you/projects/app"
-          list="claude-folders"
+          list="start-folders"
           required
           className="font-mono"
         />
-        <datalist id="claude-folders">
+        <datalist id="start-folders">
           {[...new Set(folders)].map((folder) => (
             <option key={folder} value={folder} />
           ))}
         </datalist>
       </div>
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="claude-mode">Permissions</Label>
-        <NativeSelect
-          id="claude-mode"
-          className="w-full"
-          value={mode}
-          onChange={(e) => setMode(e.target.value as ClaudeMode)}
-        >
-          {(Object.keys(claudeModes) as ClaudeMode[]).map((m) => (
-            <NativeSelectOption key={m} value={m}>
-              {claudeModes[m]}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </div>
+      {harness === "claude-code" ? (
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="start-mode">Permissions</Label>
+          <NativeSelect
+            id="start-mode"
+            className="w-full"
+            value={mode}
+            onChange={(e) => setMode(e.target.value as ClaudeMode)}
+          >
+            {(Object.keys(claudeModes) as ClaudeMode[]).map((m) => (
+              <NativeSelectOption key={m} value={m}>
+                {claudeModes[m]}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </div>
+      ) : harness === "codex" ? (
+        <>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="start-policy">Approvals</Label>
+            <NativeSelect
+              id="start-policy"
+              className="w-full"
+              value={policy}
+              onChange={(e) =>
+                setPolicy(e.target.value as CodexApprovalPolicy | "")
+              }
+            >
+              <NativeSelectOption value="">Codex settings</NativeSelectOption>
+              {(
+                Object.keys(codexApprovalPolicies) as CodexApprovalPolicy[]
+              ).map((p) => (
+                <NativeSelectOption key={p} value={p}>
+                  {codexApprovalPolicies[p]}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="start-sandbox">Sandbox</Label>
+            <NativeSelect
+              id="start-sandbox"
+              className="w-full"
+              value={sandbox}
+              onChange={(e) => setSandbox(e.target.value as CodexSandbox | "")}
+            >
+              <NativeSelectOption value="">Codex settings</NativeSelectOption>
+              {(Object.keys(codexSandboxes) as CodexSandbox[]).map((m) => (
+                <NativeSelectOption key={m} value={m}>
+                  {codexSandboxes[m]}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </div>
+        </>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Uses pi's own model, tools and project settings.
+        </p>
+      )}
       <Button
         type="submit"
         className="self-start"
@@ -383,9 +465,16 @@ export function Team({
               busy={busy}
               stop={() => perform(() => chat.stop(s.id))}
               resume={
-                s.origin === "owned" &&
+                (s.harness === "pi" || s.origin === "owned") &&
                 (s.status === "stopped" || s.status === "attention")
                   ? () => perform(() => chat.resume(s.id))
+                  : undefined
+              }
+              takeover={
+                s.harness === "pi" &&
+                s.origin === "attached" &&
+                s.status === "connected"
+                  ? () => perform(() => chat.takeoverPi(s.id))
                   : undefined
               }
               rename={(next) => perform(() => chat.rename(s.actor_id, next))}
@@ -485,6 +574,7 @@ export function HiredSession({
   stop,
   rename,
   resume,
+  takeover,
 }: {
   session: ChatSession;
   name: string;
@@ -493,8 +583,13 @@ export function HiredSession({
   rename: (name: string) => Promise<boolean>;
   /** A session ZeroLux runs, stopped or needing attention: start it again. */
   resume?: () => Promise<boolean>;
+  takeover?: () => Promise<boolean>;
 }) {
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState<"stop" | "takeover">();
+  const confirmedAction = confirming === "takeover" ? takeover : stop;
+  async function confirm() {
+    if (confirmedAction && (await confirmedAction())) setConfirming(undefined);
+  }
   // The new name while renaming; chats, sessions and history keep the same agent.
   const [draft, setDraft] = useState<string>();
   async function save(event: SubmitEvent) {
@@ -548,6 +643,15 @@ export function HiredSession({
               {session.attention_reason}
             </small>
           )}
+          {takeover && !confirming && (
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() => setConfirming("takeover")}
+            >
+              Take over
+            </Button>
+          )}
           {resume && !confirming && (
             <Button
               variant="outline"
@@ -567,7 +671,7 @@ export function HiredSession({
               <Button
                 variant="outline"
                 disabled={busy}
-                onClick={() => setConfirming(true)}
+                onClick={() => setConfirming("stop")}
               >
                 Stop
               </Button>
@@ -578,18 +682,19 @@ export function HiredSession({
       {confirming && (
         <div className="flex flex-col gap-3 rounded-lg bg-attention/10 p-3">
           <p className="text-sm">
-            Stop {name}? It will no longer reply in ZeroLux or resume this
-            session. Your chats and their history stay.
+            {confirming === "takeover"
+              ? `Close ${name}'s idle pi terminal and continue the same session under ZeroLux? Work and queued messages must finish first; clear terminal drafts and dialogs. Its saved history and launch profile must be verified. No process is force-killed.`
+              : `Stop ${name}? It will no longer reply in ZeroLux or resume this session. Your chats and their history stay.`}
           </p>
           <div className="flex gap-2">
             <Button
-              variant="destructive"
-              disabled={busy}
-              onClick={() => void stop()}
+              variant={confirming === "stop" ? "destructive" : "default"}
+              disabled={busy || !confirmedAction}
+              onClick={() => void confirm()}
             >
-              Stop {name}
+              {confirming === "stop" ? "Stop" : "Take over"} {name}
             </Button>
-            <Button variant="outline" onClick={() => setConfirming(false)}>
+            <Button variant="outline" onClick={() => setConfirming(undefined)}>
               Keep working
             </Button>
           </div>

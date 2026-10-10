@@ -44,7 +44,7 @@ Install the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) fir
 cargo run -- doctor   # installed pi, claude and codex versions
 ```
 
-Hire agents from Team > Hire: pick a running session of pi, Claude Code or Codex, or start a new Claude Code session that ZeroLux runs. See [agents and tasks](docs/byoh.md), [chats](docs/chat.md) and [web search](docs/web-search.md).
+Hire agents from Team > Hire: pick a running session of pi, Claude Code or Codex, or start a new session in a folder. Mobile offers creation from Org > New agent. See [agents and tasks](docs/byoh.md), [chats](docs/chat.md) and [web search](docs/web-search.md).
 
 ## Checks
 

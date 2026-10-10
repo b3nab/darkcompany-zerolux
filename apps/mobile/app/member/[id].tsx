@@ -1,14 +1,18 @@
-import { Pressable, ScrollView, View } from "react-native";
+import { useState } from "react";
+import { Alert, Pressable, ScrollView, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import {
   activeActors,
   agentPresence,
   agentWork,
   creationDateLabel,
+  errorMessage,
   harnessLabels,
+  listedSessions,
   memberTone,
+  sessionState,
 } from "@zerolux/chat";
-import type { Actor, Workspace } from "@zerolux/chat";
+import type { Actor, ChatSession, Workspace } from "@zerolux/chat";
 import { ActorMark, Lamp } from "@/components/member";
 import { Eyebrow } from "@/components/meter";
 import { Screen } from "@/components/screen";
@@ -246,11 +250,126 @@ function Agent({
           </Text>
         </Row>
       </View>
+      <Sessions agent={agent} />
       <View className="gap-2">
         <Eyebrow>Budget</Eyebrow>
         {/* TODO: kernel: the agent's monthly spend and budget, from its harness usage. */}
         <Text className="text-sm text-muted-foreground">Not tracked yet.</Text>
       </View>
     </>
+  );
+}
+
+/**
+ * The agent's sessions as the team list shows them: live ones to stop, and the latest one
+ * ZeroLux runs that is stopped or stuck, to resume. Stop asks first: it ends the link and
+ * cancels a turn only this chat started.
+ */
+function Sessions({ agent }: { agent: Actor }) {
+  const { chat } = useSession();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const sessions = listedSessions(chat.sessions).filter(
+    (s) => s.actor_id === agent.id,
+  );
+  if (sessions.length === 0) return null;
+  const perform = async (action: () => Promise<unknown>) => {
+    setBusy(true);
+    setError("");
+    try {
+      await action();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const confirmStop = (session: ChatSession) =>
+    Alert.alert(
+      `Stop ${session.title}?`,
+      "The session leaves your chats. Work it is doing for other reasons continues.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Stop",
+          style: "destructive",
+          onPress: () => void perform(() => chat.stop(session.id)),
+        },
+      ],
+    );
+  // Sessions ZeroLux runs, and pi ones it can continue from their saved file with a
+  // verified profile: the kernel refuses what it cannot verify, never picks defaults.
+  const resumable = (s: ChatSession) =>
+    (s.harness === "pi" || s.origin === "owned") &&
+    (s.status === "stopped" || s.status === "attention");
+  // A pi hired from a terminal: ZeroLux can take it over while it is idle there.
+  const takeable = (s: ChatSession) =>
+    s.harness === "pi" && s.origin === "attached" && s.status === "connected";
+  const confirmTakeover = (session: ChatSession) =>
+    Alert.alert(
+      `Take over ${session.title}?`,
+      "The idle terminal closes and the same session continues under ZeroLux: same history, same verified launch profile. Refused if it is working, has queued input or its profile cannot be verified; nothing is killed.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Take over",
+          onPress: () => void perform(() => chat.takeoverPi(session.id)),
+        },
+      ],
+    );
+  return (
+    <View className="gap-2">
+      <Eyebrow>Sessions</Eyebrow>
+      {sessions.map((s) => (
+        <View
+          key={s.id}
+          className="gap-2 rounded-lg border border-border bg-card p-3"
+        >
+          <View className="flex-row items-center gap-3">
+            <View className="min-w-0 flex-1">
+              <Text numberOfLines={1} className="text-sm font-medium">
+                {s.title}
+              </Text>
+              <Text className="text-xs text-muted-foreground">
+                {harnessLabels[s.harness] ?? s.harness} · {sessionState(s)}
+              </Text>
+            </View>
+            {takeable(s) ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onPress={() => confirmTakeover(s)}
+              >
+                <Text>Take over</Text>
+              </Button>
+            ) : null}
+            {s.status !== "stopped" ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onPress={() => confirmStop(s)}
+              >
+                <Text>Stop</Text>
+              </Button>
+            ) : null}
+            {resumable(s) ? (
+              <Button
+                size="sm"
+                disabled={busy}
+                onPress={() => void perform(() => chat.resume(s.id))}
+              >
+                <Text>Resume</Text>
+              </Button>
+            ) : null}
+          </View>
+          {s.attention_reason ? (
+            <Text className="text-xs text-attention">{s.attention_reason}</Text>
+          ) : null}
+        </View>
+      ))}
+      {error ? <Text className="text-sm text-destructive">{error}</Text> : null}
+    </View>
   );
 }
