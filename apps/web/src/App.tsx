@@ -14,7 +14,7 @@ import { useChat, useStorage } from "@zerolux/chat";
 import type { Conversation } from "@zerolux/chat";
 import { activeActors, api, errorMessage } from "./api";
 import {
-  trafficLightsInset,
+  useTrafficLightsInset,
   windowDragProps,
   workspaceNavigationGuard,
 } from "./desktop";
@@ -247,7 +247,7 @@ export function App({
   );
   // In the macOS desktop app the header is the window's title bar: it spans the window,
   // with the native traffic lights in its first 92px, and the rail starts below it.
-  const titleBar = trafficLightsInset();
+  const titleBar = useTrafficLightsInset();
 
   return (
     <div

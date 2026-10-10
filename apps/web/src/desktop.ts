@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { currentDrafts } from "@zerolux/chat";
 
 /** Optional desktop context. No native API or other workspace's configuration is exposed. */
@@ -29,9 +30,34 @@ export const kernelAddress = () => desktopConnection()?.kernelUrl ?? "";
 export const windowDragProps = () =>
   desktopConnection() ? ({ "data-tauri-drag-region": "deep" } as const) : {};
 
-/** macOS keeps its native traffic lights at the top left, over the page. */
-export const trafficLightsInset = () =>
-  desktopConnection()?.platform === "macos";
+/** macOS keeps its native traffic lights at the top left, over the page, and hides them in fullscreen. */
+export function useTrafficLightsInset() {
+  const macos = desktopConnection()?.platform === "macos";
+  const [fullscreen, setFullscreen] = useState(false);
+  useEffect(() => {
+    if (!macos) return;
+    let live = true;
+    let stop: (() => void) | undefined;
+    void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
+      const view = getCurrentWindow();
+      // The host reports the new state by the resize that ends each transition.
+      const read = () =>
+        view.isFullscreen().then(
+          (value) => live && setFullscreen(value),
+          () => {},
+        );
+      const unlisten = await view.onResized(read);
+      if (!live) return unlisten();
+      stop = unlisten;
+      void read();
+    });
+    return () => {
+      live = false;
+      stop?.();
+    };
+  }, [macos]);
+  return macos && !fullscreen;
+}
 
 /** Windows and Linux have no native title bar in the desktop app: the page draws the buttons. */
 export const drawsWindowControls = () => {
