@@ -3,10 +3,12 @@
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "paths": { "@/*": ["../web/src/*"] },
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
     "types": ["bun"]
   },
-  "include": ["*.ts"]
+  "include": ["*.ts", "*.tsx"]
 }

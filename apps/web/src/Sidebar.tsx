@@ -286,7 +286,7 @@ export function WorkspaceMenu({
           <DialogHeader>
             <DialogTitle>Workspace settings</DialogTitle>
             <DialogDescription>
-              The company's name and creation date.
+              The shared workspace name and this device's connection.
             </DialogDescription>
           </DialogHeader>
           {editing && (

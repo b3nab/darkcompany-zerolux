@@ -35,10 +35,10 @@ const styles = [...html.matchAll(/<link\b[^>]*rel="stylesheet"[^>]*>/g)]
 if (!styles) throw new Error("The web build did not include its stylesheets");
 await Bun.write(
   join(dist, "web/desktop.html"),
-  `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">${styles}<title>ZeroLux</title><script type="module" src="/desktop.js"></script></head><body><main style="padding:3rem;max-width:56rem;font-family:system-ui"><h1>ZeroLux</h1><p id="status">Opening ZeroLux…</p><pre id="error" role="alert" style="white-space:pre-wrap;overflow-wrap:anywhere;margin-block:1rem"></pre><fieldset id="choices" hidden disabled style="border:0;padding:0"><form id="connection"><label for="address">Existing workspace — kernel address</label><div style="display:flex;gap:0.5rem;margin-block:0.75rem"><input id="address" type="url" required value="http://127.0.0.1:4310/" style="flex:1;min-width:0;padding:0.5rem;border:1px solid var(--border);border-radius:var(--radius)"><button type="submit" style="padding:0.5rem 1rem;background:var(--primary);color:var(--primary-foreground);border-radius:var(--radius)">Use workspace</button></div><p>This opens the same organization, chats and agents. Closing this window will not stop its kernel.</p></form><hr style="margin-block:1.5rem"><button id="local" type="button" style="padding:0.5rem 1rem;border:1px solid var(--border);border-radius:var(--radius)">Use a local workspace</button><p style="margin-top:0.75rem">Starts the desktop's separate local kernel. A new local workspace begins with onboarding; no existing workspace is copied or replaced.</p></fieldset></main></body></html>`,
+  `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">${styles}<title>ZeroLux — Workspaces</title><script type="module" src="/desktop.js"></script></head><body><div id="root"></div></body></html>`,
 );
 const startup = await Bun.build({
-  entrypoints: [join(here, "startup.ts")],
+  entrypoints: [join(here, "startup.tsx")],
   target: "browser",
   outdir: join(dist, "web"),
   naming: "desktop.js",

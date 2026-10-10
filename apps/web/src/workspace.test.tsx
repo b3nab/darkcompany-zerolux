@@ -3,7 +3,25 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import type { Workspace } from "@zerolux/chat";
 import { App } from "./App";
-import { WorkspaceSettings } from "./components/workspace-settings";
+import {
+  WorkspaceSettings,
+  connectionKind,
+} from "./components/workspace-settings";
+
+test("address locality stays separate from ownership and connection status", () => {
+  expect(connectionKind("http://127.0.0.1:4310", true)).toBe(
+    "Managed on this device",
+  );
+  expect(connectionKind("http://127.0.0.1:4310")).toBe(
+    "Local address · existing kernel",
+  );
+  expect(connectionKind("http://[::1]:4310")).toBe(
+    "Local address · existing kernel",
+  );
+  expect(connectionKind("https://office.example")).toBe(
+    "Network address · existing kernel",
+  );
+});
 
 const created_at = Date.UTC(2026, 0, 2, 12);
 const company: Workspace = {
@@ -77,6 +95,34 @@ test("workspace settings edit only the name and keep creation metadata read-only
   expect(html).toContain("Created 2026-01-02");
   expect(html).not.toContain('name="created_at"');
   expect(html).toContain("Save name");
+});
+
+test("workspace settings distinguish the shared name from the desktop connection", () => {
+  const html = renderToStaticMarkup(
+    <WorkspaceSettings
+      workspace={company.workspace}
+      busy={false}
+      error=""
+      save={async () => {}}
+      connection={{ address: "https://studio.example", desktop: true }}
+    />,
+  );
+  expect(html).toContain("Shared with everyone in this workspace");
+  expect(html).toContain('value="https://studio.example"');
+  expect(html).toContain('href="zerolux://workspaces"');
+  expect(html).toContain("Manage connections");
+  expect(html).not.toContain('name="address"');
+  const browser = renderToStaticMarkup(
+    <WorkspaceSettings
+      workspace={company.workspace}
+      busy={false}
+      error=""
+      save={async () => {}}
+      connection={{ address: "https://studio.example", desktop: false }}
+    />,
+  );
+  expect(browser).not.toContain('href="zerolux://workspaces"');
+  expect(browser).toContain("This browser connects");
 });
 
 test("workspace settings expose server errors and disable editing during a save", () => {

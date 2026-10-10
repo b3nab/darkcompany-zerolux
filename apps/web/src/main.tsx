@@ -3,10 +3,13 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { App } from "./App";
 import { preloadRenderer } from "./components/message-text";
-import { keepDraftsIn } from "@zerolux/chat";
+import { keepDraftsIn, setKernelUrl } from "@zerolux/chat";
+import { kernelAddress } from "./desktop";
 import { startTheme } from "./theme";
 
 startTheme();
+// In the desktop app the page is packaged and the kernel is wherever the workspace says.
+setKernelUrl(kernelAddress());
 // Unsent messages survive a reload, in this browser only.
 const DRAFTS = "zerolux-drafts";
 try {

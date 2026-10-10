@@ -14,9 +14,10 @@ tauri = { version = "2.12.1", features = [] }
 fs2 = "0.4"
 tauri-plugin-opener = "2"
 serde.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["rustls-tls-native-roots"] }
 tempfile = "3"
 clap.workspace = true
+uuid.workspace = true
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

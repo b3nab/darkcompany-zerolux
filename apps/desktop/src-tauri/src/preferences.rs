@@ -5,13 +5,7 @@ use std::{io::Write, path::Path};
 
 use crate::connection::kernel_url;
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Choice {
-    Existing { url: String },
-    Local,
-}
-
+/// The previous single-connection format is read only, for a conservative registry import.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SavedConnection {
@@ -19,28 +13,8 @@ pub enum SavedConnection {
     Local,
 }
 
-impl SavedConnection {
-    pub fn choice(&self) -> Choice {
-        match self {
-            Self::Existing { url, .. } => Choice::Existing { url: url.clone() },
-            Self::Local => Choice::Local,
-        }
-    }
-
-    pub fn expected_id(&self, url: &tauri::Url) -> Option<&str> {
-        match self {
-            Self::Existing {
-                url: saved,
-                workspace_id,
-            } if saved == url.as_str() => Some(workspace_id),
-            _ => None,
-        }
-    }
-}
-
 pub fn load(root: &Path) -> Result<Option<SavedConnection>> {
-    let path = root.join("connection.json");
-    let value = match std::fs::read(path) {
+    let value = match std::fs::read(root.join("connection.json")) {
         Ok(bytes) => serde_json::from_slice::<SavedConnection>(&bytes)
             .context("Invalid desktop connection settings; they were not reset")?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -59,36 +33,40 @@ pub fn load(root: &Path) -> Result<Option<SavedConnection>> {
     Ok(Some(value))
 }
 
-pub fn save(root: &Path, value: &SavedConnection) -> Result<()> {
+pub fn write_json(root: &Path, filename: &str, value: &impl Serialize) -> Result<()> {
     // Replace only host preferences, atomically. Never copy, reset or open a kernel database.
     let mut temporary = tempfile::NamedTempFile::new_in(root)?;
     temporary.write_all(&serde_json::to_vec_pretty(value)?)?;
     temporary.as_file().sync_all()?;
     temporary
-        .persist(root.join("connection.json"))
+        .persist(root.join(filename))
         .context("Persist desktop connection settings")?;
     #[cfg(unix)]
     std::fs::File::open(root)?.sync_all()?;
     Ok(())
 }
 
+#[cfg(test)]
+pub fn save(root: &Path, value: &SavedConnection) -> Result<()> {
+    write_json(root, "connection.json", value)
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "zerolux-desktop", about = "Open a ZeroLux workspace", group(clap::ArgGroup::new("workspace").args(["connect", "local", "choose_workspace"]).multiple(false)))]
 pub struct LaunchOptions {
-    /// Connect to an existing loopback kernel and remember its verified workspace identity.
+    /// Open a saved connection at this address, or verify and add a new connection.
     #[arg(long)]
     pub connect: Option<String>,
-    /// Explicitly use the desktop's local workspace, starting its embedded kernel.
+    /// Open the first saved app-managed workspace, or create one if none is saved.
     #[arg(long)]
     pub local: bool,
-    /// Show the workspace selector instead of automatically using the saved connection.
+    /// Show the workspace manager without starting the selected workspace.
     #[arg(long)]
     pub choose_workspace: bool,
 }
 
 impl LaunchOptions {
     pub fn read() -> Self {
-        // Cocoa consumes its own process-only restoration argument; it is not a desktop option.
         let mut args = std::env::args();
         let mut desktop = Vec::new();
         while let Some(arg) = args.next() {
@@ -100,18 +78,6 @@ impl LaunchOptions {
         }
         Self::parse_from(desktop)
     }
-
-    pub fn initial(&self, saved: Option<&SavedConnection>) -> Option<Choice> {
-        if let Some(url) = &self.connect {
-            Some(Choice::Existing { url: url.clone() })
-        } else if self.local {
-            Some(Choice::Local)
-        } else if self.choose_workspace {
-            None
-        } else {
-            saved.map(SavedConnection::choice)
-        }
-    }
 }
 
 #[cfg(test)]
@@ -119,65 +85,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn first_launch_does_not_create_a_workspace_and_choices_are_explicit() {
+    fn launch_overrides_are_explicit_and_mutually_exclusive() {
         let options = LaunchOptions::try_parse_from(["desktop"]).unwrap();
-        assert!(options.initial(None).is_none());
+        assert!(options.connect.is_none());
+        assert!(!options.local && !options.choose_workspace);
+        assert!(
+            LaunchOptions::try_parse_from(["desktop", "--local", "--choose-workspace"]).is_err()
+        );
         assert!(
             LaunchOptions::try_parse_from([
                 "desktop",
-                "--local",
                 "--connect",
-                "http://127.0.0.1:4310"
+                "https://example.org",
+                "--local"
             ])
             .is_err()
         );
-        assert_eq!(
-            LaunchOptions::try_parse_from(["desktop", "--local"])
-                .unwrap()
-                .initial(None),
-            Some(Choice::Local)
-        );
+        assert!(LaunchOptions::try_parse_from(["desktop", "--unknown"]).is_err());
+        let options = LaunchOptions::try_parse_from(["desktop", "--choose-workspace"]).unwrap();
+        assert!(options.choose_workspace);
     }
 
     #[test]
-    fn saved_selection_and_identity_survive_reopen_without_opening_a_database() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(load(dir.path()).unwrap(), None);
-        let value = SavedConnection::Existing {
+    fn legacy_preferences_are_read_without_opening_or_resetting_data() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(load(directory.path()).unwrap(), None);
+        let existing = SavedConnection::Existing {
             url: "http://127.0.0.1:4310/".into(),
-            workspace_id: "fixture-workspace".into(),
+            workspace_id: "original-id".into(),
         };
-        save(dir.path(), &value).unwrap();
-        assert_eq!(load(dir.path()).unwrap(), Some(value.clone()));
-        assert!(!dir.path().join("zerolux.db").exists());
-        assert!(!dir.path().join("port").exists());
+        std::fs::write(directory.path().join("zerolux.db"), b"not a database").unwrap();
+        save(directory.path(), &existing).unwrap();
+        assert_eq!(load(directory.path()).unwrap(), Some(existing));
         assert_eq!(
-            value.expected_id(&kernel_url("http://127.0.0.1:4310").unwrap()),
-            Some("fixture-workspace")
+            std::fs::read(directory.path().join("zerolux.db")).unwrap(),
+            b"not a database"
         );
+        std::fs::write(directory.path().join("connection.json"), b"broken").unwrap();
+        assert!(load(directory.path()).is_err());
         assert_eq!(
-            value.expected_id(&kernel_url("http://127.0.0.1:4311").unwrap()),
-            None
-        );
-        assert_eq!(
-            LaunchOptions::try_parse_from(["desktop"])
-                .unwrap()
-                .initial(Some(&value)),
-            Some(value.choice())
-        );
-        assert!(
-            LaunchOptions::try_parse_from(["desktop", "--choose-workspace"])
-                .unwrap()
-                .initial(Some(&value))
-                .is_none()
-        );
-        save(dir.path(), &SavedConnection::Local).unwrap();
-        assert_eq!(load(dir.path()).unwrap(), Some(SavedConnection::Local));
-        std::fs::write(dir.path().join("connection.json"), "broken").unwrap();
-        assert!(load(dir.path()).is_err());
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("connection.json")).unwrap(),
-            "broken"
+            std::fs::read(directory.path().join("connection.json")).unwrap(),
+            b"broken"
         );
     }
 }

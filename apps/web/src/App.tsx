@@ -13,6 +13,13 @@ import { usePanelRef } from "react-resizable-panels";
 import { useChat, useStorage } from "@zerolux/chat";
 import type { Conversation } from "@zerolux/chat";
 import { activeActors, api, errorMessage } from "./api";
+import {
+  trafficLightsInset,
+  windowDragProps,
+  workspaceNavigationGuard,
+} from "./desktop";
+import { WindowControls } from "@/components/window-controls";
+import { cn } from "cn";
 import type { Actor, Workspace } from "./api";
 import { Approvals } from "./Approvals";
 import { ChatHome, ChatList, ChatView, NewConversation } from "./ChatView";
@@ -128,6 +135,7 @@ export function App({
   const chatReady = health?.capabilities.includes("chat-v1") ?? true;
   const capabilities = health?.capabilities ?? [];
   const chat = useChat(!!workspace && !needsOnboarding && chatReady);
+  useEffect(() => workspaceNavigationGuard(chat.canLeave), [chat.canLeave]);
   // One list of files for the whole app: storage page, chats, their panels.
   const storage = useStorage(capabilities.includes("storage-v1"));
   const conversation = chat.conversations.find((c) => c.id === chatId);
@@ -145,10 +153,10 @@ export function App({
       : !workspace
         ? { tone: "connecting", label: "Connecting…" }
         : chat.realtime === "live"
-          ? { tone: "connected", label: "Local kernel · live" }
+          ? { tone: "connected", label: "Kernel · live" }
           : needsOnboarding || chat.realtime === "connecting"
-            ? { tone: "connecting", label: "Local kernel" }
-            : { tone: "stopped", label: "Local kernel · realtime offline" }),
+            ? { tone: "connecting", label: "Kernel" }
+            : { tone: "stopped", label: "Kernel · realtime offline" }),
     host: globalThis.location?.host ?? "",
     version: health?.version,
   };
@@ -237,112 +245,127 @@ export function App({
   const sidebar = shell && (
     <Sidebar chat={chat} owner={owner} kernel={kernel} toggle={toggle} />
   );
+  // In the macOS desktop app the header is the window's title bar: it spans the window,
+  // with the native traffic lights in its first 92px, and the rail starts below it.
+  const titleBar = trafficLightsInset();
 
   return (
     <div
       data-rail={shell || undefined}
-      className="grid h-dvh bg-background md:data-rail:grid-cols-[4.25rem_minmax(0,1fr)]"
+      className="grid h-dvh grid-rows-[auto_minmax(0,1fr)] md:data-rail:grid-cols-[4.25rem_minmax(0,1fr)]"
     >
       {sidebar && (
-        <aside className="flex min-h-0 flex-col overflow-y-auto border-r border-sidebar-border bg-sidebar max-md:hidden">
+        <aside
+          className={cn(
+            "flex min-h-0 flex-col overflow-y-auto border-r border-sidebar-border bg-sidebar max-md:hidden",
+            titleBar ? "row-start-2" : "row-span-2",
+          )}
+        >
           {sidebar}
         </aside>
       )}
-      <div className="flex min-h-0 min-w-0 flex-col">
-        {/* Three columns, so the search sits in the middle whatever the sides hold; a phone has no middle. */}
-        <header className="grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b px-3 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:px-4">
-          <div className="flex min-w-0 items-center gap-1.5">
-            {shell && (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Open the menu"
-                className="md:hidden"
-                onClick={() => setRail(true)}
-              >
-                <MenuIcon />
-              </Button>
-            )}
-            {shell ? (
-              <WorkspaceMenu
-                workspace={workspace}
-                busy={busy}
-                perform={perform}
-              />
-            ) : (
-              <h1 className="truncate text-sm font-semibold">ZeroLux</h1>
-            )}
-          </div>
-          {shell ? (
-            <button
-              type="button"
-              onClick={() => setMenu(true)}
-              className="flex h-8 w-[min(30rem,40vw)] items-center gap-2 rounded-md border border-input bg-card px-2.5 text-[13px] text-faint transition-colors hover:border-faint/60 hover:text-muted-foreground max-md:hidden"
+      {/* Three columns, so the search sits in the middle whatever the sides hold; a phone has no middle. */}
+      <header
+        {...windowDragProps()}
+        className={cn(
+          "grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b pr-3 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:pr-4",
+          titleBar
+            ? "col-span-full pl-23"
+            : cn("pl-3 md:pl-4", shell && "md:col-start-2"),
+        )}
+      >
+        <div className="flex min-w-0 items-center gap-1.5">
+          {shell && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Open the menu"
+              className="md:hidden"
+              onClick={() => setRail(true)}
             >
-              <SearchIcon aria-hidden className="size-3.5" />
-              Search or run
-              <KbdGroup className="ml-auto">
-                <Kbd>⌘</Kbd>
-                <Kbd>K</Kbd>
-              </KbdGroup>
-            </button>
-          ) : (
-            <span className="max-md:hidden" />
+              <MenuIcon />
+            </Button>
           )}
-          <div className="flex items-center justify-end gap-1">
-            {shell && (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Search or run"
-                className="md:hidden"
-                onClick={() => setMenu(true)}
+          {shell ? (
+            <WorkspaceMenu
+              workspace={workspace}
+              busy={busy}
+              perform={perform}
+            />
+          ) : (
+            <h1 className="truncate text-sm font-semibold">ZeroLux</h1>
+          )}
+        </div>
+        {shell ? (
+          <button
+            type="button"
+            onClick={() => setMenu(true)}
+            className="flex h-8 w-[min(30rem,40vw)] items-center gap-2 rounded-md border border-input bg-card px-2.5 text-[13px] text-faint transition-colors hover:border-faint/60 hover:text-muted-foreground max-md:hidden"
+          >
+            <SearchIcon aria-hidden className="size-3.5" />
+            Search or run
+            <KbdGroup className="ml-auto">
+              <Kbd>⌘</Kbd>
+              <Kbd>K</Kbd>
+            </KbdGroup>
+          </button>
+        ) : (
+          <span className="max-md:hidden" />
+        )}
+        <div className="flex items-center justify-end gap-1">
+          {shell && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Search or run"
+              className="md:hidden"
+              onClick={() => setMenu(true)}
+            >
+              <SearchIcon />
+            </Button>
+          )}
+          {shell ? (
+            <Popover>
+              <PopoverTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={
+                      pending ? `${pending} requests wait for you` : "Requests"
+                    }
+                    className="relative"
+                  />
+                }
               >
-                <SearchIcon />
-              </Button>
-            )}
-            {shell ? (
-              <Popover>
-                <PopoverTrigger
-                  render={
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={
-                        pending
-                          ? `${pending} requests wait for you`
-                          : "Requests"
-                      }
-                      className="relative"
-                    />
-                  }
-                >
-                  <BellIcon />
-                  {pending > 0 && (
-                    <span
-                      aria-hidden
-                      className="absolute top-1 right-1 size-1.5 rounded-full bg-human shadow-[0_0_6px_var(--color-human)]"
-                    />
-                  )}
-                </PopoverTrigger>
-                <PopoverContent
-                  align="end"
-                  className="max-h-[70vh] w-96 overflow-y-auto"
-                >
-                  {pending ? approvals : nothingWaits}
-                </PopoverContent>
-              </Popover>
-            ) : (
-              <span
-                role="status"
-                className="font-mono text-[11px] text-muted-foreground"
+                <BellIcon />
+                {pending > 0 && (
+                  <span
+                    aria-hidden
+                    className="absolute top-1 right-1 size-1.5 rounded-full bg-human shadow-[0_0_6px_var(--color-human)]"
+                  />
+                )}
+              </PopoverTrigger>
+              <PopoverContent
+                align="end"
+                className="max-h-[70vh] w-96 overflow-y-auto"
               >
-                {kernel.label}
-                {kernel.version && ` · v${kernel.version}`}
-              </span>
-            )}
-          </div>
-        </header>
+                {pending ? approvals : nothingWaits}
+              </PopoverContent>
+            </Popover>
+          ) : (
+            <span
+              role="status"
+              className="font-mono text-[11px] text-muted-foreground"
+            >
+              {kernel.label}
+              {kernel.version && ` · v${kernel.version}`}
+            </span>
+          )}
+          <WindowControls />
+        </div>
+      </header>
+      <div className="flex min-h-0 min-w-0 flex-col">
         {(error || connectionError || (chat.error && !projectPath)) && (
           <div
             role="alert"

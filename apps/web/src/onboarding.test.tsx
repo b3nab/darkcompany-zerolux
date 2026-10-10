@@ -150,6 +150,24 @@ test("retired agents are absent from the roster and assignment options; legacy t
   expect(html).toContain("owned by Ada");
 });
 
+test("desktop welcome can return to workspaces without completing onboarding, even while saving", () => {
+  for (const busy of [false, true]) {
+    const html = renderToStaticMarkup(
+      <OwnerOnboarding desktop busy={busy} save={async () => true} />,
+    );
+    expect(html).toMatch(
+      /<a[^>]*href="zerolux:\/\/workspaces"[^>]*>Back to workspaces<\/a>/,
+    );
+    expect(html.indexOf("Back to workspaces")).toBeLessThan(
+      html.indexOf("<form"),
+    );
+  }
+  const browser = renderToStaticMarkup(
+    <OwnerOnboarding desktop={false} busy={false} save={async () => true} />,
+  );
+  expect(browser).not.toContain("zerolux://workspaces");
+});
+
 test("onboarding saving state disables duplicate submissions", () => {
   const html = renderToStaticMarkup(
     <OwnerOnboarding busy save={async () => true} />,

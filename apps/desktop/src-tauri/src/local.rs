@@ -126,13 +126,35 @@ pub fn executable(name: &str) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(name))
 }
 
-pub fn boot_page(url: &tauri::Url) -> bool {
+pub fn app_origin(url: &tauri::Url) -> bool {
     (url.scheme() == "tauri" && url.host_str() == Some("localhost")
         || url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))
-        && url.path() == "/desktop.html"
         && url.port().is_none()
         && url.username().is_empty()
         && url.password().is_none()
+}
+
+pub fn boot_page(url: &tauri::Url) -> bool {
+    app_origin(url) && url.path() == "/desktop.html"
+}
+
+pub fn app_page(url: &tauri::Url) -> bool {
+    app_origin(url) && url.path() != "/desktop.html"
+}
+
+/// Preserve only a route inside the packaged app, never a kernel or external origin.
+pub fn app_route(path: &str) -> Option<String> {
+    let base = tauri::Url::parse("http://tauri.localhost/").expect("app origin");
+    let url = base.join(path).ok()?;
+    if !same_origin(&base, &url) || !app_page(&url) {
+        return None;
+    }
+    Some(format!(
+        "{}{}{}",
+        url.path(),
+        url.query().map(|q| format!("?{q}")).unwrap_or_default(),
+        url.fragment().map(|f| format!("#{f}")).unwrap_or_default()
+    ))
 }
 
 pub fn external_link(url: &tauri::Url) -> bool {
@@ -212,6 +234,26 @@ mod tests {
             assert!(!same_origin(&base, &tauri::Url::parse(denied).unwrap()));
         }
     }
+    #[test]
+    fn packaged_routes_cannot_escape_to_a_kernel_or_the_manager() {
+        assert_eq!(
+            app_route("/chats/one?tab=all#message"),
+            Some("/chats/one?tab=all#message".into())
+        );
+        for path in [
+            "https://outside.example/",
+            "//outside.example/",
+            "http://127.0.0.1:4310/",
+            "/desktop.html",
+            "javascript:alert(1)",
+        ] {
+            assert!(app_route(path).is_none());
+        }
+        for url in ["tauri://localhost/chats", "http://tauri.localhost/projects"] {
+            assert!(app_page(&url.parse().unwrap()));
+        }
+    }
+
     #[test]
     fn boot_navigation_does_not_admit_other_ports_or_credentials() {
         for value in [

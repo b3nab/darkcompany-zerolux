@@ -16,11 +16,22 @@
           "identifier": "desktop-startup",
           "description": "Choose a workspace from the packaged startup page only; no remote kernel UI permission",
           "local": true,
-          "windows": ["main"],
-          "permissions": ["allow-choose-workspace"]
+          "windows": ["manager"],
+          "permissions": ["allow-workspace-action"]
+        },
+        {
+          "identifier": "workspace-window",
+          "description": "Packaged workspace window controls only; no registry, file or process access",
+          "local": true,
+          "windows": ["workspace-*"],
+          "permissions": [
+            "allow-window-control",
+            "core:window:allow-start-dragging",
+            "core:window:allow-internal-toggle-maximize"
+          ]
         }
       ],
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; media-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http: https: ws: wss:; media-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self'"
     }
   },
   "bundle": {
@@ -39,7 +50,7 @@
       "../dist/icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "12.0"
+      "minimumSystemVersion": "14.0"
     }
   }
 }

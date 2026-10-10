@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Eyebrow } from "@/components/presence";
+import { desktopConnection, WORKSPACES_LINK } from "@/desktop";
 
 export function ownerNameError(value: string): string | undefined {
   const name = value.trim();
@@ -18,7 +19,9 @@ export function ownerNameError(value: string): string | undefined {
 export function OwnerOnboarding({
   busy,
   save,
+  desktop = Boolean(desktopConnection()),
 }: {
+  desktop?: boolean;
   busy: boolean;
   save: (name: string) => Promise<boolean>;
 }) {
@@ -33,6 +36,15 @@ export function OwnerOnboarding({
       aria-labelledby="owner-heading"
       className="mx-auto flex max-w-lg flex-col gap-4 py-12"
     >
+      {desktop && (
+        <Button
+          variant="outline"
+          className="self-start"
+          render={<a href={WORKSPACES_LINK} />}
+        >
+          Back to workspaces
+        </Button>
+      )}
       <Eyebrow>Welcome / your workspace</Eyebrow>
       <h1 id="owner-heading" className="text-3xl font-semibold tracking-tight">
         First, what should we call you?
