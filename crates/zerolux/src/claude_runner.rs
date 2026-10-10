@@ -18,6 +18,9 @@ use uuid::Uuid;
 
 use crate::model::ClaudePermissionMode as PermissionMode;
 
+#[cfg(test)]
+mod tests;
+
 /// Fixed local executable/entrypoint, supplied by the host, never by an API/chat payload.
 /// Embedders and deterministic subprocess fixtures may select their own installed entrypoint.
 #[derive(Clone)]
@@ -161,9 +164,11 @@ impl Registry {
             if record.native_session_id != native_id {
                 continue;
             }
-            if record.pid <= 0
-                || kill(Pid::from_raw(record.pid), None) == Err(nix::errno::Errno::ESRCH)
-            {
+            ensure!(
+                record.pid > 0,
+                "The Claude runner has no valid process identity"
+            );
+            if kill(Pid::from_raw(record.pid), None) == Err(nix::errno::Errno::ESRCH) {
                 continue;
             }
             ensure!(
@@ -180,9 +185,11 @@ impl Registry {
                 registry: self.path.clone(),
                 bound: false,
             };
-            let Ok(description) = link.describe().await else {
-                continue;
-            };
+            // A failed control request is not evidence that this live claimant ended.
+            // Even a free helper lease or an empty native catalogue cannot erase it.
+            let description = link.describe().await.context(
+                "The live Claude runner could not be verified; no replacement was started",
+            )?;
             ensure!(
                 link.record.workspace == workspace && link.record.permission_mode == mode,
                 "The owned session's workspace or permission mode changed"
