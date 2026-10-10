@@ -1038,6 +1038,63 @@ mod tests {
         );
     }
 
+    /// Nothing on the Claude Code side records who is linked: two kernels (two workspaces)
+    /// attach the same session and both deliver to its inbox. This documents the gap that a
+    /// machine-wide session lease would close; it is not the behaviour we want.
+    #[tokio::test]
+    async fn two_kernels_can_attach_the_same_claude_session_and_both_deliver() {
+        let (sockets, _) = workspace();
+        let (_dir, cwd) = workspace();
+        let projects = projects(&["birch"]);
+        let listener = private_socket(sockets.path(), me());
+        // The same selection succeeds twice: no lease, no "already linked" anywhere.
+        let first = linked(sockets.path(), &cwd, projects.path()).await;
+        let second = linked(sockets.path(), &cwd, projects.path()).await;
+        let (url_a, _) = kernel(inbox("stored"), axum::http::StatusCode::OK).await;
+        let (url_b, _) = kernel(inbox("stored"), axum::http::StatusCode::OK).await;
+        let (_wake_a, changed_a) = mpsc::channel(1);
+        let (_wake_b, changed_b) = mpsc::channel(1);
+        let (stop_a, stopped_a) = watch::channel(false);
+        let (stop_b, stopped_b) = watch::channel(false);
+        let run_a = tokio::spawn(first.run(
+            url_a,
+            links(),
+            "link".into(),
+            "token-a".into(),
+            changed_a,
+            stopped_a,
+        ));
+        let run_b = tokio::spawn(second.run(
+            url_b,
+            links(),
+            "link".into(),
+            "token-b".into(),
+            changed_b,
+            stopped_b,
+        ));
+        let mut delivered = Vec::new();
+        for _ in 0..2 {
+            // Generous: two deliveries with the whole suite running in parallel on a busy CPU.
+            let (mut stream, _) = tokio::time::timeout(Duration::from_secs(30), listener.accept())
+                .await
+                .expect("both kernels deliver")
+                .unwrap();
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).await.unwrap();
+            let line: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            delivered.push(line["message"]["content"].as_str().unwrap().to_owned());
+        }
+        assert_eq!(
+            delivered.len(),
+            2,
+            "the session got the envelope of both workspaces"
+        );
+        stop_a.send(true).unwrap();
+        stop_b.send(true).unwrap();
+        run_a.await.unwrap().unwrap();
+        run_b.await.unwrap().unwrap();
+    }
+
     /// The turn is about the chat of the envelope the transcript put in front of the model;
     /// a typed input or envelopes of two chats make it nobody's chat; the end clears it.
     #[tokio::test]
