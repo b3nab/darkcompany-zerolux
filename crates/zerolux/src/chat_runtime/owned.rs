@@ -14,19 +14,12 @@ impl ChatRuntime {
         if !who.is_owner() {
             return Err(Error::Forbidden.into());
         }
-        if !PathBuf::from(&input.workspace).is_absolute() {
-            return Err(Error::Invalid("Choose an absolute workspace path".into()).into());
-        }
-        let workspace = std::fs::canonicalize(&input.workspace)
-            .map_err(|_| Error::Invalid("Workspace does not exist".into()))?;
-        if !workspace.is_dir() {
-            return Err(Error::Invalid("Workspace must be a directory".into()).into());
-        }
+        let workspace = super::workspace_dir(&input.workspace)?;
         let native_id = uuid::Uuid::new_v4().to_string();
         self.start_owned(who, HireChatSession {
             name: input.name, actor_id: input.actor_id, harness: Harness::ClaudeCode,
             native_session_id: native_id, title: "Claude Code".into(),
-            workspace: workspace.to_string_lossy().into_owned(),
+            workspace,
             native_locator: json!({"kind":"claude-runner","permission_mode":input.permission_mode}),
             resume: false,
         }, input.permission_mode).await
