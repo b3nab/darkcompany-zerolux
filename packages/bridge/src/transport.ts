@@ -2,13 +2,13 @@ import {
   ChatHttpError,
   ChatLinkSuspended,
   type ChatRequest,
-} from "@zerolux/bridge";
+} from "./chat-bridge.ts";
 
 /** How long a request waits for the kernel to bind the link again after `prepare`. */
 const REBIND_WAIT = 60_000;
 
 /**
- * The runner's link to the kernel, swapped in place on a rebind. Paused, a request waits for
+ * A native host's link to the kernel, swapped in place on a rebind. Paused, a request waits for
  * the next bind; revoked, it fails at once.
  */
 export class Transport {
@@ -49,7 +49,12 @@ export class Transport {
         throw new ChatLinkSuspended("ZeroLux revoked this link");
       return result;
     } catch (error) {
-      if (error instanceof ChatHttpError && [401, 403].includes(error.status)) {
+      if (
+        error instanceof ChatHttpError &&
+        (error.status === 401 ||
+          (error.status === 403 && path.startsWith("/chat/")))
+      ) {
+        // A conversation-level 403 refuses that message, not the whole link.
         // An old token refused after a rebind is no news; the current one means revocation.
         if (current === this.current && !this.revoked) {
           this.revoked = true;

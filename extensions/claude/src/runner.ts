@@ -10,12 +10,12 @@ import {
   chatRequest,
   LocalControl,
   localURL,
+  Transport,
   type ChatRequest,
   type Inbox,
 } from "@zerolux/bridge";
 import { ClaudeAgent, type StartQuery } from "./agent.ts";
 import { lockSession } from "./lock.ts";
-import { Transport } from "./transport.ts";
 
 const MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "auto"];
 

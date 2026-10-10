@@ -5,10 +5,14 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { ChatHttpError, type ChatRequest, type Inbox } from "@zerolux/bridge";
+import {
+  ChatHttpError,
+  Transport,
+  type ChatRequest,
+  type Inbox,
+} from "@zerolux/bridge";
 import type { StartQuery } from "./agent.ts";
 import { Runner } from "./runner.ts";
-import { Transport } from "./transport.ts";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
