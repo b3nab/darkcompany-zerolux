@@ -246,15 +246,17 @@ describe("permanent pi chat", () => {
       registerCommand: (name: string) => commands.push(name),
       events: {
         on: () => () => {},
-        emit: () => {
-          throw new Error("No emissions on registration");
+        emit: (name: string, query: { reply: unknown }) => {
+          // Local duplicate-installation detection is not IO or native input.
+          expect(name).toBe("zerolux:query-chat");
+          expect(typeof query.reply).toBe("function");
         },
       },
     } as unknown as ExtensionAPI);
     expect(events).toContain("session_start");
     expect(events).toContain("agent_settled");
     expect(events).not.toContain("agent_end");
-    // message_start says when an envelope enters the context; message text is never read.
+    // message_start confirms presentation; private native text is never published.
     expect(events).toContain("message_start");
     expect(events).not.toContain("message_end");
     expect(events).not.toContain("agent_before_settle");
@@ -297,8 +299,10 @@ describe("permanent pi chat", () => {
       expect(await readFile(join(root, "zerolux-wake", "s1.txt"), "utf8")).toBe(
         "[autowake] Resume the search",
       );
-      // The wake handler is the first session_start the extension registers.
+      // Managed startup verification precedes the wake handler.
       await handlers[0]({ reason: "reload" }, ctx);
+      expect(sent).toHaveLength(1);
+      await handlers[1]({ reason: "reload" }, ctx);
       expect(sent[1]).toEqual([
         "[autowake] Resume the search",
         { expandPromptTemplates: false },

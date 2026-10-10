@@ -65,18 +65,14 @@ chatExtension({
       events.get(name)?.(value);
     },
   },
-  sendMessage: (message: {
-    customType: string;
-    details: unknown;
-    content: string;
-  }) => {
+  sendUserMessage: (content: string) => {
     idle = false;
     // Native-style lifecycle, but a fixed response instead of inference.
     setTimeout(() => {
       void (async () => {
         await emit("agent_start", { type: "agent_start" });
         await emit("message_start", {
-          message: { role: "custom", ...message },
+          message: { role: "user", content },
         });
         await emit("message_end", {
           message: {
@@ -93,7 +89,7 @@ chatExtension({
         });
         // Answer as a model would: with the chat and message named in the envelope.
         const [, chat, replyTo] =
-          /with chat ("[^"]*") and reply_to ("[^"]*")/.exec(message.content)!;
+          /with chat ("[^"]*") and reply_to ("[^"]*")/.exec(content)!;
         await send.execute("fixture-call", {
           chat: JSON.parse(chat!),
           reply_to: JSON.parse(replyTo!),

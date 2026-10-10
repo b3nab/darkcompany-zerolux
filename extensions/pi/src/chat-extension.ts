@@ -10,6 +10,7 @@ import {
 import {
   AgentLinkChild,
   ChatBridge,
+  Transport,
   chatRequest,
   localURL,
   nativeFingerprint,
@@ -17,7 +18,15 @@ import {
 } from "@zerolux/bridge";
 import { ChatControl, type PairRequest } from "./chat-control.ts";
 import { listMetadata } from "./discover.ts";
+import { checkTerminalTakeover } from "./terminal-takeover.ts";
 import { installWake } from "./wake.ts";
+import {
+  verifyManaged,
+  canPairManaged,
+  reportManagedLinks,
+  nativeMetadata,
+  type NativeMetadata,
+} from "./managed.ts";
 
 export const CHAT_MESSAGE = "zerolux-chat-delivery";
 
@@ -76,22 +85,68 @@ export function messageStarted(
 }
 
 /** A passive factory; session_start advertises local presence, only Hire pairs the link. */
+/** One kernel's link to this pi session: an agent can work in several workspaces at once. */
+interface Link {
+  bridge: ChatBridge;
+  transport: Transport;
+  child?: AgentLinkChild;
+  linkId?: string;
+  token?: string;
+  base?: string;
+}
+
+/** The key of a link: its workspace. A kernel that names none gets the legacy single slot. */
+const LEGACY = "";
+
 export default function chatExtension(pi: ExtensionAPI) {
+  // An explicit --extension may also be installed in the project. One native
+  // runtime gets one bridge, not two competing descriptors/tool registrations.
+  let installed = false;
+  pi.events.emit("zerolux:query-chat", {
+    reply: () => {
+      installed = true;
+    },
+  });
+  if (installed) return;
   let control: ChatControl | undefined;
-  let bridge: ChatBridge | undefined;
-  let child: AgentLinkChild | undefined;
-  let linkId: string | undefined;
-  let token: string | undefined;
-  let base: string | undefined;
+  /** By workspace ID. Each link has its own kernel, token, deliveries and replies. */
+  const links = new Map<string, Link>();
+  const queuedInputs = new Map<string, string[]>();
+  const bridges = () => [...links.values()].map((link) => link.bridge);
   let pairing = false;
+  let takingOver = false;
   let disposed = false;
   let stopping: Promise<void> | undefined;
   let settled = true;
+  // Removing a workspace cannot unmix the running native turn.
+  let dialogShared = true;
+  let uiPrompts = 0;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let context: ExtensionContext | undefined;
+  let managed: Awaited<ReturnType<typeof verifyManaged>>;
+  let metadata: NativeMetadata = { pid: process.pid };
+  pi.on("session_start", async (_event, ctx) => {
+    try {
+      managed = await verifyManaged(pi, ctx);
+    } catch {
+      // Only the newly launched, explicitly marked RPC process. An ordinary hook throw
+      // is swallowed by pi and would let startup work continue under the wrong profile.
+      console.error(
+        "ZeroLux refused native pi startup: entrusted identity/profile was not verified",
+      );
+      process.exit(3);
+    }
+    metadata = await nativeMetadata(ctx, managed);
+  });
   const leaveWake = installWake(pi, join(getAgentDir(), "zerolux-wake"));
 
-  const active = () => Boolean(stopping || pairing || bridge?.connected);
+  const active = () =>
+    Boolean(
+      stopping ||
+      pairing ||
+      takingOver ||
+      bridges().some((bridge) => bridge.connected),
+    );
   const busyChanged = () => pi.events.emit("zerolux:chat-active", active());
   const unsubscribe = pi.events.on("zerolux:query-chat", (query) => {
     if (
@@ -111,21 +166,37 @@ export default function chatExtension(pi: ExtensionAPI) {
     });
     return busy;
   };
-  const stop = (): Promise<void> => {
-    if (stopping) return stopping;
-    const current = bridge,
-      subscriber = child;
-    bridge = undefined;
-    child = undefined;
-    token = undefined;
-    base = undefined;
-    linkId = undefined;
-    if (refreshTimer) clearTimeout(refreshTimer);
-    refreshTimer = undefined;
+  const status = () => {
+    const connected = bridges().filter((bridge) => bridge.connected).length;
+    context?.ui.setStatus(
+      "zerolux-chat",
+      connected === 0
+        ? undefined
+        : connected === 1
+          ? "chat: connected"
+          : `chat: connected (${connected} workspaces)`,
+    );
+  };
+  /** Ends one link (its workspace) or all of them. Never Stops the agent. */
+  const stop = (key?: string): Promise<void> => {
+    // Wait for cleanup, then apply this request too: it may name another workspace.
+    if (stopping) return stopping.then(() => stop(key));
+    const ending =
+      key === undefined
+        ? [...links.entries()]
+        : [...links.entries()].filter(([k]) => k === key);
+    for (const [k] of ending) links.delete(k);
+    if (links.size === 0 && refreshTimer) {
+      clearTimeout(refreshTimer);
+      refreshTimer = undefined;
+    }
     stopping = (async () => {
-      await current?.stop();
-      await subscriber?.stop();
-      context?.ui.setStatus("zerolux-chat", undefined);
+      for (const [, link] of ending) {
+        await link.bridge.stop();
+        link.transport.close();
+        await link.child?.stop();
+      }
+      status();
     })().finally(() => {
       stopping = undefined;
       busyChanged();
@@ -133,17 +204,24 @@ export default function chatExtension(pi: ExtensionAPI) {
     return stopping;
   };
   const refresh = () => {
-    if (disposed || !bridge) return;
-    const current = bridge;
-    void current
-      .invalidate()
-      .then(() => {
-        if (bridge === current && !current.connected) return stop();
-      })
-      .catch(() => {});
+    if (disposed || takingOver) return;
+    for (const [key, link] of links) {
+      const current = link.bridge;
+      void current
+        .invalidate()
+        .then(() => {
+          if (links.get(key)?.bridge === current && !current.connected)
+            return stop(key);
+        })
+        .catch(() => {});
+    }
   };
 
-  const host = (ctx: ExtensionContext, workspace: string): ChatHost => ({
+  const host = (
+    ctx: ExtensionContext,
+    workspace: string,
+    linkKey: string,
+  ): ChatHost => ({
     harness: "pi",
     nativeSessionId: ctx.sessionManager.getSessionId(),
     workspace,
@@ -151,19 +229,24 @@ export default function chatExtension(pi: ExtensionAPI) {
     idle: () =>
       settled && ctx.isIdle() && !ctx.hasPendingMessages() && !taskBusy(),
     // Everything waiting in one message: pi steers one queued message per step.
-    send: (batches) =>
-      pi.sendMessage(
-        {
-          customType: CHAT_MESSAGE,
-          content: batches.map((batch) => batch.content).join("\n\n"),
-          display: true,
-          details: { deliveryIds: batches.map((batch) => batch.id) },
-        },
-        // Idle: starts a turn. Working: joins it after the current tool call.
-        { triggerTurn: true, deliverAs: "steer" },
-      ),
+    send: (batches) => {
+      if (takingOver)
+        throw new Error("Native pi is handing over its execution");
+      if (links.size > 1) dialogShared = true;
+      const content = batches.map((batch) => batch.content).join("\n\n");
+      queuedInputs.set(
+        content,
+        batches.map((batch) => batch.id),
+      );
+      // Use pi's actual text-steering queue. Custom-message steers are invisible to
+      // its pending-input UI and are discarded by Escape's clear/restore operation.
+      // Native text steers remain visible/editable there; we never resubmit a claim.
+      pi.sendUserMessage(content, { deliverAs: "steer" });
+    },
     abort: () => {
-      void ctx.abort();
+      // A native abort affects every workspace, including steers not yet presented.
+      // A bridge's turn ownership cannot establish exclusive native ownership.
+      if (![...links.keys()].some((key) => key !== linkKey)) void ctx.abort();
     },
     notify: (message) => {
       if (!disposed) {
@@ -178,43 +261,70 @@ export default function chatExtension(pi: ExtensionAPI) {
     ctx: ExtensionContext,
     workspace: string,
   ): Promise<string> {
+    await canPairManaged(managed);
+    if (takingOver) throw new Error("Native pi is handing over its execution");
     const origin = localURL(init.base_url);
+    // A kernel names its workspace; one that does not (older) gets the single legacy slot,
+    // and only while no other workspace is linked.
+    const key = init.workspace_id ?? LEGACY;
+    if (
+      key === LEGACY
+        ? [...links.keys()].some((k) => k !== LEGACY)
+        : links.has(LEGACY)
+    )
+      throw new Error(
+        "This pi session is linked by a kernel that does not name its workspace; update it before linking several workspaces",
+      );
+    const existing = links.get(key);
+    if (!existing && links.size > 0 && (!settled || !ctx.isIdle()))
+      dialogShared = true;
     if (
       !pairing &&
       !stopping &&
-      bridge?.connected &&
-      token === init.token &&
-      base === origin &&
-      linkId
+      existing?.bridge.connected &&
+      existing.token === init.token &&
+      existing.base === origin &&
+      existing.linkId
     )
-      return linkId;
-    // A new token for the live link is the kernel relinking this same session
-    // (the control socket already verified it), e.g. after a restart: replace the
+      return existing.linkId;
+    // A new token for a live link of the same workspace is its kernel relinking this
+    // session (the control socket already verified it), e.g. after a restart: replace the
     // link without waiting for pi to be idle, and keep the open turn.
     const previous =
-      !disposed && !pairing && !stopping && bridge?.connected
-        ? bridge
+      !disposed && !pairing && !stopping && existing?.bridge.connected
+        ? existing.bridge
         : undefined;
     // A busy pi pairs too: the kernel checks before a first hire and relinks regardless
     // (e.g. right after a reload), and chat messages join a running turn anyway. Only the
     // task bridge excludes the chat.
-    if (!previous && (disposed || stopping || pairing || bridge || taskBusy()))
+    if (
+      !previous &&
+      (disposed || stopping || pairing || existing || taskBusy())
+    )
       throw new Error(
         "Pi's chat is already connecting, or its task bridge is connected",
       );
     pairing = true;
     busyChanged();
-    const next = new ChatBridge(
-      host(ctx, workspace),
-      chatRequest(origin, init.token),
+    const native = host(ctx, workspace, key);
+    // Revocation is not Stop: the kernel rotates tokens during a relink. Use the same
+    // suspended transport as the Claude runner so open work survives either race order.
+    const transport = new Transport(() =>
+      native.notify(
+        "The ZeroLux link lost authorization. Native work continues while the link is rebound.",
+      ),
     );
-    if (!previous) bridge = next; // An off during the identity request must close this pending pair too.
+    transport.bind(chatRequest(origin, init.token));
+    const next = new ChatBridge(native, transport.request);
+    // An off during the identity request must close this pending pair too.
+    if (!previous) links.set(key, { bridge: next, transport });
+    const mine = () => links.get(key);
     try {
       // Check the private bearer against this exact native session before doing anything else.
       await next.connect();
       if (
         disposed ||
-        bridge !== (previous ?? next) ||
+        mine()?.bridge !== (previous ?? next) ||
         !next.connected ||
         (!previous && taskBusy())
       )
@@ -223,12 +333,12 @@ export default function chatExtension(pi: ExtensionAPI) {
         next.adopt(previous.handOff());
         // From here pi's events (input, context, end of turn) reach the new link, also
         // while the old subscriber is still stopping.
-        bridge = next;
-        const old = child;
-        child = undefined;
-        await old?.stop();
+        const old = mine()!;
+        links.set(key, { bridge: next, transport });
+        old.transport.close();
+        await old.child?.stop();
         // A Stop or shutdown while the old subscriber was stopping ends this relink too.
-        if (disposed || bridge !== next || !next.connected)
+        if (disposed || mine()?.bridge !== next || !next.connected)
           throw new Error("Pairing was stopped");
       }
       const subscriber = new AgentLinkChild(refresh, () => {
@@ -236,32 +346,66 @@ export default function chatExtension(pi: ExtensionAPI) {
           "LiveKit subscriber stopped; no prompt will be retried automatically",
         );
       });
-      bridge = next;
-      child = subscriber;
-      token = init.token;
-      base = origin;
-      linkId = randomUUID();
+      const link: Link = {
+        bridge: next,
+        transport,
+        child: subscriber,
+        token: init.token,
+        base: origin,
+        linkId: randomUUID(),
+      };
+      links.set(key, link);
       // The first invalidation also publishes a reply carried over from a relink.
       await subscriber.start(
         await realpath(init.executable),
         origin,
         init.token,
       );
-      if (disposed || bridge !== next) throw new Error("Pairing was stopped");
+      if (disposed || mine() !== link) throw new Error("Pairing was stopped");
       await next.ready();
-      if (disposed || bridge !== next || !next.connected || !linkId)
+      if (disposed || mine() !== link || !next.connected || !link.linkId)
         throw new Error("Pairing was stopped");
-      ctx.ui.setStatus("zerolux-chat", "chat: connected");
-      return linkId!;
+      status();
+      await reportManagedLinks(
+        managed,
+        bridges().flatMap((bridge) =>
+          bridge.sessionId ? [bridge.sessionId] : [],
+        ),
+        control
+          ? join(getAgentDir(), "zerolux-links", `${control.instanceId}.json`)
+          : undefined,
+      ).catch(() => {});
+      return link.linkId;
     } catch (error) {
-      await next.stop();
-      await stop();
+      if (previous) {
+        // A failed rebind must not cancel the open native turn. Before handoff the old
+        // link remains; afterwards the new one keeps its state for the next verified pair.
+        transport.close();
+        if (mine()?.bridge === next) await mine()?.child?.stop();
+        else await next.stop(); // Never adopted, or already explicitly stopped.
+      } else {
+        await next.stop();
+        await stop(key);
+      }
       throw error;
     } finally {
       pairing = false;
       busyChanged();
     }
   }
+
+  /** The one link whose workspace has this chat. Never a guess: zero or several is an error. */
+  const linkOf = (chat: string): ChatBridge => {
+    const connected = bridges().filter((bridge) => bridge.connected);
+    if (connected.length === 0) throw new Error("No ZeroLux chat is connected");
+    const known = connected.filter((bridge) => bridge.knows(chat));
+    if (known.length === 1) return known[0]!;
+    throw new Error(
+      known.length === 0
+        ? "This chat belongs to none of the connected ZeroLux workspaces"
+        : "This chat ID exists in several connected workspaces; it cannot be addressed",
+    );
+  };
 
   pi.registerTool({
     name: "zerolux_send",
@@ -280,8 +424,11 @@ export default function chatExtension(pi: ExtensionAPI) {
     async execute(_id, args, signal) {
       if (signal?.aborted)
         throw new Error("Message cancelled before publication");
-      if (!bridge) throw new Error("No ZeroLux chat is connected");
-      const outcome = await bridge.post(args.chat, args.text, args.reply_to);
+      const outcome = await linkOf(args.chat).post(
+        args.chat,
+        args.text,
+        args.reply_to,
+      );
       return {
         content: [
           {
@@ -316,8 +463,7 @@ export default function chatExtension(pi: ExtensionAPI) {
     }),
     async execute(_id, args, signal) {
       if (signal?.aborted) throw new Error("Thread cancelled before opening");
-      if (!bridge) throw new Error("No ZeroLux chat is connected");
-      const thread = await bridge.openThread(
+      const thread = await linkOf(args.chat).openThread(
         args.chat,
         args.on,
         args.title,
@@ -390,23 +536,121 @@ export default function chatExtension(pi: ExtensionAPI) {
   });
   pi.on("session_start", async (_event, ctx) => {
     context = ctx;
+    dialogShared = !ctx.isIdle() || ctx.hasPendingMessages();
     if (disposed) return;
     const workspace = await realpath(ctx.cwd);
     const current = new ChatControl(join(getAgentDir(), "zerolux-links"), {
       describe: () => ({
+        ...metadata,
         native_session_id: ctx.sessionManager.getSessionId(),
         workspace,
         title:
           ctx.sessionManager.getSessionName() || `pi — ${basename(workspace)}`,
         busy:
-          !settled || !ctx.isIdle() || ctx.hasPendingMessages() || taskBusy(),
+          !settled ||
+          uiPrompts > 0 ||
+          !ctx.isIdle() ||
+          ctx.hasPendingMessages() ||
+          taskBusy(),
         paired: active(),
+        // Several workspaces may link this session, each with its own kernel.
+        multi_workspace: true,
+        takeover: !managed && ctx.mode === "tui" ? 1 : undefined,
+        taking_over: takingOver,
       }),
+      turn: () => {
+        if (settled || dialogShared || takingOver || links.size !== 1)
+          return { delivery: null };
+        const link = links.values().next().value;
+        const turn = link?.bridge.connected ? link.bridge.turn() : null;
+        return turn
+          ? { ...turn, link_id: link!.bridge.sessionId }
+          : { delivery: null };
+      },
       // The kernel asks a live pi for the session list: pi's own SDK, in this process.
       sessions: () => listMetadata(process.env.PI_CODING_AGENT_SESSION_DIR),
       pair: (init) => pair(init, ctx, workspace),
+      takeover: async (request) => {
+        const key = request.workspace_id;
+        const link = links.get(key);
+        const idle = () =>
+          !managed &&
+          !disposed &&
+          !pairing &&
+          !stopping &&
+          links.size === 1 &&
+          links.get(key) === link &&
+          link?.bridge.sessionId === request.session_id &&
+          link.bridge.connected &&
+          !link.bridge.busy &&
+          link.bridge.syncing === false &&
+          metadata.session_file === request.session_file &&
+          settled &&
+          uiPrompts === 0 &&
+          ctx.isIdle() &&
+          !ctx.hasPendingMessages() &&
+          !taskBusy();
+        if (takingOver || !idle()) return { accepted: false };
+        let closing = false;
+        let paused = false;
+        try {
+          await checkTerminalTakeover(pi, ctx, metadata);
+          if (takingOver || !idle()) return { accepted: false };
+          if (request.check) return { accepted: true };
+          takingOver = true;
+          paused = true;
+          // The kernel must durably request recovery before the old writer exits.
+          // Its authenticated inbox also rechecks owner Stop and a concurrent relink.
+          const inbox = await link!.transport.request<{
+            session: { id: string; status: string; native_session_id: string };
+            workspace: { id: string };
+            deliveries: { status: string }[];
+          }>("/chat/inbox");
+          if (
+            !idle() ||
+            inbox.session.id !== request.session_id ||
+            inbox.session.native_session_id !==
+              ctx.sessionManager.getSessionId() ||
+            inbox.session.status !== "attention" ||
+            inbox.workspace.id !== key ||
+            inbox.deliveries.some((delivery) => delivery.status === "stored")
+          )
+            return { accepted: false };
+          await stop(key);
+          // Native private input may have arrived during asynchronous cleanup. Never
+          // close a now-busy terminal, migrate it, or substitute another saved context.
+          await checkTerminalTakeover(pi, ctx, metadata);
+          if (uiPrompts > 0) return { accepted: false };
+          ctx.shutdown();
+          closing = true;
+          return { accepted: true };
+        } catch {
+          // Do not expose history/profile parse errors or any native conversation text.
+          return { accepted: false };
+        } finally {
+          // A check must not trigger dispatch, nor release another request's pause.
+          if (paused && !closing) {
+            takingOver = false;
+            refresh();
+          }
+        }
+      },
       stop: async (id) => {
-        if (id === linkId) await stop();
+        let matched = false;
+        for (const [key, link] of links)
+          if (link.linkId === id) {
+            matched = true;
+            await stop(key);
+          }
+        await reportManagedLinks(
+          managed,
+          bridges().flatMap((bridge) =>
+            bridge.sessionId ? [bridge.sessionId] : [],
+          ),
+          join(getAgentDir(), "zerolux-links", `${current.instanceId}.json`),
+        ).catch(() => {});
+        if (matched && managed && links.size === 0)
+          setTimeout(() => ctx.shutdown(), 0);
       },
     });
     control = current;
@@ -420,29 +664,41 @@ export default function chatExtension(pi: ExtensionAPI) {
         );
     }
   });
+  // Every link follows pi's turns; each one only acts on its own deliveries.
   pi.on("agent_start", () => {
+    dialogShared ||= links.size !== 1;
     settled = false;
-    bridge?.agentStarted();
+    for (const bridge of bridges()) bridge.agentStarted();
   });
   pi.on("input", (event) => {
-    if (event.source !== "extension") bridge?.privateInput();
+    if (event.source !== "extension")
+      for (const bridge of bridges()) bridge.privateInput();
   });
   // Receipts go out in the background: pi's turn never waits on ZeroLux.
-  pi.on("message_start", (event) => void messageStarted(bridge, event.message));
+  pi.on(
+    "message_start",
+    (event) => void messageStarted(bridges(), event.message, queuedInputs),
+  );
   pi.on("agent_settled", async () => {
     settled = true;
-    await bridge?.settled();
+    dialogShared = false;
+    await Promise.all(bridges().map((bridge) => bridge.settled()));
     // agent_settled is notification-only. Dispatch another delivery on a later event-loop tick.
-    if (!disposed && bridge) refreshTimer = setTimeout(refresh, 0);
+    if (!disposed && links.size > 0) refreshTimer = setTimeout(refresh, 0);
   });
   pi.on("ui_prompt_start", () => {
-    if (bridge?.busy)
-      void bridge.attention(
-        "A native pi extension is awaiting a dialog in pi. ZeroLux cannot answer that TUI dialog; native permissions are unchanged.",
-      );
+    uiPrompts++;
+    if (managed?.dialogs) return; // The host reports questions it cannot safely route.
+    for (const bridge of bridges())
+      if (bridge.busy)
+        void bridge.attention(
+          "A native pi extension is awaiting a dialog in pi. ZeroLux cannot answer that TUI dialog; native permissions are unchanged.",
+        );
   });
   pi.on("ui_prompt_end", () => {
-    if (bridge?.busy) void bridge.ready().catch(() => {});
+    uiPrompts = Math.max(0, uiPrompts - 1);
+    for (const bridge of bridges())
+      if (bridge.busy) void bridge.ready().catch(() => {});
   });
   const guard = (_event: unknown, ctx: ExtensionContext) => {
     if (active()) {

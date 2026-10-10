@@ -152,6 +152,18 @@ async function fixture() {
       presented.push(
         ...(event.message.details as { deliveryIds: string[] }).deliveryIds,
       );
+    if (event.type === "message_start" && event.message.role === "user") {
+      const content = event.message.content;
+      const text =
+        typeof content === "string"
+          ? content
+          : content
+              .filter((p) => p.type === "text")
+              .map((p) => p.text)
+              .join("\n");
+      const index = messages.indexOf(text);
+      if (index >= 0) presented.push(`d${index + 1}`);
+    }
   });
   return {
     session,
@@ -161,7 +173,7 @@ async function fixture() {
         await readFile(projectSettings, "utf8"),
       );
     },
-    async burst() {
+    async burst(textSteering = false) {
       const running = session.prompt("Private fixture input");
       try {
         await Promise.race([
@@ -170,7 +182,11 @@ async function fixture() {
             throw new Error("Fixture ended before its held model request");
           }),
         ]);
-        for (const [index, content] of messages.entries())
+        for (const [index, content] of messages.entries()) {
+          if (textSteering) {
+            await session.sendUserMessage(content, { deliverAs: "steer" });
+            continue;
+          }
           await session.sendCustomMessage(
             {
               customType: "zerolux-chat-delivery",
@@ -180,6 +196,7 @@ async function fixture() {
             },
             { triggerTurn: true, deliverAs: "steer" },
           );
+        }
         expect(presented).toEqual([]); // Queued is not Read/presented yet.
         release.resolve();
         await running;
@@ -190,6 +207,33 @@ async function fixture() {
         release.resolve();
         await running.catch(() => {});
       }
+    },
+    async escape(useTextSteering: boolean) {
+      const running = session.prompt("Private fixture input");
+      await entered.promise;
+      for (const content of messages) {
+        if (useTextSteering)
+          await session.sendUserMessage(content, { deliverAs: "steer" });
+        else
+          await session.sendCustomMessage(
+            {
+              customType: "zerolux-chat-delivery",
+              content,
+              display: true,
+              details: { deliveryIds: [content] },
+            },
+            { triggerTurn: true, deliverAs: "steer" },
+          );
+      }
+      // This is the native TUI's clear/restore-to-editor path, not a ZeroLux retry.
+      const restored = session.clearQueue();
+      const aborted = session.abort();
+      release.resolve();
+      await aborted;
+      await running;
+      expect(calls).toHaveLength(1);
+      expect(presented).toEqual([]);
+      return restored;
     },
     async close() {
       release.resolve();
@@ -203,6 +247,20 @@ async function fixture() {
     },
   };
 }
+
+test("native Escape silently drops custom steers, but returns text steers intact to the editor", async () => {
+  for (const text of [false, true]) {
+    const f = await fixture();
+    try {
+      expect(await f.escape(text)).toEqual({
+        steering: text ? messages : [],
+        followUp: [],
+      });
+    } finally {
+      await f.close();
+    }
+  }
+});
 
 test("pi's one-at-a-time queue adds one model step for every waiting chat envelope", async () => {
   const f = await fixture();
@@ -230,7 +288,7 @@ test("reloading this project's settings delivers the entire waiting burst at the
     expect(f.session.sessionId).toBe(id);
     expect(f.session.steeringMode).toBe("all");
     expect(f.session.followUpMode).toBe("one-at-a-time");
-    expect(await f.burst()).toEqual([
+    expect(await f.burst(true)).toEqual([
       ["Private fixture input"],
       ["Private fixture input", ...messages],
     ]);
