@@ -70,7 +70,10 @@ where
                     break;
                 }
             }
-            Err(error) => tracing::warn!(%error, "LiveKit subscription failed; retrying"),
+            Err(error) => tracing::warn!(
+                error = format!("{error:#}"),
+                "LiveKit subscription failed; retrying"
+            ),
         }
         tokio::select! {
             _ = tokio::time::sleep(RETRY) => {}

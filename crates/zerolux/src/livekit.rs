@@ -253,11 +253,15 @@ pub async fn run_publisher(
     store: Store,
     livekit: Arc<LiveKit>,
     changed: Arc<Notify>,
+    wake: tokio::sync::broadcast::Sender<()>,
     mut stop: watch::Receiver<bool>,
 ) {
     while !*stop.borrow() {
-        if let Err(error) = publish_pending(&store, &livekit).await {
-            tracing::warn!(%error, "LiveKit publication failed; notices stay pending");
+        if let Err(error) = publish_pending(&store, &livekit, &wake).await {
+            tracing::warn!(
+                error = format!("{error:#}"),
+                "LiveKit publication failed; notices stay pending"
+            );
         }
         tokio::select! {
             _ = changed.notified() => {}
@@ -268,12 +272,20 @@ pub async fn run_publisher(
 }
 
 /// One failing notice never blocks the ones queued behind it.
-async fn publish_pending(store: &Store, livekit: &LiveKit) -> anyhow::Result<()> {
+async fn publish_pending(
+    store: &Store,
+    livekit: &LiveKit,
+    wake: &tokio::sync::broadcast::Sender<()>,
+) -> anyhow::Result<()> {
     loop {
         let events = store.pending_chat_events(OUTBOX_BATCH).await?;
         if events.is_empty() {
             return Ok(());
         }
+        // Whatever LiveKit does with these notices, the adapters in this process hear about
+        // the pending work now: they read the store, not the room. Each batch wakes them,
+        // so a batch that arrives while an earlier one is published is never missed.
+        let _ = wake.send(());
         let mut failure = None;
         for event in events {
             match livekit.notify(&event.payload, &event.actor_ids).await {
@@ -560,6 +572,7 @@ mod tests {
             store.clone(),
             Arc::new(livekit),
             Arc::new(Notify::new()),
+            tokio::sync::broadcast::channel(4).0,
             stop,
         ));
         tokio::time::sleep(Duration::from_secs(2)).await;

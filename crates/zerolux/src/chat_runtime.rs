@@ -5,7 +5,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
 use tokio::{
-    sync::{Mutex, Notify, mpsc, watch},
+    sync::{Mutex, Notify, broadcast, mpsc, watch},
     task::JoinHandle,
 };
 
@@ -84,6 +84,9 @@ pub struct ChatRuntime {
     #[cfg(unix)]
     runners: crate::claude_runner::Registry,
     changed: Arc<Notify>,
+    /// Wakes the adapters that run inside this process: they share the store, so a notice
+    /// written to the outbox reaches them here, without LiveKit, sockets or tokens.
+    wake: broadcast::Sender<()>,
     stop: watch::Sender<bool>,
     agents: Mutex<HashMap<String, AgentTask>>,
     publisher: Mutex<Option<JoinHandle<()>>>,
@@ -128,10 +131,12 @@ impl ChatRuntime {
         store.recover_chat_sessions().await?;
         let (stop, stopped) = watch::channel(false);
         let changed = Arc::new(Notify::new());
+        let (wake, _) = broadcast::channel(16);
         let publisher = tokio::spawn(crate::livekit::run_publisher(
             store.clone(),
             livekit.clone(),
             changed.clone(),
+            wake.clone(),
             stopped,
         ));
         Ok(Arc::new(Self {
@@ -145,6 +150,7 @@ impl ChatRuntime {
             ),
             links,
             changed,
+            wake,
             stop,
             agents: Mutex::new(HashMap::new()),
             publisher: Mutex::new(Some(publisher)),
@@ -152,6 +158,9 @@ impl ChatRuntime {
     }
 
     pub fn changed(&self) {
+        // The in-process adapters first, directly: a publisher stuck on LiveKit must not
+        // delay them. Then the publisher, for the clients outside.
+        let _ = self.wake.send(());
         self.changed.notify_one();
     }
 
@@ -397,20 +406,25 @@ impl ChatRuntime {
         );
         let (stopper, mut stop) = watch::channel(false);
         let (invalidate, mut invalidations) = mpsc::channel(1);
-        let livekit = self.livekit.clone();
-        let ticket_store = self.store.clone();
-        let ticket_token = token.clone();
-        let ticket = move || {
-            let store = ticket_store.clone();
-            let livekit = livekit.clone();
-            let token = ticket_token.clone();
-            async move {
-                let identity = store.chat_identity(Some(&token)).await?;
-                let ticket = livekit.client_token(&identity.actor_id)?;
-                Ok((ticket.url, ticket.token))
+        // In-process: woken from the outbox directly. The first signal says "ready", like a
+        // joined subscription would; a lagged receiver just re-reads its inbox.
+        let mut woken = self.wake.subscribe();
+        let mut stopping = stop.clone();
+        let subscriber = tokio::spawn(async move {
+            let _ = invalidate.try_send(());
+            loop {
+                tokio::select! {
+                    received = woken.recv() => match received {
+                        Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                            let _ = invalidate.try_send(());
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    },
+                    _ = stopping.wait_for(|stopped| *stopped) => break,
+                }
             }
-        };
-        let subscriber = tokio::spawn(crate::agent_link::run(ticket, invalidate, stop.clone()));
+            Ok::<(), anyhow::Error>(())
+        });
         let base_url = self.base_url.clone();
         let links = self.links.clone();
         let session_id = session.id.clone();
@@ -422,7 +436,7 @@ impl ChatRuntime {
                 if *stop.borrow() { return Ok(()); }
                 tokio::select! {
                     ready = tokio::time::timeout(Duration::from_secs(30), invalidations.recv()) => {
-                        ready.context("LiveKit subscription did not become ready")?.context("LiveKit subscription ended before becoming ready")?;
+                        ready.context("The adapter did not become ready")?.context("The adapter's wake-up channel closed before it was ready")?;
                     }
                     _ = stop.wait_for(|stopped| *stopped) => return Ok(()),
                 }
