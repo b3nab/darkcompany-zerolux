@@ -200,6 +200,11 @@ fn turn_signal(line: &str) -> Option<&'static str> {
         kind: String,
         subtype: Option<String>,
         message: Option<Message>,
+        // After a context compaction Claude Code writes the summary as a `user` row with
+        // text, and no turn follows it. Reading it as a turn leaves the agent "working".
+        // Only this flag: `isMeta` rows include the ZeroLux deliveries that do open turns.
+        #[serde(rename = "isCompactSummary", default)]
+        compact_summary: bool,
     }
     #[derive(Deserialize)]
     struct Message {
@@ -208,6 +213,7 @@ fn turn_signal(line: &str) -> Option<&'static str> {
     }
     let entry: Entry = serde_json::from_str(line).ok()?;
     match entry.kind.as_str() {
+        "user" if entry.compact_summary => None,
         "user" => match entry.message?.content {
             serde_json::Value::String(_) => Some("working"),
             serde_json::Value::Array(blocks) => {
@@ -942,6 +948,13 @@ mod tests {
         let failed = json!({"type":"assistant","isApiErrorMessage":true,"message":{"content":[{"type":"text","text":"API error"}],"stop_reason":null}});
         let other = json!({"type":"system","subtype":"informational"});
         let queued = json!({"type":"queue-operation","operation":"enqueue","content":"x"});
+        // After a compaction the summary is a `user` row with text, but no turn follows it.
+        let boundary = json!({"type":"system","subtype":"compact_boundary"});
+        let summary = json!({"type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"This session is being continued from a previous conversation…"}});
+        let summary_alone = json!({"type":"user","isCompactSummary":true,"message":{"role":"user","content":[{"type":"text","text":"Summary of the conversation so far"}]}});
+        // A ZeroLux delivery is a meta row and does open a turn.
+        let delivery = json!({"type":"user","isMeta":true,"message":{"role":"user","content":"Another Claude session sent a message: [ZeroLux] x"}});
+        let flagged_false = json!({"type":"user","isCompactSummary":false,"message":{"role":"user","content":"do it"}});
         for (line, expected) in [
             (typed, Some("working")),
             (peer, Some("working")),
@@ -958,6 +971,11 @@ mod tests {
             (failed, None),
             (other, None),
             (queued, None),
+            (boundary, None),
+            (summary, None),
+            (summary_alone, None),
+            (delivery, Some("working")),
+            (flagged_false, Some("working")),
         ] {
             assert_eq!(turn_signal(&line.to_string()), expected, "{line}");
         }
@@ -1372,6 +1390,18 @@ mod tests {
         )
         .unwrap();
         wait(2).await;
+        // A context compaction writes a boundary and a summary row, with no turn after them:
+        // still idle. The real case: an agent shown "working" for eleven hours after compacting.
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"system","subtype":"compact_boundary","content":"Conversation compacted"})
+        )
+        .unwrap();
+        writeln!(file, "{}", json!({"type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"This session is being continued from a previous conversation"}})).unwrap();
+        // Past two transcript reads: the summary was read on its own, and reported nothing.
+        tokio::time::sleep(TRANSCRIPT_INTERVAL * 2 + Duration::from_millis(200)).await;
+        assert_eq!(activities(&calls.lock().unwrap()).len(), 2);
         // Its notice opens the next turn: working again.
         writeln!(file, "{}", json!({"type":"user","message":{"role":"user","content":[{"type":"text","text":"background task finished"}]}})).unwrap();
         wait(3).await;
@@ -1385,6 +1415,37 @@ mod tests {
                 json!({"activity":"working","conversation_id":null}).to_string(),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn the_state_at_link_time_ignores_a_compaction_summary() {
+        let projects = projects(&["birch"]);
+        let path = projects.path().join("-workspace/birch.jsonl");
+        let summary = json!({"type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"This session is being continued from a previous conversation"}});
+        let boundary = json!({"type":"system","subtype":"compact_boundary"});
+        let typed = json!({"type":"user","message":{"role":"user","content":"go"}});
+        let ended = json!({"type":"system","subtype":"turn_duration","durationMs":5});
+        let state = |lines: &[&serde_json::Value]| {
+            let text = lines.iter().map(|l| format!("{l}\n")).collect::<String>();
+            let path = path.clone();
+            async move {
+                std::fs::write(&path, text).unwrap();
+                Transcript::open(path, false)
+                    .await
+                    .unwrap()
+                    .recent_activity()
+                    .await
+                    .unwrap()
+            }
+        };
+        // A transcript that ends in a compaction says nothing new: idle stays idle,
+        // a turn still running stays working, and a lone summary is no signal at all.
+        assert_eq!(
+            state(&[&typed, &ended, &boundary, &summary]).await,
+            Some("idle")
+        );
+        assert_eq!(state(&[&typed, &boundary, &summary]).await, Some("working"));
+        assert_eq!(state(&[&boundary, &summary]).await, None);
     }
 
     #[tokio::test]
