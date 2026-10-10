@@ -261,6 +261,7 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
         await page(id, pageBefore(first - 1), Math.min(PAGE, first - 1));
     },
     unsent,
+    canLeave: () => !outgoing.pending(),
     send: (conversation: Conversation, draft: { id: string; text: string }) =>
       outgoing.send({ conversation_id: conversation.id, ...draft }),
     async pause(conversation: Conversation, paused: boolean) {

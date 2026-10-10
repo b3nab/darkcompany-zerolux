@@ -297,6 +297,36 @@ test("a message the kernel saved, though its answer was lost, is not shown as no
   expect(posts).toBe(before); // Not sent again.
 });
 
+test("a view cannot be replaced while the first send or an offline message is pending", async () => {
+  let finish!: () => void;
+  const box = outbox(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    () => {},
+    () => {},
+  );
+  expect(box.pending()).toBe(false);
+  const sent = box.send({ conversation_id: "a", id: "m1", text: "stay in A" });
+  expect(box.pending()).toBe(true);
+  finish();
+  await sent;
+  expect(box.pending()).toBe(false);
+
+  const offline = outbox(
+    async () => {
+      throw new TypeError("offline");
+    },
+    () => {},
+    () => {},
+  );
+  await offline.send({ conversation_id: "a", id: "m2", text: "not for B" });
+  expect(offline.pending()).toBe(true);
+  offline.close();
+  expect(offline.pending()).toBe(true);
+});
+
 test("a message the kernel shows back before its send answer is lost is not queued", async () => {
   let answer!: (error: unknown) => void;
   let waiting: Outgoing[] = [];

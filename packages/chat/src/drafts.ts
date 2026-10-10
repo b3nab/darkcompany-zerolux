@@ -3,6 +3,10 @@
  * as in a messaging app. A client can also keep it across restarts with `keepDraftsIn`.
  */
 const drafts = new Map<string, string>();
+
+/** A copy of this client's unsent text, including changes storage could not persist. */
+export const currentDrafts = (): Record<string, string> =>
+  Object.fromEntries(drafts);
 let save: ((all: Record<string, string>) => void) | undefined;
 
 /** Starts from the drafts a client saved, and saves every change through `store`. */

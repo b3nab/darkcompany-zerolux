@@ -400,6 +400,8 @@ export function outbox(
   };
   return {
     flush,
+    /** Synchronous: includes a send awaiting its first answer, not only the offline queue. */
+    pending: () => waiting.length > 0 || sending.size > 0,
     /** Connected to its kernel (again, e.g. React re-running effects in development). */
     open() {
       closed = false;
