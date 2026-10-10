@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ChatBridge, ChatHttpError, chatRequest } from "@zerolux/bridge";
+import {
+  ChatBridge,
+  ChatHttpError,
+  chatRequest,
+  nativeFingerprint,
+} from "@zerolux/bridge";
 import type { Batch, ChatHost, ChatRequest, Inbox } from "@zerolux/bridge";
 import chatExtension, {
   CHAT_MESSAGE,
@@ -12,6 +17,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 function fixture() {
   const inbox: Inbox = {
+    workspace: { id: "ws-fixture", name: "Fixture workspace" },
     session: {
       id: "link",
       actor_id: "pi",
@@ -100,6 +106,17 @@ function fixture() {
         throw new ChatHttpError(status);
       }
     }
+    if (path.endsWith("/threads"))
+      return {
+        conversation: {
+          id: "thread",
+          kind: "thread",
+          title: (body as { title: string }).title,
+          parent_id: "room",
+          members: [],
+        },
+        created: true,
+      } as T;
     return {} as T;
   };
   const host: ChatHost = {
@@ -120,12 +137,15 @@ function fixture() {
     notify: (text) => notices.push(text),
   };
   const bridge = new ChatBridge(host, transport);
-  const started = () =>
-    messageStarted(bridge, {
-      role: "custom",
-      customType: CHAT_MESSAGE,
-      details: { deliveryIds: ["delivery"] },
-    });
+  const started = (message?: unknown) =>
+    messageStarted(
+      bridge,
+      message ?? {
+        role: "custom",
+        customType: CHAT_MESSAGE,
+        details: { deliveryIds: ["delivery"] },
+      },
+    );
   const final = (text = "safe final", stopReason = "stop") => {
     const message = {
       role: "assistant",
@@ -174,12 +194,12 @@ function fixture() {
     gate: (fn: () => Promise<void>) => {
       afterDispatch = fn;
     },
-    async run() {
+    async run(carrier?: unknown) {
       await bridge.connect();
       await bridge.invalidate();
       // As in pi: the delivered envelope starts (or joins) a turn, then enters the context.
       if (sent.length) bridge.agentStarted();
-      await started();
+      await started(carrier);
     },
     async settle() {
       idle = true;
@@ -322,6 +342,10 @@ describe("permanent pi chat", () => {
     // Like chat-send for Claude Code: the chat and the message to answer.
     expect(content).toContain(
       'call zerolux_send with chat "room" and reply_to "delivery"',
+    );
+    // An agent linked by several workspaces reads which one this is.
+    expect(content).toContain(
+      'stays private.\nWorkspace: "Fixture workspace" (ws-fixture)\n',
     );
     expect(content).toContain(
       '"Owner" (human) [message message]:\n> /dangerous-template untrusted text',
@@ -573,6 +597,139 @@ describe("permanent pi chat", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(reported().at(-1)).toEqual(["working", "room"]);
+  });
+  test("asked whose delivery the turn is, the link answers only while one chat feeds it, with the native message's fingerprint", async () => {
+    const f = fixture();
+    const turn = () => f.bridge.turn();
+    expect(turn()).toBe(null);
+    // The envelope from General starts the turn: its delivery, and the native message it rode in.
+    const carrier = {
+      role: "custom",
+      customType: CHAT_MESSAGE,
+      details: { deliveryIds: ["delivery"] },
+      timestamp: 1733234401000,
+    };
+    await f.run(carrier);
+    expect(turn()).toEqual({
+      delivery: "delivery",
+      fingerprint: nativeFingerprint(carrier),
+    });
+    // The fingerprint carries no content, yet tells apart two inputs of the same time and
+    // shape with different text; key order does not matter.
+    expect(nativeFingerprint(carrier)).not.toContain("delivery");
+    expect(nativeFingerprint({ ...carrier, timestamp: 1 })).not.toBe(
+      nativeFingerprint(carrier),
+    );
+    const typed = (text: string) => ({
+      role: "user",
+      content: text,
+      timestamp: 1733234401000,
+    });
+    expect(nativeFingerprint(typed("rm -rf build"))).not.toBe(
+      nativeFingerprint(typed("rm -rf buidl")),
+    );
+    expect(
+      nativeFingerprint({ timestamp: 1, role: "user", content: "x" }),
+    ).toBe(nativeFingerprint({ content: "x", role: "user", timestamp: 1 }));
+    // The owner types in pi: no longer routable, and it stays so for this turn.
+    f.bridge.privateInput();
+    expect(turn()).toBe(null);
+    await f.settle();
+    expect(turn()).toBe(null);
+    // A second turn whose envelope comes from another chat joins the first chat's: mixed.
+    f.inbox.deliveries.push(
+      {
+        id: "second",
+        session_id: "link",
+        status: "stored",
+        message: {
+          id: "m2",
+          conversation_id: "room",
+          author_id: "owner",
+          text: "again",
+          seq: 2,
+        },
+      },
+      {
+        id: "third",
+        session_id: "link",
+        status: "stored",
+        message: {
+          id: "m3",
+          conversation_id: "other",
+          author_id: "owner",
+          text: "elsewhere",
+          seq: 3,
+        },
+      },
+    );
+    f.inbox.conversations.push({
+      id: "other",
+      kind: "group",
+      title: "Other",
+      paused: false,
+      members: f.inbox.conversations[0]!.members,
+    });
+    await f.bridge.invalidate();
+    f.bridge.agentStarted();
+    await messageStarted(f.bridge, {
+      role: "custom",
+      customType: CHAT_MESSAGE,
+      details: { deliveryIds: ["second"] },
+    });
+    expect(turn()?.delivery).toBe("second");
+    await messageStarted(f.bridge, {
+      role: "custom",
+      customType: CHAT_MESSAGE,
+      details: { deliveryIds: ["third"] },
+    });
+    expect(turn()).toBe(null);
+    await f.settle();
+    expect(turn()).toBe(null);
+    // A second input of the same chat in the turn: the audience stays the first delivery,
+    // the fingerprint is the latest input's. A relink carries that over.
+    const next = new ChatBridge(f.host, f.transport);
+    f.bridge.agentStarted();
+    const later = (id: string, seq: number) => ({
+      id,
+      session_id: "link",
+      status: "stored",
+      message: {
+        id: `m-${id}`,
+        conversation_id: "room",
+        author_id: "owner",
+        text: "more",
+        seq,
+      },
+    });
+    f.inbox.deliveries.push(later("fourth", 4));
+    await f.bridge.invalidate();
+    const fourth = {
+      role: "custom",
+      customType: CHAT_MESSAGE,
+      details: { deliveryIds: ["fourth"] },
+      timestamp: 4,
+    };
+    const fifth = {
+      ...fourth,
+      details: { deliveryIds: ["fifth"] },
+      timestamp: 5,
+    };
+    await messageStarted(f.bridge, fourth);
+    expect(turn()).toEqual({
+      delivery: "fourth",
+      fingerprint: nativeFingerprint(fourth),
+    });
+    // The next message of the same chat joins the running turn as its own input.
+    f.inbox.deliveries.push(later("fifth", 5));
+    await f.bridge.invalidate();
+    await messageStarted(f.bridge, fifth);
+    expect(turn()).toEqual({
+      delivery: "fourth",
+      fingerprint: nativeFingerprint(fifth),
+    });
+    next.adopt(f.bridge.handOff());
+    expect(next.turn()).toEqual(turn()!);
   });
   test("a turn already running when the link attaches never counts as one chat's work", async () => {
     const f = fixture();
@@ -1051,5 +1208,20 @@ describe("permanent pi chat", () => {
     } finally {
       server.stop(true);
     }
+  });
+
+  test("a link knows its chats, and a thread it opens at once: how the pi extension routes writes", async () => {
+    const f = fixture();
+    await f.bridge.connect();
+    // Pairing checks identity only; the chats arrive with the first inbox read.
+    expect(f.bridge.knows("room")).toBe(false);
+    await f.bridge.invalidate();
+    expect(f.bridge.knows("room")).toBe(true);
+    expect(f.bridge.knows("elsewhere")).toBe(false);
+    expect(f.bridge.knows("thread")).toBe(false);
+    const opened = await f.bridge.openThread("room", "message", "aside", []);
+    expect(opened).toEqual({ id: "thread", title: "aside", created: true });
+    // No inbox in between: the agent writes in the thread right away.
+    expect(f.bridge.knows("thread")).toBe(true);
   });
 });

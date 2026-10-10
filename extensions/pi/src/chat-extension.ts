@@ -12,6 +12,7 @@ import {
   ChatBridge,
   chatRequest,
   localURL,
+  nativeFingerprint,
   type ChatHost,
 } from "@zerolux/bridge";
 import { ChatControl, type PairRequest } from "./chat-control.ts";
@@ -22,24 +23,56 @@ export const CHAT_MESSAGE = "zerolux-chat-delivery";
 
 /** A message entered pi's context: a chat envelope is read; anything else is the owner's. */
 export function messageStarted(
-  bridge: ChatBridge | undefined,
+  bridges: ChatBridge | ChatBridge[] | undefined,
   message: unknown,
+  queued?: Map<string, string[]>,
 ) {
+  const all = bridges === undefined ? [] : [bridges].flat();
   const m = message as
     | {
         role?: string;
         customType?: string;
         details?: { deliveryIds?: string[] };
+        content?: string | { type: string; text?: string }[];
       }
     | undefined;
   const ids =
     m?.role === "custom" && m.customType === CHAT_MESSAGE
       ? (m.details?.deliveryIds ?? [])
       : [];
-  const readings = ids.flatMap((id) => bridge?.read(id) ?? []);
+  let privateText = false;
+  if (m?.role === "user" && queued) {
+    let text =
+      typeof m.content === "string"
+        ? m.content
+        : (m.content ?? [])
+            .filter((p) => p.type === "text")
+            .map((p) => p.text ?? "")
+            .join("\n");
+    for (const [content, delivered] of queued) {
+      if (!text.includes(content)) continue;
+      ids.push(...delivered);
+      text = text.replace(content, "");
+      queued.delete(content);
+    }
+    // Escape may restore several steers to the native editor. Added owner text
+    // still makes this their private turn, even when it includes our envelopes.
+    privateText =
+      Boolean(text.trim()) ||
+      (Array.isArray(m.content) && m.content.some((p) => p.type !== "text"));
+  }
+  if (privateText) for (const bridge of all) bridge.privateInput();
+  // A delivery is one link's: the others see nothing of it.
+  const fingerprint = ids.length ? nativeFingerprint(message) : undefined;
+  const readings = ids.flatMap((id) =>
+    all.flatMap((bridge) => bridge.read(id, fingerprint) ?? []),
+  );
   if (readings.length) return Promise.all(readings).then(() => {});
-  if (["user", "custom", "bashExecution"].includes(m?.role ?? ""))
-    bridge?.privateInput();
+  if (
+    !privateText &&
+    ["user", "custom", "bashExecution"].includes(m?.role ?? "")
+  )
+    for (const bridge of all) bridge.privateInput();
 }
 
 /** A passive factory; session_start advertises local presence, only Hire pairs the link. */
