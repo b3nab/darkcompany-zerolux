@@ -27,7 +27,10 @@
           "permissions": [
             "allow-window-control",
             "core:window:allow-start-dragging",
-            "core:window:allow-internal-toggle-maximize"
+            "core:window:allow-internal-toggle-maximize",
+            "core:window:allow-is-fullscreen",
+            "core:event:allow-listen",
+            "core:event:allow-unlisten"
           ]
         }
       ],

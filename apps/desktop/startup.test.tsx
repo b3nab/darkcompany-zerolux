@@ -81,6 +81,9 @@ test("registry commands are restricted to the packaged manager, not workspace pa
     "allow-window-control",
     "core:window:allow-start-dragging",
     "core:window:allow-internal-toggle-maximize",
+    "core:window:allow-is-fullscreen",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
   ]);
   expect(capabilities[1].remote).toBeUndefined();
   expect(config.bundle.macOS.minimumSystemVersion).toBe("14.0");
