@@ -94,6 +94,8 @@ pub fn desktop_path(path: Option<OsString>, home: Option<OsString>) -> Option<Os
                 home.join(".bun/bin"),
                 home.join(".local/bin"),
                 home.join(".cargo/bin"),
+                // pi's own installer puts its launcher here.
+                home.join(".pi/agent/bin"),
             ]);
         }
         additions.extend([
@@ -152,10 +154,16 @@ pub fn resource_root(resource_dir: &Path) -> Result<PathBuf> {
         "Desktop web assets are missing. Run the desktop preparation/build again."
     );
     #[cfg(unix)]
-    ensure!(
-        resource_dir.join("claude/runner.js").is_file(),
-        "Desktop Claude runner is missing. Run the desktop preparation/build again."
-    );
+    for (file, name) in [
+        ("claude/runner.js", "Claude runner"),
+        ("pi/runner.js", "pi host"),
+        ("pi/chat-extension.js", "pi chat extension"),
+    ] {
+        ensure!(
+            resource_dir.join(file).is_file(),
+            "Desktop {name} is missing. Run the desktop preparation/build again."
+        );
+    }
     Ok(resource_dir.to_path_buf())
 }
 
@@ -258,10 +266,24 @@ mod tests {
             1
         );
         assert!(entries.contains(&PathBuf::from("/fixture/home/.bun/bin")));
+        assert!(entries.contains(&PathBuf::from("/fixture/home/.pi/agent/bin")));
     }
     #[test]
     fn resources_do_not_fall_back_to_the_source_tree() {
         let dir = tempfile::tempdir().unwrap();
         assert!(resource_root(dir.path()).is_err());
+        // Both hosts are required, not just the web assets and the Claude runner.
+        for file in ["web/index.html", "claude/runner.js"] {
+            std::fs::create_dir_all(dir.path().join(file).parent().unwrap()).unwrap();
+            std::fs::write(dir.path().join(file), "").unwrap();
+        }
+        #[cfg(unix)]
+        assert!(resource_root(dir.path()).is_err());
+        std::fs::create_dir_all(dir.path().join("pi")).unwrap();
+        std::fs::write(dir.path().join("pi/runner.js"), "").unwrap();
+        #[cfg(unix)]
+        assert!(resource_root(dir.path()).is_err());
+        std::fs::write(dir.path().join("pi/chat-extension.js"), "").unwrap();
+        assert!(resource_root(dir.path()).is_ok());
     }
 }

@@ -66,6 +66,28 @@ const sdk = dirname(
 await cp(join(sdk, "LICENSE.md"), join(dist, "claude/CLAUDE-SDK-LICENSE.md"));
 await cp(join(sdk, "README.md"), join(dist, "claude/CLAUDE-SDK-README.md"));
 
+// The pi host is the same runner the checkout uses: it opens the installed `pi` on the
+// agent's own session file. Nothing of pi itself is bundled or downloaded.
+const piHost = await Bun.build({
+  entrypoints: [join(root, "extensions/pi/src/runner.ts")],
+  target: "bun",
+  outdir: join(dist, "pi"),
+  naming: "runner.js",
+});
+if (!piHost.success)
+  throw new AggregateError(piHost.logs, "Bundle the pi host");
+// The chat extension stock pi loads (`--extension`) beside the host. pi runs on Node and
+// supplies its own packages: those stay imports for pi's loader, nothing of pi is copied.
+const piExtension = await Bun.build({
+  entrypoints: [join(root, "extensions/pi/src/chat-extension.ts")],
+  target: "node",
+  outdir: join(dist, "pi"),
+  naming: "chat-extension.js",
+  external: ["@earendil-works/*"],
+});
+if (!piExtension.success)
+  throw new AggregateError(piExtension.logs, "Bundle the pi chat extension");
+
 // Generate platform icons from the existing web favicon; no independent desktop branding.
 const source = await readFile(join(root, "apps/web/index.html"), "utf8");
 const favicon = source.match(/href="data:image\/svg\+xml,([^"]+)"/);

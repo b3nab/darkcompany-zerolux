@@ -115,6 +115,7 @@ async fn open_workspace(
                 #[cfg(unix)]
                 runner: Some(zerolux::claude_runner::RunnerProgram {
                     entry: resources.join("claude/runner.js"),
+                    pi_entry: Some(resources.join("pi/runner.js")),
                     sdk_executable: Some(local::executable("claude")),
                     ..Default::default()
                 }),

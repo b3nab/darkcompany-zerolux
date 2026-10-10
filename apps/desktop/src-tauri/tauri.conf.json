@@ -28,7 +28,8 @@
     "targets": "all",
     "resources": {
       "../dist/web/": "web/",
-      "../dist/claude/": "claude/"
+      "../dist/claude/": "claude/",
+      "../dist/pi/": "pi/"
     },
     "icon": [
       "../dist/icons/32x32.png",
