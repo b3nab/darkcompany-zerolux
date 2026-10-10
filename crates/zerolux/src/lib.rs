@@ -9,10 +9,12 @@ pub mod chat_tools;
 pub mod claude;
 #[cfg(unix)]
 pub mod claude_runner;
+pub mod cli;
 pub mod codex;
 pub mod harness;
 pub mod livekit;
 pub mod model;
+pub mod server;
 pub mod sessions;
 pub mod store;
 pub mod worker;

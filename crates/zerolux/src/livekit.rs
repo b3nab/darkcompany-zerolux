@@ -27,7 +27,23 @@ use uuid::Uuid;
 
 use crate::store::{Store, now_ms};
 
+/// The notice room of a kernel that was not told its workspace (tests, older callers).
 pub const ROOM: &str = "zerolux";
+
+/// The notice room of one workspace: with a shared LiveKit server, kernels stay apart.
+/// Lossless: a UUID keeps its hyphenated form, anything else is hex-encoded.
+pub fn workspace_room(workspace_id: &str) -> String {
+    match Uuid::parse_str(workspace_id) {
+        Ok(uuid) => format!("{ROOM}-{}", uuid.hyphenated()),
+        Err(_) => format!(
+            "{ROOM}-x{}",
+            workspace_id
+                .bytes()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        ),
+    }
+}
 pub const TOPIC: &str = "chat";
 
 const TOKEN_TTL: Duration = Duration::from_secs(6 * 60 * 60);
@@ -67,13 +83,20 @@ pub struct ClientToken {
     pub url: String,
     pub token: String,
     pub expires_at: i64,
+    /// Whether `url` is the server this kernel runs itself; never sent to clients.
+    #[serde(skip)]
+    pub managed: bool,
 }
 
 pub struct LiveKit {
     url: String,
     api_key: String,
     api_secret: String,
+    /// Where this kernel's notices go; clients only ever hold a token for it.
+    room: String,
     rooms: Arc<RoomClient>,
+    /// Started by this kernel (as opposed to an external server), whatever its URL says.
+    owns_server: bool,
     managed: Mutex<Option<Child>>,
 }
 
@@ -113,8 +136,25 @@ impl LiveKit {
             url,
             api_key,
             api_secret,
+            room: ROOM.to_owned(),
+            owns_server: managed.is_some(),
             managed: Mutex::new(managed),
         })
+    }
+
+    /// Scopes the notices to one workspace's room. Call before any token is issued.
+    pub fn for_workspace(mut self, workspace_id: &str) -> Self {
+        self.room = workspace_room(workspace_id);
+        self
+    }
+
+    pub fn room(&self) -> &str {
+        &self.room
+    }
+
+    /// The managed server is a child of this kernel; an external one has its own URL.
+    pub fn managed(&self) -> bool {
+        self.owns_server
     }
 
     /// A receive-only token for the single notice room. The identity is unique per connection,
@@ -125,7 +165,7 @@ impl LiveKit {
             .with_ttl(TOKEN_TTL)
             .with_grants(VideoGrants {
                 room_join: true,
-                room: ROOM.to_owned(),
+                room: self.room.clone(),
                 can_subscribe: Some(true),
                 can_publish: Some(false),
                 can_publish_data: Some(false),
@@ -137,6 +177,7 @@ impl LiveKit {
             url: self.url.clone(),
             token,
             expires_at: now_ms() + TOKEN_TTL.as_millis() as i64,
+            managed: self.managed(),
         })
     }
 
@@ -151,7 +192,7 @@ impl LiveKit {
         if actor_ids.is_empty() {
             return Ok(());
         }
-        let participants = match self.rooms.list_participants(ROOM).await {
+        let participants = match self.rooms.list_participants(&self.room).await {
             Ok(participants) => participants,
             Err(error) if room_missing(&error) => return Ok(()),
             Err(error) => return Err(error).context("List LiveKit participants"),
@@ -167,12 +208,16 @@ impl LiveKit {
             destination_identities,
             ..Default::default()
         };
-        let (rooms, payload) = (self.rooms.clone(), serde_json::to_vec(event)?);
+        let (rooms, room, payload) = (
+            self.rooms.clone(),
+            self.room.clone(),
+            serde_json::to_vec(event)?,
+        );
         let runtime = tokio::runtime::Handle::current();
         // `send_data` holds a thread-local RNG across an await, so its future is not `Send`.
         // Driving it on a blocking thread keeps `notify` usable from any spawned task.
         tokio::task::spawn_blocking(move || {
-            runtime.block_on(rooms.send_data(ROOM, payload, options))
+            runtime.block_on(rooms.send_data(&room, payload, options))
         })
         .await?
         .context("Publish LiveKit notice")

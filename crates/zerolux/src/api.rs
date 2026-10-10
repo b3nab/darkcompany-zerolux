@@ -33,6 +33,56 @@ pub struct Exposed {
     address: SocketAddr,
 }
 
+/// The public origin a reverse proxy serves this kernel at, e.g. `https://company.example`.
+/// Requests arriving under that authority are public, whatever address they came from: same
+/// rules as an exposed address, no agent credentials. Forwarded headers are never trusted.
+pub struct PublicOrigin {
+    origin: String,
+    authority: String,
+    /// The LiveKit address clients reach from the public origin, when the kernel runs its
+    /// own LiveKit behind the proxy. An external LIVEKIT_URL stays authoritative.
+    livekit_url: Option<String>,
+}
+
+impl PublicOrigin {
+    pub fn new(origin: &str, livekit_url: Option<String>) -> anyhow::Result<Arc<Self>> {
+        let uri: axum::http::Uri = origin
+            .trim()
+            .parse()
+            .map_err(|_| anyhow::anyhow!("The public origin must be a URL like https://host"))?;
+        let scheme = uri.scheme_str().unwrap_or_default();
+        let authority = uri
+            .authority()
+            .ok_or_else(|| anyhow::anyhow!("The public origin must name a host"))?;
+        anyhow::ensure!(
+            matches!(scheme, "http" | "https")
+                && uri.query().is_none()
+                && matches!(uri.path(), "" | "/")
+                && !authority.as_str().contains('@'),
+            "The public origin must be scheme://host[:port], without path, query or credentials"
+        );
+        if let Some(url) = &livekit_url {
+            let parsed = reqwest::Url::parse(url).map_err(|_| {
+                anyhow::anyhow!("The public LiveKit URL must be a ws:// or wss:// URL")
+            })?;
+            anyhow::ensure!(
+                matches!(parsed.scheme(), "ws" | "wss"),
+                "The public LiveKit URL must be a ws:// or wss:// URL"
+            );
+        }
+        let authority = authority.as_str().to_ascii_lowercase();
+        Ok(Arc::new(Self {
+            origin: format!("{scheme}://{authority}"),
+            authority,
+            livekit_url,
+        }))
+    }
+
+    fn serves(&self, host: Option<&str>) -> bool {
+        host.is_some_and(|h| h.eq_ignore_ascii_case(&self.authority))
+    }
+}
+
 impl Exposed {
     pub fn new(address: SocketAddr) -> Arc<Self> {
         Arc::new(Self { address })
@@ -48,6 +98,7 @@ struct AppState {
     store: Store,
     runtime: Option<Arc<ChatRuntime>>,
     exposed: Option<Arc<Exposed>>,
+    public: Option<Arc<PublicOrigin>>,
 }
 
 impl FromRef<AppState> for Store {
@@ -84,6 +135,7 @@ pub fn router(store: Store, web_dir: PathBuf) -> Router {
             store,
             runtime: None,
             exposed: None,
+            public: None,
         },
         web_dir,
     )
@@ -100,11 +152,23 @@ pub fn router_exposed(
     runtime: Option<Arc<ChatRuntime>>,
     exposed: Option<Arc<Exposed>>,
 ) -> Router {
+    router_public(store, web_dir, runtime, exposed, None)
+}
+
+/// Also serve a public origin, as a reverse proxy presents this kernel.
+pub fn router_public(
+    store: Store,
+    web_dir: PathBuf,
+    runtime: Option<Arc<ChatRuntime>>,
+    exposed: Option<Arc<Exposed>>,
+    public: Option<Arc<PublicOrigin>>,
+) -> Router {
     app_router(
         AppState {
             store,
             runtime,
             exposed,
+            public,
         },
         web_dir,
     )
@@ -608,6 +672,23 @@ async fn livekit_token(
     let mut ticket = runtime(&state)?
         .client_token(&who.actor_id)
         .map_err(runtime_error)?;
+    let host = request.headers().get("host").and_then(|h| h.to_str().ok());
+    if let Some(public) = state.public.as_ref().filter(|p| p.serves(host)) {
+        // Behind the proxy, the kernel's own LiveKit is reachable only where the operator
+        // says; an external server's URL is already the one clients use.
+        if ticket.managed {
+            match &public.livekit_url {
+                Some(url) => ticket.url = url.clone(),
+                None => {
+                    return Err(ApiFailure(Box::new(refused(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Realtime is not configured for the public origin: set the public LiveKit URL",
+                    ))));
+                }
+            }
+        }
+        return Ok(Json(json!(ticket)));
+    }
     // A device that reached the kernel at the exposed address reaches LiveKit there too.
     if let Some(exposed) = &state.exposed
         && peer(&request).is_some_and(|peer| !peer.is_loopback())
@@ -722,6 +803,60 @@ fn same_origin(request: &Request, host: Option<&str>) -> bool {
         .unwrap_or(true)
 }
 
+/// The origins of the packaged desktop app, as Tauri 2 presents them: its pages call the
+/// kernel's API from here. Accepted wherever a same-origin request would be, as the same
+/// class of request (local, exposed or public): the desktop never gains a privilege by it.
+const DESKTOP_ORIGINS: [&str; 2] = ["tauri://localhost", "http://tauri.localhost"];
+
+fn desktop_origin(request: &Request) -> Option<&'static str> {
+    let origin = request.headers().get("origin")?.to_str().ok()?;
+    DESKTOP_ORIGINS
+        .into_iter()
+        .find(|known| known.eq_ignore_ascii_case(origin))
+}
+
+/// CORS for the desktop app only: the exact origin, no credentials, no wildcard.
+fn with_desktop_cors(mut response: Response, origin: &str) -> Response {
+    let headers = response.headers_mut();
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        header::HeaderValue::from_str(origin).expect("known origin"),
+    );
+    headers.insert(header::VARY, header::HeaderValue::from_static("Origin"));
+    response
+}
+
+fn desktop_preflight(origin: &str) -> Response {
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        header::HeaderValue::from_static("GET, POST"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        header::HeaderValue::from_static("content-type"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_MAX_AGE,
+        header::HeaderValue::from_static("600"),
+    );
+    with_desktop_cors(response, origin)
+}
+
+/// The Origin header, when present, must be exactly the configured public origin.
+fn same_origin_as(request: &Request, origin: &str) -> bool {
+    request
+        .headers()
+        .get("origin")
+        .map(|value| {
+            value
+                .to_str()
+                .is_ok_and(|v| v.trim_end_matches('/').eq_ignore_ascii_case(origin))
+        })
+        .unwrap_or(true)
+}
+
 fn peer(request: &Request) -> Option<IpAddr> {
     request
         .extensions()
@@ -731,7 +866,44 @@ fn peer(request: &Request) -> Option<IpAddr> {
 
 /// Match the request's Host and Origin to a served address.
 async fn access(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    // The desktop app's pages are cross-origin to every kernel they talk to: answer the
+    // browser's preflight, then let the request through the same checks as any other, with
+    // its Origin accepted, and tag the response for the browser.
+    let desktop = desktop_origin(&request);
+    if let Some(origin) = desktop
+        && request.method() == axum::http::Method::OPTIONS
+        && request
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_REQUEST_METHOD)
+    {
+        return desktop_preflight(origin);
+    }
+    let response = classify(state, request, next).await;
+    match desktop {
+        Some(origin) => with_desktop_cors(response, origin),
+        None => response,
+    }
+}
+
+async fn classify(state: AppState, request: Request, next: Next) -> Response {
+    let desktop = desktop_origin(&request).is_some();
     let host = request.headers().get("host").and_then(|h| h.to_str().ok());
+    // Public by authority, even when the proxy connects from loopback: never a local privilege.
+    if let Some(public) = state.public.as_ref().filter(|p| p.serves(host)) {
+        if !desktop && !same_origin_as(&request, &public.origin) {
+            return refused(
+                StatusCode::FORBIDDEN,
+                "Only same-origin requests to the public origin are allowed",
+            );
+        }
+        if request.headers().contains_key(header::AUTHORIZATION) {
+            return refused(
+                StatusCode::FORBIDDEN,
+                "Agents connect from the kernel's computer",
+            );
+        }
+        return next.run(request).await;
+    }
     let remote = match (&state.exposed, peer(&request)) {
         (None, _) => false,
         (Some(_), Some(peer)) => !peer.is_loopback(),
@@ -746,7 +918,7 @@ async fn access(State(state): State<AppState>, request: Request, next: Next) -> 
         let local = host
             .and_then(|h| h.parse::<axum::http::uri::Authority>().ok())
             .is_some_and(|h| matches!(h.host(), "localhost" | "127.0.0.1" | "[::1]"));
-        if !local || !same_origin(&request, host) {
+        if !local || !(desktop || same_origin(&request, host)) {
             return refused(
                 StatusCode::FORBIDDEN,
                 "Only same-origin, loopback requests are allowed",
@@ -755,7 +927,7 @@ async fn access(State(state): State<AppState>, request: Request, next: Next) -> 
         return next.run(request).await;
     }
     let exposed = state.exposed.as_ref().expect("remote implies exposed");
-    if host != Some(exposed.authority().as_str()) || !same_origin(&request, host) {
+    if host != Some(exposed.authority().as_str()) || !(desktop || same_origin(&request, host)) {
         return refused(
             StatusCode::FORBIDDEN,
             "Only same-origin requests to the exposed address are allowed",
@@ -774,12 +946,17 @@ async fn access(State(state): State<AppState>, request: Request, next: Next) -> 
 async fn workspace(State(store): State<Store>) -> Result<Json<Workspace>, Error> {
     Ok(Json(store.workspace().await?))
 }
+/// The HTTP API contract clients check before talking to a kernel. Bumped only when a
+/// change breaks a client that followed the previous number; features go in `capabilities`.
+pub const API_VERSION: u32 = 1;
+
 /// Reachable without a device token: what this kernel is, and the company it runs.
 async fn health(State(store): State<Store>) -> Result<Json<Value>, Error> {
     let workspace = store.workspace_info().await?;
     Ok(Json(json!({
         "name": "zerolux",
         "version": env!("CARGO_PKG_VERSION"),
+        "api_version": API_VERSION,
         "capabilities": ["byoh-v1", "owner-onboarding-v1", "chat-v1"],
         "workspace": workspace,
     })))

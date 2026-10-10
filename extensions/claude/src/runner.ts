@@ -265,7 +265,19 @@ export async function launch(
 
 if (import.meta.main)
   launch({
-    start: query,
+    start: (parameters) =>
+      query({
+        ...parameters,
+        options: {
+          ...parameters.options,
+          ...(process.env.ZEROLUX_CLAUDE_EXECUTABLE
+            ? {
+                pathToClaudeCodeExecutable:
+                  process.env.ZEROLUX_CLAUDE_EXECUTABLE,
+              }
+            : {}),
+        },
+      }),
     subscriber: (invalidate, lost) => new AgentLinkChild(invalidate, lost),
     connect: chatRequest,
     saved: async (id, dir) => Boolean(await getSessionInfo(id, { dir })),

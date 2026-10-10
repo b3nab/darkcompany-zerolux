@@ -26,6 +26,8 @@ pub struct RunnerProgram {
     pub entry: PathBuf,
     pub kernel_executable: Option<PathBuf>,
     pub claude_cli: PathBuf,
+    /// An embedder may use an installed Claude binary instead of the SDK's packaged binary.
+    pub sdk_executable: Option<PathBuf>,
 }
 impl Default for RunnerProgram {
     fn default() -> Self {
@@ -35,6 +37,7 @@ impl Default for RunnerProgram {
                 .join("../../extensions/claude/src/runner.ts"),
             kernel_executable: None,
             claude_cli: "claude".into(),
+            sdk_executable: None,
         }
     }
 }
@@ -208,6 +211,12 @@ impl Registry {
             !leased(&self.path, native_id)?,
             "An owned runner holds this session but could not be verified"
         );
+        if let Some(executable) = &self.program.sdk_executable {
+            ensure!(
+                executable.is_absolute() && executable.is_file(),
+                "Claude Code executable was not found. Install Claude Code and restart ZeroLux with its directory on PATH."
+            );
+        }
         let log = private_file(&self.path.join(format!("{native_id}.log")), true)?;
         let mut command = tokio::process::Command::new(&self.program.bun);
         command
@@ -222,6 +231,9 @@ impl Registry {
             .env("ZEROLUX_NATIVE_SESSION", native_id)
             .env("ZEROLUX_WORKSPACE", workspace)
             .env("ZEROLUX_PERMISSION_MODE", mode.name())
+            .env_remove("ZEROLUX_SYSTEM_PROMPT")
+            .env_remove("ZEROLUX_CLAUDE_PROFILE")
+            .env_remove("ZEROLUX_CLAUDE_EXECUTABLE")
             .env_remove("ZEROLUX_TOKEN")
             .env_remove("ZEROLUX_URL")
             .env_remove("PI_SESSION_ID")
@@ -230,6 +242,9 @@ impl Registry {
             .stdout(Stdio::from(log.try_clone()?))
             .stderr(Stdio::from(log))
             .kill_on_drop(false);
+        if let Some(executable) = &self.program.sdk_executable {
+            command.env("ZEROLUX_CLAUDE_EXECUTABLE", executable);
+        }
         // Detached, with no terminal streams: stopping the kernel does not stop the runner.
         // setsid is an async-signal-safe syscall; no allocation or application code runs here.
         unsafe {

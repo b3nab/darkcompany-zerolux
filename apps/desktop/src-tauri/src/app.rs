@@ -108,6 +108,7 @@ async fn open_workspace(
             let server = Server::start(ServerOptions {
                 address: ([127, 0, 0, 1], workspace.port()?).into(),
                 expose: None,
+                public: None,
                 database: workspace.root.join("zerolux.db"),
                 web_dir: resources.join("web"),
                 livekit: None,
