@@ -16,11 +16,14 @@ use tokio::{
     sync::{Notify, broadcast, mpsc, watch},
     task::JoinHandle,
 };
-use zerolux::codex::{CodexDriver, CodexRpc};
+use zerolux::{
+    codex::{CodexDriver, CodexRpc},
+    model::{CodexApprovalPolicy, CodexSandbox},
+};
 
 #[path = "support/codex_runtime.rs"]
 mod codex_runtime;
-use codex_runtime::{Runtime, THREAD};
+use codex_runtime::{Runtime, STARTED, THREAD};
 const SESSION: &str = "chat-session";
 const DELIVERY: &str = "51d6a6dc-4c02-4794-adc5-cf4cb470b8c7";
 const CONVERSATION: &str = "29c8494c-e8da-44ec-8dbb-e5d54a680380";
@@ -1645,6 +1648,67 @@ async fn permission_grants_are_turn_scoped_and_denial_does_not_grant_anything() 
 }
 
 #[tokio::test]
+async fn a_session_started_by_zerolux_sends_only_the_owner_choices_and_no_prompt() {
+    let runtime = Runtime::new_in(std::path::Path::new("/fixture")).await;
+    let rpc = CodexRpc::connect(&runtime.endpoint).await.unwrap();
+    let driver = CodexDriver::start_with_rpc(rpc, "/fixture", None, None)
+        .await
+        .unwrap();
+    assert_eq!(driver.thread_id(), STARTED);
+    {
+        let state = runtime.state.lock().unwrap();
+        let starts: Vec<_> = state
+            .requests
+            .iter()
+            .filter(|r| r["method"] == "thread/start")
+            .collect();
+        assert_eq!(starts.len(), 1);
+        // Nothing ZeroLux did not ask for: policy, sandbox and model stay Codex's own.
+        assert_eq!(
+            starts[0]["params"],
+            json!({"cwd":"/fixture","ephemeral":false})
+        );
+        assert!(state.requests.iter().all(|r| !matches!(
+            r["method"].as_str(),
+            Some("turn/start" | "thread/queue/add" | "thread/resume")
+        )));
+    }
+    let rpc = CodexRpc::connect(&runtime.endpoint).await.unwrap();
+    CodexDriver::start_with_rpc(
+        rpc,
+        "/fixture",
+        Some(CodexApprovalPolicy::Never),
+        Some(CodexSandbox::DangerFullAccess),
+    )
+    .await
+    .unwrap();
+    let state = runtime.state.lock().unwrap();
+    let last = state
+        .requests
+        .iter()
+        .rfind(|r| r["method"] == "thread/start")
+        .unwrap();
+    assert_eq!(
+        last["params"],
+        json!({"cwd":"/fixture","ephemeral":false,"approvalPolicy":"never","sandbox":"danger-full-access"})
+    );
+}
+
+#[tokio::test]
+async fn a_started_thread_that_cannot_be_linked_is_reported_by_its_id() {
+    let runtime = Runtime::new_in(std::path::Path::new("/fixture")).await;
+    let rpc = CodexRpc::connect(&runtime.endpoint).await.unwrap();
+    let error = match CodexDriver::start_with_rpc(rpc, "/elsewhere", None, None).await {
+        Ok(_) => panic!("a thread in another folder must not be linked"),
+        Err(error) => error,
+    };
+    let message = format!("{error:#}");
+    assert!(message.contains(STARTED), "{message}");
+    assert!(message.contains("another folder"), "{message}");
+    assert_eq!(runtime.count("thread/start"), 1, "never started twice");
+}
+
+#[tokio::test]
 async fn new_context_has_no_history_or_turn_and_preserves_permission_configuration() {
     let runtime = Runtime::new().await;
     let driver = CodexDriver::attach(&runtime.endpoint, THREAD)
@@ -1729,4 +1793,168 @@ async fn recovery_keeps_a_turn_with_a_typed_input_nobodys_chat() {
         "a typed input already in the turn keeps it nobody's chat"
     );
     finish(stop, task).await;
+}
+
+/// Nothing on the Codex side records who is attached: two kernels (two workspaces) attach the
+/// same thread through the same app-server and both get a driver. This documents the gap that
+/// a machine-wide session lease would close; it is not the behaviour we want.
+#[tokio::test]
+async fn two_kernels_can_attach_the_same_codex_thread() {
+    let runtime = Runtime::new_in(std::path::Path::new("/fixture")).await;
+    let first = CodexRpc::connect(&runtime.endpoint).await.unwrap();
+    let second = CodexRpc::connect(&runtime.endpoint).await.unwrap();
+    let a = CodexDriver::attach_with_rpc(first, THREAD).await.unwrap();
+    let b = CodexDriver::attach_with_rpc(second, THREAD).await.unwrap();
+    assert_eq!(a.thread_id(), THREAD);
+    assert_eq!(b.thread_id(), THREAD);
+    // Both resumed the thread; neither was told the other holds it.
+    assert_eq!(runtime.count("thread/resume"), 2);
+}
+
+/// After the runtime restarted (the daemon came back, the machine crashed), the thread is
+/// persisted but not loaded. ZeroLux continues the same session: a cold resume by the same
+/// ID, without reading its turns back, after which it is attachable as before.
+#[tokio::test]
+async fn a_thread_the_runtime_no_longer_holds_is_resumed_by_the_same_identity() {
+    let runtime = Runtime::new_in(std::path::Path::new("/fixture")).await;
+    runtime.state.lock().unwrap().unloaded = true;
+    // Not running: a plain attach refuses, as it always did.
+    let rpc = CodexRpc::connect(&runtime.endpoint).await.unwrap();
+    let error = match CodexDriver::attach_with_rpc(rpc, THREAD).await {
+        Ok(_) => panic!("a thread the runtime does not hold must not attach"),
+        Err(error) => error,
+    };
+    assert!(format!("{error:#}").contains("not running"), "{error:#}");
+    assert_eq!(runtime.count("thread/resume"), 0);
+    // Resumed: the same thread, loaded again, its history left to Codex.
+    let rpc = CodexRpc::connect(&runtime.endpoint).await.unwrap();
+    let driver = CodexDriver::resume_with_rpc(rpc, THREAD, "/fixture", || async { Ok(true) })
+        .await
+        .unwrap();
+    assert_eq!(driver.thread_id(), THREAD);
+    assert_eq!(runtime.count("thread/resume"), 1);
+    let resume = {
+        let state = runtime.state.lock().unwrap();
+        state
+            .requests
+            .iter()
+            .find(|r| r["method"] == "thread/resume")
+            .unwrap()["params"]
+            .clone()
+    };
+    assert_eq!(resume["threadId"], THREAD);
+    assert_eq!(resume["excludeTurns"], true);
+    assert!(!runtime.state.lock().unwrap().unloaded);
+    // Loaded again: the discovery sees it as attachable, and a second attach is the live path.
+    let rpc = CodexRpc::connect(&runtime.endpoint).await.unwrap();
+    let again = CodexDriver::attach_with_rpc(rpc, THREAD).await.unwrap();
+    assert_eq!(again.thread_id(), THREAD);
+}
+
+/// A resume never invents a session: an ephemeral or unknown thread is refused.
+#[tokio::test]
+async fn resume_refuses_what_is_not_the_same_persisted_session() {
+    let runtime = Runtime::new_in(std::path::Path::new("/fixture")).await;
+    runtime.state.lock().unwrap().unloaded = true;
+    let rpc = CodexRpc::connect(&runtime.endpoint).await.unwrap();
+    let error = match CodexDriver::resume_with_rpc(rpc, "another-thread", "/fixture", || async {
+        Ok(true)
+    })
+    .await
+    {
+        Ok(_) => panic!("another thread must not be resumed"),
+        Err(error) => error,
+    };
+    assert!(
+        format!("{error:#}").contains("different thread"),
+        "{error:#}"
+    );
+    assert_eq!(runtime.count("thread/resume"), 0);
+    // Another workspace is another session; a Stop that arrived meanwhile ends it before
+    // any native call: both are read-only refusals.
+    let rpc = CodexRpc::connect(&runtime.endpoint).await.unwrap();
+    let error = match CodexDriver::resume_with_rpc(rpc, THREAD, "/elsewhere", || async { Ok(true) })
+        .await
+    {
+        Ok(_) => panic!("another workspace must not be resumed"),
+        Err(error) => error,
+    };
+    assert!(
+        format!("{error:#}").contains("workspace changed"),
+        "{error:#}"
+    );
+    let rpc = CodexRpc::connect(&runtime.endpoint).await.unwrap();
+    let error =
+        match CodexDriver::resume_with_rpc(rpc, THREAD, "/fixture", || async { Ok(false) }).await {
+            Ok(_) => panic!("a stopped session must not be resumed"),
+            Err(error) => error,
+        };
+    assert!(format!("{error:#}").contains("stopped before"), "{error:#}");
+    assert_eq!(runtime.count("thread/resume"), 0);
+    assert!(runtime.state.lock().unwrap().unloaded);
+}
+
+/// The daemon is Codex's: started once through its own command only when its socket does not
+/// answer, never restarted or stopped, and a failed start is an error, not a loop.
+#[tokio::test]
+async fn the_codex_daemon_is_started_once_only_when_absent() {
+    use std::os::unix::fs::PermissionsExt;
+    let runtime = Runtime::new_in(std::path::Path::new("/fixture")).await;
+    let socket = runtime.endpoint.trim_start_matches("unix://").to_owned();
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("starts");
+    // A fake `codex` that records each start and, like the real daemon, makes the socket appear.
+    // Its instructions come from files next to it, so no test touches the environment.
+    let program = dir.path().join("codex");
+    let endpoint_file = dir.path().join("endpoint");
+    let fail_file = dir.path().join("fail");
+    std::fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\n[ \"$1 $2 $3\" = \"app-server daemon start\" ] || exit 9\necho start >> {marker}\n[ -e {fail} ] && exit 1\nln -s {socket} \"$(cat {endpoint})\"\n",
+            marker = marker.display(),
+            fail = fail_file.display(),
+            endpoint = endpoint_file.display(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let starts = || {
+        std::fs::read_to_string(&marker)
+            .map(|s| s.lines().count())
+            .unwrap_or(0)
+    };
+    // Already answering: nothing is run.
+    zerolux::sessions::ensure_codex_daemon_with(&program, &runtime.endpoint)
+        .await
+        .unwrap();
+    assert_eq!(starts(), 0);
+    // Absent: one start, then the socket answers.
+    let endpoint = dir.path().join("control.sock");
+    std::fs::write(&endpoint_file, endpoint.to_string_lossy().as_bytes()).unwrap();
+    zerolux::sessions::ensure_codex_daemon_with(
+        &program,
+        &format!("unix://{}", endpoint.display()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(starts(), 1);
+    // Answering now: no second start.
+    zerolux::sessions::ensure_codex_daemon_with(
+        &program,
+        &format!("unix://{}", endpoint.display()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(starts(), 1);
+    // A start that fails is reported once; nothing is retried, stopped or restarted.
+    std::fs::write(&fail_file, "").unwrap();
+    let error = zerolux::sessions::ensure_codex_daemon_with(
+        &program,
+        &format!("unix://{}", dir.path().join("never.sock").display()),
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("did not start"), "{error:#}");
+    assert_eq!(starts(), 2);
 }

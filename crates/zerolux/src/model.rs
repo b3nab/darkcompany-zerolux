@@ -207,6 +207,37 @@ pub struct CreateClaudeSession {
     pub permission_mode: ClaudePermissionMode,
 }
 
+/// A new Codex session, started by ZeroLux in a folder. What is omitted is decided by the
+/// user's own Codex configuration: ZeroLux names no policy, sandbox or model of its own.
+#[derive(Deserialize)]
+pub struct CreateCodexSession {
+    pub name: String,
+    pub actor_id: Option<String>,
+    pub workspace: String,
+    #[serde(default)]
+    pub approval_policy: Option<CodexApprovalPolicy>,
+    #[serde(default)]
+    pub sandbox: Option<CodexSandbox>,
+}
+
+/// Codex's own `approvalPolicy` values, as its app-server protocol names them.
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Debug)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodexApprovalPolicy {
+    Untrusted,
+    OnRequest,
+    Never,
+}
+
+/// Codex's own `sandbox` modes, as its app-server protocol names them.
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Debug)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodexSandbox {
+    ReadOnly,
+    WorkspaceWrite,
+    DangerFullAccess,
+}
+
 // Internal input, populated from verified discovery rather than the HTTP body.
 pub struct HireChatSession {
     pub name: String,

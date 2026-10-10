@@ -481,14 +481,56 @@ async fn codex_candidates(endpoint: &str) -> Result<Vec<Candidate>> {
     }
     Ok(candidates)
 }
-async fn discover_codex() -> Result<Vec<Candidate>> {
+/// The control socket of the user's Codex app-server daemon, as `codex` itself finds it.
+pub fn codex_endpoint() -> Result<String> {
     let root = match std::env::var_os("CODEX_HOME") {
         Some(root) => PathBuf::from(root),
         None => home()?.join(".codex"),
     };
     let endpoint = root.join("app-server-control/app-server-control.sock");
     ensure!(endpoint.is_absolute(), "Codex home must be absolute");
-    codex_candidates(&format!("unix://{}", endpoint.to_string_lossy())).await
+    Ok(format!("unix://{}", endpoint.to_string_lossy()))
+}
+
+/// Codex's own daemon, through its own lifecycle: `codex app-server daemon start` starts it
+/// only if it is not running, and never restarts or reconfigures a running one. Returns the
+/// endpoint once it answers. The daemon outlives the kernel: it is never stopped by ZeroLux.
+pub async fn ensure_codex_daemon() -> Result<String> {
+    let endpoint = codex_endpoint()?;
+    ensure_codex_daemon_with(Path::new("codex"), &endpoint).await?;
+    Ok(endpoint)
+}
+
+/// One attempt to start, bounded; the daemon's own output never reaches the API.
+pub async fn ensure_codex_daemon_with(program: &Path, endpoint: &str) -> Result<()> {
+    if CodexRpc::connect(endpoint).await.is_ok() {
+        return Ok(());
+    }
+    let mut launcher = tokio::process::Command::new(program);
+    launcher
+        .args(["app-server", "daemon", "start"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        // The launcher only; the daemon it starts detaches and is Codex's to keep.
+        .kill_on_drop(true);
+    let status = tokio::time::timeout(Duration::from_secs(30), launcher.status())
+        .await
+        .context("Starting the Codex daemon timed out")?
+        .context("Cannot run `codex`; install Codex or put it on PATH")?;
+    ensure!(status.success(), "Codex daemon did not start ({status})");
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while CodexRpc::connect(endpoint).await.is_err() {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .context("The Codex daemon started but its control socket does not answer")?;
+    Ok(())
+}
+
+async fn discover_codex() -> Result<Vec<Candidate>> {
+    codex_candidates(&codex_endpoint()?).await
 }
 
 async fn scan() -> (Vec<Candidate>, Vec<DiscoveryError>) {

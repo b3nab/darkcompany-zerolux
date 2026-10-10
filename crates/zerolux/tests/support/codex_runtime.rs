@@ -24,10 +24,21 @@ pub(crate) struct NativeState {
     pub(crate) history: Vec<Value>,
     pub(crate) drop_queue_ack: bool,
     pub(crate) drop_cancel_ack: bool,
+    /// thread/start happens, but its answer is lost.
+    pub(crate) drop_start_ack: bool,
     /// "refuse" and "internal" answer turn/steer with an error; "drop" loses the answer.
     pub(crate) steer: Option<&'static str>,
+    /// The runtime restarted: its thread is persisted but not loaded until resumed.
+    pub(crate) unloaded: bool,
+    /// Hold the next thread/read response until the test permits it.
+    pub(crate) paused_read: Option<Arc<Notify>>,
+    /// After thread/start the runtime also holds the new thread; reads of it answer.
+    pub(crate) started: bool,
     cwd: Option<String>,
 }
+
+/// The thread a `thread/start` creates.
+pub(crate) const STARTED: &str = "new-context";
 
 pub(crate) struct Runtime {
     _dir: TempDir,
@@ -69,12 +80,16 @@ impl Runtime {
                                     frame = socket.next() => {
                                         let Some(Ok(Message::Text(text))) = frame else { break; };
                                         let value: Value = serde_json::from_str(&text).unwrap();
-                                        let result = {
+                                        let (result, paused) = {
                                             let mut state = state.lock().unwrap();
                                             state.requests.push(value.clone());
-                                            native_response(&mut state, &value)
+                                            let paused = if value["method"] == "thread/read" {
+                                                state.paused_read.take()
+                                            } else { None };
+                                            (native_response(&mut state, &value), paused)
                                         };
                                         notify.notify_waiters();
+                                        if let Some(paused) = paused { paused.notified().await; }
                                         let Some(result) = result else { continue; };
                                         let answer = if result.get("refused").is_some() {
                                             json!({"id":value["id"],"error":{"code":result["refused"],"message":"fixture refusal"}})
@@ -149,6 +164,12 @@ fn native_response(state: &mut NativeState, request: &Value) -> Option<Value> {
         return None;
     }
     let mut current = settings();
+    // The started thread is a thread of its own: asked for it, the runtime answers for it.
+    let asked = request["params"]["threadId"].as_str();
+    if state.started && asked == Some(STARTED) {
+        current["thread"]["id"] = json!(STARTED);
+        current["thread"]["sessionId"] = json!(STARTED);
+    }
     if let Some(cwd) = &state.cwd {
         current["cwd"] = json!(cwd);
         current["thread"]["cwd"] = json!(cwd);
@@ -159,18 +180,39 @@ fn native_response(state: &mut NativeState, request: &Value) -> Option<Value> {
         "initialize" => json!({"userAgent":"fixture/0.159.0"}),
         "thread/read" => {
             let mut thread = current["thread"].clone();
+            if state.unloaded {
+                thread["status"] = json!({"type":"notLoaded"});
+                thread["canAcceptDirectInput"] = Value::Null;
+            }
             if request["params"]["includeTurns"] == true {
                 thread["turns"] = json!(state.history);
             }
             json!({"thread":thread})
         }
         "thread/list" => json!({"data":[current["thread"]],"nextCursor":null}),
-        "thread/loaded/list" => json!({"data":[THREAD],"nextCursor":null}),
-        "thread/resume" => current,
+        "thread/loaded/list" => {
+            let mut loaded = Vec::new();
+            if !state.unloaded {
+                loaded.push(THREAD);
+                if state.started {
+                    loaded.push(STARTED);
+                }
+            }
+            json!({"data":loaded,"nextCursor":null})
+        }
+        "thread/resume" => {
+            // A cold resume loads the persisted thread again, under the same identity.
+            state.unloaded = false;
+            current
+        }
         "thread/start" => {
+            state.started = true;
+            if state.drop_start_ack {
+                return None;
+            }
             let mut value = current;
-            value["thread"]["id"] = json!("new-context");
-            value["thread"]["sessionId"] = json!("new-context");
+            value["thread"]["id"] = json!(STARTED);
+            value["thread"]["sessionId"] = json!(STARTED);
             value
         }
         "thread/queue/list" => json!({"data":state.queue,"nextCursor":null}),

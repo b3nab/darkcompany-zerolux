@@ -1,6 +1,7 @@
 //! Existing-runtime Codex bridge. This module never launches a Codex process.
 use std::{
     collections::{HashMap, HashSet},
+    future::Future,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -21,9 +22,36 @@ use uuid::Uuid;
 use crate::{
     chat_driver::{Delivery, Kernel, MAX_TEXT, prompt, string},
     chat_tools::ChatLink,
+    model::{CodexApprovalPolicy, CodexSandbox},
 };
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A Codex start ZeroLux asked for that did not end in a linked session: what the owner is
+/// told, exactly. Codex never discards or restarts a thread on its behalf.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CodexStartFailure {
+    /// Codex did not answer: whether it started a thread is not known.
+    Uncertain,
+    /// Codex started this thread, and ZeroLux could not link it; it is live in Codex.
+    Unlinked { thread_id: String },
+}
+
+impl std::fmt::Display for CodexStartFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Uncertain => f.write_str(
+                "Codex did not confirm the new session; whether it started one is uncertain. Look again under Hire before starting another.",
+            ),
+            Self::Unlinked { thread_id } => write!(
+                f,
+                "Codex started thread {thread_id} but ZeroLux could not link it; it is live in Codex and can be hired under Hire"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CodexStartFailure {}
 const CLOSED: &str = "zerolux/transportClosed";
 type Reply = oneshot::Sender<Result<Value>>;
 
@@ -380,6 +408,103 @@ impl CodexDriver {
 
     /// Reuses an initialized connection, including for deterministic protocol fixtures.
     pub async fn attach_with_rpc(rpc: CodexRpc, thread_id: &str) -> Result<Self> {
+        Self::join_with_rpc::<fn() -> std::future::Ready<Result<bool>>, _>(rpc, thread_id, None)
+            .await
+    }
+
+    /// A new thread in `workspace`, started by ZeroLux: one `thread/start`, no prompt. Only
+    /// what the owner chose is sent; the rest follows the user's Codex configuration.
+    pub async fn start(
+        endpoint: &str,
+        workspace: &str,
+        approval_policy: Option<CodexApprovalPolicy>,
+        sandbox: Option<CodexSandbox>,
+    ) -> Result<Self> {
+        let rpc = CodexRpc::connect(endpoint).await?;
+        Self::start_with_rpc(rpc, workspace, approval_policy, sandbox).await
+    }
+
+    pub async fn start_with_rpc(
+        rpc: CodexRpc,
+        workspace: &str,
+        approval_policy: Option<CodexApprovalPolicy>,
+        sandbox: Option<CodexSandbox>,
+    ) -> Result<Self> {
+        let mut params = json!({"cwd":workspace,"ephemeral":false});
+        if let Some(policy) = approval_policy {
+            params["approvalPolicy"] = serde_json::to_value(policy)?;
+        }
+        if let Some(sandbox) = sandbox {
+            params["sandbox"] = serde_json::to_value(sandbox)?;
+        }
+        let events = rpc.subscribe();
+        // No answer is no knowledge: the thread may or may not exist in Codex.
+        let created = rpc
+            .request("thread/start", params)
+            .await
+            .context(CodexStartFailure::Uncertain)?;
+        // From here the thread exists: whatever is wrong, its ID is reported, never lost.
+        let thread_id = created["thread"]["id"]
+            .as_str()
+            .unwrap_or("<unknown>")
+            .to_owned();
+        (|| {
+            ensure!(
+                created["thread"]["cwd"] == workspace,
+                "Codex started the thread in another folder"
+            );
+            ensure!(
+                created["thread"]["canAcceptDirectInput"] != false
+                    && created["thread"]["ephemeral"] != true,
+                "The new Codex session cannot receive queued messages"
+            );
+            Self::attached(rpc, events, created, None)
+        })()
+        .context(CodexStartFailure::Unlinked { thread_id })
+    }
+
+    /// Continues a session ZeroLux already held, live or not (see `resume_with_rpc`).
+    pub async fn resume<F, Fut>(
+        endpoint: &str,
+        thread_id: &str,
+        workspace: &str,
+        still_wanted: F,
+    ) -> Result<Self>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<bool>>,
+    {
+        let rpc = CodexRpc::connect(endpoint).await?;
+        Self::resume_with_rpc(rpc, thread_id, workspace, still_wanted).await
+    }
+
+    /// The same session, continued by ZeroLux: a thread the runtime no longer holds (the
+    /// daemon restarted, the machine crashed) is loaded again from its persisted history,
+    /// with the same identity and in the same workspace. Its turns are not read back into
+    /// the kernel. `still_wanted` is asked right before the load: a Stop that arrived
+    /// meanwhile means no native work starts.
+    pub async fn resume_with_rpc<F, Fut>(
+        rpc: CodexRpc,
+        thread_id: &str,
+        workspace: &str,
+        still_wanted: F,
+    ) -> Result<Self>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<bool>>,
+    {
+        Self::join_with_rpc(rpc, thread_id, Some((workspace, still_wanted))).await
+    }
+
+    async fn join_with_rpc<F, Fut>(
+        rpc: CodexRpc,
+        thread_id: &str,
+        cold: Option<(&str, F)>,
+    ) -> Result<Self>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<bool>>,
+    {
         let events = rpc.subscribe();
         let metadata = rpc
             .request(
@@ -391,21 +516,38 @@ impl CodexDriver {
             metadata["thread"]["id"] == thread_id,
             "Codex returned a different thread"
         );
+        let status = metadata["thread"]["status"]["type"].as_str();
         ensure!(
-            matches!(
-                metadata["thread"]["status"]["type"].as_str(),
-                Some("active" | "idle")
-            ),
-            "The selected Codex session is not running"
+            matches!(status, Some("active" | "idle"))
+                || (cold.is_some() && status == Some("notLoaded")),
+            if cold.is_some() {
+                "The Codex session cannot be resumed in this state"
+            } else {
+                "The selected Codex session is not running"
+            }
         );
         ensure!(
             metadata["thread"]["canAcceptDirectInput"] != false
                 && metadata["thread"]["ephemeral"] != true,
             "The selected Codex session cannot receive queued messages"
         );
-        let settings = rpc
-            .request("thread/resume", json!({"threadId":thread_id}))
-            .await?;
+        // A live thread is joined as before; a cold one is loaded without its turns, in the
+        // workspace it was hired in, and only if nobody stopped it meanwhile.
+        let params = match cold {
+            Some((workspace, still_wanted)) => {
+                ensure!(
+                    metadata["thread"]["cwd"] == workspace,
+                    "The Codex session's workspace changed; it is not resumed"
+                );
+                ensure!(
+                    still_wanted().await?,
+                    "The session was stopped before it was resumed"
+                );
+                json!({"threadId":thread_id,"excludeTurns":true})
+            }
+            None => json!({"threadId":thread_id}),
+        };
+        let settings = rpc.request("thread/resume", params).await?;
         Self::attached(rpc, events, settings, Some(thread_id))
     }
 
