@@ -5,10 +5,10 @@ import { FlatList, Pressable, View } from "react-native";
 import {
   agentMembers,
   chatFilters,
+  chatPreview,
   harnessLabels,
   listChats,
   listTime,
-  presenceLine,
   unreadIn,
   waitingChats,
 } from "@zerolux/chat";
@@ -97,6 +97,12 @@ export default function Chats() {
           const unread = unreadIn(c, chat.seen);
           const asks = waiting.has(c.id);
           const last = c.last_message;
+          const preview = chatPreview(
+            c,
+            chat.conversations,
+            chat.sessions,
+            name,
+          );
           return (
             <Pressable
               className="flex-row items-center gap-3 px-5 py-2.5 active:bg-accent"
@@ -124,14 +130,15 @@ export default function Chats() {
                 </View>
                 <View className="flex-row items-center gap-2">
                   <Text
-                    className="flex-1 text-sm text-muted-foreground"
+                    className={cn(
+                      "flex-1 text-sm",
+                      preview.working
+                        ? "text-agent-foreground"
+                        : "text-muted-foreground",
+                    )}
                     numberOfLines={1}
                   >
-                    {c.paused
-                      ? "Paused"
-                      : last
-                        ? `${name(last.author_id)}: ${last.text}`
-                        : presenceLine(c, chat.sessions, name)}
+                    {preview.text}
                   </Text>
                   {unread > 0 || asks ? (
                     <View

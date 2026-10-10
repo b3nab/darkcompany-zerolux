@@ -36,6 +36,7 @@ import {
   threadsOf,
   transcribe,
   workingIn,
+  workingLabel,
 } from "@zerolux/chat";
 import type { Actor, Approval, Conversation, Message } from "@zerolux/chat";
 import { ApprovalCard } from "@/components/approval-card";
@@ -357,8 +358,7 @@ export default function ChatScreen() {
           <View className="mt-3 flex-row items-center gap-2 self-start rounded-full border border-agent/30 bg-agent/10 px-3 py-1.5">
             <View className="size-1.5 rounded-[1.5px] bg-agent" />
             <Text className="font-mono text-[12px] text-agent-foreground">
-              {item.names.map(name).join(", ")}{" "}
-              {item.names.length === 1 ? "is" : "are"} working
+              {workingLabel(item.names.map(name))}
             </Text>
           </View>
         );

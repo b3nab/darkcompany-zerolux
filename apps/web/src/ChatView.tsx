@@ -21,6 +21,7 @@ import {
   agentMembers,
   agentsForChat,
   chatFilters,
+  chatPreview,
   clockTime,
   dayLabel,
   deliveryLabels,
@@ -42,6 +43,7 @@ import {
   unreadIn,
   waitingChats,
   workingIn,
+  workingLabel,
 } from "@zerolux/chat";
 import type {
   Chat,
@@ -129,6 +131,12 @@ export function ChatList({ chat, actors }: { chat: Chat; actors: Actor[] }) {
             c.kind === "dm" ? agentMembers(c, actors)[0] : undefined;
           const unread = unreadIn(c, chat.seen);
           const last = c.last_message;
+          const preview = chatPreview(
+            c,
+            chat.conversations,
+            chat.sessions,
+            name,
+          );
           return (
             <NavLink
               key={c.id}
@@ -156,12 +164,11 @@ export function ChatList({ chat, actors }: { chat: Chat; actors: Actor[] }) {
                   )}
                 </span>
                 <span className="flex items-center gap-2">
-                  <span className="truncate text-[13px] text-muted-foreground">
-                    {c.paused
-                      ? "Paused"
-                      : last
-                        ? `${name(last.author_id)}: ${last.text}`
-                        : presenceLine(c, chat.sessions, name)}
+                  <span
+                    data-working={preview.working || undefined}
+                    className="truncate text-[13px] text-muted-foreground data-working:text-agent-foreground"
+                  >
+                    {preview.text}
                   </span>
                   {(unread > 0 || waiting.has(c.id)) && (
                     <span
@@ -547,8 +554,7 @@ export function ChatView({
                       />
                     ))}
                   </span>
-                  {busyHere.map(name).join(", ")}{" "}
-                  {busyHere.length === 1 ? "is" : "are"} working
+                  {workingLabel(busyHere.map(name))}
                 </li>
               )}
               {chat.messages.length === 0 && conversation.last_seq === 0 && (

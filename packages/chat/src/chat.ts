@@ -188,6 +188,35 @@ export const workingIn = (
       );
     })
     .map((m) => m.actor_id);
+/** Who is working, the same words in the bubble and in the list of chats. */
+export const workingLabel = (names: string[]) =>
+  `${names.join(", ")} ${names.length === 1 ? "is" : "are"} working`;
+/** A chat's line in the list: who works on it or its threads now, else paused, else its last message. */
+export function chatPreview(
+  conversation: Conversation,
+  conversations: Conversation[],
+  sessions: ChatSession[],
+  name: (actorId: string) => string,
+): { text: string; working: boolean } {
+  const working = [
+    ...new Set(
+      [conversation, ...threadsOf(conversation, conversations)].flatMap((c) =>
+        workingIn(c, sessions),
+      ),
+    ),
+  ];
+  const last = conversation.last_message;
+  return {
+    text: working.length
+      ? workingLabel(working.map(name))
+      : conversation.paused
+        ? "Paused"
+        : last
+          ? `${name(last.author_id)}: ${last.text}`
+          : presenceLine(conversation, sessions, name),
+    working: working.length > 0,
+  };
+}
 /** Agents coordinate in threads under a chat; the chats themselves are the rest. */
 export const isThread = (conversation: Conversation) =>
   conversation.kind === "thread";

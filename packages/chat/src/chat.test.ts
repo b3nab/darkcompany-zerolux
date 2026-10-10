@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   agentsForChat,
+  chatPreview,
   directChat,
   authorColor,
   authorColors,
@@ -426,6 +427,51 @@ test("the activity bubble shows only agents whose current turn serves this chat"
         { ...session("s-maple", "working", "general"), status },
       ]),
     ).toEqual([]);
+
+  // The list of chats says the same in place of the last message, paused or not.
+  const name = (id: string) => id[0]!.toUpperCase() + id.slice(1);
+  const busy = [
+    session("s-maple", "working", "general"),
+    session("s-cedar", "working", "general"),
+  ];
+  const preview = (
+    sessions: ChatSession[],
+    chat = general,
+    conversations = [chat],
+  ) => chatPreview(chat, conversations, sessions, name);
+  expect(preview(busy)).toEqual({
+    text: "Maple, Cedar are working",
+    working: true,
+  });
+  expect(preview(busy.slice(0, 1), { ...general, paused: true })).toEqual({
+    text: "Maple is working",
+    working: true,
+  });
+  const idle = [session("s-maple", "idle", "general")];
+  expect(preview(idle)).toEqual({ text: "Owner: Hello", working: false });
+  expect(preview(idle, { ...general, paused: true }).text).toBe("Paused");
+  // Threads are not listed: their work shows on their chat, each agent once.
+  const thread: Conversation = {
+    ...general,
+    id: "thread",
+    kind: "thread",
+    parent_id: "general",
+    members: [
+      { actor_id: "maple", session_id: "s-maple-2" },
+      { actor_id: "cedar", session_id: "s-cedar" },
+    ],
+  };
+  expect(
+    preview(
+      [
+        session("s-maple", "working", "general"),
+        { ...session("s-maple", "working", "thread"), id: "s-maple-2" },
+        session("s-cedar", "working", "thread"),
+      ],
+      general,
+      [general, thread],
+    ).text,
+  ).toBe("Maple, Cedar are working");
 });
 
 test("a chat lists its threads, open ones first, and threads are not chats", () => {
