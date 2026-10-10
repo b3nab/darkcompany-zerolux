@@ -24,6 +24,7 @@ use tower_http::{
 
 use crate::{
     chat_runtime::ChatRuntime,
+    codex::CodexStartFailure,
     model::*,
     store::{Error, Store},
 };
@@ -196,7 +197,10 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/sessions", get(discover_sessions))
         .route("/chat/hire", post(hire_session))
         .route("/chat/claude-sessions", post(create_claude_session))
-        .route("/chat/sessions/{id}/resume", post(resume_claude_session))
+        .route("/chat/codex-sessions", post(create_codex_session))
+        .route("/chat/pi-sessions", post(create_pi_session))
+        .route("/chat/sessions/{id}/resume", post(resume_session))
+        .route("/chat/sessions/{id}/takeover", post(takeover_pi_session))
         .route("/actors/{id}/name", post(rename_agent))
         .route("/chat/sessions", get(chat_sessions))
         .route("/chat/sessions/{id}/stop", post(stop_session))
@@ -390,6 +394,92 @@ async fn hire_session(
     Ok(Json(json!({ "actor": actor, "session": session })))
 }
 
+async fn create_codex_session(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    ChatJson(input): ChatJson<CreateCodexSession>,
+) -> Result<Json<Value>, ApiFailure> {
+    if !who.is_owner() {
+        return Err(Error::Forbidden.into());
+    }
+    let (actor, session) = runtime(&state)?
+        .create_codex(&who, input)
+        .await
+        .map_err(|error| {
+            // What Codex did, or may have done, is the owner's to know: a thread it started
+            // is named, an unanswered start is called uncertain. Nothing else is exposed.
+            match error.downcast_ref::<CodexStartFailure>() {
+                Some(failure) => {
+                    tracing::error!(
+                        error = format!("{error:#}"),
+                        "Codex session was not started"
+                    );
+                    let thread_id = match failure {
+                        CodexStartFailure::Unlinked { thread_id } => Some(thread_id.as_str()),
+                        CodexStartFailure::Uncertain => None,
+                    };
+                    ApiFailure(Box::new(
+                        (
+                            StatusCode::BAD_GATEWAY,
+                            Json(json!({ "error": failure.to_string(), "thread_id": thread_id })),
+                        )
+                            .into_response(),
+                    ))
+                }
+                None => runtime_error(error),
+            }
+        })?;
+    Ok(Json(json!({"actor":actor,"session":session})))
+}
+
+async fn create_pi_session(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    ChatJson(input): ChatJson<CreatePiSession>,
+) -> Result<Json<Value>, ApiFailure> {
+    if !who.is_owner() {
+        return Err(Error::Forbidden.into());
+    }
+    #[cfg(unix)]
+    {
+        use crate::chat_runtime::PiStartFailure;
+        let (actor, session) = runtime(&state)?
+            .create_pi(&who, input)
+            .await
+            .map_err(|error| {
+                if let Some(failure) = error.downcast_ref::<PiStartFailure>() {
+                    tracing::error!(
+                        error = format!("{error:#}"),
+                        "Pi session creation was not confirmed"
+                    );
+                    let id = match failure {
+                        PiStartFailure::Unlinked { native_session_id } => {
+                            Some(native_session_id.as_str())
+                        }
+                        PiStartFailure::Uncertain => None,
+                    };
+                    ApiFailure(Box::new(
+                        (
+                            StatusCode::BAD_GATEWAY,
+                            Json(json!({"error":failure.to_string(),"native_session_id":id})),
+                        )
+                            .into_response(),
+                    ))
+                } else {
+                    runtime_error(error)
+                }
+            })?;
+        Ok(Json(json!({"actor":actor,"session":session})))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (state, input);
+        Err(runtime_error(anyhow::anyhow!(
+            "Pi creation requires a Unix execution host"
+        )))
+    }
+}
+
 async fn create_claude_session(
     State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
@@ -416,7 +506,7 @@ async fn create_claude_session(
     }
 }
 
-async fn resume_claude_session(
+async fn takeover_pi_session(
     State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
@@ -426,10 +516,36 @@ async fn resume_claude_session(
     }
     #[cfg(unix)]
     {
-        let (actor, session) = runtime(&state)?
-            .resume_claude(&who, &id)
+        let session = runtime(&state)?
+            .takeover_pi(&who, &id)
             .await
             .map_err(runtime_error)?;
+        Ok(Json(json!({"session": session})))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (state, id);
+        Err(Error::Invalid("Pi takeover requires a Unix execution host".into()).into())
+    }
+}
+
+async fn resume_session(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    if !who.is_owner() {
+        return Err(Error::Forbidden.into());
+    }
+    #[cfg(unix)]
+    {
+        let current = state.store.chat_session(&who, &id).await?;
+        let result = if current.harness == "pi" {
+            runtime(&state)?.resume_pi(&who, &id).await
+        } else {
+            runtime(&state)?.resume_claude(&who, &id).await
+        };
+        let (actor, session) = result.map_err(runtime_error)?;
         Ok(Json(json!({"actor":actor,"session":session})))
     }
     #[cfg(not(unix))]

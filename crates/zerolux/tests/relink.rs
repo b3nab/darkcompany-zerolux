@@ -128,8 +128,27 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    // SAFETY: this test binary holds one test; nothing else reads the variable concurrently.
-    unsafe { std::env::set_var("PI_CODING_AGENT_DIR", dir.path().join("agent")) };
+    // Every discovery root is the fixture's: relinking scans all harnesses, and the person's
+    // Claude Code sessions and Codex app-server must neither be contacted nor slow this down.
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let claude = bin.join("claude");
+    std::fs::write(&claude, "#!/bin/sh\nprintf '[]\\n'\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+    // SAFETY: this test binary holds one test; nothing else reads the variables concurrently.
+    unsafe {
+        std::env::set_var("PI_CODING_AGENT_DIR", dir.path().join("agent"));
+        std::env::set_var("CLAUDE_CONFIG_DIR", dir.path().join("claude"));
+        std::env::set_var("CODEX_HOME", dir.path().join("codex"));
+        std::env::set_var("PATH", path);
+    }
     let native = "pi-native";
     let pi = fake_pi(dir.path(), native);
     let store = Store::open(&dir.path().join("chat.db")).await.unwrap();

@@ -26,6 +26,8 @@ pub struct RunnerProgram {
     pub entry: PathBuf,
     pub kernel_executable: Option<PathBuf>,
     pub claude_cli: PathBuf,
+    /// Native pi lifecycle host, supplied by the same execution host.
+    pub pi_entry: Option<PathBuf>,
     /// An embedder may use an installed Claude binary instead of the SDK's packaged binary.
     pub sdk_executable: Option<PathBuf>,
 }
@@ -37,6 +39,9 @@ impl Default for RunnerProgram {
                 .join("../../extensions/claude/src/runner.ts"),
             kernel_executable: None,
             claude_cli: "claude".into(),
+            pi_entry: Some(
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/pi/src/runner.ts"),
+            ),
             sdk_executable: None,
         }
     }

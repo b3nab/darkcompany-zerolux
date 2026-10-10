@@ -7,6 +7,7 @@ use sqlx::{FromRow, SqliteConnection};
 use uuid::Uuid;
 
 use crate::{
+    harness::Harness,
     model::*,
     store::{Error, Result, Store, now_ms, text},
 };
@@ -48,6 +49,22 @@ async fn identity_in(db: &mut SqliteConnection, who: &ChatIdentity) -> Result<()
         Ok(())
     } else {
         Err(Error::Unauthorized)
+    }
+}
+
+/// The existing agent the owner hires for `harness`, or `None` when a new one is to be named
+/// (its name validated here). An agent of another harness or owner is forbidden.
+async fn hireable_in(
+    tx: &mut SqliteConnection,
+    who: &ChatIdentity,
+    harness: Harness,
+    actor_id: Option<&str>,
+    name: &str,
+) -> Result<Option<Actor>> {
+    match actor_id {
+        Some(id) => sqlx::query_as("SELECT * FROM actors WHERE id=? AND owner_id=? AND kind='agent' AND archived=0 AND harness=?")
+            .bind(id).bind(&who.actor_id).bind(harness.id()).fetch_optional(&mut *tx).await?.ok_or(Error::Forbidden).map(Some),
+        None => text(name, "Agent name", 200, true).map(|_| None),
     }
 }
 
@@ -464,6 +481,22 @@ impl Store {
         }
     }
 
+    /// Whether the owner may hire `actor_id`, or name a new agent, for `harness`: the checks
+    /// of `hire_chat_session`, before anything native is started for it.
+    pub async fn check_hire(
+        &self,
+        who: &ChatIdentity,
+        harness: Harness,
+        actor_id: Option<&str>,
+        name: &str,
+    ) -> Result<()> {
+        self.require_onboarding().await?;
+        let mut tx = self.pool.begin().await?;
+        owner_in(&mut tx, who).await?;
+        hireable_in(&mut tx, who, harness, actor_id, name).await?;
+        Ok(())
+    }
+
     pub async fn hire_chat_session(
         &self,
         who: &ChatIdentity,
@@ -498,14 +531,11 @@ impl Store {
                 return Err(Error::StoppedByOwner);
             }
         }
-        let actor: Actor = if let Some(id) = input.actor_id {
-            sqlx::query_as("SELECT * FROM actors WHERE id=? AND owner_id=? AND kind='agent' AND archived=0 AND harness=?")
-                .bind(id).bind(&who.actor_id).bind(input.harness.id()).fetch_optional(&mut *tx).await?.ok_or(Error::Forbidden)?
-        } else {
-            let name = text(&input.name, "Agent name", 200, true)?;
-            sqlx::query_as("INSERT INTO actors(id,name,kind,owner_id,harness,created_at) VALUES (?,?,'agent',?,?,?) RETURNING *")
-                .bind(Uuid::new_v4().to_string()).bind(name).bind(&who.actor_id).bind(input.harness.id()).bind(now_ms())
-                .fetch_one(&mut *tx).await?
+        let actor: Actor = match hireable_in(&mut tx, who, input.harness, input.actor_id.as_deref(), &input.name).await? {
+            Some(actor) => actor,
+            None => sqlx::query_as("INSERT INTO actors(id,name,kind,owner_id,harness,created_at) VALUES (?,?,'agent',?,?,?) RETURNING *")
+                .bind(Uuid::new_v4().to_string()).bind(input.name.trim()).bind(&who.actor_id).bind(input.harness.id()).bind(now_ms())
+                .fetch_one(&mut *tx).await?,
         };
         let id = Uuid::new_v4().to_string();
         let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
@@ -611,6 +641,24 @@ impl Store {
                 .await?
                 .ok_or(Error::NotFound)?;
         decode(&value)
+    }
+
+    /// Record host-local continuity metadata only while the same issued link remains wanted.
+    pub(crate) async fn remember_pi_locator(
+        &self,
+        id: &str,
+        native: &str,
+        locator: &Value,
+    ) -> Result<()> {
+        if !locator.is_object() || locator.to_string().len() > 16_384 {
+            return Err(Error::Invalid("Invalid pi locator".into()));
+        }
+        let changed = sqlx::query("UPDATE chat_sessions SET native_locator_json=? WHERE id=? AND harness='pi' AND native_session_id=? AND stopped_at IS NULL")
+            .bind(locator.to_string()).bind(id).bind(native).execute(&self.pool).await?;
+        if changed.rows_affected() != 1 {
+            return Err(Error::StoppedByOwner);
+        }
+        Ok(())
     }
 
     /// Rotate a prepared, live owned runner's credential without replacing its identity.
@@ -740,6 +788,22 @@ impl Store {
         stop_in(&mut tx, id, Some(note)).await?;
         tx.commit().await?;
         Ok(false)
+    }
+
+    /// Whether an automatic relink of this native context is still wanted: its latest session
+    /// is the one the runtime stopped for it, and the owner has not stopped it since. Checked
+    /// before any native call that would start work, as `hire_chat_session` checks it again
+    /// before the successor exists.
+    pub async fn relink_wanted(&self, harness: &str, native_session_id: &str) -> Result<bool> {
+        let predecessor: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT attention_reason FROM chat_sessions WHERE harness=? AND native_session_id=?
+            ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(harness)
+        .bind(native_session_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(predecessor.flatten().as_deref() == Some(RELINKING))
     }
 
     /// One session of the owner's, as it is now.
@@ -1375,8 +1439,12 @@ impl Store {
             });
         }
         let approvals = approvals_in(&mut tx, who).await?;
+        let workspace = sqlx::query_as("SELECT * FROM workspace")
+            .fetch_one(&mut *tx)
+            .await?;
         Ok(ChatInbox {
             session,
+            workspace,
             conversations,
             deliveries,
             approvals,

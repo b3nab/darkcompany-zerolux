@@ -220,6 +220,15 @@ pub struct CreateCodexSession {
     pub sandbox: Option<CodexSandbox>,
 }
 
+/// Native pi settings choose the model/tools; no initial prompt is supplied.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreatePiSession {
+    pub name: String,
+    pub actor_id: Option<String>,
+    pub workspace: String,
+}
+
 /// Codex's own `approvalPolicy` values, as its app-server protocol names them.
 #[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Debug)]
 #[serde(rename_all = "kebab-case")]
@@ -270,11 +279,13 @@ impl TryFrom<String> for ChatSessionOrigin {
     type Error = serde_json::Error;
     fn try_from(locator: String) -> std::result::Result<Self, Self::Error> {
         let locator: serde_json::Value = serde_json::from_str(&locator)?;
-        Ok(if locator["kind"] == "claude-runner" {
-            Self::Owned
-        } else {
-            Self::Attached
-        })
+        Ok(
+            if locator["kind"] == "claude-runner" || locator["kind"] == "pi-runner" {
+                Self::Owned
+            } else {
+                Self::Attached
+            },
+        )
     }
 }
 
@@ -433,6 +444,8 @@ pub struct InboxDelivery {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChatInbox {
     pub session: ChatSession,
+    /// The workspace this inbox belongs to: an agent linked by several tells them apart.
+    pub workspace: WorkspaceInfo,
     pub conversations: Vec<Conversation>,
     pub deliveries: Vec<InboxDelivery>,
     pub approvals: Vec<ChatApproval>,

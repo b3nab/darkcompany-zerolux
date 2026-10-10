@@ -14,6 +14,8 @@ pub mod codex;
 pub mod harness;
 pub mod livekit;
 pub mod model;
+#[cfg(unix)]
+mod pi_runner;
 pub mod server;
 pub mod sessions;
 pub mod store;

@@ -115,7 +115,7 @@ fn home() -> Result<PathBuf> {
     ensure!(path.is_absolute(), "Home directory must be absolute");
     Ok(path)
 }
-fn agent_dir() -> Result<PathBuf> {
+pub(crate) fn agent_dir() -> Result<PathBuf> {
     let path = match std::env::var("PI_CODING_AGENT_DIR") {
         Ok(value) if value.starts_with("~/") => home()?.join(&value[2..]),
         Ok(value) => PathBuf::from(value),
@@ -170,15 +170,17 @@ async fn command_json(program: &str, args: &[&str]) -> Result<Value> {
 const CATALOGUE_LIMIT: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Deserialize)]
-struct PiDescriptor {
+pub(crate) struct PiDescriptor {
     version: u32,
-    instance_id: String,
+    pub(crate) instance_id: String,
     endpoint: String,
     nonce: String,
-    native_session_id: String,
-    workspace: String,
+    #[serde(default)]
+    pub(crate) pid: Option<i32>,
+    pub(crate) native_session_id: String,
+    pub(crate) workspace: String,
 }
-async fn descriptor(path: &Path) -> Result<PiDescriptor> {
+pub(crate) async fn descriptor(path: &Path) -> Result<PiDescriptor> {
     let metadata = tokio::fs::symlink_metadata(path).await?;
     ensure!(
         metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() < 64 * 1024,
@@ -202,11 +204,11 @@ async fn descriptor(path: &Path) -> Result<PiDescriptor> {
     Ok(record)
 }
 
-/// A control exchange with a live pi. Pairing may wait for the extension; the session
-/// catalogue is computed by pi's SDK and can be large; every other message is small and quick.
-async fn control(record: &PiDescriptor, mut request: Value) -> Result<Value> {
+/// A control exchange with a live pi. Pairing and takeover may wait for the extension;
+/// the SDK's session catalogue can be large; other messages are small and quick.
+pub(crate) async fn control(record: &PiDescriptor, mut request: Value) -> Result<Value> {
     let (deadline, limit) = match request["method"].as_str() {
-        Some("pair") => (Duration::from_secs(60), 64 * 1024),
+        Some("pair" | "bind" | "takeover") => (Duration::from_secs(60), 64 * 1024),
         Some("sessions") => (Duration::from_secs(15), CATALOGUE_LIMIT),
         _ => (Duration::from_secs(5), 64 * 1024),
     };
@@ -282,25 +284,33 @@ async fn live_pi_with_descriptors(registry: &Path) -> Result<(Vec<Candidate>, Ve
         if workspace != record.workspace {
             continue;
         }
-        let ready = actual["busy"] == false && actual["paired"] == false;
+        // A pi that links several workspaces is hireable while another kernel holds a link;
+        // an older extension holds one link only.
+        let taking_over = actual["taking_over"] == true;
+        let ready = !taking_over
+            && actual["busy"] == false
+            && (actual["paired"] == false || actual["multi_workspace"] == true);
         let mut found = candidate(
             NativeSessionTarget {
                 harness: Harness::Pi,
                 native_session_id: record.native_session_id.clone(),
                 title: title(&actual, "title", "pi session"),
                 workspace,
-                native_locator: json!({"descriptor":path,"instance_id":record.instance_id}),
+                native_locator: json!({"descriptor":path,"instance_id":record.instance_id,
+                    "pid":record.pid,"session_file":actual["session_file"],"profile":actual["profile"],"runner":actual["runner"]}),
             },
             None,
             ready,
-            if ready {
-                "Existing session ready. Native extension dialogs still require pi; new isolated contexts are not yet supported."
+            if taking_over {
+                "This terminal pi is handing over its execution; recovery waits for its process to exit."
+            } else if ready {
+                "Existing session ready. Native extension dialogs may still require pi."
             } else {
                 "This pi session is busy or already linked. Wait or stop its existing link before hiring."
             },
         );
         // The extension treats a new token for its live link as a relink, even mid-turn.
-        found.resumable = true;
+        found.resumable = !taking_over;
         candidates.push(found);
         live.push(record);
     }
@@ -609,6 +619,57 @@ pub async fn resolve_linked(harness: &str, native_session_id: &str) -> Option<Na
         .map(|c| c.target)
 }
 
+#[cfg(unix)]
+pub(crate) async fn ensure_pi_stopped(agent: &Path, native: &str) -> Result<()> {
+    use nix::{sys::signal::kill, unistd::Pid};
+    let mut entries = match tokio::fs::read_dir(agent.join("zerolux-links")).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let record = descriptor(&path).await?;
+        if record.native_session_id != native {
+            continue;
+        }
+        let pid = record
+            .pid
+            .filter(|pid| *pid > 0)
+            .context("Pi discovery cannot establish native process death")?;
+        ensure!(
+            kill(Pid::from_raw(pid), None) == Err(nix::errno::Errno::ESRCH),
+            "A native pi process still claims this session; no replacement was started"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+pub(crate) async fn running_pi(
+    agent: &Path,
+    native: &str,
+    pid: i32,
+) -> Result<NativeSessionTarget> {
+    let (candidates, descriptors) = live_pi_with_descriptors(&agent.join("zerolux-links")).await?;
+    let record = descriptors
+        .iter()
+        .find(|d| d.native_session_id == native && d.pid == Some(pid))
+        .context("Native pi has not advertised its verified control")?;
+    candidates
+        .into_iter()
+        .find(|c| {
+            c.resumable
+                && c.target.native_session_id == native
+                && c.target.native_locator["instance_id"] == record.instance_id
+        })
+        .map(|c| c.target)
+        .context("The restored pi context is ambiguous")
+}
+
 /// Owns the private control link, NOT the externally launched pi process.
 pub struct PiLink {
     descriptor: PiDescriptor,
@@ -627,6 +688,7 @@ impl PiLink {
 pub async fn pair_pi(
     target: &NativeSessionTarget,
     base_url: &str,
+    workspace_id: &str,
     token: String,
     resume: bool,
 ) -> Result<PiLink> {
@@ -652,8 +714,10 @@ pub async fn pair_pi(
     let executable = std::env::current_exe()?.canonicalize()?;
     let paired = control(
         &record,
+        // The workspace identity lets pi tell a relink by the same kernel from a different
+        // workspace claiming a session it already serves.
         json!({"method":"pair","native_session_id":target.native_session_id,
-        "workspace":target.workspace,"base_url":base_url,"token":token,"executable":executable}),
+        "workspace":target.workspace,"workspace_id":workspace_id,"base_url":base_url,"token":token,"executable":executable}),
     )
     .await?;
     let link_id = text(&paired, "link_id")?;

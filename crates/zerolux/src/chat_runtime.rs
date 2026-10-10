@@ -10,10 +10,12 @@ use tokio::{
 };
 
 use crate::{
-    codex::CodexDriver,
+    codex::{CodexDriver, CodexStartFailure},
     harness::Harness,
     livekit::{ClientToken, LiveKit},
-    model::{Actor, ChatIdentity, ChatSession, ChatSessionStatus, HireChatSession},
+    model::{
+        Actor, ChatIdentity, ChatSession, ChatSessionStatus, CreateCodexSession, HireChatSession,
+    },
     sessions,
     store::{Error, Store},
 };
@@ -42,6 +44,19 @@ impl AgentTask {
             let _ = finish(&mut subscriber).await;
         }
     }
+}
+
+/// The folder a session started by ZeroLux works in: absolute, existing, canonical.
+pub(crate) fn workspace_dir(path: &str) -> Result<String> {
+    if !PathBuf::from(path).is_absolute() {
+        return Err(Error::Invalid("Choose an absolute workspace path".into()).into());
+    }
+    let workspace = std::fs::canonicalize(path)
+        .map_err(|_| Error::Invalid("Workspace does not exist".into()))?;
+    if !workspace.is_dir() {
+        return Err(Error::Invalid("Workspace must be a directory".into()).into());
+    }
+    Ok(workspace.to_string_lossy().into_owned())
 }
 
 enum NativeDriver {
@@ -76,6 +91,18 @@ impl NativeDriver {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum PiStartFailure {
+    #[error(
+        "Pi creation was not confirmed. Inspect native sessions before starting another; no creation was retried."
+    )]
+    Uncertain,
+    #[error(
+        "Pi prepared session {native_session_id}, but ZeroLux could not link it. Its identity was retained; no replacement was created."
+    )]
+    Unlinked { native_session_id: String },
+}
+
 pub struct ChatRuntime {
     store: Store,
     livekit: Arc<LiveKit>,
@@ -83,6 +110,8 @@ pub struct ChatRuntime {
     links: PathBuf,
     #[cfg(unix)]
     runners: crate::claude_runner::Registry,
+    #[cfg(unix)]
+    pi_runners: crate::pi_runner::Registry,
     changed: Arc<Notify>,
     /// Wakes the adapters that run inside this process: they share the store, so a notice
     /// written to the outbox reaches them here, without LiveKit, sockets or tokens.
@@ -139,15 +168,16 @@ impl ChatRuntime {
             wake.clone(),
             stopped,
         ));
+        #[cfg(unix)]
+        let program = program.unwrap_or_default();
         Ok(Arc::new(Self {
             store,
             livekit,
             base_url,
             #[cfg(unix)]
-            runners: crate::claude_runner::Registry::new(
-                links.join("claude"),
-                program.unwrap_or_default(),
-            ),
+            runners: crate::claude_runner::Registry::new(links.join("claude"), program.clone()),
+            #[cfg(unix)]
+            pi_runners: crate::pi_runner::Registry::new(links.join("pi"), program),
             links,
             changed,
             wake,
@@ -210,9 +240,22 @@ impl ChatRuntime {
                 let endpoint = target.native_locator["endpoint"]
                     .as_str()
                     .context("The Codex discovery target has no endpoint")?;
-                Some(NativeDriver::Codex(Box::new(
-                    CodexDriver::attach(endpoint, &target.native_session_id).await?,
-                )))
+                // A first hire joins a live thread only; a relink continues the session
+                // ZeroLux held, loading it again under the same identity if the runtime lost it.
+                let driver = if resume {
+                    let store = self.store.clone();
+                    let wanted_for = target.native_session_id.clone();
+                    CodexDriver::resume(
+                        endpoint,
+                        &target.native_session_id,
+                        &target.workspace,
+                        || async move { Ok(store.relink_wanted("codex", &wanted_for).await?) },
+                    )
+                    .await?
+                } else {
+                    CodexDriver::attach(endpoint, &target.native_session_id).await?
+                };
+                Some(NativeDriver::Codex(Box::new(driver)))
             }
             Harness::ClaudeCode => {
                 #[cfg(unix)]
@@ -232,6 +275,20 @@ impl ChatRuntime {
             }
             Harness::Pi => None,
         };
+        self.bind(who, target, name, actor_id, resume, driver).await
+    }
+
+    /// Issues the link for a verified native session and pairs it: a native driver already
+    /// attached, or pi's own extension.
+    async fn bind(
+        &self,
+        who: &ChatIdentity,
+        target: sessions::NativeSessionTarget,
+        name: &str,
+        actor_id: Option<String>,
+        resume: bool,
+        driver: Option<NativeDriver>,
+    ) -> Result<(Actor, ChatSession)> {
         let issued = match self
             .store
             .hire_chat_session(
@@ -282,6 +339,213 @@ impl ChatRuntime {
         Ok((issued.actor, session))
     }
 
+    /// A new Codex session in a folder, as a new agent or another session of an existing one.
+    /// Everything is checked before the one `thread/start`; no prompt is submitted. A thread
+    /// Codex created but ZeroLux could not link is reported by ID, never discarded or started
+    /// again: it is live in Codex and can be hired from discovery. An unanswered start is
+    /// reported as uncertain.
+    pub async fn create_codex(
+        &self,
+        who: &ChatIdentity,
+        input: CreateCodexSession,
+    ) -> Result<(Actor, ChatSession)> {
+        if !who.is_owner() {
+            return Err(Error::Forbidden.into());
+        }
+        let workspace = workspace_dir(&input.workspace)?;
+        self.store
+            .check_hire(who, Harness::Codex, input.actor_id.as_deref(), &input.name)
+            .await?;
+        ensure!(!*self.stop.borrow(), "The kernel is stopping");
+        let endpoint = sessions::ensure_codex_daemon().await?;
+        let driver =
+            CodexDriver::start(&endpoint, &workspace, input.approval_policy, input.sandbox).await?;
+        let thread_id = driver.thread_id().to_owned();
+        let target = sessions::NativeSessionTarget {
+            harness: Harness::Codex,
+            native_session_id: thread_id.clone(),
+            title: "Codex".into(),
+            workspace,
+            native_locator: serde_json::json!({"endpoint": endpoint}),
+        };
+        self.bind(
+            who,
+            target,
+            &input.name,
+            input.actor_id,
+            false,
+            Some(NativeDriver::Codex(Box::new(driver))),
+        )
+        .await
+        .context(CodexStartFailure::Unlinked { thread_id })
+    }
+
+    #[cfg(unix)]
+    pub async fn create_pi(
+        &self,
+        who: &ChatIdentity,
+        input: crate::model::CreatePiSession,
+    ) -> Result<(Actor, ChatSession)> {
+        if !who.is_owner() {
+            return Err(Error::Forbidden.into());
+        }
+        let workspace = workspace_dir(&input.workspace)?;
+        self.store
+            .check_hire(who, Harness::Pi, input.actor_id.as_deref(), &input.name)
+            .await?;
+        ensure!(!*self.stop.borrow(), "The kernel is stopping");
+        let host = self
+            .pi_runners
+            .create(&workspace)
+            .await
+            .context(PiStartFailure::Uncertain)?;
+        let native_session_id = host.native_id().to_owned();
+        let result = async {
+            let target = host.target().await?;
+            self.link(who, target, &input.name, input.actor_id, false)
+                .await
+        }
+        .await;
+        // A failed response is not permission to start another identity or kill native work.
+        if result.is_err() {
+            host.discard_unstarted().await;
+        }
+        result.context(PiStartFailure::Unlinked { native_session_id })
+    }
+
+    #[cfg(unix)]
+    pub async fn resume_pi(&self, who: &ChatIdentity, id: &str) -> Result<(Actor, ChatSession)> {
+        if !who.is_owner() {
+            return Err(Error::Forbidden.into());
+        }
+        let session = self.store.chat_session(who, id).await?;
+        ensure!(session.harness == "pi", "This is not a pi session");
+        ensure!(
+            session.stopped_at.is_some() || session.status == "attention",
+            "Stop the running session before resuming it"
+        );
+        self.store
+            .check_hire(who, Harness::Pi, Some(&session.actor_id), "")
+            .await?;
+        let live = sessions::resolve_linked("pi", &session.native_session_id).await;
+        let target = self.pi_target(who, &session, live).await?;
+        let reconnect = session.stopped_at.is_none();
+        if reconnect
+            && self
+                .store
+                .stop_chat_session_marked(who, id, crate::chat::RELINKING)
+                .await?
+        {
+            return Err(Error::StoppedByOwner.into());
+        }
+        if let Some(previous) = self.agents.lock().await.remove(id) {
+            previous.release().await;
+        }
+        // Explicit Resume after an owner's Stop transfers only never-attempted deliveries.
+        self.bind(who, target, "", Some(session.actor_id), reconnect, None)
+            .await
+    }
+
+    /// Cooperative handover: native pi closes its idle terminal. Ordinary recovery owns
+    /// the later launch and still requires proof of native death; this request starts none.
+    #[cfg(unix)]
+    pub async fn takeover_pi(&self, who: &ChatIdentity, id: &str) -> Result<ChatSession> {
+        if !who.is_owner() {
+            return Err(Error::Forbidden.into());
+        }
+        let session = self.store.chat_session(who, id).await?;
+        if session.harness != "pi" || session.stopped_at.is_some() {
+            return Err(
+                Error::Invalid("Takeover requires a live terminal pi session".into()).into(),
+            );
+        }
+        self.store
+            .check_hire(who, Harness::Pi, Some(&session.actor_id), "")
+            .await?;
+        let live = sessions::resolve_linked("pi", &session.native_session_id)
+            .await
+            .context("The terminal pi is unavailable; no native process was closed or started")?;
+        let target = self.pi_target(who, &session, Some(live)).await?;
+        let path = target.native_locator["descriptor"]
+            .as_str()
+            .context("Missing native pi control")?;
+        let record = sessions::descriptor(std::path::Path::new(path)).await?;
+        ensure!(
+            record.native_session_id == session.native_session_id
+                && record.workspace == session.workspace,
+            "Native pi control changed"
+        );
+        let state = sessions::control(&record, serde_json::json!({"method":"describe"})).await?;
+        ensure!(
+            state["instance_id"] == record.instance_id && state["takeover"] == 1,
+            "This native pi does not support terminal takeover; update its extension first"
+        );
+        let workspace = self.store.workspace_info().await?;
+        let mut request = serde_json::json!({"method":"takeover", "check":true,
+            "session_id":id, "workspace_id":workspace.id,
+            "native_session_id":session.native_session_id, "workspace":session.workspace,
+            "session_file":target.native_locator["session_file"]});
+        if sessions::control(&record, request.clone()).await?["accepted"] != true {
+            return Err(Error::Invalid("Let terminal pi finish its work, queue, drafts and dialogs. Its saved history and launch profile must be verifiable and no other workspace may be linked.".into()).into());
+        }
+        ensure!(!*self.stop.borrow(), "The kernel is stopping");
+        // Durable recovery intent precedes shutdown. Owner Stop wins this write and the
+        // extension's final authenticated inbox check. No token or input is replayed.
+        self.store.set_chat_session_status(who, id, ChatSessionStatus {
+            status: "attention".into(),
+            reason: Some("Moving this idle terminal pi under ZeroLux; recovery waits for its native process to exit.".into()),
+        }).await?;
+        self.changed();
+        request["check"] = serde_json::json!(false);
+        let outcome = sessions::control(&record, request).await.context(
+            "Pi takeover was not confirmed; inspect the session before repeating it. No native closure was retried.")?;
+        if outcome["accepted"] != true {
+            return Err(Error::Invalid(
+                "The terminal could not confirm an idle takeover; no shutdown was retried.".into(),
+            )
+            .into());
+        }
+        self.store.chat_session(who, id).await.map_err(Into::into)
+    }
+
+    #[cfg(unix)]
+    async fn pi_target(
+        &self,
+        who: &ChatIdentity,
+        session: &ChatSession,
+        live: Option<sessions::NativeSessionTarget>,
+    ) -> Result<sessions::NativeSessionTarget> {
+        let saved = self.store.chat_session_locator(who, &session.id).await?;
+        let target = if let Some(target) = live {
+            target
+        } else {
+            let locator = crate::pi_runner::recovery_locator(
+                &session.native_session_id,
+                &session.workspace,
+                saved.clone(),
+            )
+            .await?;
+            sessions::NativeSessionTarget {
+                harness: Harness::Pi,
+                native_session_id: session.native_session_id.clone(),
+                title: session.title.clone(),
+                workspace: session.workspace.clone(),
+                native_locator: locator,
+            }
+        };
+        ensure!(
+            target.workspace == session.workspace,
+            "The entrusted pi workspace changed; no other folder was selected"
+        );
+        if let Some(file) = saved["session_file"].as_str() {
+            ensure!(
+                target.native_locator["session_file"].as_str() == Some(file),
+                "The entrusted pi history locator changed; no other file was selected"
+            );
+        }
+        Ok(target)
+    }
+
     /// Relinks every session whose link was lost, by a kernel restart or on the native side,
     /// and that is still live. Tokens are never persisted, so each link is reissued. No prompt
     /// is submitted and nothing is resent.
@@ -295,14 +559,55 @@ impl ChatRuntime {
             #[cfg(unix)]
             if let Some(mode) = self.owned_mode(&owner, &session.id).await? {
                 if let Err(error) = self.reconnect_owned(&owner, &session, mode).await {
-                    tracing::warn!(session_id = session.id, %error, "Owned runner was not rebound");
+                    tracing::warn!(
+                        session_id = session.id,
+                        error = format!("{error:#}"),
+                        "Owned runner was not rebound"
+                    );
                 }
                 continue;
             }
-            let Some(target) =
-                sessions::resolve_linked(&session.harness, &session.native_session_id).await
-            else {
-                continue;
+            let target = match sessions::resolve_linked(
+                &session.harness,
+                &session.native_session_id,
+            )
+            .await
+            {
+                #[cfg(unix)]
+                target if session.harness == "pi" => {
+                    match self.pi_target(&owner, &session, target).await {
+                        Ok(target) => target,
+                        Err(error) => {
+                            tracing::warn!(session_id=session.id, error=%error, "Pi continuity metadata unavailable; no native process started");
+                            continue;
+                        }
+                    }
+                }
+                Some(target) => target,
+                // Codex keeps its threads: one the runtime no longer holds is still this
+                // session, continued through Codex's own daemon. Other harnesses wait for a
+                // live process.
+                None if session.harness == "codex" => {
+                    let endpoint = match sessions::ensure_codex_daemon().await {
+                        Ok(endpoint) => endpoint,
+                        Err(error) => {
+                            tracing::warn!(
+                                session_id = session.id,
+                                error = format!("{error:#}"),
+                                "Codex daemon unavailable; the session waits"
+                            );
+                            continue;
+                        }
+                    };
+                    sessions::NativeSessionTarget {
+                        harness: Harness::Codex,
+                        native_session_id: session.native_session_id.clone(),
+                        title: session.title.clone(),
+                        workspace: session.workspace.clone(),
+                        native_locator: serde_json::json!({"endpoint": endpoint}),
+                    }
+                }
+                None => continue,
             };
             if let Some(lost) = self.agents.lock().await.remove(&session.id) {
                 lost.release().await;
@@ -331,7 +636,11 @@ impl ChatRuntime {
                         );
                         continue;
                     }
-                    tracing::warn!(session_id = session.id, %error, "Session was not relinked; retrying");
+                    tracing::warn!(
+                        session_id = session.id,
+                        error = format!("{error:#}"),
+                        "Session was not relinked; retrying"
+                    );
                     // A busy or restarting harness is not a reason to lose the agent: the next
                     // pass tries again from whichever session of that context is the latest.
                     self.store
@@ -443,7 +752,11 @@ impl ChatRuntime {
                 driver.run(base_url, links, session_id.clone(), token, invalidations, stop.clone()).await
             }.await;
             if let Err(error) = &result {
-                tracing::warn!(session_id, %error, "Native chat adapter ended with an error");
+                tracing::warn!(
+                    session_id,
+                    error = format!("{error:#}"),
+                    "Native chat adapter ended with an error"
+                );
             }
             if result.is_err()
                 && !*stop.borrow()
@@ -479,11 +792,80 @@ impl ChatRuntime {
     ) -> Result<()> {
         let mut agents = self.agents.lock().await;
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
-        let link = sessions::pair_pi(target, &self.base_url, token, resume).await?;
+        let workspace = self.store.workspace_info().await?;
+        let mut target = target.clone();
+        #[cfg(unix)]
+        let mut runner = self
+            .pi_runners
+            .find(&session.native_session_id, &session.workspace)
+            .await?;
+        #[cfg(unix)]
+        if target.native_locator["cold"] == true {
+            runner = Some(
+                self.pi_runners
+                    .get_or_launch(
+                        &session.native_session_id,
+                        &session.workspace,
+                        &target.native_locator,
+                    )
+                    .await?,
+            );
+        }
+        #[cfg(unix)]
+        if let Some(host) = &runner {
+            let pid = host.bind(&self.base_url, &token).await?;
+            let description = host.describe().await?;
+            let durable = crate::pi_runner::recovery_locator(&session.native_session_id, &session.workspace,
+                serde_json::json!({"session_file":description["session_file"],"profile":description["profile"]})).await?;
+            let agent = std::path::Path::new(
+                durable["agent_dir"]
+                    .as_str()
+                    .context("Missing pi host directory")?,
+            );
+            let mut actual = sessions::running_pi(agent, &session.native_session_id, pid).await?;
+            for key in ["session_file", "profile", "agent_dir"] {
+                actual.native_locator[key] = durable[key].clone();
+            }
+            actual.native_locator["runner"] = serde_json::json!(host.path);
+            actual.native_locator["kind"] = serde_json::json!("pi-runner");
+            target = actual;
+        }
+        let owner = self.store.chat_identity(None).await?;
+        if self
+            .store
+            .chat_session(&owner, &session.id)
+            .await?
+            .stopped_at
+            .is_some()
+        {
+            #[cfg(unix)]
+            if let Some(host) = &runner {
+                let _ = host.stop(&session.id).await;
+            }
+            return Err(StoppedByOwner(Error::StoppedByOwner.into()).into());
+        }
+        self.store
+            .remember_pi_locator(
+                &session.id,
+                &session.native_session_id,
+                &target.native_locator,
+            )
+            .await?;
+        let link = sessions::pair_pi(&target, &self.base_url, &workspace.id, token, resume).await?;
         let (stopper, mut stop) = watch::channel(false);
+        #[cfg(unix)]
+        let owned = runner.is_some();
+        #[cfg(not(unix))]
+        let owned = false;
+        let session_id = session.id.clone();
         let task = tokio::spawn(async move {
             let _ = stop.wait_for(|stopped| *stopped).await;
-            link.shutdown().await
+            link.shutdown().await?;
+            #[cfg(unix)]
+            if let Some(host) = runner {
+                host.stop(&session_id).await?;
+            }
+            Ok(())
         });
         agents.insert(
             session.id.clone(),
@@ -491,7 +873,7 @@ impl ChatRuntime {
                 stop: stopper,
                 task,
                 subscriber: None,
-                stop_note: Some("The chat link is stopped and its token revoked. Native cancellation was not confirmed; pi may continue its native turn."),
+                stop_note: if owned { None } else { Some("The chat link is stopped and its token revoked. Native cancellation was not confirmed; pi may continue its native turn.") },
             },
         );
         Ok(())
@@ -503,6 +885,20 @@ impl ChatRuntime {
             #[cfg(unix)]
             if self.stop_untracked_owned(id).await? {
                 return Ok(None);
+            }
+            #[cfg(unix)]
+            {
+                let owner = self.store.chat_identity(None).await?;
+                let session = self.store.chat_session(&owner, id).await?;
+                if session.harness == "pi"
+                    && let Some(host) = self
+                        .pi_runners
+                        .find(&session.native_session_id, &session.workspace)
+                        .await?
+                {
+                    host.stop(id).await?;
+                    return Ok(None);
+                }
             }
             return Ok(Some(
                 "The chat link is stopped and its token revoked. Native cancellation was not confirmed because this kernel had no active adapter.",

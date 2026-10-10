@@ -47,6 +47,7 @@ impl Fixture {
                 .join("../../extensions/claude/src/fixtures/owned-harness.ts"),
             kernel_executable: Some(env!("CARGO_BIN_EXE_zerolux").into()),
             claude_cli: claude,
+            pi_entry: None,
             sdk_executable: None,
         };
         Self { dir, program }
