@@ -91,9 +91,11 @@ impl Store {
             .connect_with(options)
             .await?;
         sqlx::migrate!().run(&pool).await?;
-        // One atomic insert each makes initialization safe across concurrent opens.
-        // Existing identity, name, dates and ownership links are never regenerated.
+        // The workspace and its owner are born together, by one open: both inserts in one
+        // write transaction, so concurrent first opens cannot split them across two
+        // instants. Existing identity, name, dates and ownership links are never regenerated.
         let now = now_ms();
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
         sqlx::query(
             "INSERT INTO workspace (id, name, created_at)
             SELECT ?, 'Workspace', ?
@@ -101,7 +103,7 @@ impl Store {
         )
         .bind(Uuid::new_v4().to_string())
         .bind(now)
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?;
         sqlx::query(
             "INSERT INTO actors (id, name, kind, created_at)
@@ -110,8 +112,9 @@ impl Store {
         )
         .bind(Uuid::new_v4().to_string())
         .bind(now)
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         let store = Self { pool };
         store.reap_expired().await?;
         Ok(store)
