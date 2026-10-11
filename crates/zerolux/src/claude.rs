@@ -1779,15 +1779,30 @@ mod tests {
         }
     }
 
+    /// A live process of the test's own: never a system process, whose existence would
+    /// make the test depend on the machine it runs on.
+    fn held() -> std::process::Child {
+        std::process::Command::new("sleep")
+            .arg("60")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn refuses_sessions_that_cannot_be_connected() {
         let (sockets, _) = workspace();
         let (_dir, cwd) = workspace();
         let (_elsewhere, other_cwd) = workspace();
         let _listener = private_socket(sockets.path(), me());
-        let open = private_socket(sockets.path(), 43);
+        // Two live sessions of the test's own: one with no inbox, one whose inbox is shared.
+        let mut without_inbox = held();
+        let mut shared = held();
+        let open = private_socket(sockets.path(), shared.id());
         std::fs::set_permissions(
-            sockets.path().join("43.sock"),
+            sockets.path().join(format!("{}.sock", shared.id())),
             std::fs::Permissions::from_mode(0o666),
         )
         .unwrap();
@@ -1796,8 +1811,8 @@ mod tests {
                 {"sessionId":"live","cwd":cwd,"kind":"interactive","pid":me()},
                 {"sessionId":"in-background","cwd":cwd,"kind":"background","id":"y","state":"blocked","pid":me()},
                 {"sessionId":"ended","cwd":cwd,"kind":"background","id":"x","state":"done"},
-                {"sessionId":"no-inbox","cwd":cwd,"kind":"interactive","pid":40},
-                {"sessionId":"shared-inbox","cwd":cwd,"kind":"interactive","pid":43},
+                {"sessionId":"no-inbox","cwd":cwd,"kind":"interactive","pid":without_inbox.id()},
+                {"sessionId":"shared-inbox","cwd":cwd,"kind":"interactive","pid":shared.id()},
             ]))
         };
         let projects = projects(&["live", "in-background", "ended", "no-inbox", "shared-inbox"]);
@@ -1825,5 +1840,9 @@ mod tests {
         std::fs::remove_file(projects.path().join("-workspace/live.jsonl")).unwrap();
         assert!(attach("live", &cwd).is_ok());
         drop(open);
+        for child in [&mut without_inbox, &mut shared] {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
