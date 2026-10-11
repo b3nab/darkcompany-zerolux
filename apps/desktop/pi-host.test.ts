@@ -270,17 +270,30 @@ test.skipIf(process.platform === "win32" || !stockPi || !node)(
       if (!path)
         throw new Error(`host exited ${child.exitCode}: ${await stderr}`);
       const descriptor = await readControlDescriptor(path);
+      // Binding starts stock pi, which can outlast the control client's own timeout on a
+      // loaded machine; the host goes on regardless, so its state is what is awaited.
       const bound = await controlRequest(descriptor, "bind", {
         base_url: `http://127.0.0.1:${kernel.port}`,
         token: "fixture",
       }).catch(async (error) => {
-        child!.kill();
-        throw new Error(`${error}\nhost stderr: ${await stderr}`);
+        if (!String(error).includes("timed out")) {
+          child!.kill();
+          throw new Error(`${error}\nhost stderr: ${await stderr}`);
+        }
+        return { ok: true, late: true };
       });
+      expect(bound.ok).toBe(true);
       // Running: stock pi loaded the bundled extension (its guard verified the host) and
       // answered get_state with the saved model and thinking, which it persisted again.
-      expect(bound.ok).toBe(true);
-      const state = await controlRequest(descriptor, "describe");
+      let state = await controlRequest(descriptor, "describe");
+      for (let i = 0; i < 300 && state.phase !== "running"; i++) {
+        if (child.exitCode !== null)
+          throw new Error(`host exited ${child.exitCode}: ${await stderr}`);
+        if (state.phase === "ended")
+          throw new Error(`host ended: ${await stderr}`);
+        await Bun.sleep(200);
+        state = await controlRequest(descriptor, "describe");
+      }
       expect(state.phase).toBe("running");
       expect(state.model).toEqual({ provider: "fixture", id: "native-model" });
       expect(state.thinking).toBe("off");

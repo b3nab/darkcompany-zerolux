@@ -420,16 +420,30 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     .await;
     assert_eq!(hired["session"]["origin"], "attached");
     assert_eq!(starts(&root).len(), 4);
-    api(
-        &client,
-        &base,
-        &format!(
-            "/chat/sessions/{}/takeover",
-            hired["session"]["id"].as_str().unwrap()
-        ),
-        Some(json!({})),
-    )
-    .await;
+    // The terminal accepts a takeover only once idle and in sync with its kernel: right
+    // after Hire its link may still be syncing, so the owner's request is repeated until
+    // the terminal is ready, never forced.
+    let hired_id = hired["session"]["id"].as_str().unwrap();
+    connected(&client, &base, &native).await;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let response = client
+            .post(format!("{base}/api/chat/sessions/{hired_id}/takeover"))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let text = response.text().await.unwrap();
+        if status.is_success() {
+            break;
+        }
+        assert!(
+            status == 400 && text.contains("Let terminal pi finish") && Instant::now() < deadline,
+            "takeover: {status}: {text}"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
     assert!(terminal.0.wait().unwrap().success());
     let taken = connected(&client, &base, &native).await;
     assert_eq!(taken["actor_id"], actor);
