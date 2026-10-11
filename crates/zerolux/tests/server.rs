@@ -155,7 +155,22 @@ async fn dropping_the_server_requests_shutdown_and_a_second_start_reuses_the_por
     let rebound = rebound.expect("the port is released after drop");
     drop(rebound);
     // The desktop remembers its port: a later start on the same address and data works.
-    let second = Server::start(options(dir.path(), address)).await.unwrap();
+    // The port goes first; the data lease ends only when the lifecycle task has stopped
+    // the runtime and LiveKit, so a start that meets the lease still held tries again.
+    let mut second = None;
+    for _ in 0..100 {
+        match Server::start(options(dir.path(), address)).await {
+            Ok(server) => {
+                second = Some(server);
+                break;
+            }
+            Err(error) if format!("{error:#}").contains("already serves") => {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            Err(error) => panic!("{error:#}"),
+        }
+    }
+    let second = second.expect("the data lease is released after drop");
     assert_eq!(second.address(), address);
     second.shutdown().await.unwrap();
 }
