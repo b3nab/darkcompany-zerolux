@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
   Options,
@@ -18,6 +18,9 @@ import { launch, type Runner } from "../runner.ts";
  */
 const workspace = process.env.ZEROLUX_WORKSPACE ?? ".";
 const tracePath = join(workspace, "runner-trace.jsonl");
+// The isolated terminal fixture's native transcript, not a ZeroLux sidecar.
+const terminalHistory = (id: string) =>
+  join(process.env.HOME!, ".claude/projects/terminal-fixture", `${id}.jsonl`);
 const trace = (event: string, fields: Record<string, unknown> = {}) =>
   appendFileSync(
     tracePath,
@@ -33,9 +36,33 @@ function scripted(
   options: Options,
 ): Query {
   const sessionId = options.resume ?? options.sessionId ?? "";
+  // The model remains scripted in this fixture. A real, isolated child exercises the
+  // SDK spawn contract/lease, with no Claude binary, credentials or model requests.
+  const native = options.spawnClaudeCodeProcess?.({
+    command: process.execPath,
+    args: [
+      "-e",
+      existsSync(join(workspace, "keep-native"))
+        ? 'process.stdin.resume(); setInterval(() => {}, 1000); await Bun.write("native-ready", String(process.pid))'
+        : "process.stdin.resume()",
+    ],
+    cwd: workspace,
+    env: {
+      HOME: process.env.HOME,
+      TMPDIR: process.env.TMPDIR,
+      PATH: process.env.PATH,
+    },
+    signal: new AbortController().signal,
+  });
+  native?.stdout.resume();
   const out: SDKMessage[] = [];
   let wake: (() => void) | undefined;
   let closed = false;
+  // Model the SDK's stream ending when its native child dies.
+  native?.on("exit", () => {
+    closed = true;
+    wake?.();
+  });
   let abort = new AbortController();
   const emit = (message: unknown) => {
     out.push(message as SDKMessage);
@@ -53,6 +80,16 @@ function scripted(
     resume: Boolean(options.resume),
     mode: options.permissionMode,
     session: sessionId,
+    model: options.model ?? null,
+    effort: options.effort ?? null,
+    system_prompt: options.systemPrompt ?? null,
+    hooks: Boolean(options.hooks),
+    history:
+      options.resume && existsSync(terminalHistory(sessionId))
+        ? createHash("sha256")
+            .update(readFileSync(terminalHistory(sessionId)))
+            .digest("hex")
+        : null,
   });
 
   void (async () => {
@@ -128,6 +165,7 @@ function scripted(
     close: () => {
       trace("close");
       closed = true;
+      native?.stdin.end();
       wake?.();
     },
   }) as unknown as Query;
@@ -138,10 +176,32 @@ launch(
     start: ({ prompt, options }) => scripted(prompt, options),
     subscriber: (invalidate, lost) => new AgentLinkChild(invalidate, lost),
     connect: chatRequest,
-    // A session this fixture already ran in this folder resumes.
-    saved: async () => existsSync(tracePath),
+    // Both sessions created by this fixture and its independently started terminal.
+    saved: async (id, dir) => {
+      if (existsSync(tracePath)) return true;
+      if (!existsSync(terminalHistory(id))) return false;
+      const first = JSON.parse(
+        readFileSync(terminalHistory(id), "utf8").split("\n")[0]!,
+      );
+      return first.sessionId === id && first.cwd === dir;
+    },
   },
-  (created) => (runner = created),
+  (created) => {
+    runner = created;
+    const describe = created.describe.bind(created);
+    created.describe = () => {
+      const state = describe();
+      if (existsSync(join(workspace, "legacy-description")))
+        for (const key of [
+          "started",
+          "native_guard",
+          "native_phase",
+          "native_pid",
+        ])
+          Reflect.deleteProperty(state, key);
+      return state;
+    };
+  },
 ).then(
   (code) => process.exit(code),
   (error: unknown) => {

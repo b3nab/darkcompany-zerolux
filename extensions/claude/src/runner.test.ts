@@ -12,11 +12,19 @@ import {
   type Inbox,
 } from "@zerolux/bridge";
 import type { StartQuery } from "./agent.ts";
+import type { ClaudeExecution } from "./execution.ts";
 import { Runner } from "./runner.ts";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function fixture() {
+function fixture(
+  saved = false,
+  options: {
+    systemPrompt?: "claude_code";
+    execution?: ClaudeExecution;
+    managed?: boolean;
+  } = {},
+) {
   const session = {
     id: "link",
     actor_id: "claude",
@@ -53,6 +61,7 @@ function fixture() {
     [];
   const sessions = new Map<string, typeof session>();
   let hold: Promise<void> | undefined;
+  let savedGate: Promise<void> | undefined;
   /** The kernel revokes the token at this request, as at a claim refused midway. */
   let revokeAt: string | undefined;
   let failStart = 0;
@@ -136,11 +145,21 @@ function fixture() {
     stopped: 0,
   };
   const runner = new Runner(
-    { nativeSessionId: "native", workspace: "/work", mode: "default" },
+    {
+      nativeSessionId: "native",
+      workspace: "/work",
+      mode: "default",
+      ...(options.managed ? { managed: true } : {}),
+      ...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
+    },
     {
       start,
       connect,
-      saved: async () => false,
+      saved: async () => {
+        await savedGate;
+        return saved;
+      },
+      execution: options.execution,
       subscriber: () => ({
         start: async (_executable, _base, token) => {
           if (failStart > 0) {
@@ -159,11 +178,12 @@ function fixture() {
       }),
     },
   );
-  const bind = (token: string) =>
+  const bind = (token: string, resume = false) =>
     runner.handle("bind", {
       base_url: "http://127.0.0.1:4310",
       token,
       executable: "/bin/zerolux",
+      resume,
     }) as Promise<{ link_id: string }>;
   return {
     inbox,
@@ -189,6 +209,9 @@ function fixture() {
     },
     slowStop: (gate: Promise<void> | undefined) => {
       slowStop = gate;
+    },
+    slowSaved: (gate: Promise<void> | undefined) => {
+      savedGate = gate;
     },
     timeline,
     consumed: (...ids: string[]) =>
@@ -220,6 +243,83 @@ function fixture() {
       }),
   };
 }
+
+test.each([false, true])(
+  "startup metadata is independent of transport binding (managed=%s)",
+  async (managed) => {
+    const f = fixture(false, { managed });
+    let proceed = () => {};
+    let binding: Promise<{ link_id: string }> | undefined;
+    try {
+      expect(f.runner.describe()).toMatchObject({
+        started: false,
+        bound: false,
+      });
+      f.failStart();
+      await expect(f.bind("t1")).rejects.toThrow("subscriber failed");
+      expect(f.runner.describe()).toMatchObject({
+        started: false,
+        bound: false,
+      });
+      expect(f.starts).toHaveLength(0);
+
+      f.slowSaved(new Promise<void>((resolve) => (proceed = resolve)));
+      binding = f.bind("t1");
+      await tick();
+      // A connected transport during preflight is not evidence of a native query.
+      expect(f.runner.describe()).toMatchObject({
+        started: false,
+        bound: true,
+      });
+      expect(f.starts).toHaveLength(0);
+      proceed();
+      await binding;
+      expect(f.runner.describe()).toMatchObject({ started: true, bound: true });
+      await f.runner.handle("prepare", { link_id: "link" });
+      expect(f.runner.describe()).toMatchObject({
+        started: true,
+        bound: false,
+      });
+      expect(f.closes()).toBe(0);
+      await f.bind("t2");
+      expect(f.runner.describe()).toMatchObject({ started: true, bound: true });
+      expect(f.starts).toHaveLength(1);
+      expect(f.inputs).toEqual([]);
+      if (!managed) {
+        expect(f.starts[0]!.hooks).toBeUndefined();
+        expect(f.runner.describe()).not.toHaveProperty("native_guard");
+      }
+    } finally {
+      proceed();
+      await binding?.catch(() => {});
+      f.runner.agent.close();
+    }
+  },
+);
+
+test("a required resume uses the saved native session and never substitutes a new one", async () => {
+  const saved = fixture(true, { managed: true, systemPrompt: "claude_code" });
+  const { link_id } = await saved.bind("t1", true);
+  expect(saved.starts).toHaveLength(1);
+  expect(saved.starts[0]?.resume).toBe("native");
+  expect(saved.starts[0]?.sessionId).toBeUndefined();
+  expect(saved.starts[0]).toMatchObject({
+    permissionMode: "default",
+    systemPrompt: { type: "preset", preset: "claude_code" },
+  });
+  expect(saved.starts[0]!.model).toBeUndefined();
+  expect(saved.starts[0]!.effort).toBeUndefined();
+  await saved.runner.handle("stop", { link_id });
+
+  const missing = fixture();
+  await expect(missing.bind("t1", true)).rejects.toThrow(
+    "saved Claude session is missing",
+  );
+  expect(missing.starts).toHaveLength(0);
+  expect(missing.inputs).toHaveLength(0);
+  expect(missing.subscribers.stopped).toBe(1);
+  await missing.runner.handle("stop", { link_id: "link" });
+});
 
 test("the first bind names the session and starts it once, in its folder and mode", async () => {
   const f = fixture();
@@ -507,6 +607,69 @@ test("after a revocation, the new subscriber starts only once the old one has en
   expect(f.timeline.slice(-3)).toEqual(["stopping", "stopped", "start t2"]);
 });
 
+test("a managed Stop observed during preflight prevents query startup", async () => {
+  const f = fixture(false, { managed: true });
+  let release!: () => void;
+  f.slowSaved(
+    new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+  );
+  const binding = f.bind("t1").then(
+    () => undefined,
+    (error) => error as Error,
+  );
+  try {
+    await tick();
+    const stopping = f.runner.handle("stop", { link_id: "link" });
+    release();
+    expect(await binding).toBeInstanceOf(Error);
+    await stopping;
+    expect(f.starts).toHaveLength(0);
+    expect(f.inputs).toHaveLength(0);
+  } finally {
+    release();
+    await f.runner.handle("stop", { link_id: "link" });
+  }
+});
+
+test("Stop during identity lookup preempts only the link actually named by bind", async () => {
+  for (const id of ["link", "unrelated"]) {
+    const f = fixture(false, { managed: true });
+    let release!: () => void;
+    f.hold(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    const binding = f.bind("t1").then(
+      () => undefined,
+      (error) => error as Error,
+    );
+    try {
+      await tick();
+      const stopping = f.runner.handle("stop", { link_id: id }).then(
+        () => undefined,
+        (error) => error as Error,
+      );
+      f.hold(undefined);
+      release();
+      if (id === "link") {
+        expect(await binding).toBeInstanceOf(Error);
+        expect(await stopping).toBeUndefined();
+        expect(f.starts).toHaveLength(0);
+      } else {
+        expect(await binding).toBeUndefined();
+        expect(await stopping).toBeInstanceOf(Error);
+        expect(f.starts).toHaveLength(1);
+      }
+    } finally {
+      release();
+      await f.runner.handle("stop", { link_id: "link" });
+    }
+  }
+});
+
 test("a runner whose first bind never named a session can still be stopped", async () => {
   const f = fixture();
   await f.runner.handle("stop", { link_id: "link" });
@@ -536,4 +699,41 @@ test("once the session is named, another link cannot stop or prepare it", async 
   ).rejects.toThrow();
   expect(f.runner.describe().bound).toBe(true);
   expect(f.interrupts() + f.closes()).toBe(0);
+});
+
+test("managed startup uses the selected native preset without model or effort overrides", async () => {
+  const f = fixture(false, { managed: true, systemPrompt: "claude_code" });
+  await f.bind("t1");
+  expect(f.starts[0]).toMatchObject({
+    sessionId: "native",
+    permissionMode: "default",
+    systemPrompt: { type: "preset", preset: "claude_code" },
+  });
+  for (const key of ["model", "effort", "hooks"])
+    expect(f.starts[0]).not.toHaveProperty(key);
+  await f.runner.handle("stop", { link_id: "link" });
+});
+
+test("host shutdown waits for actual native exit", async () => {
+  let exit!: () => void;
+  const exited = new Promise<void>((resolve) => (exit = resolve));
+  const execution = {
+    requestStop() {},
+    describe: () => ({ native_pid: 1, native_phase: "running" }),
+    waitForExit: () => exited,
+  } as unknown as ClaudeExecution;
+  const f = fixture(true, { managed: true, execution });
+  await f.bind("t1", true);
+  let closed = false;
+  const closing = f.runner.closeNative().then(() => {
+    closed = true;
+  });
+  try {
+    await tick();
+    expect(closed).toBe(false);
+  } finally {
+    exit();
+    await closing;
+  }
+  expect(closed).toBe(true);
 });
