@@ -1,4 +1,4 @@
-import { liveSessions, sessionState } from "./chat";
+import { listedSessions, liveSessions, sessionState } from "./chat";
 import type { ChatSession } from "./chat";
 import type { Actor } from "./client";
 import type { Chat } from "./useChat";
@@ -59,7 +59,13 @@ export const memberTone = (
       : "stopped"
     : agentPresence(actor.id, sessions, connections).tone;
 
-/** What an agent works on now, its one-to-one chat with its owner, and what waits for it. */
+/** One native session, whichever ZeroLux link it had. */
+const native = (s: ChatSession) => `${s.harness}:${s.native_session_id}`;
+
+/**
+ * What an agent works on now, its live sessions and the earlier ones worth listing, its chats
+ * and its one-to-one chat with its owner, and what waits for it.
+ */
 export function agentWork(
   agent: Actor,
   workspace: Workspace,
@@ -68,6 +74,22 @@ export function agentWork(
   const sessions = liveSessions(chat.sessions, agent.id);
   return {
     sessions,
+    // Newest first and once per native session; one that runs again is no longer earlier.
+    earlier: listedSessions(chat.sessions)
+      .filter(
+        (s) =>
+          s.actor_id === agent.id &&
+          s.status === "stopped" &&
+          !sessions.some((l) => native(l) === native(s)),
+      )
+      .reverse()
+      .filter(
+        (s, i, all) => all.findIndex((o) => native(o) === native(s)) === i,
+      ),
+    chats: chat.conversations.filter(
+      (c) =>
+        c.kind !== "thread" && c.members.some((m) => m.actor_id === agent.id),
+    ),
     answering: chat.conversations.find((c) =>
       sessions.some(
         (s) => s.activity === "working" && s.activity_conversation_id === c.id,

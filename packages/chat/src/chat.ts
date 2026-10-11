@@ -474,6 +474,9 @@ export const refreshesSessions = (event: ChatEvent) =>
   ["message.created", "delivery.changed", "session.changed"].includes(
     event.type,
   );
+/** A folder's own name, the last part of its path. */
+export const folderName = (path: string) =>
+  path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
 /** Found sessions by project folder, keeping their order: which project each belongs to. */
 export function byProject(sessions: DiscoveredSession[]) {
   const groups = new Map<string, DiscoveredSession[]>();
@@ -481,7 +484,7 @@ export function byProject(sessions: DiscoveredSession[]) {
     groups.set(s.workspace, [...(groups.get(s.workspace) ?? []), s]);
   return [...groups].map(([workspace, list]) => ({
     workspace,
-    name: workspace.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace,
+    name: folderName(workspace),
     sessions: list,
   }));
 }
