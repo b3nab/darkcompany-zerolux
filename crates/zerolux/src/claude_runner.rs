@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use crate::model::ClaudePermissionMode as PermissionMode;
 
+mod execution;
 #[cfg(test)]
 mod tests;
 
@@ -208,12 +209,13 @@ impl Registry {
         Ok(found)
     }
 
-    /// Called only for explicit owner creation/resume. Never from automatic reconnect.
+    /// Starts a runner after the caller has verified that the native session is not live.
     pub(crate) async fn launch(
         &self,
         native_id: &str,
         workspace: &str,
         mode: PermissionMode,
+        system_prompt: Option<&str>,
     ) -> Result<RunnerLink> {
         ensure!(
             self.find(native_id, workspace, mode).await?.is_none(),
@@ -244,7 +246,7 @@ impl Registry {
             .env("ZEROLUX_WORKSPACE", workspace)
             .env("ZEROLUX_PERMISSION_MODE", mode.name())
             .env_remove("ZEROLUX_SYSTEM_PROMPT")
-            .env_remove("ZEROLUX_CLAUDE_PROFILE")
+            .env("ZEROLUX_CLAUDE_MANAGED", "1")
             .env_remove("ZEROLUX_CLAUDE_EXECUTABLE")
             .env_remove("ZEROLUX_TOKEN")
             .env_remove("ZEROLUX_URL")
@@ -256,6 +258,10 @@ impl Registry {
             .kill_on_drop(false);
         if let Some(executable) = &self.program.sdk_executable {
             command.env("ZEROLUX_CLAUDE_EXECUTABLE", executable);
+        }
+        // Use Claude's native resume with the preset selected at creation.
+        if let Some(system_prompt) = system_prompt {
+            command.env("ZEROLUX_SYSTEM_PROMPT", system_prompt);
         }
         // Detached, with no terminal streams: stopping the kernel does not stop the runner.
         // setsid is an async-signal-safe syscall; no allocation or application code runs here.
@@ -276,6 +282,21 @@ impl Registry {
                     "Owned Claude runner exited before becoming ready; inspect its private log"
                 );
                 if let Some(link) = self.find(native_id, workspace, mode).await? {
+                    // Setting an env flag is not negotiation: an old asset can ignore it.
+                    // Warm attachment may keep a legacy host; a NEW launch must prove its
+                    // own guarded, unbound waiting host before any token/bind is sent.
+                    ensure!(
+                        child.id() == Some(link.record.pid as u32),
+                        "A different Claude runner claimed this launch; no bind was sent"
+                    );
+                    let state = link.describe().await?;
+                    ensure!(
+                        state["native_guard"] == 1
+                            && state["bound"] == false
+                            && state["native_phase"] == "waiting"
+                            && state.get("native_pid") == Some(&Value::Null),
+                        "The new Claude runner did not confirm the native ownership protocol; no bind was sent"
+                    );
                     return Ok::<_, anyhow::Error>(link);
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -304,7 +325,31 @@ impl Registry {
         }
     }
 
-    pub(crate) async fn check_native_stopped(&self, native_id: &str) -> Result<()> {
+    pub(crate) async fn check_native_stopped(
+        &self,
+        native_id: &str,
+        workspace: &str,
+    ) -> Result<()> {
+        execution::verify_exit(
+            &self.path,
+            native_id,
+            workspace,
+            execution::Purpose::Restore,
+        )?;
+        self.check_not_running(native_id).await
+    }
+
+    /// An entrusted terminal has no ZeroLux execution lease. Its saved process must end
+    /// before the first managed host can resume its native conversation.
+    pub(crate) async fn check_terminal_stopped(&self, native_id: &str, pid: i32) -> Result<()> {
+        ensure!(
+            pid > 0 && kill(Pid::from_raw(pid), None) == Err(nix::errno::Errno::ESRCH),
+            "The entrusted Claude terminal is still running"
+        );
+        self.check_not_running(native_id).await
+    }
+
+    async fn check_not_running(&self, native_id: &str) -> Result<()> {
         let mut child = tokio::process::Command::new(&self.program.claude_cli)
             .args(["agents", "--json"])
             .stdin(Stdio::null())
@@ -359,6 +404,16 @@ impl Registry {
             .context("Kernel executable is unavailable")
     }
 
+    pub(crate) fn check_native_exit(&self, native_id: &str, workspace: &str) -> Result<()> {
+        Uuid::parse_str(native_id)?;
+        execution::verify_exit(
+            &self.path,
+            native_id,
+            workspace,
+            execution::Purpose::Stop(None),
+        )
+    }
+
     pub(crate) fn is_leased(&self, native_id: &str) -> Result<bool> {
         Uuid::parse_str(native_id)?;
         leased(&self.path, native_id)
@@ -402,6 +457,12 @@ impl RunnerLink {
         );
         Ok(value)
     }
+    pub(crate) async fn check_bind(&self) -> Result<()> {
+        // A live host (including older ones) keeps its query across prepare/bind itself.
+        // Authenticate its identity; do not require new metadata to reattach that query.
+        self.describe().await?;
+        Ok(())
+    }
     pub(crate) async fn prepare(&self, session_id: &str) -> Result<()> {
         self.request(json!({"method":"prepare","link_id":session_id}))
             .await?;
@@ -413,9 +474,11 @@ impl RunnerLink {
         token: &str,
         session_id: &str,
         executable: &Path,
+        resume: bool,
     ) -> Result<()> {
+        self.check_bind().await?;
         let result = self.request(json!({"method":"bind","native_session_id":self.record.native_session_id,
-            "workspace":self.record.workspace,"base_url":base,"token":token,"executable":executable})).await?;
+            "workspace":self.record.workspace,"base_url":base,"token":token,"executable":executable,"resume":resume})).await?;
         ensure!(
             result["link_id"] == session_id,
             "Runner bound a different ZeroLux session"
@@ -433,6 +496,11 @@ impl RunnerLink {
         })
         .await
         .context("The owned runner has not confirmed its exit")??;
-        Ok(())
+        execution::verify_exit(
+            &self.registry,
+            &self.record.native_session_id,
+            &self.record.workspace,
+            execution::Purpose::Stop(Some(&self.record.instance_id)),
+        )
     }
 }

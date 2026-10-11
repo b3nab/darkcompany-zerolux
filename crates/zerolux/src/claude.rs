@@ -449,6 +449,10 @@ impl ClaudeSession {
         let pid = session
             .pid
             .context("This Claude Code session has no running process")?;
+        ensure!(
+            pid > 0 && pid <= i32::MAX as u32 && alive(pid),
+            "The Claude Code session ended"
+        );
         let socket = sockets.join(format!("{pid}.sock"));
         let metadata = std::fs::symlink_metadata(&socket)
             .context("This Claude Code session exposes no inbox; update Claude Code")?;
@@ -466,6 +470,10 @@ impl ClaudeSession {
 
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    pub(crate) fn pid(&self) -> u32 {
+        self.pid
     }
 
     /// Delivers the stored messages of this link until `stop` turns true or the link is stopped.

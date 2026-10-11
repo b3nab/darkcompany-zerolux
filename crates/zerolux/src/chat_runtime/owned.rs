@@ -20,9 +20,10 @@ impl ChatRuntime {
             name: input.name, actor_id: input.actor_id, harness: Harness::ClaudeCode,
             native_session_id: native_id, title: "Claude Code".into(),
             workspace,
-            native_locator: json!({"kind":"claude-runner","permission_mode":input.permission_mode}),
+            // Started by ZeroLux with Claude Code's own system prompt, as a terminal would.
+            native_locator: json!({"kind":"claude-runner","permission_mode":input.permission_mode,"system_prompt":"claude_code"}),
             resume: false,
-        }, input.permission_mode).await
+        }, input.permission_mode, false).await
     }
 
     pub async fn resume_claude(
@@ -51,7 +52,7 @@ impl ChatRuntime {
             "The runner is still alive; reconnect it or Stop first"
         );
         self.runners
-            .check_native_stopped(&session.native_session_id)
+            .check_native_stopped(&session.native_session_id, &session.workspace)
             .await?;
         if session.stopped_at.is_none() {
             self.store.stop_chat_session(who, id).await?;
@@ -73,6 +74,7 @@ impl ChatRuntime {
                 resume: false,
             },
             mode,
+            true,
         )
         .await
     }
@@ -82,10 +84,14 @@ impl ChatRuntime {
         who: &ChatIdentity,
         input: HireChatSession,
         mode: ClaudePermissionMode,
+        resume_native: bool,
     ) -> Result<(Actor, ChatSession)> {
         let executable = self.runners.executable()?;
         let mut agents = self.agents.lock().await;
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
+        let system_prompt = input.native_locator["system_prompt"]
+            .as_str()
+            .map(str::to_owned);
         let issued = self.store.hire_chat_session(who, input).await?;
         self.changed();
         let launched = self
@@ -94,6 +100,7 @@ impl ChatRuntime {
                 &issued.session.native_session_id,
                 &issued.session.workspace,
                 mode,
+                system_prompt.as_deref(),
             )
             .await;
         let link = match launched {
@@ -109,6 +116,7 @@ impl ChatRuntime {
                 &issued.token,
                 &issued.session.id,
                 &executable,
+                resume_native,
             )
             .await;
         self.monitor_owned(&mut agents, link, &issued.session);
@@ -176,14 +184,25 @@ impl ChatRuntime {
         let mut agents = self.agents.lock().await;
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
         let executable = self.runners.executable()?;
-        // A dead runner needs explicit Resume. Reconnect never starts another process.
+        // Rebind a surviving query; only a verified absence permits cold recovery.
         let Some(link) = self
             .runners
             .find(&session.native_session_id, &session.workspace, mode)
             .await?
         else {
-            return Ok(());
+            ensure!(
+                !self.runners.is_leased(&session.native_session_id)?,
+                "The owned runner is still leased; no replacement was started"
+            );
+            self.runners
+                .check_native_stopped(&session.native_session_id, &session.workspace)
+                .await?;
+            let locator = self.store.chat_session_locator(who, &session.id).await?;
+            drop(agents);
+            return self.restore_claude(who, session, locator, mode).await;
         };
+        // Authenticate the surviving host before pausing work or rotating its token.
+        link.check_bind().await?;
         if link.bound {
             link.prepare(&session.id).await?;
         }
@@ -192,7 +211,13 @@ impl ChatRuntime {
             .renew_owned_chat_session(who, &session.id)
             .await?;
         let bound = link
-            .bind(&self.base_url, &issued.token, &session.id, &executable)
+            .bind(
+                &self.base_url,
+                &issued.token,
+                &session.id,
+                &executable,
+                true,
+            )
             .await;
         if let Some(previous) = agents.remove(&session.id) {
             previous.release().await;
@@ -201,6 +226,76 @@ impl ChatRuntime {
         drop(agents);
         self.finish_owned_bind(who, issued, bound).await?;
         Ok(())
+    }
+
+    pub(super) async fn restore_claude_terminal(
+        &self,
+        who: &ChatIdentity,
+        session: &ChatSession,
+    ) -> Result<()> {
+        let locator = self.store.chat_session_locator(who, &session.id).await?;
+        let pid = locator["pid"]
+            .as_i64()
+            .and_then(|pid| i32::try_from(pid).ok())
+            .context("The entrusted Claude terminal has no saved process ID")?;
+        self.runners
+            .check_terminal_stopped(&session.native_session_id, pid)
+            .await?;
+        // No settings sidecar: the SDK resumes the native transcript. New permission
+        // requests use the existing approval bridge; the terminal is never killed here.
+        self.restore_claude(
+            who,
+            session,
+            json!({"kind":"claude-runner","permission_mode":"default","system_prompt":"claude_code"}),
+            ClaudePermissionMode::Default,
+        ).await
+    }
+
+    async fn restore_claude(
+        &self,
+        who: &ChatIdentity,
+        session: &ChatSession,
+        locator: Value,
+        mode: ClaudePermissionMode,
+    ) -> Result<()> {
+        let mut agents = self.agents.lock().await;
+        ensure!(!*self.stop.borrow(), "The kernel is stopping");
+        // Dead callbacks are settled; attempted deliveries retain their state. Stop wins
+        // both here and in the transaction that issues the successor link.
+        if self
+            .store
+            .stop_chat_session_marked(who, &session.id, crate::chat::RELINKING)
+            .await?
+        {
+            return Ok(());
+        }
+        if let Some(previous) = agents.remove(&session.id) {
+            previous.release().await;
+        }
+        drop(agents);
+        let result = self
+            .start_owned(
+                who,
+                HireChatSession {
+                    name: String::new(),
+                    actor_id: Some(session.actor_id.clone()),
+                    harness: Harness::ClaudeCode,
+                    native_session_id: session.native_session_id.clone(),
+                    title: session.title.clone(),
+                    workspace: session.workspace.clone(),
+                    native_locator: locator,
+                    resume: true,
+                },
+                mode,
+                true,
+            )
+            .await;
+        if let Err(error) = &result {
+            self.store.revive_chat_session(who, &session.harness, &session.native_session_id,
+                &format!("The native session could not be restored ({error}); no attempted input was resent.")).await?;
+            self.changed();
+        }
+        result.map(|_| ())
     }
 
     fn monitor_owned(
@@ -233,7 +328,7 @@ impl ChatRuntime {
                 && let Ok(owner) = store.chat_identity(None).await
             {
                 let _ = store.set_chat_session_status(&owner, &id, ChatSessionStatus {
-                    status: "attention".into(), reason: Some("The owned Claude runner ended or became unreachable. Use Resume after checking its work.".into()),
+                    status: "attention".into(), reason: Some("The Claude runner ended or became unreachable. Waiting to restore the saved session.".into()),
                 }).await;
                 changed.notify_one();
             }
@@ -267,6 +362,8 @@ impl ChatRuntime {
                 !self.runners.is_leased(&session.native_session_id)?,
                 "The owned runner's exit could not be confirmed"
             );
+            self.runners
+                .check_native_exit(&session.native_session_id, &session.workspace)?;
         }
         Ok(true)
     }

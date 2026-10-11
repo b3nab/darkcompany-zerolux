@@ -228,7 +228,7 @@ impl ChatRuntime {
     async fn link(
         &self,
         who: &ChatIdentity,
-        target: sessions::NativeSessionTarget,
+        mut target: sessions::NativeSessionTarget,
         name: &str,
         actor_id: Option<String>,
         resume: bool,
@@ -260,13 +260,15 @@ impl ChatRuntime {
             Harness::ClaudeCode => {
                 #[cfg(unix)]
                 {
-                    Some(NativeDriver::Claude(
-                        crate::claude::ClaudeSession::attach(
-                            &target.native_session_id,
-                            &target.workspace,
-                        )
-                        .await?,
-                    ))
+                    let driver = crate::claude::ClaudeSession::attach(
+                        &target.native_session_id,
+                        &target.workspace,
+                    )
+                    .await?;
+                    target.native_locator["pid"] = serde_json::json!(driver.pid());
+                    target.native_locator["socket"] =
+                        serde_json::json!(format!("/tmp/cc-socks/{}.sock", driver.pid()));
+                    Some(NativeDriver::Claude(driver))
                 }
                 #[cfg(not(unix))]
                 {
@@ -546,9 +548,9 @@ impl ChatRuntime {
         Ok(target)
     }
 
-    /// Relinks every session whose link was lost, by a kernel restart or on the native side,
-    /// and that is still live. Tokens are never persisted, so each link is reissued. No prompt
-    /// is submitted and nothing is resent.
+    /// Reconnects entrusted sessions after kernel/link loss, resuming saved native contexts
+    /// when their processes ended. Tokens are reissued; no startup prompt or attempted input
+    /// is resent. Sessions explicitly stopped by their owner remain stopped.
     pub async fn reconnect(&self) -> Result<()> {
         let owner = self.store.chat_identity(None).await?;
         let linked = self.store.chat_sessions(&owner).await?;
@@ -584,9 +586,19 @@ impl ChatRuntime {
                     }
                 }
                 Some(target) => target,
+                #[cfg(unix)]
+                None if session.harness == "claude-code" => {
+                    if let Err(error) = self.restore_claude_terminal(&owner, &session).await {
+                        tracing::warn!(
+                            session_id = session.id,
+                            error = format!("{error:#}"),
+                            "Entrusted Claude terminal could not be resumed"
+                        );
+                    }
+                    continue;
+                }
                 // Codex keeps its threads: one the runtime no longer holds is still this
-                // session, continued through Codex's own daemon. Other harnesses wait for a
-                // live process.
+                // session, continued through Codex's own daemon.
                 None if session.harness == "codex" => {
                     let endpoint = match sessions::ensure_codex_daemon().await {
                         Ok(endpoint) => endpoint,

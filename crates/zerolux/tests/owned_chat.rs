@@ -35,7 +35,7 @@ impl Fixture {
             .canonicalize()
             .unwrap();
         let wrapper = root.join("bun-fixture");
-        std::fs::write(&wrapper, format!("#!/bin/sh\nexec /usr/bin/env -i HOME=\"{}\" TMPDIR=\"{}\" PATH=/usr/bin:/bin ZEROLUX_RUNNER_REGISTRY=\"$ZEROLUX_RUNNER_REGISTRY\" ZEROLUX_NATIVE_SESSION=\"$ZEROLUX_NATIVE_SESSION\" ZEROLUX_WORKSPACE=\"$ZEROLUX_WORKSPACE\" ZEROLUX_PERMISSION_MODE=\"$ZEROLUX_PERMISSION_MODE\" \"{}\" \"$@\"\n", root.join("home").display(), root.join("tmp").display(), bun.display())).unwrap();
+        std::fs::write(&wrapper, format!("#!/bin/sh\nexec /usr/bin/env -i HOME=\"{}\" TMPDIR=\"{}\" PATH=/usr/bin:/bin ZEROLUX_RUNNER_REGISTRY=\"$ZEROLUX_RUNNER_REGISTRY\" ZEROLUX_NATIVE_SESSION=\"$ZEROLUX_NATIVE_SESSION\" ZEROLUX_WORKSPACE=\"$ZEROLUX_WORKSPACE\" ZEROLUX_PERMISSION_MODE=\"$ZEROLUX_PERMISSION_MODE\" ZEROLUX_CLAUDE_MANAGED=\"$ZEROLUX_CLAUDE_MANAGED\" ${{ZEROLUX_SYSTEM_PROMPT:+ZEROLUX_SYSTEM_PROMPT=$ZEROLUX_SYSTEM_PROMPT}} \"{}\" \"$@\"\n", root.join("home").display(), root.join("tmp").display(), bun.display())).unwrap();
         let claude = root.join("claude-fixture");
         std::fs::write(&claude, "#!/bin/sh\nprintf '%s\\n' '[]'\n").unwrap();
         for file in [&wrapper, &claude] {
@@ -209,7 +209,7 @@ fn count(rows: &[Value], event: &str) -> usize {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn owned_claude_keeps_its_query_and_pending_approval_across_kernel_restart() {
+async fn managed_claude_bootstrap_lifecycle() {
     let fixture = Fixture::new();
     let kernel = Kernel::start(&fixture, 0).await;
     let workspace = fixture.dir.path().join("workspace");
@@ -245,6 +245,13 @@ async fn owned_claude_keeps_its_query_and_pending_approval_across_kernel_restart
     let pid = trace[0]["pid"].as_i64().unwrap() as i32;
     assert_eq!(trace[0]["mode"], "plan");
     assert_eq!(trace[0]["resume"], false);
+    assert!(trace[0]["model"].is_null());
+    assert!(trace[0]["effort"].is_null());
+    assert_eq!(trace[0]["hooks"], false);
+    assert_eq!(
+        trace[0]["system_prompt"],
+        json!({"type":"preset","preset":"claude_code"})
+    );
     let chat = kernel.api("/conversations", Some(json!({"kind":"dm", "title":"Fixture", "members":[{"actor_id":actor,"session_id":session}]}))).await;
     let chat = chat["conversation"]["id"].as_str().unwrap();
     let messages = format!("/conversations/{chat}/messages");
@@ -264,6 +271,7 @@ async fn owned_claude_keeps_its_query_and_pending_approval_across_kernel_restart
     let approval = approvals["approvals"][0]["id"].as_str().unwrap().to_owned();
     assert_eq!(approvals["approvals"][0]["status"], "pending");
     let port = reqwest::Url::parse(&kernel.url).unwrap().port().unwrap();
+    std::fs::write(workspace.join("legacy-description"), "fixture").unwrap();
     kernel.shutdown().await;
     assert_eq!(
         count(&fixture.trace(), "close"),
@@ -398,6 +406,25 @@ async fn owned_claude_keeps_its_query_and_pending_approval_across_kernel_restart
         "Owned Stop confirms native exit: {stopped}"
     );
     assert_eq!(count(&fixture.trace(), "close"), 1);
+    std::fs::remove_file(workspace.join("legacy-description")).unwrap();
+    // Exercise an existing bootstrap session's old lease format during explicit Resume.
+    let lease = fixture
+        .dir
+        .path()
+        .join(format!("links/claude/{}.lock", native.as_str().unwrap()));
+    let record: Value = serde_json::from_slice(&std::fs::read(&lease).unwrap()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while kill(Pid::from_raw(pid), None) != Err(nix::errno::Errno::ESRCH) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    std::fs::write(
+        &lease,
+        serde_json::to_vec(&json!({"pid":pid,"instance_id":record["instanceId"]})).unwrap(),
+    )
+    .unwrap();
     let resumed = kernel
         .api(&format!("/chat/sessions/{session}/resume"), Some(json!({})))
         .await;
@@ -422,15 +449,64 @@ async fn owned_claude_keeps_its_query_and_pending_approval_across_kernel_restart
         "Repeating Stop on the predecessor does not stop its successor"
     );
     let next = resumed["session"]["id"].as_str().unwrap();
+    // Crash the fixture host AND its child, then resume their saved native identity.
+    let record: Value = serde_json::from_slice(&std::fs::read(&lease).unwrap()).unwrap();
+    let host_pid = last["pid"].as_i64().unwrap() as i32;
+    let child_pid = record["nativePid"].as_i64().unwrap() as i32;
+    killpg(Pid::from_raw(host_pid), Signal::SIGKILL).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while [host_pid, child_pid]
+            .iter()
+            .any(|pid| kill(Pid::from_raw(*pid), None) != Err(nix::errno::Errno::ESRCH))
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    kernel.shutdown().await;
+    let kernel = Kernel::start(&fixture, port).await;
+    let sessions = kernel
+        .wait("/chat/sessions", |v| {
+            v["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["native_session_id"] == native && s["status"] == "connected")
+        })
+        .await;
+    let restored = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["native_session_id"] == native && s["status"] == "connected")
+        .unwrap();
+    assert_eq!(restored["actor_id"], actor);
+    assert_ne!(restored["id"], next);
+    let restored = restored["id"].as_str().unwrap();
+    let trace = fixture.wait_trace(|rows| count(rows, "start") == 3).await;
+    let start = trace.iter().rev().find(|v| v["event"] == "start").unwrap();
+    assert_eq!(start["resume"], true);
+    assert_eq!(start["mode"], "plan");
+    assert!(start["model"].is_null());
+    assert!(start["effort"].is_null());
+    assert_eq!(count(&trace, "input"), 2);
     let stopped = kernel
-        .api(&format!("/chat/sessions/{next}/stop"), Some(json!({})))
+        .api(&format!("/chat/sessions/{restored}/stop"), Some(json!({})))
         .await;
     assert!(stopped["session"]["attention_reason"].is_null());
+    kernel.shutdown().await;
+    let kernel = Kernel::start(&fixture, port).await;
+    assert_eq!(
+        count(&fixture.trace(), "start"),
+        3,
+        "Stop remains stopped after restart"
+    );
     kernel.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_dead_runner_is_not_restarted_automatically_and_resume_never_replays_attempted_input() {
+async fn a_native_crash_is_restored_without_replay_or_duplicate_processes() {
     let fixture = Fixture::new();
     let kernel = Kernel::start(&fixture, 0).await;
     let created = kernel.api("/chat/claude-sessions", Some(json!({
@@ -474,8 +550,19 @@ async fn a_dead_runner_is_not_restarted_automatically_and_resume_never_replays_a
         .await;
     let trace = fixture.trace();
     assert_eq!(count(&trace, "input"), 1);
-    let pid = trace[0]["pid"].as_i64().unwrap() as i32;
-    killpg(Pid::from_raw(pid), Signal::SIGKILL).unwrap();
+    let record: Value = serde_json::from_slice(
+        &std::fs::read(
+            fixture
+                .dir
+                .path()
+                .join(format!("links/claude/{}.lock", native.as_str().unwrap())),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let pid = record["nativePid"].as_i64().unwrap() as i32;
+    // Kill ONLY this fixture's native child.
+    kill(Pid::from_raw(pid), Signal::SIGKILL).unwrap();
     kernel
         .wait("/chat/sessions", |v| {
             v["sessions"]
@@ -485,13 +572,25 @@ async fn a_dead_runner_is_not_restarted_automatically_and_resume_never_replays_a
                 .any(|s| s["id"] == session && s["status"] == "attention")
         })
         .await;
-    kernel.runtime.as_ref().unwrap().reconnect().await.unwrap();
-    assert_eq!(count(&fixture.trace(), "start"), 1);
-    let resumed = kernel
-        .api(&format!("/chat/sessions/{session}/resume"), Some(json!({})))
+    // Starting the kernel alone restores the same saved native session.
+    kernel.shutdown().await;
+    let kernel = Kernel::start(&fixture, 0).await;
+    let sessions = kernel
+        .wait("/chat/sessions", |v| {
+            v["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| &s["native_session_id"] == native && s["status"] == "connected")
+        })
         .await;
-    assert_eq!(&resumed["session"]["native_session_id"], native);
-    assert_eq!(resumed["actor"]["id"], actor);
+    let resumed = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| &s["native_session_id"] == native && s["status"] == "connected")
+        .unwrap();
+    assert_eq!(resumed["actor_id"], actor);
     let trace = fixture.wait_trace(|rows| count(rows, "start") == 2).await;
     let start = trace
         .iter()
@@ -500,7 +599,9 @@ async fn a_dead_runner_is_not_restarted_automatically_and_resume_never_replays_a
         .unwrap();
     assert_eq!(start["mode"], "acceptEdits");
     assert_eq!(start["resume"], true);
-    let next = resumed["session"]["id"].as_str().unwrap();
+    let next = resumed["id"].as_str().unwrap();
+    kernel.runtime.as_ref().unwrap().reconnect().await.unwrap();
+    assert_eq!(count(&fixture.trace(), "start"), 2);
     let history = kernel.api(&messages, None).await;
     let waiting = history["messages"]
         .as_array()
@@ -508,7 +609,8 @@ async fn a_dead_runner_is_not_restarted_automatically_and_resume_never_replays_a
         .iter()
         .find(|m| m["id"] == waiting_id)
         .unwrap();
-    assert_eq!(waiting["deliveries"][0]["session_id"], session);
+    // The successor may answer prior input, but must never dispatch it again.
+    assert_eq!(waiting["deliveries"][0]["session_id"], next);
     assert_ne!(waiting["deliveries"][0]["status"], "stored");
     let approvals = kernel.api("/chat/approvals", None).await;
     assert!(
@@ -524,4 +626,142 @@ async fn a_dead_runner_is_not_restarted_automatically_and_resume_never_replays_a
         .await;
     assert!(stopped["session"]["attention_reason"].is_null());
     kernel.shutdown().await;
+    let kernel = Kernel::start(&fixture, 0).await;
+    kernel.runtime.as_ref().unwrap().reconnect().await.unwrap();
+    assert_eq!(
+        count(&fixture.trace(), "start"),
+        2,
+        "Owner Stop forbids automatic restoration"
+    );
+    let sessions = kernel.api("/chat/sessions", None).await;
+    assert!(
+        sessions["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| &s["native_session_id"] == native)
+            .all(|s| s["status"] == "stopped")
+    );
+    kernel.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dead_host_and_free_lease_do_not_confirm_stop_of_its_live_native_child() {
+    let fixture = Fixture::new();
+    let workspace = fixture.dir.path().join("workspace");
+    std::fs::write(workspace.join("keep-native"), "fixture").unwrap();
+    let kernel = Kernel::start(&fixture, 0).await;
+    let created = kernel
+        .api(
+            "/chat/claude-sessions",
+            Some(json!({
+                "name":"Orphan fixture", "workspace":workspace, "permission_mode":"default"
+            })),
+        )
+        .await;
+    let session = created["session"]["id"].as_str().unwrap();
+    let native_pid: i32 = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(text) = std::fs::read_to_string(workspace.join("native-ready"))
+                && let Ok(pid) = text.parse()
+            {
+                break pid;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let host_pid = fixture
+        .trace()
+        .iter()
+        .find(|row| row["event"] == "start")
+        .unwrap()["pid"]
+        .as_i64()
+        .unwrap() as i32;
+    // Kill ONLY this fake helper, not its group. The fixture child ignores EOF.
+    kill(Pid::from_raw(host_pid), Signal::SIGKILL).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while kill(Pid::from_raw(host_pid), None) != Err(nix::errno::Errno::ESRCH) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(kill(Pid::from_raw(native_pid), None).is_ok());
+    kernel.shutdown().await;
+    let kernel = Kernel::start(&fixture, 0).await; // No tracked adapter; cold restore must refuse.
+    assert_eq!(count(&fixture.trace(), "start"), 1);
+    assert!(kill(Pid::from_raw(native_pid), None).is_ok());
+    let response = kernel
+        .client
+        .post(format!("{}/api/chat/sessions/{session}/stop", kernel.url))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let state = kernel.api("/chat/sessions", None).await;
+    let stopped = state["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == session)
+        .unwrap();
+    assert!(
+        kill(Pid::from_raw(native_pid), None).is_ok(),
+        "The orphan must remain untouched"
+    );
+    assert_eq!(count(&fixture.trace(), "start"), 1);
+    kernel.shutdown().await;
+    // Fixture Drop closes only the detached process group this fixture created.
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Native cancellation is uncertain"
+    );
+    assert_eq!(stopped["status"], "stopped", "Owner Stop remains durable");
+    assert!(
+        stopped["attention_reason"]
+            .as_str()
+            .unwrap()
+            .contains("Native cancellation was not confirmed")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_explicit_sdk_executable_must_be_an_absolute_existing_file_before_any_spawn() {
+    // The desktop names the installed Claude Code explicitly. A missing or relative path is
+    // refused before Bun or the runner start, so nothing is launched and nothing is leased.
+    for executable in [
+        PathBuf::from("/tmp/zerolux-fixture-no-such-claude"),
+        PathBuf::from("claude"),
+    ] {
+        let mut fixture = Fixture::new();
+        fixture.program.sdk_executable = Some(executable);
+        let kernel = Kernel::start(&fixture, 0).await;
+        let workspace = fixture.dir.path().join("workspace");
+        let response = kernel
+            .client
+            .post(format!("{}/api/chat/claude-sessions", kernel.url))
+            .json(
+                &json!({"name":"Fixture Claude", "workspace":workspace, "permission_mode":"plan"}),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        // No runner trace: the refusal happened before the spawn. The session the owner asked
+        // for is recorded as needing attention, never as connected.
+        assert!(fixture.trace().is_empty());
+        let sessions = kernel.api("/chat/sessions", None).await;
+        let sessions = sessions["sessions"].as_array().unwrap();
+        assert!(
+            sessions.iter().all(|s| s["status"] == "attention"
+                && s["origin"] == "owned"
+                && s["activity"].is_null()),
+            "{sessions:?}"
+        );
+        kernel.shutdown().await;
+    }
 }

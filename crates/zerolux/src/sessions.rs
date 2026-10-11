@@ -396,7 +396,7 @@ fn claude_candidates(value: &Value) -> Result<Vec<Candidate>> {
 }
 
 /// What a connected Claude Code session can and cannot do, stated up front.
-const CLAUDE_READY: &str = "Claude Code inbox verified. Replies go through chat-send; tool permissions are answered in Claude Code itself; Stop closes the link but cannot interrupt a running turn.";
+const CLAUDE_READY: &str = "Claude Code inbox verified. Replies go through chat-send; tool permissions are answered in Claude Code itself. After the terminal exits, ZeroLux resumes the saved conversation automatically. Stop prevents recovery but cannot interrupt a turn in the terminal.";
 
 async fn discover_claude() -> Result<Vec<Candidate>> {
     let mut candidates = claude_candidates(&command_json("claude", &["agents", "--json"]).await?)?;

@@ -5,7 +5,7 @@
 - **Kernel** (`crates/zerolux`): a Rust library and CLI executable with a shared server lifecycle. It serves the JSON API and the web app, stores data, runs the chat runtime and the harness drivers. Built on Axum and SQLx.
 - **Database**: SQLite, built in and used by default.
 - **Clients**: web (`apps/web`), desktop (`apps/desktop`) and mobile (`apps/mobile`) share chat logic (`packages/chat`) and [themes](themes.md) (`packages/theme`). Tauri uses the packaged interface to connect to a kernel, or explicitly hosts the kernel library for a local workspace. Connection identity, lifecycle, assets and desktop-private preferences are described in [desktop](desktop.md).
-- **Harnesses**: pi, Claude Code and Codex sessions join as agents. The kernel drives Codex through its app-server and Claude Code through its session inbox; pi runs the ZeroLux extension (`extensions/pi`). The Claude Code runner (`extensions/claude`) runs sessions that ZeroLux starts itself.
+- **Harnesses**: pi, Claude Code and Codex sessions join as agents. The kernel drives Codex through its app-server and Claude Code through its session inbox; pi runs the ZeroLux extension (`extensions/pi`). Detached hosts in `extensions/claude` and `extensions/pi` keep managed execution independent of the kernel's lifetime. New sessions use native configuration. Claude and Codex recover through their native resume APIs with the saved session identity; managed pi also keeps the launch profile needed by its RPC host.
 - **Real time**: LiveKit carries small change events; clients then read messages and state over HTTP.
 
 ## Component boundaries
