@@ -1,14 +1,18 @@
 import { useEffect, useState } from "react";
 import type { SubmitEvent } from "react";
-import { errorMessage, harnessLabels } from "./api";
-import type { Actor } from "./api";
+import { Link } from "react-router";
+import { ChevronRightIcon } from "lucide-react";
+import { cn } from "cn";
+import { activeActors, errorMessage, harnessLabels } from "./api";
+import type { Actor, Workspace } from "./api";
 import {
+  agentWork,
   ago,
   byProject,
   claudeModes,
   codexApprovalPolicies,
   codexSandboxes,
-  listedSessions,
+  folderName,
   sessionState,
 } from "@zerolux/chat";
 import type {
@@ -18,17 +22,25 @@ import type {
   CodexSandbox,
   DiscoveredSession,
   Discovery,
+  Tone,
 } from "@zerolux/chat";
 import type { Chat, Perform } from "@zerolux/chat";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   NativeSelect,
   NativeSelectOption,
 } from "@/components/ui/native-select";
-import { Eyebrow, Presence } from "@/components/presence";
-import { sessionTone } from "./presence";
+import { ActorMark, Eyebrow, Presence } from "@/components/presence";
+import {
+  Fact,
+  Facts,
+  Mark,
+  memberRole,
+  ProfileHead,
+} from "@/components/profile";
+import { agentPresence, sessionTone } from "./presence";
 
 /** Finds the owner's harness sessions and hires them. */
 export function Hire({
@@ -429,60 +441,335 @@ export function StartAgent({
   );
 }
 
-/** The hired agents: their state, rename and stop. */
+/** The team: each of your agents once, with what it is doing; each opens its profile. */
 export function Team({
+  workspace,
   chat,
-  actors,
-  busy,
-  perform,
+  owner,
   hire,
 }: {
+  workspace: Workspace;
   chat: Chat;
-  actors: Actor[];
-  busy: boolean;
-  perform: Perform;
+  owner: Actor;
   hire: () => void;
 }) {
-  const name = (id: string) => actors.find((a) => a.id === id)?.name;
-  const hired = chat.sessions.filter((s) => s.status !== "stopped");
-  // A stop the harness could not confirm keeps its reason visible.
-  const shown = listedSessions(chat.sessions);
+  const rows = activeActors(workspace.actors)
+    .filter((a) => a.kind === "agent" && a.owner_id === owner.id)
+    .map((agent) => {
+      const { sessions, earlier } = agentWork(agent, workspace, chat);
+      return {
+        agent,
+        presence: agentPresence(agent.id, chat.sessions, workspace.connections),
+        // Where it works, or last worked.
+        folder: (sessions[0] ?? earlier[0])?.workspace,
+      };
+    });
+  const count = (tone: Tone) =>
+    rows.filter((r) => r.presence.tone === tone).length;
+  const summary = [
+    `${rows.length} agent${rows.length === 1 ? "" : "s"}`,
+    count("working") > 0 && `${count("working")} working`,
+    count("attention") > 0 &&
+      `${count("attention")} need${count("attention") === 1 ? "s" : ""} your attention`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <section aria-label="Your agents" className="flex max-w-3xl flex-col gap-4">
-      <div className="flex items-center justify-between gap-4">
-        <Eyebrow>Team / Your agents · {hired.length}</Eyebrow>
-        <Button onClick={hire}>Hire an agent</Button>
+    <section aria-label="Your agents" className="flex max-w-3xl flex-col gap-6">
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-4">
+          <Eyebrow>Team</Eyebrow>
+          <Button onClick={hire}>Hire an agent</Button>
+        </div>
+        <h1 className="text-2xl font-semibold tracking-tight">Your agents.</h1>
+        <p className="text-sm text-muted-foreground">
+          {rows.length ? summary : "No agents yet."}
+        </p>
       </div>
-      {shown.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No agents yet.</p>
-      ) : (
-        <ul className="divide-y rounded-xl border bg-card">
-          {shown.map((s) => (
-            <HiredSession
-              key={s.id}
-              session={s}
-              name={name(s.actor_id) ?? "Agent"}
-              busy={busy}
-              stop={() => perform(() => chat.stop(s.id))}
-              resume={
-                (s.harness === "pi" || s.origin === "owned") &&
-                (s.status === "stopped" || s.status === "attention")
-                  ? () => perform(() => chat.resume(s.id))
-                  : undefined
-              }
-              takeover={
-                s.harness === "pi" &&
-                s.origin === "attached" &&
-                s.status === "connected"
-                  ? () => perform(() => chat.takeoverPi(s.id))
-                  : undefined
-              }
-              rename={(next) => perform(() => chat.rename(s.actor_id, next))}
-            />
+      {rows.length > 0 && (
+        <ul className="divide-y overflow-hidden rounded-xl border bg-card">
+          {rows.map(({ agent, presence, folder }) => (
+            <li key={agent.id}>
+              <Link
+                to={`/team/${agent.id}`}
+                className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/50"
+              >
+                <Mark actor={agent} state={presence.tone} className="size-9" />
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate font-mono text-sm text-agent-foreground">
+                    {agent.name}
+                  </span>
+                  <span className="truncate text-xs text-faint">
+                    {memberRole(agent)}
+                    {folder && (
+                      <>
+                        {" · "}
+                        <span title={folder} className="font-mono">
+                          {folderName(folder)}
+                        </span>
+                      </>
+                    )}
+                  </span>
+                </span>
+                <Presence tone={presence.tone} className="max-sm:hidden">
+                  {presence.label}
+                </Presence>
+                <ChevronRightIcon
+                  aria-hidden
+                  className="size-4 shrink-0 text-faint"
+                />
+              </Link>
+            </li>
           ))}
         </ul>
       )}
     </section>
+  );
+}
+
+/** An agent on its own page, below the way back to the team. */
+export function AgentPage({
+  agent,
+  workspace,
+  chat,
+  busy,
+  perform,
+}: {
+  agent: Actor;
+  workspace: Workspace;
+  chat: Chat;
+  busy: boolean;
+  perform: Perform;
+}) {
+  return (
+    <section
+      aria-label={`${agent.name}'s profile`}
+      className="flex max-w-2xl flex-col gap-4"
+    >
+      <Eyebrow>
+        <Link to="/team" className="transition-colors hover:text-foreground">
+          Team
+        </Link>{" "}
+        / {agent.name}
+      </Eyebrow>
+      <div className="overflow-hidden rounded-xl border bg-card">
+        <AgentProfile
+          agent={agent}
+          workspace={workspace}
+          chat={chat}
+          busy={busy}
+          perform={perform}
+        />
+      </div>
+    </section>
+  );
+}
+
+/** Sessions ZeroLux runs, and pi ones it can continue from their saved file. */
+const resumable = (s: ChatSession) =>
+  (s.harness === "pi" || s.origin === "owned") &&
+  (s.status === "stopped" || s.status === "attention");
+/** A pi hired from a terminal: ZeroLux can take it over while it is idle there. */
+const takeable = (s: ChatSession) =>
+  s.harness === "pi" && s.origin === "attached" && s.status === "connected";
+
+/** An agent's profile: who it is, what it does now, where it runs, and its chats. */
+export function AgentProfile({
+  agent,
+  workspace,
+  chat,
+  busy,
+  perform,
+}: {
+  agent: Actor;
+  workspace: Workspace;
+  chat: Chat;
+  busy: boolean;
+  perform: Perform;
+}) {
+  const owner = workspace.actors.find((a) => a.id === agent.owner_id);
+  const { label, tone } = agentPresence(
+    agent.id,
+    chat.sessions,
+    workspace.connections,
+  );
+  const { sessions, earlier, chats, answering, task, dm, waiting } = agentWork(
+    agent,
+    workspace,
+    chat,
+  );
+  // With nothing live, its last session stands where the live one would be.
+  const current = sessions.length ? sessions : earlier.slice(0, 1);
+  const older = earlier.slice(sessions.length ? 0 : 1);
+  // The new name while renaming; chats, sessions and history keep the same agent.
+  const [draft, setDraft] = useState<string>();
+  async function save(event: SubmitEvent) {
+    event.preventDefault();
+    const name = draft?.trim();
+    if (name && (await perform(() => chat.rename(agent.id, name))))
+      setDraft(undefined);
+  }
+  const card = (session: ChatSession, facts: boolean) => (
+    <SessionCard
+      key={session.id}
+      session={session}
+      name={agent.name}
+      facts={facts}
+      busy={busy}
+      stop={() => perform(() => chat.stop(session.id))}
+      resume={
+        resumable(session)
+          ? () => perform(() => chat.resume(session.id))
+          : undefined
+      }
+      takeover={
+        takeable(session)
+          ? () => perform(() => chat.takeoverPi(session.id))
+          : undefined
+      }
+    />
+  );
+  return (
+    <>
+      <ProfileHead
+        actor={agent}
+        state={tone}
+        role={memberRole(agent)}
+        status={label}
+      >
+        {dm && (
+          <Link
+            to={`/chats/${dm.id}`}
+            className={cn(
+              buttonVariants({ size: "sm" }),
+              "bg-agent text-background hover:bg-agent/80",
+            )}
+          >
+            Message {agent.name}
+          </Link>
+        )}
+        {draft === undefined && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setDraft(agent.name)}
+          >
+            Rename
+          </Button>
+        )}
+      </ProfileHead>
+      {draft !== undefined && (
+        <form
+          className="flex gap-2 border-b px-5 py-3"
+          onSubmit={(e) => void save(e)}
+        >
+          <Input
+            aria-label={`New name for ${agent.name}`}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            maxLength={200}
+            autoFocus
+          />
+          <Button type="submit" disabled={busy || !draft.trim()}>
+            Save
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setDraft(undefined)}
+          >
+            Cancel
+          </Button>
+        </form>
+      )}
+      <section className="border-b px-5 py-4">
+        <Facts>
+          <Fact label="Owned by">
+            {owner ? (
+              <Link
+                to={`/org?actor=${owner.id}`}
+                className="inline-flex items-center gap-1.5 font-medium text-human-foreground hover:underline"
+              >
+                <ActorMark
+                  kind="human"
+                  name={owner.name}
+                  className="size-5 text-[9px]"
+                />
+                {owner.name}
+              </Link>
+            ) : (
+              <span className="text-faint">No one</span>
+            )}
+          </Fact>
+          <Fact label="Working on" className="truncate">
+            {answering ? (
+              <Link to={`/chats/${answering.id}`} className="hover:underline">
+                Answering in {answering.title}
+              </Link>
+            ) : task ? (
+              <Link
+                to={`/projects/${task.project_id}?task=${task.id}`}
+                className="hover:underline"
+              >
+                {task.title}
+              </Link>
+            ) : (
+              <span className="text-faint">Nothing right now</span>
+            )}
+          </Fact>
+          <Fact label="Waiting" className="font-mono text-xs">
+            {waiting} message{waiting === 1 ? "" : "s"}
+          </Fact>
+        </Facts>
+      </section>
+      {current.length > 0 && (
+        <section className="flex flex-col gap-3 border-b px-5 py-4">
+          <Eyebrow>
+            {sessions.length === 0
+              ? "Last session"
+              : sessions.length === 1
+                ? "Session"
+                : `Sessions · ${sessions.length}`}
+          </Eyebrow>
+          {current.map((s) => card(s, true))}
+        </section>
+      )}
+      <section className="flex flex-col gap-1 border-b px-5 py-4">
+        <Eyebrow className="mb-1.5">Chats · {chats.length}</Eyebrow>
+        {chats.map((c) => (
+          <Link
+            key={c.id}
+            to={`/chats/${c.id}`}
+            className="-mx-2 flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm transition-colors hover:bg-accent"
+          >
+            <span className="truncate">
+              {c.kind === "dm" ? "Direct chat" : c.title}
+            </span>
+            <span className="ml-auto shrink-0 text-xs text-faint">
+              {c.members.length} members
+            </span>
+          </Link>
+        ))}
+        {chats.length === 0 && (
+          <p className="text-sm text-muted-foreground">Not in a chat yet.</p>
+        )}
+      </section>
+      {older.length > 0 && (
+        <details className="border-b px-5 py-4">
+          <summary className="cursor-pointer">
+            <Eyebrow>Earlier sessions · {older.length}</Eyebrow>
+          </summary>
+          <div className="mt-3 flex flex-col gap-3">
+            {older.map((s) => card(s, false))}
+          </div>
+        </details>
+      )}
+      <section className="flex flex-col gap-2 px-5 py-4">
+        <Eyebrow>Budget</Eyebrow>
+        {/* TODO: kernel: the agent's monthly spend and budget, from its harness usage. */}
+        <p className="text-sm text-muted-foreground">Not tracked yet.</p>
+      </section>
+    </>
   );
 }
 
@@ -567,20 +854,22 @@ export function HireForm({
   );
 }
 
-export function HiredSession({
+/** One session of an agent: where and how it runs, its state, and stop, resume or take over. */
+function SessionCard({
   session,
   name,
+  facts,
   busy,
   stop,
-  rename,
   resume,
   takeover,
 }: {
   session: ChatSession;
   name: string;
+  /** Where and how it runs, in full; an earlier session names only its harness and folder. */
+  facts: boolean;
   busy: boolean;
   stop: () => Promise<boolean>;
-  rename: (name: string) => Promise<boolean>;
   /** A session ZeroLux runs, stopped or needing attention: start it again. */
   resume?: () => Promise<boolean>;
   takeover?: () => Promise<boolean>;
@@ -590,95 +879,83 @@ export function HiredSession({
   async function confirm() {
     if (confirmedAction && (await confirmedAction())) setConfirming(undefined);
   }
-  // The new name while renaming; chats, sessions and history keep the same agent.
-  const [draft, setDraft] = useState<string>();
-  async function save(event: SubmitEvent) {
-    event.preventDefault();
-    if (draft?.trim() && (await rename(draft.trim()))) setDraft(undefined);
-  }
+  const harness = harnessLabels[session.harness] ?? session.harness;
   return (
-    <li className="flex flex-col gap-3 px-4 py-3">
-      <div className="flex flex-wrap items-start gap-3">
+    <div className="flex flex-col gap-3 rounded-lg border p-3">
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          {draft === undefined ? (
-            <strong className="text-sm font-medium">{name}</strong>
-          ) : (
-            <form className="flex gap-2" onSubmit={(e) => void save(e)}>
-              <Input
-                aria-label={`New name for ${name}`}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                maxLength={200}
-                autoFocus
-              />
-              <Button type="submit" disabled={busy || !draft.trim()}>
-                Save
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setDraft(undefined)}
-              >
-                Cancel
-              </Button>
-            </form>
-          )}
-          <span className="text-xs text-muted-foreground">
-            {harnessLabels[session.harness] ?? session.harness} ·{" "}
+          <strong className="truncate text-sm font-medium">
             {session.title || "Untitled session"}
-          </span>
-          <small
-            title={session.workspace}
-            className="truncate font-mono text-xs text-muted-foreground"
-          >
-            {session.workspace}
-          </small>
-        </div>
-        <div className="flex flex-col items-end gap-2">
-          <Presence tone={sessionTone(session)}>
-            {sessionState(session)}
-          </Presence>
-          {session.attention_reason && (
-            <small className="max-w-xs text-right text-xs text-attention">
-              {session.attention_reason}
-            </small>
+          </strong>
+          {!facts && (
+            <span className="truncate text-xs text-faint">
+              {harness} ·{" "}
+              <span title={session.workspace} className="font-mono">
+                {folderName(session.workspace)}
+              </span>
+            </span>
           )}
-          {takeover && !confirming && (
+        </div>
+        <Presence tone={sessionTone(session)}>{sessionState(session)}</Presence>
+      </div>
+      {facts && (
+        <Facts>
+          <Fact label="Harness">{harness}</Fact>
+          <Fact label="Folder" className="font-mono text-xs break-all">
+            {session.workspace}
+          </Fact>
+          <Fact label="Started by">
+            {session.origin === "owned" ? "ZeroLux" : "You, then hired"}
+          </Fact>
+          {/* TODO: kernel: each session's model, reasoning effort and launch profile (Claude Code's permission mode, Codex approvals and sandbox, pi's settings), shown here. */}
+          <Fact label="Model" className="text-faint">
+            Not reported yet
+          </Fact>
+          <Fact label="Effort" className="text-faint">
+            Not reported yet
+          </Fact>
+          <Fact label="Permissions" className="text-faint">
+            Not reported yet
+          </Fact>
+        </Facts>
+      )}
+      {session.attention_reason && (
+        <p className="text-xs text-attention">{session.attention_reason}</p>
+      )}
+      {!confirming && (takeover || resume || session.status !== "stopped") && (
+        <div className="flex flex-wrap gap-2">
+          {takeover && (
             <Button
               variant="outline"
+              size="sm"
               disabled={busy}
               onClick={() => setConfirming("takeover")}
             >
               Take over
             </Button>
           )}
-          {resume && !confirming && (
+          {resume && (
             <Button
               variant="outline"
+              size="sm"
               disabled={busy}
               onClick={() => void resume()}
             >
               Resume
             </Button>
           )}
-          {session.status !== "stopped" && !confirming && (
-            <div className="flex gap-2">
-              {draft === undefined && (
-                <Button variant="outline" onClick={() => setDraft(name)}>
-                  Rename
-                </Button>
-              )}
-              <Button
-                variant="outline"
-                disabled={busy}
-                onClick={() => setConfirming("stop")}
-              >
-                Stop
-              </Button>
-            </div>
+          {session.status !== "stopped" && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => setConfirming("stop")}
+            >
+              Stop
+            </Button>
           )}
         </div>
-      </div>
+      )}
       {confirming && (
         <div className="flex flex-col gap-3 rounded-lg bg-attention/10 p-3">
           <p className="text-sm">
@@ -700,6 +977,6 @@ export function HiredSession({
           </div>
         </div>
       )}
-    </li>
+    </div>
   );
 }

@@ -415,7 +415,7 @@ export function ProjectList({
   );
 }
 
-/** The panel of Team: your agents, lit while they work; each one opens its chat. */
+/** The panel of Team: your agents, lit while they work; each one opens its profile. */
 export function AgentList({
   workspace,
   chat,
@@ -428,10 +428,6 @@ export function AgentList({
   const agents = activeActors(workspace.actors).filter(
     (a) => a.kind === "agent" && a.owner_id === owner.id,
   );
-  const dm = (actorId: string) =>
-    chat.conversations.find(
-      (c) => c.kind === "dm" && c.members.some((m) => m.actor_id === actorId),
-    );
   return (
     <section aria-label="Your agents" className="flex min-h-0 flex-1 flex-col">
       <PanelHeader
@@ -449,12 +445,11 @@ export function AgentList({
             chat.sessions,
             workspace.connections,
           );
-          const chatWith = dm(agent.id);
           return (
-            <Row
+            <NavLink
               key={agent.id}
-              to={chatWith ? `/chats/${chatWith.id}` : "/team"}
-              className="flex items-center gap-3 rounded-md px-2 py-2 transition-colors hover:bg-accent"
+              to={`/team/${agent.id}`}
+              className="flex items-center gap-3 rounded-md px-2 py-2 transition-colors hover:bg-accent aria-[current=page]:bg-accent"
             >
               <ActorMark
                 kind="agent"
@@ -470,7 +465,7 @@ export function AgentList({
                 </span>
               </span>
               <Lamp kind="agent" state={presence.tone} className="size-1.5" />
-            </Row>
+            </NavLink>
           );
         })}
         {agents.length === 0 && (
@@ -481,18 +476,6 @@ export function AgentList({
         )}
       </div>
     </section>
-  );
-}
-
-/** An agent's row: lit while its chat is open, never for the team page it falls back to. */
-function Row({
-  to,
-  ...props
-}: React.ComponentProps<typeof Link> & { to: string }) {
-  return to.startsWith("/chats/") ? (
-    <NavLink to={to} {...props} />
-  ) : (
-    <Link to={to} {...props} />
   );
 }
 

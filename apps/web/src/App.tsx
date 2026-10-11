@@ -32,7 +32,7 @@ import { ProjectPage } from "./Projects";
 import { AgentList, ProjectList, Sidebar, WorkspaceMenu } from "./Sidebar";
 import type { Kernel } from "./Sidebar";
 import { Storage } from "./Storage";
-import { Hire, Team } from "./Team";
+import { AgentPage, Hire, Team } from "./Team";
 import { Tonight } from "./Tonight";
 import { Page } from "@/components/page";
 import { SidePanel } from "@/components/side-panel";
@@ -76,6 +76,7 @@ export function App({
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const chatId = useMatch("/chats/:id")?.params.id;
+  const agentId = useMatch("/team/:id")?.params.id;
   const projectPath = useMatch("/projects/:id?");
   const requestId = useRef(0);
   const refresh = useCallback(async (signal?: AbortSignal) => {
@@ -241,6 +242,18 @@ export function App({
   const agentList = workspace && owner && (
     <AgentList workspace={workspace} chat={chat} owner={owner} />
   );
+  // An agent that is not (or no longer) on the team shows the team.
+  const agent = actors.find((a) => a.id === agentId && a.kind === "agent");
+  const team =
+    workspace &&
+    owner &&
+    section(
+      agentList,
+      true,
+      <Page>
+        <Team workspace={workspace} chat={chat} owner={owner} hire={hire} />
+      </Page>,
+    );
   const shell = !!workspace && !!owner && !needsOnboarding && chatReady;
   const sidebar = shell && (
     <Sidebar chat={chat} owner={owner} kernel={kernel} toggle={toggle} />
@@ -470,7 +483,14 @@ export function App({
               />
               <Route
                 path="/org"
-                element={<Organization workspace={workspace} chat={chat} />}
+                element={
+                  <Organization
+                    workspace={workspace}
+                    chat={chat}
+                    busy={busy}
+                    perform={perform}
+                  />
+                }
               />
               <Route
                 path="/meetings"
@@ -491,21 +511,27 @@ export function App({
                   </Page>
                 }
               />
+              <Route path="/team" element={team} />
               <Route
-                path="/team"
-                element={section(
-                  agentList,
-                  true,
-                  <Page>
-                    <Team
-                      chat={chat}
-                      actors={workspace.actors}
-                      busy={busy}
-                      perform={perform}
-                      hire={hire}
-                    />
-                  </Page>,
-                )}
+                path="/team/:id"
+                element={
+                  agent
+                    ? section(
+                        agentList,
+                        true,
+                        <Page>
+                          <AgentPage
+                            key={agent.id}
+                            agent={agent}
+                            workspace={workspace}
+                            chat={chat}
+                            busy={busy}
+                            perform={perform}
+                          />
+                        </Page>,
+                      )
+                    : team
+                }
               />
               <Route
                 path="/team/hire"

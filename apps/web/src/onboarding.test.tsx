@@ -208,7 +208,9 @@ test("every page has its own address, and the bar links to them", () => {
       }}
     />
   );
-  expect(at("/team", app)).toContain("Team / Your agents");
+  expect(at("/team", app)).toContain("Your agents.");
+  // An agent that is not (or no longer) on the team goes back to the team.
+  expect(at("/team/unknown", app)).toContain("Your agents.");
   expect(at("/team/hire", app)).toContain("Team / Hire");
   expect(at("/chats/new", app)).toContain("Hire an agent to start chatting.");
   // A chat that is not (yet) in the list shows the chats home.

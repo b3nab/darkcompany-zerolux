@@ -17,7 +17,7 @@ import { Storage } from "./Storage";
 import { Tonight } from "./Tonight";
 import { ChatAbout } from "./components/chat-about";
 import { agentPresence } from "./presence";
-import { Hire, HireForm, StartAgent, Team } from "./Team";
+import { AgentProfile, Hire, HireForm, StartAgent, Team } from "./Team";
 import type { Actor, AgentConnection, Task, Workspace } from "./api";
 import type {
   Approval,
@@ -186,8 +186,11 @@ function fakeChat(overrides: Partial<Chat> = {}): Chat {
   };
 }
 const perform = async () => true;
+/** No IDs in what the owner reads; links may carry them. */
 const noUuids = (html: string) =>
-  expect(html).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+  expect(html.replace(/ href="[^"]*"/g, "")).not.toMatch(
+    /[0-9a-f]{8}-[0-9a-f]{4}-/,
+  );
 
 test("a group shows history and per-agent delivery states, and reaches every agent", () => {
   const html = renderToStaticMarkup(
@@ -344,25 +347,6 @@ test("hiring lists found sessions by name, folder and activity, without IDs or c
         perform={perform}
         initialDiscovery={discovery}
       />
-      <Team
-        chat={fakeChat({
-          sessions: [
-            session("s-aspen", ASPEN),
-            session("s-birch", BIRCH, "attention"),
-            { ...session("s-gone", BIRCH, "stopped"), title: "gone session" },
-            {
-              ...session("s-unconfirmed", ASPEN, "stopped"),
-              title: "old aspen",
-              attention_reason:
-                "Stopped here; the running turn may still finish.",
-            },
-          ],
-        })}
-        actors={actors}
-        busy={false}
-        perform={perform}
-        hire={() => {}}
-      />
     </>,
   );
   expect(html).toContain(
@@ -390,16 +374,83 @@ test("hiring lists found sessions by name, folder and activity, without IDs or c
   expect(html).toContain("1 other session can&#x27;t be hired right now");
   expect(html.indexOf("<details")).toBeLessThan(html.indexOf("Closed pi"));
   expect(html.indexOf("Old refactor")).toBeLessThan(html.indexOf("<details"));
+  expect(html).not.toContain("cargo run");
+  noUuids(html);
+});
+
+const workspace: Workspace = {
+  workspace: { id: "workspace", name: "Workspace", created_at: 0 },
+  actors,
+  projects: [],
+  tasks: [],
+  connections: [],
+  onboarding_required: false,
+};
+const profiles = (chat: Chat) =>
+  renderToStaticMarkup(
+    <>
+      {actors.slice(1).map((agent) => (
+        <AgentProfile
+          key={agent.id}
+          agent={agent}
+          workspace={workspace}
+          chat={chat}
+          busy={false}
+          perform={perform}
+        />
+      ))}
+    </>,
+  );
+
+test("the team lists each agent once; its profile says where it runs and what can be done", () => {
+  const unconfirmed = {
+    title: "old aspen",
+    native_session_id: "native-old",
+    attention_reason: "Stopped here; the running turn may still finish.",
+  };
+  const chat = fakeChat({
+    sessions: [
+      session("s-aspen", ASPEN),
+      { ...session("s-old", ASPEN, "stopped"), ...unconfirmed },
+      // The same session linked again and stopped again: listed once.
+      { ...session("s-old-again", ASPEN, "stopped"), ...unconfirmed },
+      { ...session("s-gone", ASPEN, "stopped"), title: "gone session" },
+      session("s-birch", BIRCH, "attention"),
+    ],
+  });
+  const team = renderToStaticMarkup(
+    <Team
+      workspace={workspace}
+      chat={chat}
+      owner={actors[0]!}
+      hire={() => {}}
+    />,
+  );
+  expect(team.match(/href="\/team\/[^"]+"/g)).toHaveLength(2);
+  expect(team).toContain("2 agents · 1 needs your attention");
+  expect(team).toContain(">zerolux<");
+  expect(team).not.toContain("old aspen");
+  const html = profiles(chat);
+  // Where each session runs; what the kernel does not report yet is said so.
+  expect(html).toContain("/home/owner/github/zerolux");
+  expect(html).toContain("You, then hired");
+  expect(html).toContain("Not reported yet");
+  // An unconfirmed stop keeps its note, once; a stop without a reason is gone.
+  expect(
+    html.match(/Stopped here; the running turn may still finish\./g),
+  ).toHaveLength(1);
+  expect(html).toContain("Earlier sessions · 1");
+  expect(html).not.toContain("gone session");
   expect(html).toContain("Needs your attention");
   expect(html).toContain("The session was closed; Owner must reopen it.");
-  // A stop without a reason disappears; an unconfirmed one keeps its note, not a new Stop.
-  expect(html).not.toContain("gone session");
-  expect(html).toContain("Stopped here; the running turn may still finish.");
+  // Live sessions can be stopped; every agent can be renamed.
   expect(html.match(/>Stop</g)).toHaveLength(2);
-  // Each live agent can be renamed; a stopped one cannot.
   expect(html.match(/>Rename</g)).toHaveLength(2);
-  expect(html).toContain(">Stopped<");
-  expect(html).not.toContain("cargo run");
+  // Its chats, the one-to-one chat named as such and one click away.
+  expect(html).toContain("Chats · 2");
+  expect(html).toContain("Direct chat");
+  expect(html).toContain('href="/chats/c-dm"');
+  noUuids(team);
   noUuids(html);
 });
 
@@ -722,7 +773,12 @@ test("the organization shows each person with the agents they own, and what each
   const at = (path: string) =>
     render(
       <MemoryRouter initialEntries={[path]}>
-        <Organization workspace={workspace} chat={chat} />
+        <Organization
+          workspace={workspace}
+          chat={chat}
+          busy={false}
+          perform={perform}
+        />
       </MemoryRouter>,
     );
   // Every person heads a tree with their own agents; a retired agent is gone.
@@ -736,12 +792,13 @@ test("the organization shows each person with the agents they own, and what each
   expect(html).toContain("Working…");
   // A stopped agent is still in the organization, just not connected.
   expect(html).toContain("Not connected");
-  // An agent's profile: its owner, the chat it answers in, and its one-to-one chat.
+  // An agent's profile, the same as on Team: its owner, the chat it answers in, its
+  // one-to-one chat and where it runs.
   const profile = at(`/org?actor=${ASPEN}`);
-  expect(profile).toContain("Owner</button>");
+  expect(profile).toContain("Owner</a>");
   expect(profile).toContain("Answering in General");
   expect(profile).toContain('href="/chats/c-dm"');
-  expect(profile).toContain('href="/team"');
+  expect(profile).toContain(">Folder<");
   noUuids(html);
   noUuids(profile);
 });
@@ -1055,63 +1112,50 @@ test("starting an agent asks for a harness, an agent, a folder and how it asks p
 });
 
 test("managed Claude and terminal pi offer Resume; other attached sessions do not", () => {
-  const html = renderToStaticMarkup(
-    <Team
-      chat={fakeChat({
-        sessions: [
-          { ...session("s-owned", ASPEN, "stopped"), origin: "owned" },
-          { ...session("s-stuck", BIRCH, "attention"), origin: "owned" },
-          {
-            ...session("s-terminal-pi", ASPEN, "stopped"),
-            harness: "pi",
-            origin: "attached",
-          },
-          {
-            ...session("s-had", BIRCH, "stopped"),
-            origin: "attached",
-            attention_reason:
-              "Stopped here; the running turn may still finish.",
-          },
-        ],
-      })}
-      actors={actors}
-      busy={false}
-      perform={perform}
-      hire={() => {}}
-    />,
+  const html = profiles(
+    fakeChat({
+      sessions: [
+        { ...session("s-owned", ASPEN, "stopped"), origin: "owned" },
+        { ...session("s-stuck", BIRCH, "attention"), origin: "owned" },
+        {
+          ...session("s-terminal-pi", ASPEN, "stopped"),
+          harness: "pi",
+          origin: "attached",
+        },
+        {
+          ...session("s-had", BIRCH, "stopped"),
+          origin: "attached",
+          attention_reason: "Stopped here; the running turn may still finish.",
+        },
+      ],
+    }),
   );
   expect(html.match(/>Resume</g)).toHaveLength(3);
   expect(html).toContain("Stopped here; the running turn may still finish.");
 });
 
 test("only connected attached pi offers cooperative terminal takeover", () => {
-  const html = renderToStaticMarkup(
-    <Team
-      chat={fakeChat({
-        sessions: [
-          {
-            ...session("terminal", ASPEN, "connected"),
-            harness: "pi",
-            origin: "attached",
-          },
-          {
-            ...session("managed", BIRCH, "connected"),
-            harness: "pi",
-            origin: "owned",
-          },
-          {
-            ...session("unavailable", ASPEN, "attention"),
-            harness: "pi",
-            origin: "attached",
-          },
-          { ...session("claude", BIRCH, "connected"), origin: "attached" },
-        ],
-      })}
-      actors={actors}
-      busy={false}
-      perform={perform}
-      hire={() => {}}
-    />,
+  const html = profiles(
+    fakeChat({
+      sessions: [
+        {
+          ...session("terminal", ASPEN, "connected"),
+          harness: "pi",
+          origin: "attached",
+        },
+        {
+          ...session("managed", BIRCH, "connected"),
+          harness: "pi",
+          origin: "owned",
+        },
+        {
+          ...session("unavailable", ASPEN, "attention"),
+          harness: "pi",
+          origin: "attached",
+        },
+        { ...session("claude", BIRCH, "connected"), origin: "attached" },
+      ],
+    }),
   );
   expect(html.match(/>Take over</g)).toHaveLength(1);
 });

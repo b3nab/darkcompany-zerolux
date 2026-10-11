@@ -2,21 +2,26 @@ import { useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { cn } from "cn";
 import {
-  agentWork,
-  creationDateLabel,
   memberTone,
   shiftLabels,
   shiftSegments,
   shiftWindow,
 } from "@zerolux/chat";
-import type { Chat, ShiftSegment } from "@zerolux/chat";
-import { activeActors, harnessLabels } from "./api";
+import type { Chat, Perform, ShiftSegment } from "@zerolux/chat";
+import { activeActors } from "./api";
 import type { Actor, Workspace } from "./api";
 import { agentPresence } from "./presence";
+import { AgentProfile } from "./Team";
 import { buttonVariants } from "@/components/ui/button";
-import { Lamp } from "@/components/lamp";
 import type { LampState } from "@/components/lamp";
 import { ActorMark, Eyebrow } from "@/components/presence";
+import {
+  Fact,
+  Facts,
+  Mark,
+  memberRole,
+  ProfileHead,
+} from "@/components/profile";
 import { SidePanel } from "@/components/side-panel";
 import { LG, useMedia } from "./media";
 
@@ -41,9 +46,13 @@ const views: Record<View, { label: string; note: string }> = {
 export function Organization({
   workspace,
   chat,
+  busy,
+  perform,
 }: {
   workspace: Workspace;
   chat: Chat;
+  busy: boolean;
+  perform: Perform;
 }) {
   const [view, setView] = useState<View>("everyone");
   // The address names the open profile, so other pages can link to it.
@@ -91,11 +100,10 @@ export function Organization({
         <AgentProfile
           key={selected.id}
           agent={selected}
-          owner={actors.find((a) => a.id === selected.owner_id)}
           workspace={workspace}
           chat={chat}
-          state={state(selected)}
-          select={select}
+          busy={busy}
+          perform={perform}
         />
       )}
     </aside>
@@ -228,7 +236,9 @@ function Node({
           >
             {actor.name}
           </span>
-          <span className="truncate text-xs text-faint">{role(actor)}</span>
+          <span className="truncate text-xs text-faint">
+            {memberRole(actor)}
+          </span>
         </span>
       </span>
       {agents.length > 0 && (
@@ -249,35 +259,6 @@ function Node({
         </span>
       )}
     </button>
-  );
-}
-
-const role = (actor: Actor) =>
-  actor.kind === "human"
-    ? "Person"
-    : actor.harness
-      ? harnessLabels[actor.harness]
-      : "Agent";
-
-/** A member's mark with its light in the corner. */
-function Mark({
-  actor,
-  state,
-  className,
-}: {
-  actor: Actor;
-  state: LampState;
-  className?: string;
-}) {
-  return (
-    <span className="relative shrink-0">
-      <ActorMark kind={actor.kind} name={actor.name} className={className} />
-      <Lamp
-        kind={actor.kind}
-        state={state}
-        className="absolute -right-0.5 -bottom-0.5 size-1.5 outline-2 outline-card"
-      />
-    </span>
   );
 }
 
@@ -306,12 +287,14 @@ function PersonProfile({
         status={state(person) === "on" ? "Online" : "Offline"}
       />
       <section className="flex flex-col gap-2.5 border-b px-5 py-4">
-        <dl className="grid grid-cols-[6rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2 text-sm">
-          <dt className="text-faint">Reports to</dt>
-          <dd className="text-faint">No one</dd>
-          <dt className="text-faint">Agents</dt>
-          <dd className="font-mono">{agents.length}</dd>
-        </dl>
+        <Facts>
+          <Fact label="Reports to" className="text-faint">
+            No one
+          </Fact>
+          <Fact label="Agents" className="font-mono">
+            {agents.length}
+          </Fact>
+        </Facts>
       </section>
       <section className="flex flex-col gap-1 px-5 py-4">
         <Eyebrow className="mb-1.5">Agents · {agents.length}</Eyebrow>
@@ -340,156 +323,6 @@ function PersonProfile({
         </p>
       </section>
     </>
-  );
-}
-
-function AgentProfile({
-  agent,
-  owner,
-  workspace,
-  chat,
-  state,
-  select,
-}: {
-  agent: Actor;
-  owner?: Actor;
-  workspace: Workspace;
-  chat: Chat;
-  state: LampState;
-  select: (actor: Actor) => void;
-}) {
-  const { label } = agentPresence(
-    agent.id,
-    chat.sessions,
-    workspace.connections,
-  );
-  const { sessions, answering, task, dm, waiting } = agentWork(
-    agent,
-    workspace,
-    chat,
-  );
-  return (
-    <>
-      <ProfileHead
-        actor={agent}
-        state={state}
-        role={role(agent)}
-        status={label}
-      >
-        {dm && (
-          <Link
-            to={`/chats/${dm.id}`}
-            className={cn(
-              buttonVariants({ size: "sm" }),
-              "bg-agent text-background hover:bg-agent/80",
-            )}
-          >
-            Message {agent.name}
-          </Link>
-        )}
-        <Link
-          to="/team"
-          className={buttonVariants({ variant: "outline", size: "sm" })}
-        >
-          Sessions
-        </Link>
-      </ProfileHead>
-      <section className="flex flex-col gap-3 border-b px-5 py-4">
-        <dl className="grid grid-cols-[6rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2 text-sm">
-          <dt className="text-faint">Owned by</dt>
-          <dd>
-            {owner ? (
-              <button
-                type="button"
-                onClick={() => select(owner)}
-                className="flex items-center gap-1.5 font-medium text-human-foreground hover:underline"
-              >
-                <ActorMark
-                  kind="human"
-                  name={owner.name}
-                  className="size-5 text-[9px]"
-                />
-                {owner.name}
-              </button>
-            ) : (
-              <span className="text-faint">No one</span>
-            )}
-          </dd>
-          <dt className="text-faint">Working on</dt>
-          <dd className="min-w-0 truncate">
-            {answering ? (
-              <Link to={`/chats/${answering.id}`} className="hover:underline">
-                Answering in {answering.title}
-              </Link>
-            ) : task ? (
-              <Link
-                to={`/projects/${task.project_id}?task=${task.id}`}
-                className="hover:underline"
-              >
-                <span className="font-mono text-xs text-faint">
-                  {task.id.slice(0, 8)}
-                </span>{" "}
-                {task.title}
-              </Link>
-            ) : (
-              <span className="text-faint">Nothing right now</span>
-            )}
-          </dd>
-          <dt className="text-faint">Runtime</dt>
-          <dd className="font-mono text-xs">
-            {agent.harness ?? "custom"} · {sessions.length} live session
-            {sessions.length === 1 ? "" : "s"}
-          </dd>
-          <dt className="text-faint">Waiting</dt>
-          <dd className="font-mono text-xs">
-            {waiting} message{waiting === 1 ? "" : "s"}
-          </dd>
-        </dl>
-      </section>
-      <section className="flex flex-col gap-2 px-5 py-4">
-        <Eyebrow>Budget</Eyebrow>
-        {/* TODO: kernel: the agent's monthly spend and budget, from its harness usage. */}
-        <p className="text-sm text-muted-foreground">Not tracked yet.</p>
-      </section>
-    </>
-  );
-}
-
-function ProfileHead({
-  actor,
-  state,
-  role,
-  status,
-  children,
-}: {
-  actor: Actor;
-  state: LampState;
-  role: string;
-  status: string;
-  children?: React.ReactNode;
-}) {
-  const human = actor.kind === "human";
-  return (
-    <header className="flex flex-col items-start gap-3 border-b px-5 pt-5.5 pb-4.5">
-      <Mark actor={actor} state={state} className="size-14 text-lg" />
-      <div className="flex flex-col gap-1">
-        <h2
-          className={cn(
-            "text-xl font-medium tracking-tight",
-            !human && "font-mono text-agent-foreground",
-          )}
-        >
-          {actor.name}
-        </h2>
-        <p className="text-sm text-muted-foreground">{role}</p>
-        <p className="text-xs text-faint">{creationDateLabel(actor)}</p>
-      </div>
-      <span className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Lamp kind={actor.kind} state={state} />
-        {status}
-      </span>
-      {children && <div className="flex flex-wrap gap-1.5">{children}</div>}
-    </header>
   );
 }
 
@@ -577,7 +410,7 @@ function Shift({
                   {actor.name}
                 </span>
                 <span className="truncate text-xs text-faint">
-                  {role(actor)}
+                  {memberRole(actor)}
                 </span>
               </span>
             </button>
