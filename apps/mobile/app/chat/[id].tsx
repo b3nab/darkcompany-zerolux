@@ -65,7 +65,6 @@ type Row =
   | { key: string; kind: "activity"; names: string[] };
 
 const marks = { sent: "✓", delivered: "✓✓", read: "✓✓" };
-const COMPOSER = "composer";
 // Messages from one author a few minutes apart read as one turn.
 const TURN = 5 * 60 * 1000;
 const open = new Set<Approval["status"]>(["pending", "decided", "uncertain"]);
@@ -460,11 +459,10 @@ export default function ChatScreen() {
             : "Paused: no agent is woken. New messages are saved and delivered when you resume."}
         </Text>
       ) : null}
-      <GestureArea
-        className="flex-1"
-        interpolator="ios"
-        textInputNativeID={COMPOSER}
-      >
+      {/* No textInputNativeID: on iOS it only serves an `offset`, and its invisible accessory
+          view delays the input's resign, so after leaving the chat with the keyboard open the
+          input could no longer bring it back (react-native-keyboard-controller#1615). */}
+      <GestureArea className="flex-1" interpolator="ios">
         <ChatList
           data={rows}
           keyExtractor={(item) => (item as Row).key}
@@ -534,7 +532,6 @@ export default function ChatScreen() {
             {tool(PaperclipIcon, "Attach a file", attach, !storage.available)}
             <View className="min-h-10 flex-1 flex-row items-end rounded-md border border-input bg-background">
               <TextInput
-                nativeID={COMPOSER}
                 className="max-h-36 flex-1 px-3 py-2.5 font-sans text-base text-foreground"
                 placeholderTextColor={faint}
                 value={draft}
