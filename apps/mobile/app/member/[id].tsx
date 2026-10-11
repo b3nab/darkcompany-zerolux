@@ -7,8 +7,8 @@ import {
   agentWork,
   creationDateLabel,
   errorMessage,
+  folderName,
   harnessLabels,
-  listedSessions,
   memberTone,
   sessionState,
 } from "@zerolux/chat";
@@ -195,11 +195,14 @@ function Agent({
 }) {
   const { chat } = useSession();
   const router = useRouter();
-  const { sessions, answering, task, dm, waiting } = agentWork(
+  const { sessions, earlier, chats, answering, task, dm, waiting } = agentWork(
     agent,
     workspace,
     chat,
   );
+  // With nothing live, its last session stands where the live one would be.
+  const current = sessions.length ? sessions : earlier.slice(0, 1);
+  const older = earlier.slice(sessions.length ? 0 : 1);
   return (
     <>
       {dm && (
@@ -238,19 +241,46 @@ function Agent({
             <Text className="text-sm text-faint">Nothing right now</Text>
           )}
         </Row>
-        <Row label="Runtime">
-          <Text className="font-mono text-xs">
-            {agent.harness ?? "custom"} · {sessions.length} live session
-            {sessions.length === 1 ? "" : "s"}
-          </Text>
-        </Row>
         <Row label="Waiting">
           <Text className="font-mono text-xs">
             {waiting} message{waiting === 1 ? "" : "s"}
           </Text>
         </Row>
       </View>
-      <Sessions agent={agent} />
+      <Sessions
+        agent={agent}
+        current={current}
+        older={older}
+        title={
+          sessions.length === 0
+            ? "Last session"
+            : sessions.length === 1
+              ? "Session"
+              : `Sessions · ${sessions.length}`
+        }
+      />
+      <View className="gap-1">
+        <Eyebrow className="mb-1">Chats · {chats.length}</Eyebrow>
+        {chats.map((c) => (
+          <Pressable
+            key={c.id}
+            onPress={() => router.push(`/chat/${c.id}`)}
+            className="-mx-2 flex-row items-center gap-3 rounded-sm px-2 py-2 active:bg-accent"
+          >
+            <Text numberOfLines={1} className="flex-1 text-sm">
+              {c.kind === "dm" ? "Direct chat" : c.title}
+            </Text>
+            <Text className="text-xs text-faint">
+              {c.members.length} members
+            </Text>
+          </Pressable>
+        ))}
+        {chats.length === 0 && (
+          <Text className="text-sm text-muted-foreground">
+            Not in a chat yet.
+          </Text>
+        )}
+      </View>
       <View className="gap-2">
         <Eyebrow>Budget</Eyebrow>
         {/* TODO: kernel: the agent's monthly spend and budget, from its harness usage. */}
@@ -261,18 +291,26 @@ function Agent({
 }
 
 /**
- * The agent's sessions as the team list shows them: live ones to stop, and the latest one
- * ZeroLux runs that is stopped or stuck, to resume. Stop asks first: it ends the link and
- * cancels a turn only this chat started.
+ * Where the agent runs and how, with Stop, Resume and Take over: its live sessions, or the
+ * last one, and the earlier ones on request. Stop asks first: it ends the link and cancels
+ * a turn only this chat started.
  */
-function Sessions({ agent }: { agent: Actor }) {
+function Sessions({
+  agent,
+  current,
+  older,
+  title,
+}: {
+  agent: Actor;
+  current: ChatSession[];
+  older: ChatSession[];
+  title: string;
+}) {
   const { chat } = useSession();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const sessions = listedSessions(chat.sessions).filter(
-    (s) => s.actor_id === agent.id,
-  );
-  if (sessions.length === 0) return null;
+  const [showOlder, setShowOlder] = useState(false);
+  if (current.length === 0) return null;
   const perform = async (action: () => Promise<unknown>) => {
     setBusy(true);
     setError("");
@@ -286,8 +324,8 @@ function Sessions({ agent }: { agent: Actor }) {
   };
   const confirmStop = (session: ChatSession) =>
     Alert.alert(
-      `Stop ${session.title}?`,
-      "The session leaves your chats. Work it is doing for other reasons continues.",
+      `Stop ${agent.name}?`,
+      "It will no longer reply in ZeroLux or resume this session. Your chats and their history stay.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -307,7 +345,7 @@ function Sessions({ agent }: { agent: Actor }) {
     s.harness === "pi" && s.origin === "attached" && s.status === "connected";
   const confirmTakeover = (session: ChatSession) =>
     Alert.alert(
-      `Take over ${session.title}?`,
+      `Take over ${agent.name}?`,
       "The idle terminal closes and the same session continues under ZeroLux: same history, same verified launch profile. Refused if it is working, has queued input or its profile cannot be verified; nothing is killed.",
       [
         { text: "Cancel", style: "cancel" },
@@ -317,58 +355,102 @@ function Sessions({ agent }: { agent: Actor }) {
         },
       ],
     );
-  return (
-    <View className="gap-2">
-      <Eyebrow>Sessions</Eyebrow>
-      {sessions.map((s) => (
-        <View
-          key={s.id}
-          className="gap-2 rounded-lg border border-border bg-card p-3"
-        >
-          <View className="flex-row items-center gap-3">
-            <View className="min-w-0 flex-1">
-              <Text numberOfLines={1} className="text-sm font-medium">
-                {s.title}
-              </Text>
-              <Text className="text-xs text-muted-foreground">
-                {harnessLabels[s.harness] ?? s.harness} · {sessionState(s)}
-              </Text>
-            </View>
-            {takeable(s) ? (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={busy}
-                onPress={() => confirmTakeover(s)}
-              >
-                <Text>Take over</Text>
-              </Button>
-            ) : null}
-            {s.status !== "stopped" ? (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={busy}
-                onPress={() => confirmStop(s)}
-              >
-                <Text>Stop</Text>
-              </Button>
-            ) : null}
-            {resumable(s) ? (
-              <Button
-                size="sm"
-                disabled={busy}
-                onPress={() => void perform(() => chat.resume(s.id))}
-              >
-                <Text>Resume</Text>
-              </Button>
-            ) : null}
+  const card = (s: ChatSession, facts: boolean) => {
+    const harness = harnessLabels[s.harness] ?? s.harness;
+    return (
+      <View
+        key={s.id}
+        className="gap-2 rounded-lg border border-border bg-card p-3"
+      >
+        <View className="flex-row items-center gap-3">
+          <View className="min-w-0 flex-1">
+            <Text numberOfLines={1} className="text-sm font-medium">
+              {s.title || "Untitled session"}
+            </Text>
+            <Text numberOfLines={1} className="text-xs text-muted-foreground">
+              {facts
+                ? sessionState(s)
+                : `${harness} · ${folderName(s.workspace)}`}
+            </Text>
           </View>
-          {s.attention_reason ? (
-            <Text className="text-xs text-attention">{s.attention_reason}</Text>
+          {takeable(s) ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onPress={() => confirmTakeover(s)}
+            >
+              <Text>Take over</Text>
+            </Button>
+          ) : null}
+          {s.status !== "stopped" ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onPress={() => confirmStop(s)}
+            >
+              <Text>Stop</Text>
+            </Button>
+          ) : null}
+          {resumable(s) ? (
+            <Button
+              size="sm"
+              disabled={busy}
+              onPress={() => void perform(() => chat.resume(s.id))}
+            >
+              <Text>Resume</Text>
+            </Button>
           ) : null}
         </View>
-      ))}
+        {facts ? (
+          <View>
+            <Row label="Harness">
+              <Text className="text-sm">{harness}</Text>
+            </Row>
+            <Row label="Folder">
+              <Text className="font-mono text-xs">{s.workspace}</Text>
+            </Row>
+            <Row label="Started by">
+              <Text className="text-sm">
+                {s.origin === "owned" ? "ZeroLux" : "You, then hired"}
+              </Text>
+            </Row>
+            {/* TODO: kernel: each session's model, reasoning effort and launch profile (Claude Code's permission mode, Codex approvals and sandbox, pi's settings), shown here. */}
+            <Row label="Model">
+              <Text className="text-sm text-faint">Not reported yet</Text>
+            </Row>
+            <Row label="Effort">
+              <Text className="text-sm text-faint">Not reported yet</Text>
+            </Row>
+            <Row label="Permissions">
+              <Text className="text-sm text-faint">Not reported yet</Text>
+            </Row>
+          </View>
+        ) : null}
+        {s.attention_reason ? (
+          <Text className="text-xs text-attention">{s.attention_reason}</Text>
+        ) : null}
+      </View>
+    );
+  };
+  return (
+    <View className="gap-2">
+      <Eyebrow>{title}</Eyebrow>
+      {current.map((s) => card(s, true))}
+      {older.length > 0 && (
+        <Pressable
+          onPress={() => setShowOlder(!showOlder)}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: showOlder }}
+          className="py-1.5"
+        >
+          <Text className="text-sm text-muted-foreground">
+            {showOlder ? "Hide" : "Show"} earlier sessions · {older.length}
+          </Text>
+        </Pressable>
+      )}
+      {showOlder && older.map((s) => card(s, false))}
       {error ? <Text className="text-sm text-destructive">{error}</Text> : null}
     </View>
   );
