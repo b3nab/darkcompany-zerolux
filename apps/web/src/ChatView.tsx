@@ -3,6 +3,7 @@ import type { SubmitEvent } from "react";
 import { Link, NavLink } from "react-router";
 import { cn } from "cn";
 import {
+  ArrowDownIcon,
   AudioLinesIcon,
   CheckIcon,
   ChevronLeftIcon,
@@ -281,6 +282,8 @@ export function ChatView({
   );
   // Follows new messages only while you are at the bottom: reading older ones is not interrupted.
   const following = useRef(true);
+  // More than a screen above the latest messages: a button brings the reader back down.
+  const [away, setAway] = useState(false);
   // The content height the reader last scrolled against.
   const height = useRef(0);
   const toBottom = () => {
@@ -467,8 +470,9 @@ export function ChatView({
               // The browser also scrolls when content changes size (scroll anchoring): only a
               // scroll over unchanged content is the reader moving.
               if (l.scrollHeight !== height.current) return;
-              following.current =
-                l.scrollHeight - l.scrollTop - l.clientHeight < 80;
+              const below = l.scrollHeight - l.scrollTop - l.clientHeight;
+              following.current = below < 80;
+              setAway(below > l.clientHeight);
             }}
           >
             <ol ref={list} className="mx-auto flex max-w-3xl flex-col gap-1">
@@ -561,6 +565,27 @@ export function ChatView({
                 <DayLabel>No messages yet. Say hello.</DayLabel>
               )}
             </ol>
+            {/* No height of its own: it rides the bottom edge without moving the content. */}
+            {away && (
+              <div className="sticky bottom-0 mx-auto h-0 max-w-3xl">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  aria-label="Back to the latest messages"
+                  title="Back to the latest messages"
+                  className="absolute right-0 bottom-0 rounded-full bg-card shadow-md"
+                  onClick={() => {
+                    following.current = true;
+                    scroller.current?.scrollTo({
+                      top: scroller.current.scrollHeight,
+                      behavior: "smooth",
+                    });
+                  }}
+                >
+                  <ArrowDownIcon />
+                </Button>
+              </div>
+            )}
           </div>
           {thread ? (
             <p className="border-t px-3 py-3 text-xs text-muted-foreground md:px-5">
