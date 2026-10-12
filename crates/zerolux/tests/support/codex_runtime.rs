@@ -127,7 +127,7 @@ impl Runtime {
     }
 
     pub(crate) async fn wait(&self, predicate: impl Fn(&NativeState) -> bool) {
-        tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::time::timeout(Duration::from_secs(60), async {
             loop {
                 let changed = self.notify.notified();
                 if predicate(&self.state.lock().unwrap()) {

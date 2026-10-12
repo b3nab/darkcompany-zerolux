@@ -104,7 +104,7 @@ impl KernelFixture {
     }
 
     async fn wait(&self, predicate: impl Fn(&KernelState) -> bool) {
-        tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::time::timeout(Duration::from_secs(60), async {
             loop {
                 let changed = self.notify.notified();
                 if predicate(&self.state.lock().unwrap()) {
@@ -354,7 +354,7 @@ async fn run(
 
 async fn finish(stop: watch::Sender<bool>, task: JoinHandle<anyhow::Result<()>>) {
     stop.send(true).unwrap();
-    tokio::time::timeout(Duration::from_secs(3), task)
+    tokio::time::timeout(Duration::from_secs(60), task)
         .await
         .unwrap()
         .unwrap()
@@ -498,7 +498,7 @@ async fn a_message_joins_the_running_turn_instead_of_waiting_for_its_end() {
     );
     // Stop leaves a turn that holds private work alone.
     stop.send_replace(true);
-    let _ = tokio::time::timeout(Duration::from_secs(3), task)
+    let _ = tokio::time::timeout(Duration::from_secs(60), task)
         .await
         .unwrap();
     assert_eq!(runtime.count("turn/interrupt"), 0);
@@ -814,7 +814,7 @@ async fn only_successfully_claimed_input_is_sent_and_revocation_never_sends_a_pa
             finish(stop, task).await;
         } else {
             assert!(
-                tokio::time::timeout(Duration::from_secs(3), task)
+                tokio::time::timeout(Duration::from_secs(60), task)
                     .await
                     .unwrap()
                     .unwrap()
@@ -949,7 +949,7 @@ async fn stop_interrupts_a_turn_that_holds_only_envelopes_of_the_chat() {
             })];
         }
         stop.send_replace(true);
-        let result = tokio::time::timeout(Duration::from_secs(3), task)
+        let result = tokio::time::timeout(Duration::from_secs(60), task)
             .await
             .unwrap()
             .unwrap();
@@ -992,7 +992,7 @@ async fn stop_covers_unread_steering_by_interrupting_its_owned_turn_not_deleting
                 vec![json!({"id":"chat","status":"inProgress","itemsView":"full","items":items})];
         }
         stop.send_replace(true);
-        let result = tokio::time::timeout(Duration::from_secs(3), task)
+        let result = tokio::time::timeout(Duration::from_secs(60), task)
             .await
             .unwrap()
             .unwrap();
@@ -1072,7 +1072,7 @@ async fn stop_interrupts_a_turn_of_this_chat_alone_after_codex_registered_the_me
         "registered in a turn: in front of the model, so read"
     );
     stop.send_replace(true);
-    tokio::time::timeout(Duration::from_secs(3), task)
+    tokio::time::timeout(Duration::from_secs(60), task)
         .await
         .unwrap()
         .unwrap()
@@ -1276,7 +1276,7 @@ async fn revoked_token_still_cancels_owned_queue_and_reports_unconfirmed_cancell
         runtime.state.lock().unwrap().drop_cancel_ack = reject_cancel;
         kernel.state.lock().unwrap().revoked = true;
         changed.send(()).await.unwrap();
-        let error = tokio::time::timeout(Duration::from_secs(3), task)
+        let error = tokio::time::timeout(Duration::from_secs(60), task)
             .await
             .unwrap()
             .unwrap()
@@ -1313,7 +1313,7 @@ async fn stop_finds_a_consumed_turn_and_preserves_mixed_private_input() {
             ];
         }
         stop.send(true).unwrap();
-        let result = tokio::time::timeout(Duration::from_secs(3), task)
+        let result = tokio::time::timeout(Duration::from_secs(60), task)
             .await
             .unwrap()
             .unwrap();

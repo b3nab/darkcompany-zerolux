@@ -1,8 +1,5 @@
 //! Shared CLI entrypoint, including the private helpers used by attached harnesses.
-use crate::{
-    server::{Server, ServerOptions},
-    worker::{self, WorkerOptions},
-};
+use crate::server::{Server, ServerOptions};
 use clap::{Parser, Subcommand};
 use std::{
     net::{IpAddr, SocketAddr},
@@ -27,10 +24,22 @@ enum Command {
         expose: Option<IpAddr>,
         #[arg(long, default_value_t = 4310)]
         port: u16,
+        /// Where this kernel keeps links, sockets, secrets and LiveKit assets. With a SQLite
+        /// database given by path, its directory.
+        #[arg(long, env = "ZEROLUX_DATA_DIR")]
+        data_dir: Option<PathBuf>,
+        /// The workspace's data: a SQLite file, or a postgresql:// URL.
         #[arg(long, env = "ZEROLUX_DATABASE", default_value = ".zerolux/zerolux.db")]
-        database: PathBuf,
+        database: String,
         #[arg(long, default_value = "apps/web/dist")]
         web_dir: PathBuf,
+        /// The authentication service to start, run with `bun`.
+        #[arg(
+            long,
+            env = "ZEROLUX_AUTH_ENTRY",
+            default_value = "services/auth/src/server.ts"
+        )]
+        auth_entry: PathBuf,
         /// The origin a reverse proxy serves this kernel at, e.g. https://company.example.
         #[arg(long, env = "ZEROLUX_PUBLIC_ORIGIN")]
         public_origin: Option<String>,
@@ -39,8 +48,6 @@ enum Command {
         #[arg(long, env = "ZEROLUX_PUBLIC_LIVEKIT_URL", requires = "public_origin")]
         public_livekit_url: Option<String>,
     },
-    /// Execute one queued task with a local harness (or poll continuously with --watch).
-    Worker(WorkerOptions),
     /// Probe installed harness CLI versions. Does not authenticate, connect, or start an agent.
     Doctor,
     /// Receive chat invalidations for an attached harness over a private stdin/stdout channel.
@@ -86,14 +93,26 @@ pub async fn run() -> anyhow::Result<()> {
             host,
             expose,
             port,
+            data_dir,
             database,
             web_dir,
+            auth_entry,
             public_origin,
             public_livekit_url,
         } => {
+            let database = crate::db::Location::parse(&database).map_err(anyhow::Error::msg)?;
+            let data_dir = match (data_dir, &database) {
+                (Some(dir), _) => dir,
+                (None, crate::db::Location::Sqlite(path)) => path
+                    .parent()
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .map_or_else(|| PathBuf::from("."), PathBuf::from),
+                (None, crate::db::Location::Postgres(_)) => PathBuf::from(".zerolux"),
+            };
             Server::start(ServerOptions {
                 address: SocketAddr::new(host, port),
                 expose,
+                data_dir,
                 database,
                 web_dir,
                 livekit: None,
@@ -105,12 +124,15 @@ pub async fn run() -> anyhow::Result<()> {
                 },
                 #[cfg(unix)]
                 runner: None,
+                auth: Some(crate::auth::AuthEntry {
+                    bun: "bun".into(),
+                    entry: auth_entry,
+                }),
             })
             .await?
-            .run_until(worker::shutdown_signal())
+            .run_until(crate::server::shutdown_signal())
             .await?;
         }
-        Command::Worker(options) => worker::run(options).await?,
         Command::AgentLink => crate::agent_link::cli().await?,
         Command::ChatSend {
             link,

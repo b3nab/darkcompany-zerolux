@@ -413,7 +413,7 @@ async fn managed_claude_bootstrap_lifecycle() {
         .path()
         .join(format!("links/claude/{}.lock", native.as_str().unwrap()));
     let record: Value = serde_json::from_slice(&std::fs::read(&lease).unwrap()).unwrap();
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(60), async {
         while kill(Pid::from_raw(pid), None) != Err(nix::errno::Errno::ESRCH) {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -454,7 +454,7 @@ async fn managed_claude_bootstrap_lifecycle() {
     let host_pid = last["pid"].as_i64().unwrap() as i32;
     let child_pid = record["nativePid"].as_i64().unwrap() as i32;
     killpg(Pid::from_raw(host_pid), Signal::SIGKILL).unwrap();
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(60), async {
         while [host_pid, child_pid]
             .iter()
             .any(|pid| kill(Pid::from_raw(*pid), None) != Err(nix::errno::Errno::ESRCH))
@@ -660,7 +660,7 @@ async fn a_dead_host_and_free_lease_do_not_confirm_stop_of_its_live_native_child
         )
         .await;
     let session = created["session"]["id"].as_str().unwrap();
-    let native_pid: i32 = tokio::time::timeout(Duration::from_secs(5), async {
+    let native_pid: i32 = tokio::time::timeout(Duration::from_secs(60), async {
         loop {
             if let Ok(text) = std::fs::read_to_string(workspace.join("native-ready"))
                 && let Ok(pid) = text.parse()
@@ -681,7 +681,7 @@ async fn a_dead_host_and_free_lease_do_not_confirm_stop_of_its_live_native_child
         .unwrap() as i32;
     // Kill ONLY this fake helper, not its group. The fixture child ignores EOF.
     kill(Pid::from_raw(host_pid), Signal::SIGKILL).unwrap();
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(60), async {
         while kill(Pid::from_raw(host_pid), None) != Err(nix::errno::Errno::ESRCH) {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }

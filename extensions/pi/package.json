@@ -22,7 +22,6 @@
   },
   "pi": {
     "extensions": [
-      "./src/index.ts",
       "./src/chat-extension.ts",
       "./src/web-search.ts"
     ]

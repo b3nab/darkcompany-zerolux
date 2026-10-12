@@ -231,7 +231,11 @@ impl Host {
             address: ([127, 0, 0, 1], workspace.port()?).into(),
             expose: None,
             public: None,
-            database,
+            data_dir: database
+                .parent()
+                .context("The workspace database has a directory")?
+                .to_path_buf(),
+            database: zerolux::db::Location::Sqlite(database),
             web_dir: resources.join("web"),
             livekit: None,
             #[cfg(unix)]
@@ -240,6 +244,10 @@ impl Host {
                 pi_entry: Some(resources.join("pi/runner.js")),
                 sdk_executable: Some(local::executable("claude")),
                 ..Default::default()
+            }),
+            auth: Some(zerolux::auth::AuthEntry {
+                bun: local::executable("bun"),
+                entry: resources.join("auth/server.js"),
             }),
         })
         .await
@@ -943,7 +951,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             });
             let signal_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                zerolux::worker::shutdown_signal().await;
+                zerolux::server::shutdown_signal().await;
                 signal_handle.exit(0);
             });
             Ok(())

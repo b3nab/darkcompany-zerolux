@@ -29,6 +29,19 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = [
 ] }
 futures-util = { version = "0.3", features = ["sink"] }
 url = "2"
+sea-orm = { version = "2", default-features = false, features = [
+  "sqlx-sqlite",
+  "sqlx-postgres",
+  "runtime-tokio-rustls",
+  "macros",
+  "with-json",
+] }
+sea-orm-migration = { version = "2", default-features = false, features = [
+  "sqlx-sqlite",
+  "sqlx-postgres",
+  "runtime-tokio-rustls",
+] }
+async-trait = "0.1.92"
 
 [dev-dependencies]
 tempfile = "3"

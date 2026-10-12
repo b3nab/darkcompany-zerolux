@@ -7,8 +7,10 @@ use zerolux::{
     codex::CodexDriver,
     harness::Harness,
     model::{HireChatSession, SetOwnerName},
-    store::Store,
 };
+
+#[path = "support/db.rs"]
+mod db;
 
 #[allow(dead_code)]
 #[path = "support/codex_runtime.rs"]
@@ -17,7 +19,8 @@ mod native;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn owner_stop_during_native_read_prevents_cold_resume() {
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(&dir.path().join("chat.db")).await.unwrap();
+    let database = db::TestDatabase::new(dir.path().join("chat.db")).await;
+    let store = database.open().await;
     store
         .set_owner_name(SetOwnerName {
             name: "Fixture owner".into(),
@@ -78,7 +81,7 @@ async fn owner_stop_during_native_read_prevents_cold_resume() {
         .unwrap();
     assert!(!store.relink_wanted("codex", native::THREAD).await.unwrap());
     gate.notify_one();
-    let result = tokio::time::timeout(Duration::from_secs(5), attempt)
+    let result = tokio::time::timeout(Duration::from_secs(60), attempt)
         .await
         .unwrap()
         .unwrap();

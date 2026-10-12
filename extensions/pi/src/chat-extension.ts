@@ -157,15 +157,6 @@ export default function chatExtension(pi: ExtensionAPI) {
     )
       query.reply(active());
   });
-  const taskBusy = () => {
-    let busy = false;
-    pi.events.emit("zerolux:query-task-bridge", {
-      reply: (value: boolean) => {
-        busy = value;
-      },
-    });
-    return busy;
-  };
   const status = () => {
     const connected = bridges().filter((bridge) => bridge.connected).length;
     context?.ui.setStatus(
@@ -226,8 +217,7 @@ export default function chatExtension(pi: ExtensionAPI) {
     nativeSessionId: ctx.sessionManager.getSessionId(),
     workspace,
     tools: { send: "zerolux_send", thread: "zerolux_thread" },
-    idle: () =>
-      settled && ctx.isIdle() && !ctx.hasPendingMessages() && !taskBusy(),
+    idle: () => settled && ctx.isIdle() && !ctx.hasPendingMessages(),
     // Everything waiting in one message: pi steers one queued message per step.
     send: (batches) => {
       if (takingOver)
@@ -295,15 +285,9 @@ export default function chatExtension(pi: ExtensionAPI) {
         ? existing.bridge
         : undefined;
     // A busy pi pairs too: the kernel checks before a first hire and relinks regardless
-    // (e.g. right after a reload), and chat messages join a running turn anyway. Only the
-    // task bridge excludes the chat.
-    if (
-      !previous &&
-      (disposed || stopping || pairing || existing || taskBusy())
-    )
-      throw new Error(
-        "Pi's chat is already connecting, or its task bridge is connected",
-      );
+    // (e.g. right after a reload), and chat messages join a running turn anyway.
+    if (!previous && (disposed || stopping || pairing || existing))
+      throw new Error("Pi's chat is already connecting");
     pairing = true;
     busyChanged();
     const native = host(ctx, workspace, key);
@@ -322,12 +306,7 @@ export default function chatExtension(pi: ExtensionAPI) {
     try {
       // Check the private bearer against this exact native session before doing anything else.
       await next.connect();
-      if (
-        disposed ||
-        mine()?.bridge !== (previous ?? next) ||
-        !next.connected ||
-        (!previous && taskBusy())
-      )
+      if (disposed || mine()?.bridge !== (previous ?? next) || !next.connected)
         throw new Error("Pi changed while pairing");
       if (previous) {
         next.adopt(previous.handOff());
@@ -550,8 +529,7 @@ export default function chatExtension(pi: ExtensionAPI) {
           !settled ||
           uiPrompts > 0 ||
           !ctx.isIdle() ||
-          ctx.hasPendingMessages() ||
-          taskBusy(),
+          ctx.hasPendingMessages(),
         paired: active(),
         // Several workspaces may link this session, each with its own kernel.
         multi_workspace: true,
@@ -588,8 +566,7 @@ export default function chatExtension(pi: ExtensionAPI) {
           settled &&
           uiPrompts === 0 &&
           ctx.isIdle() &&
-          !ctx.hasPendingMessages() &&
-          !taskBusy();
+          !ctx.hasPendingMessages();
         if (takingOver || !idle()) return { accepted: false };
         let closing = false;
         let paused = false;

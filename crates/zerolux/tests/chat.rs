@@ -1,22 +1,24 @@
+use sea_orm::{ConnectionTrait, DatabaseBackend, EntityTrait, Statement};
 use serde_json::json;
-use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use uuid::Uuid;
-use zerolux::{
-    harness::Harness,
-    model::*,
-    store::{Error, Store},
-};
+use zerolux::{entity, harness::Harness, model::*, store::Error};
+
+#[path = "support/db.rs"]
+mod db;
+use db::TestDatabase;
 
 struct Fixture {
     dir: tempfile::TempDir,
-    store: Store,
+    db: TestDatabase,
+    store: zerolux::store::Store,
     owner: ChatIdentity,
 }
 
 impl Fixture {
     async fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("chat.db")).await.unwrap();
+        let db = TestDatabase::new(dir.path().join("chat.db")).await;
+        let store = db.open().await;
         store
             .set_owner_name(SetOwnerName {
                 name: "Owner fixture".into(),
@@ -24,7 +26,12 @@ impl Fixture {
             .await
             .unwrap();
         let owner = store.chat_identity(None).await.unwrap();
-        Self { dir, store, owner }
+        Self {
+            dir,
+            db,
+            store,
+            owner,
+        }
     }
 
     async fn hire(&self, name: &str, actor: Option<String>) -> (IssuedChatSession, ChatIdentity) {
@@ -80,14 +87,26 @@ impl Fixture {
             .unwrap()
     }
 
-    async fn pool(&self) -> SqlitePool {
-        SqlitePool::connect_with(
-            SqliteConnectOptions::new()
-                .filename(self.dir.path().join("chat.db"))
-                .foreign_keys(true),
-        )
+    /// Runs `sql` directly, as a fixture fault or inspection; placeholders are `$N`.
+    async fn exec(&self, sql: &str, values: Vec<sea_orm::Value>) {
+        let db = self.store.db();
+        db.execute_raw(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            sql,
+            values,
+        ))
         .await
-        .unwrap()
+        .unwrap();
+    }
+
+    async fn scalar<T: sea_orm::TryGetable>(&self, sql: &str) -> T {
+        let db = self.store.db();
+        db.query_one_raw(Statement::from_string(db.get_database_backend(), sql))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get_by_index(0)
+            .unwrap()
     }
 
     async fn clear_outbox(&self) {
@@ -155,11 +174,12 @@ async fn identities_are_scoped_tokens_are_not_exposed_and_stop_revokes_cached_id
             .unwrap()
             .is_object()
     );
-    let stored: String = sqlx::query_scalar("SELECT token_hash FROM chat_sessions WHERE id=?")
-        .bind(&aspen.session.id)
-        .fetch_one(&f.pool().await)
+    let stored = entity::chat_sessions::Entity::find_by_id(&aspen.session.id)
+        .one(f.store.db())
         .await
-        .unwrap();
+        .unwrap()
+        .unwrap()
+        .token_hash;
     assert_eq!(stored.len(), 64);
     assert_ne!(stored, aspen.token);
     assert!(matches!(
@@ -251,7 +271,7 @@ async fn stop_outcome_survives_reopen_and_repeated_stop_without_releasing_work()
         .note_chat_stop(&f.owner, &aspen.session.id, reason)
         .await
         .unwrap();
-    let reopened = Store::open(&f.dir.path().join("chat.db")).await.unwrap();
+    let reopened = f.db.open().await;
     let (session, was_already_stopped) = reopened
         .stop_chat_session_with_state(&f.owner, &aspen.session.id)
         .await
@@ -305,7 +325,6 @@ async fn native_session_is_unique_without_reserving_the_workspace_or_creating_an
         Err(Error::Conflict)
     ));
     assert_eq!(f.store.workspace().await.unwrap().actors.len(), before);
-    assert!(f.store.workspace().await.unwrap().connections.is_empty());
 }
 
 #[tokio::test]
@@ -692,10 +711,7 @@ async fn reading_a_message_reads_the_others_its_envelope_carried() {
         .await
         .unwrap();
     assert_eq!(kept.last_error, None, "read is final");
-    let updated: i64 = sqlx::query_scalar("SELECT min(updated_at) FROM deliveries")
-        .fetch_one(&f.pool().await)
-        .await
-        .unwrap();
+    let updated: i64 = f.scalar("SELECT min(updated_at) FROM deliveries").await;
     assert!(updated > 1_000_000_000_000, "timestamps stay timestamps");
 }
 
@@ -1376,9 +1392,13 @@ async fn failure_between_message_and_delivery_rolls_back_message_sequence_and_ou
     let (aspen, _) = f.hire("aspen", None).await;
     let room = f.room(&[&aspen]).await;
     f.clear_outbox().await;
-    let pool = f.pool().await;
-    sqlx::query("CREATE TRIGGER reject_delivery BEFORE INSERT ON deliveries BEGIN SELECT RAISE(ABORT,'fixture fault'); END")
-        .execute(&pool).await.unwrap();
+    // A fault in the middle of the transaction, in the dialect of the database at hand.
+    if f.store.db().get_database_backend() == DatabaseBackend::Postgres {
+        f.exec("CREATE FUNCTION fixture_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'fixture fault'; END $$", vec![]).await;
+        f.exec("CREATE TRIGGER reject_delivery BEFORE INSERT ON deliveries FOR EACH ROW EXECUTE FUNCTION fixture_fault()", vec![]).await;
+    } else {
+        f.exec("CREATE TRIGGER reject_delivery BEFORE INSERT ON deliveries BEGIN SELECT RAISE(ABORT,'fixture fault'); END", vec![]).await;
+    }
     let input = message("atomic request");
     assert!(matches!(
         f.store
@@ -1395,10 +1415,12 @@ async fn failure_between_message_and_delivery_rolls_back_message_sequence_and_ou
             .is_empty()
     );
     assert!(f.store.pending_chat_events(100).await.unwrap().is_empty());
-    sqlx::query("DROP TRIGGER reject_delivery")
-        .execute(&pool)
-        .await
-        .unwrap();
+    if f.store.db().get_database_backend() == DatabaseBackend::Postgres {
+        f.exec("DROP TRIGGER reject_delivery ON deliveries", vec![])
+            .await;
+    } else {
+        f.exec("DROP TRIGGER reject_delivery", vec![]).await;
+    }
     let sent = f
         .store
         .send_chat_message(&f.owner, &room.id, input)
@@ -1426,7 +1448,7 @@ async fn publication_recovers_same_small_event_and_never_dispatches_inference() 
     assert!(events[0].payload.to_string().len() < 1024);
     assert_eq!(events[0].payload["message_id"], sent.message.id);
     assert!(events[0].payload.get("text").is_none());
-    let reopened = Store::open(&f.dir.path().join("chat.db")).await.unwrap();
+    let reopened = f.db.open().await;
     let again = reopened.pending_chat_events(100).await.unwrap();
     assert_eq!(again[0].event_id, events[0].event_id);
     reopened
@@ -1480,7 +1502,7 @@ async fn pause_and_dispatch_are_atomic_and_an_uncertain_delivery_is_not_retried_
         f.store.dispatch_chat_delivery(&aspen_id, id)
     );
     assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
-    let reopened = Store::open(&f.dir.path().join("chat.db")).await.unwrap();
+    let reopened = f.db.open().await;
     assert_eq!(
         reopened.chat_inbox(&aspen_id).await.unwrap().deliveries[0].status,
         "uncertain"
@@ -1676,7 +1698,7 @@ async fn approvals_require_owner_decision_and_native_dispatch_is_never_replayed(
         f.store.dispatch_chat_approval(&aspen_id, &approval.id)
     );
     assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
-    let reopened = Store::open(&f.dir.path().join("chat.db")).await.unwrap();
+    let reopened = f.db.open().await;
     assert!(matches!(
         reopened
             .dispatch_chat_approval(&aspen_id, &approval.id)
@@ -1759,12 +1781,11 @@ async fn outbox_rechecks_membership_before_notifying_a_removed_member() {
         .send_chat_message(&f.owner, &room.id, message("membership fixture"))
         .await
         .unwrap();
-    sqlx::query("DELETE FROM conversation_members WHERE conversation_id=? AND actor_id=?")
-        .bind(&room.id)
-        .bind(&aspen.actor.id)
-        .execute(&f.pool().await)
-        .await
-        .unwrap();
+    f.exec(
+        "DELETE FROM conversation_members WHERE conversation_id=$1 AND actor_id=$2",
+        vec![room.id.clone().into(), aspen.actor.id.clone().into()],
+    )
+    .await;
     let events = f.store.pending_chat_events(100).await.unwrap();
     assert_eq!(events[0].actor_ids, vec![f.owner.actor_id.clone()]);
 }

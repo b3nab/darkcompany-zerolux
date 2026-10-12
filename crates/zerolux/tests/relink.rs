@@ -14,6 +14,9 @@ use zerolux::{
     store::Store,
 };
 
+#[path = "support/db.rs"]
+mod db;
+
 fn installed() -> bool {
     std::process::Command::new("livekit-server")
         .arg("--version")
@@ -151,7 +154,8 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
     }
     let native = "pi-native";
     let pi = fake_pi(dir.path(), native);
-    let store = Store::open(&dir.path().join("chat.db")).await.unwrap();
+    let database = db::TestDatabase::new(dir.path().join("chat.db")).await;
+    let store = database.open().await;
     store
         .set_owner_name(SetOwnerName {
             name: "Owner".into(),

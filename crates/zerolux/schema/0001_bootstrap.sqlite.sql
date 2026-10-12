@@ -26,59 +26,9 @@ CREATE TABLE workspace (
 -- naming happens during onboarding and agents are hired explicitly.
 CREATE UNIQUE INDEX one_bootstrap_owner ON actors(kind) WHERE kind = 'human';
 
-CREATE TABLE projects (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    description TEXT NOT NULL,
-    created_at INTEGER NOT NULL
-);
 
-CREATE TABLE tasks (
-    id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(id),
-    title TEXT NOT NULL,
-    description TEXT NOT NULL,
-    assignee_id TEXT NOT NULL REFERENCES actors(id),
-    status TEXT NOT NULL CHECK (status IN ('draft', 'queued', 'running', 'review', 'done', 'failed')),
-    review_note TEXT NOT NULL DEFAULT '',
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-);
-CREATE INDEX tasks_queue ON tasks(project_id, assignee_id, status, created_at);
 
-CREATE TABLE agent_connections (
-    id TEXT PRIMARY KEY,
-    actor_id TEXT NOT NULL REFERENCES actors(id),
-    project_id TEXT NOT NULL REFERENCES projects(id),
-    mode TEXT NOT NULL CHECK (mode IN ('process', 'pi_session')),
-    workspace TEXT NOT NULL,
-    session_id TEXT,
-    connected_at INTEGER NOT NULL,
-    lease_expires_at INTEGER NOT NULL,
-    disconnected_at INTEGER,
-    CHECK ((mode = 'pi_session' AND session_id IS NOT NULL) OR (mode = 'process' AND session_id IS NULL))
-);
-CREATE UNIQUE INDEX one_connection_per_actor ON agent_connections(actor_id) WHERE disconnected_at IS NULL;
-CREATE UNIQUE INDEX one_connection_per_workspace ON agent_connections(workspace) WHERE disconnected_at IS NULL;
-CREATE UNIQUE INDEX one_connection_per_pi_session ON agent_connections(session_id) WHERE disconnected_at IS NULL AND mode = 'pi_session';
 
-CREATE TABLE runs (
-    id TEXT PRIMARY KEY,
-    task_id TEXT NOT NULL REFERENCES tasks(id),
-    status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
-    stdout TEXT NOT NULL DEFAULT '',
-    stderr TEXT NOT NULL DEFAULT '',
-    exit_code INTEGER,
-    failure_reason TEXT,
-    started_at INTEGER NOT NULL,
-    finished_at INTEGER,
-    lease_expires_at INTEGER NOT NULL,
-    connection_id TEXT REFERENCES agent_connections(id),
-    actor_id TEXT REFERENCES actors(id)
-);
-CREATE UNIQUE INDEX one_active_run ON runs(task_id) WHERE status = 'running';
-CREATE INDEX runs_task ON runs(task_id, started_at);
-CREATE UNIQUE INDEX one_run_per_connection ON runs(connection_id) WHERE status = 'running' AND connection_id IS NOT NULL;
 
 -- Chat sessions are independent of task connections and their workspace leases.
 CREATE TABLE chat_sessions (
@@ -176,8 +126,3 @@ CREATE TABLE tool_approvals (
     CHECK (status NOT IN ('decided', 'uncertain', 'delivered') OR decision IS NOT NULL)
 );
 
--- Devices other than the kernel's own computer that the owner signed in from.
-CREATE TABLE owner_devices (
-    token_hash TEXT PRIMARY KEY,
-    created_at INTEGER NOT NULL
-);

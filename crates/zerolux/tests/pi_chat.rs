@@ -32,6 +32,9 @@ impl Drop for Process {
         let _ = self.0.wait();
     }
 }
+#[path = "support/owner.rs"]
+mod owner;
+
 fn isolated(command: &mut Command, home: &Path, workspace: &Path, path: &std::ffi::OsStr) {
     command
         .env_clear()
@@ -117,7 +120,8 @@ async fn gui_hire_livekit_wake_and_reply_with_a_fake_pi_host() {
         .args(["serve", "--port", &port.to_string(), "--database"])
         .arg(root.path().join("fixture.db"))
         .arg("--web-dir")
-        .arg(&workspace);
+        .arg(&workspace)
+        .args(owner::auth_entry_args());
     isolated(&mut command, &home, &workspace, &path);
     let _kernel = Process(command.spawn().unwrap());
     let client = reqwest::Client::builder()
@@ -138,13 +142,7 @@ async fn gui_hire_livekit_wake_and_reply_with_a_fake_pi_host() {
         assert!(Instant::now() < deadline, "fixture kernel did not start");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    api(
-        &client,
-        &base,
-        "/onboarding/owner",
-        Some(json!({"name":"Fixture owner"})),
-    )
-    .await;
+    let client = owner::client(&base, root.path(), Duration::from_secs(65)).await;
     let discovery = api(&client, &base, "/sessions", None).await;
     let pi = discovery["sessions"]
         .as_array()
@@ -290,6 +288,8 @@ async fn fixture_host() -> Option<Host> {
 /// One kernel over its own database; dropping it ends the process like a crash would.
 struct Kernel {
     base: String,
+    /// The owner, signed in to this kernel.
+    client: reqwest::Client,
     /// Held for the process group: dropping it ends the kernel.
     _process: Process,
 }
@@ -301,7 +301,8 @@ async fn kernel(host: &Host, database: &Path, port: u16) -> Kernel {
         .args(["serve", "--port", &port.to_string(), "--database"])
         .arg(database)
         .arg("--web-dir")
-        .arg(&host.workspace);
+        .arg(&host.workspace)
+        .args(owner::auth_entry_args());
     isolated(&mut command, &host.home, &host.workspace, &host.path);
     let process = Process(command.spawn().unwrap());
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
@@ -318,8 +319,10 @@ async fn kernel(host: &Host, database: &Path, port: u16) -> Kernel {
         assert!(Instant::now() < deadline, "fixture kernel did not start");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    let client = owner::client(&base, database.parent().unwrap(), Duration::from_secs(65)).await;
     Kernel {
         base,
+        client,
         _process: process,
     }
 }
@@ -358,13 +361,6 @@ async fn wait_status(client: &reqwest::Client, base: &str, session: &str, expect
 }
 
 async fn hire_pi(client: &reqwest::Client, base: &str) -> (String, String) {
-    api(
-        client,
-        base,
-        "/onboarding/owner",
-        Some(json!({"name":"Fixture owner"})),
-    )
-    .await;
     let discovery = api(client, base, "/sessions", None).await;
     let pi = discovery["sessions"]
         .as_array()
@@ -423,34 +419,29 @@ async fn one_pi_session_works_in_two_workspaces_and_a_kernel_restart_keeps_both(
     let Some(mut host) = fixture_host().await else {
         return;
     };
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(65))
-        .build()
-        .unwrap();
     let (db_a, db_b) = (host.root.path().join("a.db"), host.root.path().join("b.db"));
     let port_a = free_port();
     // Workspace A hires the pi session; workspace B hires the very same one while A holds it.
     let a = kernel(&host, &db_a, port_a).await;
-    let (actor_a, session_a) = hire_pi(&client, &a.base).await;
-    wait_status(&client, &a.base, &session_a, "connected").await;
+    let (actor_a, session_a) = hire_pi(&a.client, &a.base).await;
+    wait_status(&a.client, &a.base, &session_a, "connected").await;
     let b = kernel(&host, &db_b, free_port()).await;
-    let (actor_b, session_b) = hire_pi(&client, &b.base).await;
-    wait_status(&client, &b.base, &session_b, "connected").await;
+    let (actor_b, session_b) = hire_pi(&b.client, &b.base).await;
+    wait_status(&b.client, &b.base, &session_b, "connected").await;
     assert_eq!(
-        session_status(&client, &a.base, &session_a).await,
+        session_status(&a.client, &a.base, &session_a).await,
         "connected"
     );
     // Each workspace talks to the agent in its own chats; replies land where they were asked.
-    round_trip(&client, &a.base, &actor_a, &session_a, "Workspace A").await;
-    round_trip(&client, &b.base, &actor_b, &session_b, "Workspace B").await;
+    round_trip(&a.client, &a.base, &actor_a, &session_a, "Workspace A").await;
+    round_trip(&b.client, &b.base, &actor_b, &session_b, "Workspace B").await;
     // A restarts: it relinks its own link; B's link is untouched and still answers.
     drop(a);
     let a = kernel(&host, &db_a, port_a).await;
     let relinked = {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            let sessions = api(&client, &a.base, "/chat/sessions", None).await;
+            let sessions = api(&a.client, &a.base, "/chat/sessions", None).await;
             let connected = sessions["sessions"]
                 .as_array()
                 .unwrap()
@@ -466,11 +457,11 @@ async fn one_pi_session_works_in_two_workspaces_and_a_kernel_restart_keeps_both(
         }
     };
     assert_eq!(
-        session_status(&client, &b.base, &session_b).await,
+        session_status(&b.client, &b.base, &session_b).await,
         "connected"
     );
     round_trip(
-        &client,
+        &b.client,
         &b.base,
         &actor_b,
         &session_b,
@@ -478,7 +469,7 @@ async fn one_pi_session_works_in_two_workspaces_and_a_kernel_restart_keeps_both(
     )
     .await;
     round_trip(
-        &client,
+        &a.client,
         &a.base,
         &actor_a,
         &relinked,
@@ -487,7 +478,14 @@ async fn one_pi_session_works_in_two_workspaces_and_a_kernel_restart_keeps_both(
     .await;
     // A goes away for good: B keeps its agent, and the native host is never killed.
     drop(a);
-    round_trip(&client, &b.base, &actor_b, &session_b, "Workspace B alone").await;
+    round_trip(
+        &b.client,
+        &b.base,
+        &actor_b,
+        &session_b,
+        "Workspace B alone",
+    )
+    .await;
     drop(b);
     assert!(host.native.0.try_wait().unwrap().is_none());
 }

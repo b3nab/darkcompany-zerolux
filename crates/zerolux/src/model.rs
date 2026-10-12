@@ -1,38 +1,19 @@
+use sea_orm::FromQueryResult;
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 
-#[derive(Debug, Serialize, Deserialize, FromRow)]
-pub struct Actor {
-    pub id: String,
-    pub name: String,
-    pub kind: String,
-    pub owner_id: Option<String>,
-    pub harness: Option<String>,
-    pub archived: bool,
-    pub created_at: i64,
-}
+/// Rows of the workspace tables, as the API shows them.
+pub use crate::entity::{
+    actors::Model as Actor, deliveries::Model as ChatDelivery, workspace::Model as WorkspaceInfo,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SetOwnerName {
     pub name: String,
 }
 
-/// The company this kernel runs. Its creation is day 1.
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct WorkspaceInfo {
-    pub id: String,
-    pub name: String,
-    pub created_at: i64,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SetWorkspaceName {
     pub name: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ReassignTask {
-    pub assignee_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -42,128 +23,11 @@ pub struct CreateAgent {
     pub harness: crate::harness::Harness,
 }
 
-#[derive(Debug, Serialize, Deserialize, FromRow)]
-pub struct AgentConnection {
-    pub id: String,
-    pub actor_id: String,
-    pub project_id: String,
-    pub mode: String,
-    pub workspace: String,
-    pub session_id: Option<String>,
-    pub connected_at: i64,
-    pub lease_expires_at: i64,
-    pub disconnected_at: Option<i64>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ConnectAgent {
-    pub actor_id: String,
-    pub project_id: String,
-    pub mode: String,
-    pub workspace: String,
-    pub session_id: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, FromRow)]
-pub struct Project {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub created_at: i64,
-}
-
-#[derive(Debug, Serialize, Deserialize, FromRow)]
-pub struct Task {
-    pub id: String,
-    pub project_id: String,
-    pub title: String,
-    pub description: String,
-    pub assignee_id: String,
-    pub status: String,
-    pub review_note: String,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
-#[derive(Debug, Serialize, Deserialize, FromRow)]
-pub struct Run {
-    pub id: String,
-    pub task_id: String,
-    pub status: String,
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: Option<i32>,
-    pub failure_reason: Option<String>,
-    pub started_at: i64,
-    pub finished_at: Option<i64>,
-    pub lease_expires_at: i64,
-    pub connection_id: Option<String>,
-    pub actor_id: Option<String>,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Workspace {
     pub workspace: WorkspaceInfo,
     pub actors: Vec<Actor>,
-    pub projects: Vec<Project>,
-    pub tasks: Vec<Task>,
-    pub connections: Vec<AgentConnection>,
     pub onboarding_required: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CreateProject {
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CreateTask {
-    pub project_id: String,
-    pub title: String,
-    #[serde(default)]
-    pub description: String,
-    pub assignee_id: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Action {
-    Queue,
-    Approve,
-    RequestChanges,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TaskAction {
-    pub action: Action,
-    #[serde(default)]
-    pub note: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ClaimRequest {
-    pub project_id: String,
-    pub actor_id: String,
-    #[serde(default)]
-    pub connection_id: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Claim {
-    pub task: Task,
-    pub run: Run,
-    pub project: Project,
-    pub prompt: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FinishRun {
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: Option<i32>,
-    pub failure_reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -289,13 +153,12 @@ impl TryFrom<String> for ChatSessionOrigin {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatSession {
     pub id: String,
     pub actor_id: String,
     pub harness: String,
     #[serde(default)]
-    #[sqlx(rename = "native_locator_json", try_from = "String")]
     pub origin: ChatSessionOrigin,
     pub native_session_id: String,
     pub title: String,
@@ -309,6 +172,37 @@ pub struct ChatSession {
     pub activity_conversation_id: Option<String>,
     /// Messages stored for this session and not yet handed to its harness.
     pub waiting: i64,
+    /// The kernel host whose native process this is; only that kernel links and relinks it.
+    pub host_id: Option<String>,
+}
+
+/// A `chat_sessions` row with its `waiting` count; the locator is read only for its origin
+/// and the token hash never leaves the database.
+impl FromQueryResult for ChatSession {
+    fn from_query_result(
+        row: &sea_orm::QueryResult,
+        pre: &str,
+    ) -> std::result::Result<Self, sea_orm::DbErr> {
+        let locator: String = row.try_get(pre, "native_locator_json")?;
+        let origin = ChatSessionOrigin::try_from(locator)
+            .map_err(|error| sea_orm::DbErr::Type(error.to_string()))?;
+        Ok(Self {
+            id: row.try_get(pre, "id")?,
+            actor_id: row.try_get(pre, "actor_id")?,
+            harness: row.try_get(pre, "harness")?,
+            origin,
+            native_session_id: row.try_get(pre, "native_session_id")?,
+            title: row.try_get(pre, "title")?,
+            workspace: row.try_get(pre, "workspace")?,
+            status: row.try_get(pre, "status")?,
+            attention_reason: row.try_get(pre, "attention_reason")?,
+            stopped_at: row.try_get(pre, "stopped_at")?,
+            activity: row.try_get(pre, "activity")?,
+            activity_conversation_id: row.try_get(pre, "activity_conversation_id")?,
+            waiting: row.try_get(pre, "waiting")?,
+            host_id: row.try_get(pre, "host_id")?,
+        })
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -323,7 +217,7 @@ pub struct ConversationMemberInput {
     pub session_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromQueryResult)]
 pub struct ConversationMember {
     pub actor_id: String,
     pub name: String,
@@ -354,7 +248,7 @@ pub struct Conversation {
     pub last_message: Option<LastMessage>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromQueryResult)]
 pub struct LastMessage {
     pub author_id: String,
     pub text: String,
@@ -382,17 +276,6 @@ pub struct SendChatMessage {
     pub id: String,
     pub text: String,
     pub reply_to_delivery_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct ChatDelivery {
-    pub id: String,
-    pub message_id: String,
-    pub actor_id: String,
-    pub session_id: String,
-    pub status: String,
-    pub native_request_id: Option<String>,
-    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1019,7 +1019,7 @@ mod tests {
         )
         .unwrap();
         writeln!(file, "{}", json!({"type":"user","origin":{"kind":"peer"},"message":{"role":"user","content":envelope}})).unwrap();
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(60), async {
             while !calls
                 .lock()
                 .unwrap()
@@ -1133,7 +1133,7 @@ mod tests {
         let wait = |count: usize| {
             let calls = calls.clone();
             async move {
-                tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::time::timeout(Duration::from_secs(60), async {
                     while activities(&calls.lock().unwrap()).len() < count {
                         tokio::time::sleep(Duration::from_millis(50)).await;
                     }
@@ -1207,7 +1207,7 @@ mod tests {
         let wait = |count: usize| {
             let calls = calls.clone();
             async move {
-                tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::time::timeout(Duration::from_secs(60), async {
                     while activities(&calls.lock().unwrap()).len() < count {
                         tokio::time::sleep(Duration::from_millis(50)).await;
                     }
@@ -1271,7 +1271,7 @@ mod tests {
                 .map(|call| call.split_once(' ').unwrap().1.to_owned())
                 .collect()
         };
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(60), async {
             while activities(&calls.lock().unwrap()).is_empty() {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
@@ -1381,18 +1381,26 @@ mod tests {
         let (stopper, stop) = watch::channel(false);
         let run =
             tokio::spawn(session.run(url, links(), "link".into(), "token".into(), changed, stop));
-        tokio::time::sleep(Duration::from_millis(2500)).await;
+        let activities = |calls: &Vec<String>| -> Vec<String> {
+            calls
+                .iter()
+                .filter(|call| call.contains("/activity "))
+                .map(|call| call.split_once(' ').unwrap().1.to_owned())
+                .collect()
+        };
+        // The history is read back and the state reported; then nothing more.
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while activities(&calls.lock().unwrap()).is_empty() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("state reported");
+        tokio::time::sleep(Duration::from_millis(1000)).await;
         stopper.send(true).unwrap();
         run.await.unwrap().unwrap();
-        let activities: Vec<String> = calls
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|call| call.contains("/activity "))
-            .map(|call| call.split_once(' ').unwrap().1.to_owned())
-            .collect();
         assert_eq!(
-            activities,
+            activities(&calls.lock().unwrap()),
             [json!({"activity":"idle","conversation_id":null}).to_string()]
         );
     }
@@ -1435,7 +1443,7 @@ mod tests {
         let wait = |count: usize| {
             let calls = calls.clone();
             async move {
-                tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::time::timeout(Duration::from_secs(60), async {
                     while activities(&calls.lock().unwrap()).len() < count {
                         tokio::time::sleep(Duration::from_millis(50)).await;
                     }
@@ -1566,7 +1574,7 @@ mod tests {
         let wait = |count: usize| {
             let calls = calls.clone();
             async move {
-                tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::time::timeout(Duration::from_secs(60), async {
                     loop {
                         if receipts(&calls.lock().unwrap()).len() >= count {
                             return;

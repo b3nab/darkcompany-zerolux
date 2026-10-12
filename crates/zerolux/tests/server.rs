@@ -23,7 +23,8 @@ fn options(dir: &std::path::Path, address: SocketAddr) -> ServerOptions {
     ServerOptions {
         address,
         expose: None,
-        database: dir.join("data/zerolux.db"),
+        data_dir: dir.join("data"),
+        database: zerolux::db::Location::Sqlite(dir.join("data/zerolux.db")),
         web_dir: dir.join("web"),
         // Always the managed local LiveKit, whatever LIVEKIT_* is set in the environment.
         livekit: Some(LiveKitConfig {
@@ -35,6 +36,7 @@ fn options(dir: &std::path::Path, address: SocketAddr) -> ServerOptions {
         public: None,
         #[cfg(unix)]
         runner: None,
+        auth: None,
     }
 }
 
@@ -195,7 +197,8 @@ async fn one_kernel_serves_a_workspace_at_a_time_and_the_lease_ends_with_it() {
     let alias = dir.path().join("alias");
     std::os::unix::fs::symlink(dir.path().join("data"), &alias).unwrap();
     let error = Server::start(ServerOptions {
-        database: alias.join("zerolux.db"),
+        data_dir: alias.clone(),
+        database: zerolux::db::Location::Sqlite(alias.join("zerolux.db")),
         ..options(dir.path(), "127.0.0.1:0".parse().unwrap())
     })
     .await
@@ -245,8 +248,8 @@ async fn one_kernel_serves_a_workspace_at_a_time_and_the_lease_ends_with_it() {
 fn the_notice_room_is_scoped_to_the_workspace() {
     use zerolux::livekit::{ROOM, workspace_room};
     assert_eq!(
-        workspace_room("aab44ae4-3888-405f-a1e9-6012ccc9628a"),
-        "zerolux-aab44ae4-3888-405f-a1e9-6012ccc9628a"
+        workspace_room("0f9b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"),
+        "zerolux-0f9b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
     );
     // Not a UUID: encoded without loss, so distinct ids never share a room.
     assert_eq!(workspace_room("a b"), "zerolux-x612062");
@@ -350,7 +353,11 @@ async fn the_public_origin_is_served_by_authority_with_its_own_livekit_address()
     for (origin, authorization) in [
         ("https://other.example", None),
         ("http://company.example", None),
-        ("https://company.example", Some("Bearer x")),
+        // An agent's credential never arrives from the public origin.
+        (
+            "https://company.example",
+            Some("Bearer 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+        ),
     ] {
         let mut request = client
             .get(format!("{base}/api/health"))
@@ -442,7 +449,11 @@ async fn the_desktop_app_origin_is_accepted_as_the_request_it_makes_with_explici
         );
         assert_eq!(
             preflight.headers()["access-control-allow-headers"],
-            "content-type"
+            "content-type, authorization, x-zerolux-setup-token"
+        );
+        assert_eq!(
+            preflight.headers()["access-control-expose-headers"],
+            "set-auth-token"
         );
         // A remote kernel: the desktop is a public visitor there, nothing more.
         let public = client
@@ -454,11 +465,15 @@ async fn the_desktop_app_origin_is_accepted_as_the_request_it_makes_with_explici
             .unwrap();
         assert_eq!(public.status(), 200);
         assert_eq!(public.headers()["access-control-allow-origin"], origin);
+        // An agent's credential never arrives from the public origin.
         let with_credentials = client
             .get(format!("{base}/api/health"))
             .header("host", "company.example")
             .header("origin", origin)
-            .header("authorization", "Bearer x")
+            .header(
+                "authorization",
+                "Bearer 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
             .send()
             .await
             .unwrap();
@@ -495,3 +510,6 @@ async fn the_desktop_app_origin_is_accepted_as_the_request_it_makes_with_explici
     assert_eq!(refused.status(), 403);
     server.shutdown().await.unwrap();
 }
+
+#[path = "support/db.rs"]
+mod db;

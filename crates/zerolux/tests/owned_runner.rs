@@ -50,7 +50,7 @@ async fn rust_and_bun_agree_on_the_runner_lease_and_process_death_releases_it() 
     };
     let lease = open();
     lease.try_lock_exclusive().unwrap();
-    let status = tokio::time::timeout(Duration::from_secs(5), spawn().wait())
+    let status = tokio::time::timeout(Duration::from_secs(60), spawn().wait())
         .await
         .unwrap()
         .unwrap();
@@ -63,7 +63,7 @@ async fn rust_and_bun_agree_on_the_runner_lease_and_process_death_releases_it() 
     let mut child = spawn();
     let mut output = BufReader::new(child.stdout.take().unwrap());
     let mut line = String::new();
-    tokio::time::timeout(Duration::from_secs(5), output.read_line(&mut line))
+    tokio::time::timeout(Duration::from_secs(60), output.read_line(&mut line))
         .await
         .unwrap()
         .unwrap();

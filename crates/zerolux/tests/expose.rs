@@ -13,7 +13,7 @@ use zerolux::{
 const EXPOSED: &str = "192.0.2.7:4310";
 
 struct Kernel {
-    dir: tempfile::TempDir,
+    _dir: tempfile::TempDir,
     client: Client,
     /// Both servers bind loopback; connection metadata simulates a separate device.
     remote: String,
@@ -65,7 +65,7 @@ impl Kernel {
             }));
         }
         Self {
-            dir,
+            _dir: dir,
             client: Client::builder().no_proxy().build().unwrap(),
             local: urls.pop().unwrap(),
             remote: urls.pop().unwrap(),
@@ -153,13 +153,23 @@ async fn another_host_another_origin_and_remote_agent_credentials_are_refused() 
             .unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN, "{origin}");
     }
+    // An agent's token (the kernel's own, 64 hex digits) from another device is refused as
+    // such; a person's signed session token is for the sign-in layer, which here, without
+    // an authentication service, knows nobody.
     let agent = kernel
         .remote(|client, url| client.get(format!("{url}/api/chat/inbox")))
-        .bearer_auth("an-agent-token")
+        .bearer_auth("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
         .send()
         .await
         .unwrap();
     assert_eq!(agent.status(), StatusCode::FORBIDDEN);
+    let person = kernel
+        .remote(|client, url| client.get(format!("{url}/api/chat/inbox")))
+        .bearer_auth("session.signature")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(person.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -192,39 +202,6 @@ async fn loopback_still_checks_host_origin_and_never_turns_an_invalid_bearer_int
         .await
         .unwrap();
     assert_eq!(invalid_agent.status(), StatusCode::UNAUTHORIZED);
-}
-
-#[tokio::test]
-async fn reopening_keeps_owner_device_rows_and_the_schema_unchanged() {
-    let kernel = Kernel::start().await;
-    let path = kernel.dir.path().join("test.db");
-    let pool =
-        sqlx::SqlitePool::connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(&path))
-            .await
-            .unwrap();
-    // Existing owner_devices rows are kept, but no runtime path reads them.
-    sqlx::query("INSERT INTO owner_devices(token_hash,created_at) VALUES ('fixture-only',123)")
-        .execute(&pool)
-        .await
-        .unwrap();
-    let before: Vec<u8> =
-        sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version=1")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    let reopened = Store::open(&path).await.unwrap();
-    assert_eq!(reopened.workspace().await.unwrap().actors.len(), 1);
-    let row: (String, i64) = sqlx::query_as("SELECT token_hash,created_at FROM owner_devices")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(row, ("fixture-only".into(), 123));
-    let after: Vec<u8> =
-        sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version=1")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(before, after);
 }
 
 #[tokio::test]

@@ -96,6 +96,9 @@ impl Drop for Hosts {
         }
     }
 }
+#[path = "support/owner.rs"]
+mod owner;
+
 fn executable(name: &str) -> PathBuf {
     let output = Command::new("/usr/bin/which").arg(name).output().unwrap();
     assert!(
@@ -119,12 +122,17 @@ fn start(root: &Path, port: u16) -> Kernel {
         .arg(root.join("fixture.db"))
         .arg("--web-dir")
         .arg(root.join("work"))
+        .args(owner::auth_entry_args())
         .env_clear()
         .env("HOME", root.join("home"))
         .env("TMPDIR", root)
         .env(
             "PATH",
-            format!("{}:/usr/bin:/bin", root.join("bin").display()),
+            format!(
+                "{}:{}:/usr/bin:/bin",
+                root.join("bin").display(),
+                owner::bun_dir().display()
+            ),
         )
         .env("CODEX_HOME", root.join("home/.codex"))
         .env("CLAUDE_CONFIG_DIR", root.join("home/.claude"))
@@ -227,13 +235,7 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
         .unwrap();
     let kernel = start(&root, port);
     ready(&client, &base).await;
-    api(
-        &client,
-        &base,
-        "/onboarding/owner",
-        Some(json!({"name":"Fixture owner"})),
-    )
-    .await;
+    let client = owner::client(&base, &root, Duration::from_secs(65)).await;
     let invalid = client
         .post(format!("{base}/api/chat/pi-sessions"))
         .json(&json!({"name":"","workspace":"relative"}))

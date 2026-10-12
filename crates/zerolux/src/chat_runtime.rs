@@ -199,6 +199,22 @@ impl ChatRuntime {
         self.livekit.client_token(actor_id)
     }
 
+    /// A person's token, tied to their sign-in.
+    pub fn human_token(&self, actor_id: &str, session_expires_at: i64) -> Result<ClientToken> {
+        ensure!(!*self.stop.borrow(), "The kernel is stopping");
+        self.livekit.human_token(actor_id, session_expires_at)
+    }
+
+    /// After a sign-out or a revocation: the person's devices reconnect only if still signed in.
+    pub async fn disconnect_clients(&self, actor_id: &str) -> Result<()> {
+        self.livekit.disconnect_clients(actor_id).await
+    }
+
+    /// People whose sign-in ended while connected are disconnected.
+    pub async fn sweep_expired(&self) -> Result<()> {
+        self.livekit.sweep_expired().await
+    }
+
     pub async fn discover(&self) -> Result<Value> {
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
         Ok(serde_json::to_value(sessions::discover_sessions().await)?)
@@ -554,10 +570,12 @@ impl ChatRuntime {
     pub async fn reconnect(&self) -> Result<()> {
         let owner = self.store.chat_identity(None).await?;
         let linked = self.store.chat_sessions(&owner).await?;
-        for session in linked
-            .into_iter()
-            .filter(|s| s.stopped_at.is_none() && s.status == "attention")
-        {
+        // This host's sessions only: their native processes are here.
+        for session in linked.into_iter().filter(|s| {
+            s.stopped_at.is_none()
+                && s.status == "attention"
+                && s.host_id.as_deref() == self.store.host()
+        }) {
             #[cfg(unix)]
             if let Some(mode) = self.owned_mode(&owner, &session.id).await? {
                 if let Err(error) = self.reconnect_owned(&owner, &session, mode).await {

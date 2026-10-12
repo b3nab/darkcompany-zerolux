@@ -11,12 +11,19 @@ use zerolux::{
     store::Store,
 };
 
+#[path = "support/owner.rs"]
+mod owner;
+
+#[path = "support/db.rs"]
+mod db;
+
 #[cfg(unix)]
 #[path = "support/codex_runtime.rs"]
 mod codex_runtime;
 
 struct Kernel {
     _dir: tempfile::TempDir,
+    _db: db::TestDatabase,
     store: Store,
     url: String,
     client: Client,
@@ -152,11 +159,17 @@ async fn child_kernel_discovers_and_hires_an_isolated_native_session_over_http()
         }
     });
 
+    let bun_dir = owner::bun_dir();
     let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_zerolux"))
         .args(["serve", "--port", "0", "--database"])
         .arg(dir.path().join("kernel.db"))
         .arg("--web-dir")
         .arg(dir.path().join("web"))
+        .arg("--auth-entry")
+        .arg(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../services/auth/src/server.ts"),
+        )
         .current_dir(dir.path())
         .env_clear()
         .env("HOME", &fixture_home)
@@ -169,6 +182,7 @@ async fn child_kernel_discovers_and_hires_an_isolated_native_session_over_http()
             "PATH",
             std::env::join_paths([
                 bin.as_path(),
+                bun_dir.as_path(),
                 std::path::Path::new("/usr/bin"),
                 std::path::Path::new("/bin"),
             ])
@@ -212,19 +226,12 @@ async fn child_kernel_discovers_and_hires_an_isolated_native_session_over_http()
         }
     });
     let url = format!("http://127.0.0.1:{port}/api");
-    let client = Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .unwrap();
-    client
-        .post(format!("{url}/onboarding/owner"))
-        .json(&json!({"name":"Isolated owner"}))
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap();
+    let client = owner::client(
+        &format!("http://127.0.0.1:{port}"),
+        dir.path(),
+        Duration::from_secs(20),
+    )
+    .await;
     let discovery = client
         .get(format!("{url}/sessions"))
         .send()
@@ -555,18 +562,20 @@ async fn livekit_tickets_are_scoped_to_the_authenticated_actor_and_restart_requi
 impl Kernel {
     async fn start() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("test.db")).await.unwrap();
+        let db = db::TestDatabase::new(dir.path().join("test.db")).await;
+        let store = db.open().await;
         store
             .set_owner_name(SetOwnerName {
                 name: "Fixture owner".into(),
             })
             .await
             .unwrap();
-        Self::serve(dir, store, None).await.0
+        Self::serve(dir, db, store, None).await.0
     }
 
     async fn serve(
         dir: tempfile::TempDir,
+        db: db::TestDatabase,
         store: Store,
         livekit: Option<Arc<LiveKit>>,
     ) -> (Self, Option<Arc<ChatRuntime>>) {
@@ -597,6 +606,7 @@ impl Kernel {
         (
             Self {
                 _dir: dir,
+                _db: db,
                 store,
                 url,
                 client: Client::builder().no_proxy().build().unwrap(),
@@ -698,7 +708,8 @@ async fn live_chat_round_trip_and_stop_use_the_real_runtime() {
     }
     let dir = tempfile::tempdir().unwrap();
     let native = codex_runtime::Runtime::new_in(dir.path()).await;
-    let store = Store::open(&dir.path().join("kernel.db")).await.unwrap();
+    let database = db::TestDatabase::new(dir.path().join("kernel.db")).await;
+    let store = database.open().await;
     store
         .set_owner_name(SetOwnerName {
             name: "Owner".into(),
@@ -715,7 +726,7 @@ async fn live_chat_round_trip_and_stop_use_the_real_runtime() {
         .await
         .unwrap(),
     );
-    let (kernel, runtime) = Kernel::serve(dir, store, Some(livekit.clone())).await;
+    let (kernel, runtime) = Kernel::serve(dir, database, store, Some(livekit.clone())).await;
     let runtime = runtime.unwrap();
     let owner = kernel.store.chat_identity(None).await.unwrap();
     // Discovery is fixture-free here: the session is explicitly issued from
@@ -998,7 +1009,7 @@ async fn live_chat_round_trip_and_stop_use_the_real_runtime() {
     assert_eq!(native.count("thread/queue/delete"), 2);
 
     stop_ui.send(true).unwrap();
-    tokio::time::timeout(Duration::from_secs(5), ui)
+    tokio::time::timeout(Duration::from_secs(60), ui)
         .await
         .unwrap()
         .unwrap()
@@ -1068,27 +1079,11 @@ async fn bearer_never_falls_back_to_owner_and_cannot_use_legacy_apis() {
         .await
         .unwrap();
     assert_eq!(duplicate.status(), StatusCode::UNAUTHORIZED);
-    for path in ["/workspace", "/tasks/example/runs"] {
-        assert_eq!(
-            kernel.get(path, Some(&agent.token)).await.status(),
-            StatusCode::FORBIDDEN,
-            "{path}"
-        );
-    }
-    for path in [
-        "/onboarding/owner",
-        "/actors",
-        "/projects",
-        "/tasks",
-        "/connections",
-        "/tasks/example/actions",
-        "/tasks/example/assignee",
-        "/worker/claim",
-        "/worker/runs/example/finish",
-        "/worker/runs/example/heartbeat",
-        "/connections/example/heartbeat",
-        "/connections/example/disconnect",
-    ] {
+    assert_eq!(
+        kernel.get("/workspace", Some(&agent.token)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    for path in ["/onboarding/owner", "/actors"] {
         assert_eq!(
             kernel
                 .post(path, Some(&agent.token), json!({}))

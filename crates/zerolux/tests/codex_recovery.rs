@@ -16,6 +16,9 @@ use zerolux::{
     store::Store,
 };
 
+#[path = "support/db.rs"]
+mod db;
+
 /// A kernel over HTTP, as the Codex driver needs one to read its inbox: the runtime learns
 /// its own address before serving. `port` 0 the first time; the same port on a restart.
 async fn kernel(
@@ -116,7 +119,8 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
         std::env::set_var("PI_CODING_AGENT_DIR", dir.path().join("pi"));
         std::env::set_var("PATH", path);
     }
-    let store = Store::open(&dir.path().join("chat.db")).await.unwrap();
+    let database = db::TestDatabase::new(dir.path().join("chat.db")).await;
+    let store = database.open().await;
     store
         .set_owner_name(SetOwnerName {
             name: "Owner".into(),

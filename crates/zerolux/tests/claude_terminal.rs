@@ -89,6 +89,9 @@ impl Drop for Hosts {
         }
     }
 }
+#[path = "support/owner.rs"]
+mod owner;
+
 fn executable(name: &str) -> PathBuf {
     std::env::split_paths(&std::env::var_os("PATH").unwrap())
         .map(|dir| dir.join(name))
@@ -108,7 +111,11 @@ fn isolated(command: &mut Command, root: &Path) {
         .env("TMPDIR", root)
         .env(
             "PATH",
-            format!("{}:/usr/bin:/bin", root.join("bin").display()),
+            format!(
+                "{}:{}:/usr/bin:/bin",
+                root.join("bin").display(),
+                owner::bun_dir().display()
+            ),
         )
         .env("CODEX_HOME", root.join("home/.codex"))
         .env("CLAUDE_CONFIG_DIR", root.join("home/.claude"))
@@ -127,7 +134,8 @@ fn start(root: &Path, port: u16) -> Process {
         .args(["serve", "--port", &port.to_string(), "--database"])
         .arg(root.join("fixture.db"))
         .arg("--web-dir")
-        .arg(root.join("work"));
+        .arg(root.join("work"))
+        .args(owner::auth_entry_args());
     isolated(&mut command, root);
     Process(
         command
@@ -267,13 +275,7 @@ async fn entrusted_terminal_is_resumed_after_exit_without_changing_context() {
         .unwrap();
     let kernel = start(&root, port);
     ready(&client, &base).await;
-    api(
-        &client,
-        &base,
-        "/onboarding/owner",
-        Some(json!({"name":"Fixture owner"})),
-    )
-    .await;
+    let client = owner::client(&base, &root, Duration::from_secs(75)).await;
     let discovered = api(&client, &base, "/sessions", None).await;
     let candidate = discovered["sessions"]
         .as_array()

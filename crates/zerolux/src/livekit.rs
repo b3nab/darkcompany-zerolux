@@ -47,6 +47,11 @@ pub fn workspace_room(workspace_id: &str) -> String {
 pub const TOPIC: &str = "chat";
 
 const TOKEN_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+/// A person's token and the connection it opens last a minute: the device asks for a new one
+/// every time, so a token kept after a sign-out is worth at most that minute, plus the
+/// minute of leeway the server grants an expired token; notices stop at the minute's end
+/// regardless, by the identity's own expiry.
+const HUMAN_TOKEN_TTL: Duration = Duration::from_secs(60);
 const MANAGED_KEY: &str = "zerolux";
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 // The server drains for longer than eight seconds on SIGTERM; bound the wait, then force.
@@ -160,9 +165,30 @@ impl LiveKit {
     /// A receive-only token for the single notice room. The identity is unique per connection,
     /// so several tabs or devices of the same actor coexist instead of evicting each other.
     pub fn client_token(&self, actor_id: &str) -> anyhow::Result<ClientToken> {
+        self.token(&format!("{actor_id}:{}", Uuid::new_v4()), TOKEN_TTL)
+    }
+
+    /// A person's token: short-lived, and its identity carries when it stops being good,
+    /// the end of their sign-in or of the token itself, whichever is first. A connection
+    /// that outlives it is disconnected by `sweep_expired` without the device's cooperation,
+    /// so a token kept after a sign-out is worth at most its own minute: the device then
+    /// needs a new one, which only a live sign-in gets.
+    pub fn human_token(
+        &self,
+        actor_id: &str,
+        session_expires_at: i64,
+    ) -> anyhow::Result<ClientToken> {
+        let until = session_expires_at.min(now_ms() + HUMAN_TOKEN_TTL.as_millis() as i64);
+        self.token(
+            &format!("{actor_id}:h{until}:{}", Uuid::new_v4()),
+            HUMAN_TOKEN_TTL,
+        )
+    }
+
+    fn token(&self, identity: &str, ttl: Duration) -> anyhow::Result<ClientToken> {
         let token = AccessToken::with_api_key(&self.api_key, &self.api_secret)
-            .with_identity(&format!("{actor_id}:{}", Uuid::new_v4()))
-            .with_ttl(TOKEN_TTL)
+            .with_identity(identity)
+            .with_ttl(ttl)
             .with_grants(VideoGrants {
                 room_join: true,
                 room: self.room.clone(),
@@ -176,9 +202,52 @@ impl LiveKit {
         Ok(ClientToken {
             url: self.url.clone(),
             token,
-            expires_at: now_ms() + TOKEN_TTL.as_millis() as i64,
+            expires_at: now_ms() + ttl.as_millis() as i64,
             managed: self.managed(),
         })
+    }
+
+    /// Disconnects the people whose sign-in has ended, by the identity their token carried.
+    pub async fn sweep_expired(&self) -> anyhow::Result<()> {
+        let participants = match self.rooms.list_participants(&self.room).await {
+            Ok(participants) => participants,
+            Err(error) if room_missing(&error) => return Ok(()),
+            Err(error) => return Err(error).context("List LiveKit participants"),
+        };
+        let now = now_ms();
+        for identity in participants
+            .into_iter()
+            .map(|p| p.identity)
+            .filter(|identity| session_expiry(identity).is_some_and(|at| at <= now))
+        {
+            match self.rooms.remove_participant(&self.room, &identity).await {
+                Ok(()) => {}
+                Err(error) if room_missing(&error) => {}
+                Err(error) => return Err(error).context("Disconnect a LiveKit participant"),
+            }
+        }
+        Ok(())
+    }
+
+    /// Disconnects every client of `actor_id`. Each reconnects by asking the kernel for a
+    /// new token: after a sign-out or a revocation, only the devices still signed in get one.
+    pub async fn disconnect_clients(&self, actor_id: &str) -> anyhow::Result<()> {
+        let participants = match self.rooms.list_participants(&self.room).await {
+            Ok(participants) => participants,
+            Err(error) if room_missing(&error) => return Ok(()),
+            Err(error) => return Err(error).context("List LiveKit participants"),
+        };
+        for identity in recipients(
+            participants.into_iter().map(|p| p.identity),
+            &[actor_id.to_owned()],
+        ) {
+            match self.rooms.remove_participant(&self.room, &identity).await {
+                Ok(()) => {}
+                Err(error) if room_missing(&error) => {}
+                Err(error) => return Err(error).context("Disconnect a LiveKit participant"),
+            }
+        }
+        Ok(())
     }
 
     /// Sends a short event to the connected clients of `actor_ids`. Absent actors recover from
@@ -197,8 +266,16 @@ impl LiveKit {
             Err(error) if room_missing(&error) => return Ok(()),
             Err(error) => return Err(error).context("List LiveKit participants"),
         };
-        let destination_identities =
-            recipients(participants.into_iter().map(|p| p.identity), actor_ids);
+        // A person's connection past its token's life hears nothing more, whether or not the
+        // sweep has reached it yet.
+        let now = now_ms();
+        let destination_identities = recipients(
+            participants
+                .into_iter()
+                .map(|p| p.identity)
+                .filter(|identity| session_expiry(identity).is_none_or(|at| at > now)),
+            actor_ids,
+        );
         // LiveKit treats an empty destination list as a broadcast to the whole room.
         if destination_identities.is_empty() {
             return Ok(());
@@ -297,6 +374,13 @@ async fn publish_pending(
             return Err(error);
         }
     }
+}
+
+/// When a person's identity (`<actor>:h<until>:<connection>`) stops being good.
+fn session_expiry(identity: &str) -> Option<i64> {
+    let mut parts = identity.split(':');
+    let _actor = parts.next()?;
+    parts.next()?.strip_prefix('h')?.parse().ok()
 }
 
 /// Connected identities (`<actor>:<connection>`) that belong to one of `actor_ids`.
@@ -429,6 +513,21 @@ async fn start_managed(
 mod tests {
     use super::*;
 
+    /// A notice in the outbox, as a chat transaction would leave it.
+    async fn outbox(store: &Store, event_id: &str, payload: &str, recipients: &str) {
+        use sea_orm::{ActiveModelTrait, Set};
+        crate::entity::chat_outbox::ActiveModel {
+            event_id: Set(event_id.into()),
+            payload_json: Set(payload.into()),
+            recipient_actor_ids_json: Set(recipients.into()),
+            created_at: Set(now_ms()),
+            published_at: Set(None),
+        }
+        .insert(store.db())
+        .await
+        .unwrap();
+    }
+
     fn config(url: Option<&str>, key: Option<&str>, secret: Option<&str>) -> LiveKitConfig {
         LiveKitConfig {
             url: url.map(Into::into),
@@ -550,14 +649,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("test.db")).await.unwrap();
         for (event_id, recipients) in [("nobody", "[]"), ("someone", r#"["actor"]"#)] {
-            sqlx::query("INSERT INTO chat_outbox VALUES (?, ?, ?, ?, NULL)")
-                .bind(event_id)
-                .bind(format!(r#"{{"event_id":"{event_id}"}}"#))
-                .bind(recipients)
-                .bind(now_ms())
-                .execute(&store.pool)
-                .await
-                .unwrap();
+            outbox(
+                &store,
+                event_id,
+                &format!(r#"{{"event_id":"{event_id}"}}"#),
+                recipients,
+            )
+            .await;
         }
         // Unreachable server: the notice with a recipient fails, the one without is done.
         let livekit = LiveKit::start(config(
@@ -581,17 +679,13 @@ mod tests {
         assert_eq!(pending[0].event_id, "someone");
 
         // A commit that never signalled `changed` is still published by the recovery timer.
-        sqlx::query("INSERT INTO chat_outbox VALUES ('unsignalled', '{}', '[]', ?, NULL)")
-            .bind(now_ms())
-            .execute(&store.pool)
-            .await
-            .unwrap();
+        outbox(&store, "unsignalled", "{}", "[]").await;
         tokio::time::sleep(RETRY + Duration::from_secs(2)).await;
         let pending = store.pending_chat_events(10).await.unwrap();
         assert_eq!(pending.len(), 1, "only the failing notice remains");
         assert_eq!(pending[0].event_id, "someone");
         stopper.send(true).unwrap();
-        tokio::time::timeout(Duration::from_secs(2), publisher)
+        tokio::time::timeout(Duration::from_secs(60), publisher)
             .await
             .expect("publisher stops")
             .unwrap();

@@ -166,7 +166,8 @@ mod tests {
 
     fn health(id: &str) -> String {
         format!(
-            r#"{{"name":"zerolux","api_version":1,"version":"0.0.1-dev","capabilities":["chat-v1"],"workspace":{{"id":"{id}","name":"Workspace","created_at":1}}}}"#
+            r#"{{"name":"zerolux","api_version":{version},"version":"0.0.1-dev","capabilities":["chat-v1","auth-v1"],"workspace":{{"id":"{id}","name":"Workspace","created_at":1}}}}"#,
+            version = zerolux::api::API_VERSION
         )
     }
 
@@ -210,7 +211,10 @@ mod tests {
             ),
             (
                 "200 OK",
-                r#"{"name":"zerolux","api_version":2,"workspace":{"id":"future"}}"#.to_owned(),
+                format!(
+                    r#"{{"name":"zerolux","api_version":{},"workspace":{{"id":"future"}}}}"#,
+                    zerolux::api::API_VERSION + 1
+                ),
                 "not compatible",
             ),
             ("200 OK", "not json".to_owned(), "not JSON"),

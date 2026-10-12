@@ -9,8 +9,10 @@ use zerolux::{
     harness::Harness,
     livekit::{LiveKit, LiveKitConfig},
     model::*,
-    store::Store,
 };
+
+#[path = "support/db.rs"]
+mod db;
 
 #[allow(dead_code)]
 #[path = "support/codex_runtime.rs"]
@@ -19,7 +21,8 @@ mod native;
 #[tokio::test(flavor = "multi_thread")]
 async fn native_backlog_and_later_messages_arrive_when_livekit_is_unavailable() {
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(&dir.path().join("chat.db")).await.unwrap();
+    let database = db::TestDatabase::new(dir.path().join("chat.db")).await;
+    let store = database.open().await;
     store
         .set_owner_name(SetOwnerName {
             name: "Fixture owner".into(),

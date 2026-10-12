@@ -13,6 +13,8 @@ use tokio::{net::TcpListener, sync::watch, task::JoinHandle};
 use crate::{
     api,
     chat_runtime::ChatRuntime,
+    db::Location,
+    lease::Lease,
     livekit::{LiveKit, LiveKitConfig},
     store::Store,
 };
@@ -20,7 +22,10 @@ use crate::{
 pub struct ServerOptions {
     pub address: SocketAddr,
     pub expose: Option<IpAddr>,
-    pub database: PathBuf,
+    /// Where this kernel keeps what is local to it: links, sockets, secrets, LiveKit assets.
+    pub data_dir: PathBuf,
+    /// The workspace's data: a SQLite file (usually in `data_dir`) or a PostgreSQL server.
+    pub database: Location,
     pub web_dir: PathBuf,
     /// An explicit configuration avoids inheriting service credentials in embedders/tests.
     /// `None` retains the CLI's LIVEKIT_* environment configuration.
@@ -30,6 +35,9 @@ pub struct ServerOptions {
     pub public: Option<Arc<api::PublicOrigin>>,
     #[cfg(unix)]
     pub runner: Option<crate::claude_runner::RunnerProgram>,
+    /// Human sign-in through the authentication service started from here. `None` (tests,
+    /// embedders) runs the kernel as it ran before accounts: the local owner is implicit.
+    pub auth: Option<crate::auth::AuthEntry>,
 }
 
 /// Dropping requests shutdown; `shutdown`/`run_until` also wait for cleanup.
@@ -64,22 +72,79 @@ impl Server {
             ),
             None => None,
         };
-        let data_dir = options
-            .database
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .to_path_buf();
+        let data_dir = options.data_dir;
         tokio::fs::create_dir_all(&data_dir)
             .await
-            .context("Create database directory")?;
-        // One running kernel per workspace, whatever started it (CLI, desktop, a second copy
-        // of either). Held until cleanup ends; plain store access (tests, maintenance) is free.
-        let lease = lease(&options.database)?;
-        let store = Store::open(&options.database)
+            .context("Create the data directory")?;
+        // One running kernel per SQLite workspace: the lease comes before migrations and
+        // before anything is started for the workspace. Held until cleanup ends.
+        let lease = Lease::acquire(&options.database)?;
+        let store = Store::open_at(&options.database)
             .await
             .context("Open the database")?;
+        // This kernel's host: the agent sessions it starts live here, and only it links them.
+        let host_id = host_id(&data_dir).await?;
+        let store = store.hosted(host_id);
         let workspace = store.workspace_info().await?;
+        let base_url = format!("http://{address}");
+        let auth = match &options.auth {
+            Some(entry) => {
+                // The exact origins clients sign in from: this computer, the exposed address,
+                // the public origin and the desktop app. Cookies are set for the public origin
+                // when there is one.
+                let mut origins = vec![
+                    base_url.clone(),
+                    format!("http://localhost:{}", address.port()),
+                    "tauri://localhost".to_owned(),
+                    "http://tauri.localhost".to_owned(),
+                ];
+                if let Some(listener) = &exposed {
+                    origins.push(format!("http://{}", listener.local_addr()?));
+                }
+                let canonical = match &options.public {
+                    Some(public) => public.origin().to_owned(),
+                    None => base_url.clone(),
+                };
+                let secret = store.auth_secret().await?;
+                // Kernels of one workspace start their services one at a time: the service
+                // migrates its own tables on start. PostgreSQL only; SQLite has one host.
+                let turn = match &options.database {
+                    Location::Postgres(_) => Some(store.write().await?),
+                    Location::Sqlite(_) => None,
+                };
+                let service = crate::auth::AuthService::start(
+                    entry,
+                    &workspace.id,
+                    &options.database,
+                    &secret,
+                    &canonical,
+                    &origins,
+                )
+                .await?;
+                if let Some(turn) = turn {
+                    turn.commit().await?;
+                }
+                // The setup credential, while no account is bound: delivered as a private
+                // file here, never logged. A consumed one leaves no file behind.
+                let setup_path = data_dir.join("auth/setup-token");
+                match store.setup_token().await? {
+                    Some(token) => {
+                        tokio::fs::create_dir_all(data_dir.join("auth")).await?;
+                        crate::auth::write_private(&setup_path, &token).await?;
+                        tracing::info!(path = %setup_path.display(), "No account is bound to the owner yet: the setup credential is in this file");
+                    }
+                    None if store.owner_bound().await? => {
+                        let _ = tokio::fs::remove_file(&setup_path).await;
+                    }
+                    None => {}
+                }
+                Some(Arc::new(api::Auth {
+                    service: Arc::new(service),
+                    setup_path,
+                }))
+            }
+            None => None,
+        };
         let livekit = Arc::new(
             LiveKit::start_exposed(
                 options
@@ -90,7 +155,6 @@ impl Server {
             .await?
             .for_workspace(&workspace.id),
         );
-        let base_url = format!("http://{address}");
         let links = std::path::absolute(data_dir.join("links"))?;
         #[cfg(unix)]
         let started = match options.runner {
@@ -114,6 +178,9 @@ impl Server {
                 if let Err(cleanup) = livekit.shutdown().await {
                     tracing::error!(%cleanup, "LiveKit cleanup failed after startup error");
                 }
+                if let Some(auth) = &auth {
+                    auth.service.shutdown().await;
+                }
                 return Err(error);
             }
         };
@@ -128,9 +195,10 @@ impl Server {
             Some(runtime.clone()),
             access,
             options.public,
+            auth.clone(),
         )
         .into_make_service_with_connect_info::<SocketAddr>();
-        tracing::info!(%address, database = %options.database.display(), "ZeroLux kernel ready (local, single-owner mode)");
+        tracing::info!(%address, database = %options.database, "ZeroLux kernel ready (local, single-owner mode)");
         let task = tokio::spawn(async move {
             let relink = runtime.clone();
             let relinker = tokio::spawn(async move {
@@ -142,12 +210,14 @@ impl Server {
                     }
                 }
             });
-            let reaper = tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(5));
+            // People whose sign-in ended while connected to the notice room are disconnected.
+            let sweep = runtime.clone();
+            let sweeper = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(30));
                 loop {
                     interval.tick().await;
-                    if let Err(error) = store.reap_expired().await {
-                        tracing::error!(error = format!("{error:#}"), "Lease recovery failed");
+                    if let Err(error) = sweep.sweep_expired().await {
+                        tracing::error!(error = format!("{error:#}"), "Realtime sweep failed");
                     }
                 }
             });
@@ -176,12 +246,16 @@ impl Server {
                     result = Err(error);
                 }
             }
-            reaper.abort();
             relinker.abort();
-            let _ = reaper.await;
+            sweeper.abort();
             let _ = relinker.await;
+            let _ = sweeper.await;
             let runtime_stopped = runtime.shutdown().await;
             let livekit_stopped = livekit.shutdown().await;
+            if let Some(auth) = &auth {
+                auth.service.shutdown().await;
+            }
+            // Released last, once everything else has stopped.
             drop(lease);
             result?;
             runtime_stopped?;
@@ -223,64 +297,36 @@ impl Drop for Server {
     }
 }
 
-/// The exclusive lease of a workspace's kernel: `<database>.lock` next to the real database
-/// file, so every alias of the same data meets the same lease. Released with its file.
-fn lease(database: &std::path::Path) -> Result<std::fs::File> {
-    // The directory exists by now; the database may not yet. Resolve the directory, keep the
-    // file name: a symlinked database still maps to one lease.
-    let directory = database
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let directory = std::fs::canonicalize(directory)
-        .with_context(|| format!("Resolve the data directory {}", directory.display()))?;
-    let name = database
-        .file_name()
-        .context("The database path must name a file")?;
-    let real = match std::fs::canonicalize(database) {
-        Ok(real) => real,
-        Err(_) => directory.join(name),
-    };
-    // Hard links are not unified by canonicalize: a database reachable under two names
-    // would get two leases. Refuse rather than guess.
-    #[cfg(unix)]
-    if let Ok(metadata) = std::fs::metadata(&real) {
-        use std::os::unix::fs::MetadataExt;
-        anyhow::ensure!(
-            metadata.nlink() <= 1,
-            "The database {} has more than one hard link; a workspace must have one path",
-            real.display()
-        );
-    }
-    let path = real.with_extension("db.lock");
-    let mut open = std::fs::OpenOptions::new();
-    open.read(true).write(true).create(true).truncate(false);
-    // Never follow a symlink planted at the lease path, without a check-then-open race.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        open.custom_flags(nix::libc::O_NOFOLLOW);
-    }
-    #[cfg(not(unix))]
-    if let Ok(metadata) = std::fs::symlink_metadata(&path) {
-        anyhow::ensure!(
-            metadata.file_type().is_file(),
-            "The kernel lease {} must be a regular file",
-            path.display()
-        );
-    }
-    let file = open
-        .open(&path)
-        .with_context(|| format!("Open the kernel lease {}", path.display()))?;
-    fs2::FileExt::try_lock_exclusive(&file).with_context(|| {
-        format!(
-            "Another ZeroLux kernel already serves {}. Stop it, or point this one at its address instead of its data.",
-            database.display()
-        )
-    })?;
-    Ok(file)
-}
-
 async fn stopping(mut stopped: watch::Receiver<bool>) {
     let _ = stopped.wait_for(|stop| *stop).await;
+}
+
+/// The identity of this kernel host, made once in its data directory.
+async fn host_id(data_dir: &std::path::Path) -> Result<String> {
+    let path = data_dir.join("host-id");
+    match tokio::fs::read_to_string(&path).await {
+        Ok(existing) if !existing.trim().is_empty() => Ok(existing.trim().to_owned()),
+        Ok(_) => bail!("The host identity file {} is empty", path.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let id = uuid::Uuid::new_v4().to_string();
+            crate::auth::write_private(&path, &id).await?;
+            Ok(id)
+        }
+        Err(error) => Err(error).with_context(|| format!("Read {}", path.display())),
+    }
+}
+
+/// Ctrl-C or SIGTERM: the kernel's request to stop.
+pub async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("install SIGTERM handler");
+        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }

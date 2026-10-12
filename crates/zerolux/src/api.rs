@@ -6,6 +6,7 @@ use std::{
 
 use axum::{
     Extension, Json, Router,
+    body::Body,
     extract::{
         ConnectInfo, DefaultBodyLimit, FromRef, FromRequest, Path, Query, Request, State,
         rejection::QueryRejection,
@@ -23,6 +24,7 @@ use tower_http::{
 };
 
 use crate::{
+    auth::{AuthService, HumanSession},
     chat_runtime::ChatRuntime,
     codex::CodexStartFailure,
     model::*,
@@ -79,6 +81,10 @@ impl PublicOrigin {
         }))
     }
 
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
+
     fn serves(&self, host: Option<&str>) -> bool {
         host.is_some_and(|h| h.eq_ignore_ascii_case(&self.authority))
     }
@@ -94,12 +100,33 @@ impl Exposed {
     }
 }
 
+/// Human sign-in: the authentication service. Without it (tests, embedders) requests
+/// without credentials are the local owner's, as before any account existed.
+pub struct Auth {
+    pub service: Arc<AuthService>,
+    /// Where this kernel delivered the setup credential; removed once it is consumed.
+    pub setup_path: PathBuf,
+}
+
+/// Who a request is from, as the middleware established it.
+#[derive(Clone)]
+enum Identity {
+    /// An agent's session, by its kernel-issued token; or the owner, with the sign-in
+    /// behind them when there is an authentication service.
+    Known(ChatIdentity, Option<HumanSession>),
+    /// A signed-in account not bound to the owner: may ask who it is and claim, nothing else.
+    Unbound(HumanSession),
+    /// No credentials: the health endpoint and the sign-in endpoints only.
+    Anonymous,
+}
+
 #[derive(Clone)]
 struct AppState {
     store: Store,
     runtime: Option<Arc<ChatRuntime>>,
     exposed: Option<Arc<Exposed>>,
     public: Option<Arc<PublicOrigin>>,
+    auth: Option<Arc<Auth>>,
 }
 
 impl FromRef<AppState> for Store {
@@ -118,7 +145,7 @@ impl IntoResponse for Error {
             Self::Conflict | Self::OnboardingRequired | Self::StoppedByOwner => {
                 StatusCode::CONFLICT
             }
-            Self::Database(_) | Self::Migration(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Database(_) | Self::Schema(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         let message = if status.is_server_error() {
             tracing::error!(error = %self, "API failure");
@@ -137,6 +164,7 @@ pub fn router(store: Store, web_dir: PathBuf) -> Router {
             runtime: None,
             exposed: None,
             public: None,
+            auth: None,
         },
         web_dir,
     )
@@ -153,16 +181,18 @@ pub fn router_exposed(
     runtime: Option<Arc<ChatRuntime>>,
     exposed: Option<Arc<Exposed>>,
 ) -> Router {
-    router_public(store, web_dir, runtime, exposed, None)
+    router_public(store, web_dir, runtime, exposed, None, None)
 }
 
-/// Also serve a public origin, as a reverse proxy presents this kernel.
+/// Also serve a public origin, as a reverse proxy presents this kernel; with human sign-in
+/// when `auth` is given.
 pub fn router_public(
     store: Store,
     web_dir: PathBuf,
     runtime: Option<Arc<ChatRuntime>>,
     exposed: Option<Arc<Exposed>>,
     public: Option<Arc<PublicOrigin>>,
+    auth: Option<Arc<Auth>>,
 ) -> Router {
     app_router(
         AppState {
@@ -170,6 +200,7 @@ pub fn router_public(
             runtime,
             exposed,
             public,
+            auth,
         },
         web_dir,
     )
@@ -180,20 +211,8 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/workspace", get(workspace).post(set_workspace_name))
         .route("/onboarding/owner", post(set_owner_name))
         .route("/actors", post(create_agent))
-        .route("/connections", post(connect_agent))
-        .route("/connections/{id}/heartbeat", post(connection_heartbeat))
-        .route("/connections/{id}/disconnect", post(disconnect_agent))
-        .route("/projects", post(create_project))
-        .route("/tasks", post(create_task))
-        .route("/tasks/{id}/actions", post(act))
-        .route("/tasks/{id}/assignee", post(reassign_task))
-        .route("/tasks/{id}/runs", get(runs))
-        .route("/worker/claim", post(claim))
-        .route("/worker/runs/{id}/heartbeat", post(heartbeat))
-        .route("/worker/runs/{id}/finish", post(finish))
         .route_layer(middleware::from_fn(owner_only));
-    let api = legacy
-        .route("/health", get(health))
+    let domain = legacy
         .route("/sessions", get(discover_sessions))
         .route("/chat/hire", post(hire_session))
         .route("/chat/claude-sessions", post(create_claude_session))
@@ -226,13 +245,23 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/chat/approvals/{id}/decision", post(decide_approval))
         .route("/chat/approvals/{id}/dispatch", post(dispatch_approval))
         .route("/chat/approvals/{id}/receipt", post(approval_receipt))
+        .route_layer(middleware::from_fn(require_identity));
+    // Reachable before one is signed in: what this kernel is, and how to sign in.
+    let open = Router::new()
+        .route("/health", get(health))
+        .route("/auth/identity", get(auth_identity))
+        .route("/auth/claim", post(auth_claim))
+        .route("/auth/{*rest}", axum::routing::any(auth_proxy));
+    let api = open
+        .merge(domain)
         .fallback(|| async {
             (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "Unknown API endpoint" })),
             )
         })
-        .layer(middleware::from_fn_with_state(state.clone(), chat_access));
+        .layer(middleware::from_fn_with_state(state.clone(), identify))
+        .layer(middleware::from_fn(no_store));
     Router::new()
         .nest("/api", api)
         // The web app owns its addresses: any page address gets the app, which shows the page.
@@ -254,7 +283,21 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .with_state(state)
 }
 
-async fn chat_access(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
+/// Nothing of the API is cached by a browser or a device: discovery, identity and
+/// revocation take effect on the next request.
+async fn no_store(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
+/// Who the request is from. A bearer token is an agent's (kernel-issued) or a signed-in
+/// account's (signed by the authentication service); a cookie is an account's. Without the
+/// authentication service, a request without credentials is the local owner's.
+async fn identify(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
     let headers = request.headers().get_all(axum::http::header::AUTHORIZATION);
     if headers.iter().count() > 1 {
         return Error::Unauthorized.into_response();
@@ -273,12 +316,53 @@ async fn chat_access(State(state): State<AppState>, mut request: Request, next: 
             {
                 return Error::Unauthorized.into_response();
             }
-            Some(token)
+            Some(token.to_owned())
         }
     };
-    let identity = match state.store.chat_identity(token).await {
-        Ok(identity) => identity,
-        Err(error) => return error.into_response(),
+    let identity = match (&state.auth, token.as_deref()) {
+        (None, token) => match state.store.chat_identity(token).await {
+            Ok(identity) => Identity::Known(identity, None),
+            Err(error) => return error.into_response(),
+        },
+        (Some(_), Some(token)) if is_agent_token(token) => {
+            match state.store.chat_identity(Some(token)).await {
+                Ok(identity) => Identity::Known(identity, None),
+                Err(error) => return error.into_response(),
+            }
+        }
+        (Some(auth), token) => {
+            if token.is_none() && !request.headers().contains_key(header::COOKIE) {
+                Identity::Anonymous
+            } else {
+                match auth
+                    .service
+                    .session(request.headers(), peer(&request))
+                    .await
+                {
+                    Err(error) => {
+                        tracing::error!(error = format!("{error:#}"), "Session check failed");
+                        return refused(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "Sign-in is unavailable right now",
+                        );
+                    }
+                    Ok(None) => Identity::Anonymous,
+                    Ok(Some(session)) => {
+                        match state.store.actor_for_subject(&session.subject).await {
+                            Err(error) => return error.into_response(),
+                            Ok(Some(actor)) => Identity::Known(
+                                ChatIdentity {
+                                    actor_id: actor.id,
+                                    session_id: None,
+                                },
+                                Some(session),
+                            ),
+                            Ok(None) => Identity::Unbound(session),
+                        }
+                    }
+                }
+            }
+        }
     };
     request.extensions_mut().insert(identity);
     let mutation = !matches!(
@@ -293,6 +377,34 @@ async fn chat_access(State(state): State<AppState>, mut request: Request, next: 
         runtime.changed();
     }
     response
+}
+
+/// An agent's token is 64 hex digits of the kernel's; a signed session token is not.
+fn is_agent_token(token: &str) -> bool {
+    token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// The domain: someone known. An account not bound to the owner is told so; no one is
+/// told anything.
+async fn require_identity(
+    Extension(identity): Extension<Identity>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    match identity {
+        Identity::Known(who, session) => {
+            request.extensions_mut().insert(who);
+            if let Some(session) = session {
+                request.extensions_mut().insert(session);
+            }
+            next.run(request).await
+        }
+        Identity::Unbound(_) => refused(
+            StatusCode::FORBIDDEN,
+            "This account is not bound to the workspace owner; claim it with the setup credential",
+        ),
+        Identity::Anonymous => Error::Unauthorized.into_response(),
+    }
 }
 
 async fn owner_only(
@@ -783,11 +895,16 @@ async fn send_message(
 async fn livekit_token(
     State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
+    session: Option<Extension<HumanSession>>,
     request: Request,
 ) -> Result<Json<Value>, ApiFailure> {
-    let mut ticket = runtime(&state)?
-        .client_token(&who.actor_id)
-        .map_err(runtime_error)?;
+    let runtime = runtime(&state)?;
+    // A person's token ends with their sign-in; an agent's lasts its working day.
+    let mut ticket = match session {
+        Some(Extension(session)) => runtime.human_token(&who.actor_id, session.expires_at),
+        None => runtime.client_token(&who.actor_id),
+    }
+    .map_err(runtime_error)?;
     let host = request.headers().get("host").and_then(|h| h.to_str().ok());
     if let Some(public) = state.public.as_ref().filter(|p| p.serves(host)) {
         // Behind the proxy, the kernel's own LiveKit is reachable only where the operator
@@ -939,6 +1056,11 @@ fn with_desktop_cors(mut response: Response, origin: &str) -> Response {
         header::HeaderValue::from_str(origin).expect("known origin"),
     );
     headers.insert(header::VARY, header::HeaderValue::from_static("Origin"));
+    // The signed session token of a sign-in, for the app to keep.
+    headers.insert(
+        header::ACCESS_CONTROL_EXPOSE_HEADERS,
+        header::HeaderValue::from_static("set-auth-token"),
+    );
     response
 }
 
@@ -951,7 +1073,7 @@ fn desktop_preflight(origin: &str) -> Response {
     );
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
-        header::HeaderValue::from_static("content-type"),
+        header::HeaderValue::from_static("content-type, authorization, x-zerolux-setup-token"),
     );
     headers.insert(
         header::ACCESS_CONTROL_MAX_AGE,
@@ -1012,7 +1134,7 @@ async fn classify(state: AppState, request: Request, next: Next) -> Response {
                 "Only same-origin requests to the public origin are allowed",
             );
         }
-        if request.headers().contains_key(header::AUTHORIZATION) {
+        if carries_agent_token(&request) {
             return refused(
                 StatusCode::FORBIDDEN,
                 "Agents connect from the kernel's computer",
@@ -1050,7 +1172,7 @@ async fn classify(state: AppState, request: Request, next: Next) -> Response {
         );
     }
     // Agents run next to the kernel: a credential of theirs never arrives from elsewhere.
-    if request.headers().contains_key(header::AUTHORIZATION) {
+    if carries_agent_token(&request) {
         return refused(
             StatusCode::FORBIDDEN,
             "Agents connect from the kernel's computer",
@@ -1059,23 +1181,216 @@ async fn classify(state: AppState, request: Request, next: Next) -> Response {
     next.run(request).await
 }
 
+/// A bearer token of the kernel's own (an agent's), as opposed to a signed session token of
+/// a person signing in from their device.
+fn carries_agent_token(request: &Request) -> bool {
+    request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split_once(' '))
+        .is_some_and(|(_, token)| is_agent_token(token.trim()))
+}
+
 async fn workspace(State(store): State<Store>) -> Result<Json<Workspace>, Error> {
     Ok(Json(store.workspace().await?))
 }
 /// The HTTP API contract clients check before talking to a kernel. Bumped only when a
 /// change breaks a client that followed the previous number; features go in `capabilities`.
-pub const API_VERSION: u32 = 1;
+/// 2: the domain requires a signed-in, bound account (`auth-v1`).
+pub const API_VERSION: u32 = 2;
 
-/// Reachable without a device token: what this kernel is, and the company it runs.
-async fn health(State(store): State<Store>) -> Result<Json<Value>, Error> {
-    let workspace = store.workspace_info().await?;
+/// Reachable without credentials: what this kernel is, the company it runs, and whether an
+/// account still has to be bound to its owner.
+async fn health(State(state): State<AppState>) -> Result<Json<Value>, Error> {
+    let workspace = state.store.workspace_info().await?;
+    let mut capabilities = vec!["byoh-v1", "owner-onboarding-v1", "chat-v1"];
+    let auth = match &state.auth {
+        Some(_) => {
+            capabilities.push("auth-v1");
+            Some(json!({ "setup_required": !state.store.owner_bound().await? }))
+        }
+        None => None,
+    };
     Ok(Json(json!({
         "name": "zerolux",
         "version": env!("CARGO_PKG_VERSION"),
         "api_version": API_VERSION,
-        "capabilities": ["byoh-v1", "owner-onboarding-v1", "chat-v1"],
+        "capabilities": capabilities,
         "workspace": workspace,
+        "auth": auth,
     })))
+}
+
+fn auth_of(state: &AppState) -> Result<&Arc<Auth>, ApiFailure> {
+    state
+        .auth
+        .as_ref()
+        .ok_or_else(|| failure(StatusCode::NOT_FOUND, "This kernel runs without sign-in"))
+}
+
+fn failure(status: StatusCode, message: &str) -> ApiFailure {
+    ApiFailure(Box::new(refused(status, message)))
+}
+
+fn identity_json(session: &HumanSession, actor_id: Option<&str>, setup_required: bool) -> Value {
+    json!({
+        "user": { "id": session.subject, "name": session.name, "email": session.email },
+        "actor_id": actor_id,
+        "setup_required": setup_required,
+    })
+}
+
+/// Who the signed-in account is to this workspace: the owner, or not bound yet.
+async fn auth_identity(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+) -> Result<Json<Value>, ApiFailure> {
+    auth_of(&state)?;
+    let setup_required = !state.store.owner_bound().await?;
+    match identity {
+        Identity::Unbound(session) => Ok(Json(identity_json(&session, None, setup_required))),
+        Identity::Known(who, Some(session)) if who.is_owner() => Ok(Json(identity_json(
+            &session,
+            Some(&who.actor_id),
+            setup_required,
+        ))),
+        Identity::Known(..) => Err(Error::Forbidden.into()),
+        Identity::Anonymous => Err(Error::Unauthorized.into()),
+    }
+}
+
+#[derive(Deserialize)]
+struct SetupClaim {
+    setup_token: String,
+}
+
+/// Binds the signed-in account to the owner, with the setup credential, once.
+async fn auth_claim(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    ChatJson(input): ChatJson<SetupClaim>,
+) -> Result<Json<Value>, ApiFailure> {
+    let auth = auth_of(&state)?;
+    let session = match identity {
+        Identity::Unbound(session) => session,
+        Identity::Known(who, _) if who.is_owner() => {
+            return Err(failure(
+                StatusCode::CONFLICT,
+                "This account is already the owner",
+            ));
+        }
+        Identity::Known(..) => return Err(Error::Forbidden.into()),
+        Identity::Anonymous => return Err(Error::Unauthorized.into()),
+    };
+    let owner = state
+        .store
+        .bind_owner(&session.subject, &session.name, &input.setup_token)
+        .await
+        .map_err(|error| match error {
+            Error::Forbidden => failure(StatusCode::FORBIDDEN, "The setup credential is not valid"),
+            other => other.into(),
+        })?;
+    let _ = tokio::fs::remove_file(&auth.setup_path).await;
+    Ok(Json(identity_json(&session, Some(&owner.id), false)))
+}
+
+/// Better Auth's own endpoints, through the kernel: sign-in, sign-out, sessions, password.
+/// Signing up needs the setup credential: this is not an open registration. What ends or
+/// may end sessions also disconnects the person's realtime clients: the ones still signed
+/// in come back on their own.
+async fn auth_proxy(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    mut request: Request,
+) -> Response {
+    let auth = match auth_of(&state) {
+        Ok(auth) => auth,
+        Err(failure) => return failure.into_response(),
+    };
+    // The path as the service will see it: normalized, so nothing dodges the signup check.
+    let path = request
+        .extensions()
+        .get::<axum::extract::OriginalUri>()
+        .map_or_else(
+            || request.uri().path().to_owned(),
+            |o| o.0.path().to_owned(),
+        );
+    let path = match reqwest::Url::parse(&format!("http://kernel{path}")) {
+        Ok(url) => url.path().to_owned(),
+        Err(_) => return refused(StatusCode::BAD_REQUEST, "Invalid path"),
+    };
+    let signup = path == "/api/auth/sign-up/email";
+    let revokes = matches!(
+        path.rsplit('/').next(),
+        Some(
+            "sign-out"
+                | "revoke-session"
+                | "revoke-sessions"
+                | "revoke-other-sessions"
+                | "change-password"
+        )
+    );
+    let peer = peer(&request);
+    let enroll = if signup {
+        let presented = request
+            .headers()
+            .get("x-zerolux-setup-token")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        match state.store.setup_token_valid(presented).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return refused(
+                    StatusCode::FORBIDDEN,
+                    "Signing up needs the setup credential of this workspace",
+                );
+            }
+            Err(error) => return error.into_response(),
+        }
+        // The owner's name, as the kernel checks it: a signup the claim would refuse is
+        // refused here, before an account exists.
+        let (parts, body) = request.into_parts();
+        let bytes = match axum::body::to_bytes(body, 64 * 1024).await {
+            Ok(bytes) => bytes,
+            Err(_) => return refused(StatusCode::BAD_REQUEST, "Invalid signup"),
+        };
+        let name = serde_json::from_slice::<Value>(&bytes)
+            .ok()
+            .and_then(|v| v.get("name").and_then(Value::as_str).map(str::to_owned))
+            .unwrap_or_default();
+        if let Err(error) = crate::store::owner_name(&name) {
+            return error.into_response();
+        }
+        request = Request::from_parts(parts, Body::from(bytes));
+        true
+    } else {
+        false
+    };
+    match auth.service.proxy(request, enroll, peer).await {
+        Ok(response) => {
+            if revokes
+                && response.status().is_success()
+                && let Identity::Known(who, _) = identity
+                && who.is_owner()
+                && let Some(runtime) = &state.runtime
+                && let Err(error) = runtime.disconnect_clients(&who.actor_id).await
+            {
+                tracing::error!(
+                    error = format!("{error:#}"),
+                    "Disconnecting realtime clients failed"
+                );
+            }
+            response
+        }
+        Err(error) => {
+            tracing::error!(error = format!("{error:#}"), "Authentication proxy failed");
+            refused(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Sign-in is unavailable right now",
+            )
+        }
+    }
 }
 async fn set_owner_name(
     State(store): State<Store>,
@@ -1091,81 +1406,9 @@ async fn set_workspace_name(
         json!({ "workspace": store.set_workspace_name(input).await? }),
     ))
 }
-async fn reassign_task(
-    State(store): State<Store>,
-    Path(id): Path<String>,
-    Json(input): Json<ReassignTask>,
-) -> Result<Json<Task>, Error> {
-    Ok(Json(store.reassign_task(&id, input).await?))
-}
 async fn create_agent(
     State(store): State<Store>,
     Json(input): Json<CreateAgent>,
 ) -> Result<impl IntoResponse, Error> {
     Ok((StatusCode::CREATED, Json(store.create_agent(input).await?)))
-}
-async fn connect_agent(
-    State(store): State<Store>,
-    Json(input): Json<ConnectAgent>,
-) -> Result<impl IntoResponse, Error> {
-    Ok((StatusCode::CREATED, Json(store.connect_agent(input).await?)))
-}
-async fn connection_heartbeat(
-    State(store): State<Store>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, Error> {
-    store.connection_heartbeat(&id).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-async fn disconnect_agent(
-    State(store): State<Store>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, Error> {
-    store.disconnect_agent(&id).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-async fn create_project(
-    State(store): State<Store>,
-    Json(input): Json<CreateProject>,
-) -> Result<impl IntoResponse, Error> {
-    Ok((
-        StatusCode::CREATED,
-        Json(store.create_project(input).await?),
-    ))
-}
-async fn create_task(
-    State(store): State<Store>,
-    Json(input): Json<CreateTask>,
-) -> Result<impl IntoResponse, Error> {
-    Ok((StatusCode::CREATED, Json(store.create_task(input).await?)))
-}
-async fn act(
-    State(store): State<Store>,
-    Path(id): Path<String>,
-    Json(input): Json<TaskAction>,
-) -> Result<Json<Task>, Error> {
-    Ok(Json(store.act(&id, input).await?))
-}
-async fn runs(State(store): State<Store>, Path(id): Path<String>) -> Result<Json<Vec<Run>>, Error> {
-    Ok(Json(store.runs(&id).await?))
-}
-async fn claim(
-    State(store): State<Store>,
-    Json(input): Json<ClaimRequest>,
-) -> Result<Json<Option<Claim>>, Error> {
-    Ok(Json(store.claim(input).await?))
-}
-async fn heartbeat(
-    State(store): State<Store>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, Error> {
-    store.heartbeat(&id).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-async fn finish(
-    State(store): State<Store>,
-    Path(id): Path<String>,
-    Json(input): Json<FinishRun>,
-) -> Result<Json<Run>, Error> {
-    Ok(Json(store.finish(&id, input).await?))
 }
