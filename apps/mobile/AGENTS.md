@@ -1,12 +1,13 @@
 # Mobile app
 
-Expo (React Native) app for iOS and Android. It talks to a running kernel over HTTP and receives chat updates through LiveKit.
+Expo (React Native) app for iOS and Android. It talks to a running kernel over HTTP on the owner's LAN (`--expose`) or HTTPS elsewhere, and receives chat updates through LiveKit.
 
 ## Stack
 
 - Expo Router: every file in `app/` is a screen, `_layout.tsx` files are navigators. Components, hooks and helpers live outside `app/`.
 - Styling: Tailwind v4 through Uniwind (`global.css`), tokens only from the themes in `packages/theme`. Components from React Native Reusables (`components/ui`), lists with Legend List, keyboard handling with `react-native-keyboard-controller`.
 - Shared chat logic comes from `packages/chat`.
+- Authentication uses the shared `AuthConnection` with Expo SecureStore and `expo/fetch`. All private routes belong inside the authenticated `Stack.Protected` section of `app/_layout.tsx`; domain hooks stay disabled until the account is bound. Do not put session tokens in URLs or ordinary app storage.
 - Messages render with `react-native-enriched-markdown`; Mermaid diagrams with the `mermaid` package inside an Expo DOM component.
 
 ## Commands

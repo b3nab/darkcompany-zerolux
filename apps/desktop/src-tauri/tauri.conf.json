@@ -21,7 +21,7 @@
         },
         {
           "identifier": "workspace-window",
-          "description": "Packaged workspace window controls only; no registry, file or process access",
+          "description": "Packaged workspace controls and its own credentials; no registry or process access",
           "local": true,
           "windows": ["workspace-*"],
           "permissions": [
@@ -43,7 +43,8 @@
     "resources": {
       "../dist/web/": "web/",
       "../dist/claude/": "claude/",
-      "../dist/pi/": "pi/"
+      "../dist/pi/": "pi/",
+      "../dist/auth/": "auth/"
     },
     "icon": [
       "../dist/icons/32x32.png",

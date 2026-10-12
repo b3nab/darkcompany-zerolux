@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { App } from "./App";
+import { AuthGate } from "./AuthGate";
 import { preloadRenderer } from "./components/message-text";
 import { keepDraftsIn, setKernelUrl } from "@zerolux/chat";
 import { kernelAddress } from "./desktop";
@@ -32,7 +33,9 @@ try {
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BrowserRouter>
-      <App />
+      <AuthGate>
+        <App />
+      </AuthGate>
     </BrowserRouter>
   </StrictMode>,
 );

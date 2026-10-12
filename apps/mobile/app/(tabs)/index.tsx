@@ -15,18 +15,18 @@ import {
 } from "@zerolux/chat";
 import type { MemberTone, Place } from "@zerolux/chat";
 import { ActorMark } from "@/components/member";
-import { Eyebrow, Meter } from "@/components/meter";
+import { Eyebrow } from "@/components/meter";
 import { Screen } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/src/kernel";
 
-/** Where the phone opens an item; tasks and sessions are managed on the web for now. */
+/** The chat address of an item, when it belongs to a chat. */
 const href = (place: Place) =>
   "chat" in place ? (`/chat/${place.chat}` as const) : undefined;
 
-/** The home: what waits for the owner, what runs now, who is in, how the projects stand. */
+/** The home: what waits for the owner, what runs now, who is in. */
 export default function Tonight() {
   const { chat, workspace, capabilities } = useSession();
   const router = useRouter();
@@ -37,11 +37,9 @@ export default function Tonight() {
   const actors = activeActors(workspace.actors);
   const actor = (id: string) => workspace.actors.find((a) => a.id === id);
   const owner = actors.find((a) => a.kind === "human");
-  const needs = needsYou(workspace, chat);
-  const running = runningNow(workspace, chat);
-  const tones = actors.map((a) =>
-    memberTone(a, owner?.id, chat.sessions, workspace.connections),
-  );
+  const needs = needsYou(chat);
+  const running = runningNow(chat);
+  const tones = actors.map((a) => memberTone(a, owner?.id, chat.sessions));
   const people = actors.filter((a) => a.kind === "human").length;
   const working = tones.filter((t) => t === "working").length;
   const now = new Date();
@@ -231,28 +229,6 @@ export default function Tonight() {
               </View>
             ))}
           </View>
-        </View>
-        <View className="gap-3.5 rounded-md border border-border bg-card p-4">
-          <Eyebrow>Projects · {workspace.projects.length}</Eyebrow>
-          {workspace.projects.length === 0 && (
-            <Text className="text-sm text-muted-foreground">
-              No projects yet.
-            </Text>
-          )}
-          {workspace.projects.map((p) => {
-            const tasks = workspace.tasks.filter((t) => t.project_id === p.id);
-            const done = tasks.filter((t) => t.status === "done").length;
-            return (
-              <Meter
-                key={p.id}
-                label={p.name}
-                value={done}
-                max={tasks.length}
-                valueLabel={`${done} / ${tasks.length} done`}
-                tone="success"
-              />
-            );
-          })}
         </View>
         <View className="gap-2 rounded-md border border-border bg-card p-4">
           <Eyebrow>Agent spend · this month</Eyebrow>

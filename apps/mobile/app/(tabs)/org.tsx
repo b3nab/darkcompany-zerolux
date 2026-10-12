@@ -72,7 +72,7 @@ export default function Org() {
   const agentsOf = (person: Actor) =>
     actors.filter((a) => a.owner_id === person.id);
   const tone = (actor: Actor) =>
-    memberTone(actor, people[0]?.id, chat.sessions, workspace.connections);
+    memberTone(actor, people[0]?.id, chat.sessions);
   const open = (actor: Actor) => router.push(`/member/${actor.id}`);
   return (
     <Screen title="Org" action={newAgent}>

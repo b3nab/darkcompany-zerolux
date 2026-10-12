@@ -6,7 +6,7 @@ import { FileGlyph, fileSize } from "./file";
 import { Lamp } from "./lamp";
 import { ActorMark, Eyebrow } from "./presence";
 
-/** Beside a chat: who is in it and what each is doing, its tasks, and the files shared in it. */
+/** Beside a chat: who is in it, what each is doing and the files shared in it. */
 export function ChatAbout({
   conversation,
   actors,
@@ -92,11 +92,6 @@ export function ChatAbout({
             );
           })}
         </ul>
-      </section>
-      <section className="flex flex-col gap-2">
-        <Eyebrow>Tasks from this chat</Eyebrow>
-        {/* TODO: kernel: tasks started from a chat message, listed by chat, each with its status. */}
-        <p className="text-sm text-muted-foreground">No tasks yet.</p>
       </section>
       <section className="flex flex-col gap-2">
         <Eyebrow>Files · {files.length}</Eyebrow>

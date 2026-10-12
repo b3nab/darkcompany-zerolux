@@ -21,19 +21,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Meter } from "@/components/meter";
 import { Page } from "@/components/page";
 import { ActorMark, Eyebrow } from "@/components/presence";
 
 /** The web address of something the home lists. */
 const to = (place: Place) =>
-  "chat" in place
-    ? `/chats/${place.chat}`
-    : "task" in place
-      ? `/projects/${place.project}?task=${place.task}`
-      : "/team";
+  "chat" in place ? `/chats/${place.chat}` : "/team";
 
-/** The home: what waits for the owner, what runs now, who is in, how the projects stand. */
+/** The home: what waits for the owner, what runs now, who is in. */
 export function Tonight({
   workspace,
   chat,
@@ -52,11 +47,9 @@ export function Tonight({
   const live = useMeetings(capabilities.includes("meetings-v1")).meetings;
   const actors = activeActors(workspace.actors);
   const actor = (id: string) => workspace.actors.find((a) => a.id === id);
-  const needs = needsYou(workspace, chat);
-  const running = runningNow(workspace, chat);
-  const tones = actors.map((a) =>
-    memberTone(a, owner.id, chat.sessions, workspace.connections),
-  );
+  const needs = needsYou(chat);
+  const running = runningNow(chat);
+  const tones = actors.map((a) => memberTone(a, owner.id, chat.sessions));
   const people = actors.filter((a) => a.kind === "human");
   const working = tones.filter((t) => t === "working").length;
   const peopleIn = tones.filter((t) => t === "on").length;
@@ -258,39 +251,6 @@ export function Tonight({
                   </li>
                 ))}
               </ul>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <Eyebrow>Projects</Eyebrow>
-              <CardTitle>
-                {workspace.projects.length}{" "}
-                {workspace.projects.length === 1 ? "project" : "projects"}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3.5">
-              {workspace.projects.length === 0 && (
-                <p className="text-sm text-muted-foreground">
-                  No projects yet.
-                </p>
-              )}
-              {workspace.projects.map((p) => {
-                const tasks = workspace.tasks.filter(
-                  (t) => t.project_id === p.id,
-                );
-                const done = tasks.filter((t) => t.status === "done").length;
-                return (
-                  <Link key={p.id} to={`/projects/${p.id}`}>
-                    <Meter
-                      label={p.name}
-                      value={done}
-                      max={tasks.length}
-                      valueLabel={`${done} / ${tasks.length} done`}
-                      tone="success"
-                    />
-                  </Link>
-                );
-              })}
             </CardContent>
           </Card>
           <Card>

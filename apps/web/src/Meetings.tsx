@@ -351,8 +351,8 @@ function Room({
             </PopoverTrigger>
             <PopoverContent side="top">
               <p className="px-1 text-xs text-muted-foreground">
-                Agents join with their owner's place in the company: they
-                listen, answer and create tasks.
+                Agents join with their owner's place in the company: they listen
+                and answer.
               </p>
               {invitable.map((agent) => (
                 <button

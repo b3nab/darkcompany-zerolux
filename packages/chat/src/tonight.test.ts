@@ -7,7 +7,6 @@ import { shiftWindow } from "./shift";
 import { fileKind, fileSize } from "./storage";
 import type { StoredFile } from "./storage";
 import { facade, greeting, homeLabel, needsYou, runningNow } from "./tonight";
-import type { Task, Workspace } from "./workspace";
 
 const owner: Actor = {
   id: "owner",
@@ -18,29 +17,10 @@ const owner: Actor = {
   created_at: 0,
   archived: false,
 };
-const agent = (id: string): Actor => ({
-  id,
-  name: id,
-  kind: "agent",
-  owner_id: "owner",
-  harness: "claude-code",
-  created_at: 0,
-  archived: false,
-});
-const task = (id: string, status: Task["status"]): Task => ({
-  id,
-  project_id: "p",
-  title: `Task ${id}`,
-  description: "",
-  assignee_id: "lin",
-  status,
-  review_note: "",
-  created_at: 1,
-  updated_at: 2,
-});
 const session = (id: string, patch: Partial<ChatSession>): ChatSession => ({
   id,
   actor_id: "lin",
+  host_id: null,
   harness: "pi",
   native_session_id: id,
   title: "lin at work",
@@ -59,18 +39,6 @@ const general: Conversation = {
   last_seq: 1,
   last_message: { author_id: "owner", text: "Hello", created_at: 1 },
 };
-const workspace: Workspace = {
-  workspace: {
-    id: "workspace",
-    name: "Workspace",
-    created_at: 0,
-  },
-  actors: [owner, agent("lin")],
-  projects: [{ id: "p", name: "ZeroLux", description: "", created_at: 1 }],
-  tasks: [task("t1", "review"), task("t2", "running"), task("t3", "done")],
-  connections: [],
-  onboarding_required: false,
-};
 const approval = (status: Approval["status"]): Approval => ({
   id: `a-${status}`,
   actor_id: "lin",
@@ -85,23 +53,22 @@ const approval = (status: Approval["status"]): Approval => ({
   created_at: 5,
 });
 
-test("what needs the owner: open permission requests, reviews and stuck sessions", () => {
-  const needs = needsYou(workspace, {
+test("what needs the owner: open permission requests and stuck sessions", () => {
+  const needs = needsYou({
     approvals: [approval("pending"), approval("delivered")],
     sessions: [session("s1", { status: "attention" })],
     conversations: [general],
   });
   expect(needs.map((n) => [n.kind, n.title, n.where])).toEqual([
     ["Permission", "Run bun test", "General"],
-    ["Review", "Task t1", "ZeroLux"],
     ["pi", "The session needs your attention", undefined],
   ]);
   expect(needs[0]!.approvalId).toBe("a-pending");
-  expect(needs[1]!.place).toEqual({ project: "p", task: "t1" });
+  expect(needs[1]!.place).toEqual({ team: true });
 });
 
-test("what runs: an agent answering in a chat, a session elsewhere, a task a worker runs", () => {
-  const running = runningNow(workspace, {
+test("what runs: an agent answering in a chat and a session elsewhere", () => {
+  const running = runningNow({
     approvals: [],
     sessions: [
       session("s1", {
@@ -116,12 +83,11 @@ test("what runs: an agent answering in a chat, a session elsewhere, a task a wor
   expect(running.map((r) => [r.what, r.place])).toEqual([
     ["Answering in General", { chat: "general" }],
     ["lin at work", { team: true }],
-    ["Task t2", { project: "p", task: "t2" }],
   ]);
 });
 
 test("the facade keeps every light, in fixed scattered seats", () => {
-  const tones = memberTone(owner, "owner", [], []);
+  const tones = memberTone(owner, "owner", []);
   expect(tones).toBe("on");
   const cells = facade(["on", "working", "attention"]);
   expect(cells).toHaveLength(24);

@@ -22,7 +22,6 @@ import {
   isThread,
 } from "@zerolux/chat";
 import type { Chat, Discovery, Perform } from "@zerolux/chat";
-import type { Workspace } from "./api";
 import { themes } from "@zerolux/theme/themes";
 import { useTheme } from "./theme";
 import {
@@ -52,17 +51,15 @@ const pages = () => [
   { to: "/team", label: "Team", icon: UsersIcon },
 ];
 
-/** ⌘K: go anywhere, open a chat or project, hire a running session, run an action. */
+/** ⌘K: go anywhere, open a chat, hire a running session, run an action. */
 export function CommandMenu({
   open,
   setOpen,
-  workspace,
   chat,
   perform,
 }: {
   open: boolean;
   setOpen: (open: boolean) => void;
-  workspace: Workspace;
   chat: Chat;
   perform: Perform;
 }) {
@@ -116,7 +113,7 @@ export function CommandMenu({
       open={open}
       onOpenChange={setOpen}
       title="Search or run a command"
-      description="Go to a page, open a chat or project, hire a running session."
+      description="Go to a page, open a chat, hire a running session."
       className="sm:max-w-160"
     >
       <Command>
@@ -145,20 +142,6 @@ export function CommandMenu({
                 >
                   <MessagesSquareIcon />
                   {c.title}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          )}
-          {workspace.projects.length > 0 && (
-            <CommandGroup heading="Projects">
-              {workspace.projects.map((p) => (
-                <CommandItem
-                  key={p.id}
-                  value={`project ${p.name} ${p.id}`}
-                  onSelect={() => run(() => navigate(`/projects/${p.id}`))}
-                >
-                  <FolderIcon />
-                  {p.name}
                 </CommandItem>
               ))}
             </CommandGroup>

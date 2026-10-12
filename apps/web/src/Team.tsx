@@ -456,10 +456,10 @@ export function Team({
   const rows = activeActors(workspace.actors)
     .filter((a) => a.kind === "agent" && a.owner_id === owner.id)
     .map((agent) => {
-      const { sessions, earlier } = agentWork(agent, workspace, chat);
+      const { sessions, earlier } = agentWork(agent, chat);
       return {
         agent,
-        presence: agentPresence(agent.id, chat.sessions, workspace.connections),
+        presence: agentPresence(agent.id, chat.sessions),
         // Where it works, or last worked.
         folder: (sessions[0] ?? earlier[0])?.workspace,
       };
@@ -588,14 +588,9 @@ export function AgentProfile({
   perform: Perform;
 }) {
   const owner = workspace.actors.find((a) => a.id === agent.owner_id);
-  const { label, tone } = agentPresence(
-    agent.id,
-    chat.sessions,
-    workspace.connections,
-  );
-  const { sessions, earlier, chats, answering, task, dm, waiting } = agentWork(
+  const { label, tone } = agentPresence(agent.id, chat.sessions);
+  const { sessions, earlier, chats, answering, dm, waiting } = agentWork(
     agent,
-    workspace,
     chat,
   );
   // With nothing live, its last session stands where the live one would be.
@@ -705,13 +700,6 @@ export function AgentProfile({
             {answering ? (
               <Link to={`/chats/${answering.id}`} className="hover:underline">
                 Answering in {answering.title}
-              </Link>
-            ) : task ? (
-              <Link
-                to={`/projects/${task.project_id}?task=${task.id}`}
-                className="hover:underline"
-              >
-                {task.title}
               </Link>
             ) : (
               <span className="text-faint">Nothing right now</span>

@@ -47,6 +47,16 @@ const startup = await Bun.build({
 if (!startup.success)
   throw new AggregateError(startup.logs, "Build desktop startup page");
 
+// The same Better Auth service as the CLI kernel; no second auth implementation in Tauri.
+const auth = await Bun.build({
+  entrypoints: [join(root, "services/auth/src/server.ts")],
+  target: "bun",
+  outdir: join(dist, "auth"),
+  naming: "server.js",
+});
+if (!auth.success)
+  throw new AggregateError(auth.logs, "Bundle the authentication service");
+
 // Bundle existing ZeroLux runner code, not a second implementation. The desktop supplies
 // the installed Claude executable explicitly; no SDK binary is downloaded or started here.
 const runner = await Bun.build({

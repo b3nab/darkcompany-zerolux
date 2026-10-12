@@ -22,14 +22,14 @@ import { WindowControls } from "@/components/window-controls";
 import { cn } from "cn";
 import type { Actor, Workspace } from "./api";
 import { Approvals } from "./Approvals";
+import { useAuthentication } from "./AuthGate";
 import { ChatHome, ChatList, ChatView, NewConversation } from "./ChatView";
 import { CommandMenu } from "./CommandMenu";
 import { MD, useMedia } from "./media";
 import { Meetings } from "./Meetings";
 import { OwnerOnboarding } from "./OwnerOnboarding";
 import { Organization } from "./Org";
-import { ProjectPage } from "./Projects";
-import { AgentList, ProjectList, Sidebar, WorkspaceMenu } from "./Sidebar";
+import { AgentList, Sidebar, WorkspaceMenu } from "./Sidebar";
 import type { Kernel } from "./Sidebar";
 import { Storage } from "./Storage";
 import { AgentPage, Hire, Team } from "./Team";
@@ -77,7 +77,6 @@ export function App({
   const { pathname } = useLocation();
   const chatId = useMatch("/chats/:id")?.params.id;
   const agentId = useMatch("/team/:id")?.params.id;
-  const projectPath = useMatch("/projects/:id?");
   const requestId = useRef(0);
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const id = ++requestId.current;
@@ -126,9 +125,6 @@ export function App({
   // A page opened from the rail on a phone closes it.
   useEffect(() => setRail(false), [pathname]);
 
-  const project =
-    workspace?.projects.find((p) => p.id === projectPath?.params.id) ??
-    workspace?.projects[0];
   const actors = activeActors(workspace?.actors ?? []);
   const needsOnboarding = workspace?.onboarding_required === true;
   const owner = actors.find((a) => a.kind === "human");
@@ -136,6 +132,11 @@ export function App({
   const chatReady = health?.capabilities.includes("chat-v1") ?? true;
   const capabilities = health?.capabilities ?? [];
   const chat = useChat(!!workspace && !needsOnboarding && chatReady);
+  const authentication = useAuthentication();
+  useEffect(
+    () => authentication?.guard(chat.canLeave),
+    [authentication?.guard, chat.canLeave],
+  );
   useEffect(() => workspaceNavigationGuard(chat.canLeave), [chat.canLeave]);
   // One list of files for the whole app: storage page, chats, their panels.
   const storage = useStorage(capabilities.includes("storage-v1"));
@@ -225,19 +226,6 @@ export function App({
         newChat={() => navigate("/chats/new")}
       />
     </Page>,
-  );
-  const projectPage = workspace && (
-    <ProjectPage
-      key={project?.id}
-      workspace={workspace}
-      project={project}
-      busy={busy}
-      perform={perform}
-      hire={hire}
-    />
-  );
-  const projectList = workspace && (
-    <ProjectList workspace={workspace} busy={busy} perform={perform} />
   );
   const agentList = workspace && owner && (
     <AgentList workspace={workspace} chat={chat} owner={owner} />
@@ -379,7 +367,7 @@ export function App({
         </div>
       </header>
       <div className="flex min-h-0 min-w-0 flex-col">
-        {(error || connectionError || (chat.error && !projectPath)) && (
+        {(error || connectionError || chat.error) && (
           <div
             role="alert"
             className="border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive md:px-6"
@@ -413,7 +401,7 @@ export function App({
               />
             </Page>
           ) : !owner ? null : !chatReady ? (
-            projectPage
+            <Page>Update the kernel to use chats.</Page>
           ) : (
             <Routes>
               <Route
@@ -548,14 +536,6 @@ export function App({
                   </Page>,
                 )}
               />
-              <Route
-                path="/projects/:id?"
-                element={section(
-                  projectList,
-                  !!projectPath?.params.id,
-                  projectPage,
-                )}
-              />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           )}
@@ -576,7 +556,6 @@ export function App({
           <CommandMenu
             open={menu}
             setOpen={setMenu}
-            workspace={workspace}
             chat={chat}
             perform={perform}
           />

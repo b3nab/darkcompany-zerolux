@@ -3,6 +3,7 @@ import { GlobeIcon } from "lucide-react";
 import { creationDateLabel } from "@zerolux/chat";
 import type { WorkspaceInfo } from "@zerolux/chat";
 import { desktopConnection, WORKSPACES_LINK } from "@/desktop";
+import { useAuthentication } from "@/AuthGate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,6 +39,7 @@ export function WorkspaceSettings({
   connection?: { address: string; desktop: boolean; managed?: boolean };
 }) {
   const [name, setName] = useState(workspace.name);
+  const authentication = useAuthentication();
   const changed = name.trim() !== workspace.name;
   return (
     <section aria-label="Workspace settings" className="flex flex-col gap-6">
@@ -115,6 +117,29 @@ export function WorkspaceSettings({
             </Button>
           )}
         </div>
+      )}
+      {authentication && (
+        <section
+          className="flex flex-col gap-3 border-t pt-5"
+          aria-label="Your account"
+        >
+          <p className="text-sm font-medium">
+            Signed in as {authentication.identity.user.email}
+          </p>
+          {authentication.error && (
+            <p role="alert" className="text-sm text-destructive">
+              {authentication.error}
+            </p>
+          )}
+          <Button
+            variant="outline"
+            className="self-start"
+            disabled={authentication.busy}
+            onClick={() => void authentication.signOut()}
+          >
+            {authentication.busy ? "Signing out…" : "Sign out"}
+          </Button>
+        </section>
       )}
       <p className="border-t pt-4 text-xs text-muted-foreground">
         {creationDateLabel(workspace)}

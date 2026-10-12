@@ -63,8 +63,7 @@ export function Organization({
   const owner = people[0];
   const agentsOf = (person: Actor) =>
     actors.filter((a) => a.owner_id === person.id);
-  const state = (actor: Actor) =>
-    memberTone(actor, owner?.id, chat.sessions, workspace.connections);
+  const state = (actor: Actor) => memberTone(actor, owner?.id, chat.sessions);
   const selected =
     actors.find((a) => a.id === params.get("actor")) ?? owner ?? actors[0];
   const select = (actor: Actor) =>
@@ -91,9 +90,7 @@ export function Organization({
           isOwner={selected.id === owner?.id}
           agents={agentsOf(selected)}
           state={state}
-          presence={(a) =>
-            agentPresence(a.id, chat.sessions, workspace.connections).label
-          }
+          presence={(a) => agentPresence(a.id, chat.sessions).label}
           select={select}
         />
       ) : (

@@ -50,9 +50,6 @@ const company: Workspace = {
       created_at,
     },
   ],
-  projects: [],
-  tasks: [],
-  connections: [],
   onboarding_required: false,
 };
 const render = (workspace: Workspace, actor = "owner") =>

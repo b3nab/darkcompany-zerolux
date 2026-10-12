@@ -18,7 +18,7 @@ import { Tonight } from "./Tonight";
 import { ChatAbout } from "./components/chat-about";
 import { agentPresence } from "./presence";
 import { AgentProfile, Hire, HireForm, StartAgent, Team } from "./Team";
-import type { Actor, AgentConnection, Task, Workspace } from "./api";
+import type { Actor, Workspace } from "./api";
 import type {
   Approval,
   ChatSession,
@@ -65,6 +65,7 @@ const session = (
 ): ChatSession => ({
   id,
   actor_id,
+  host_id: null,
   harness: "claude-code",
   native_session_id: `native-${id}-7f9c2d1e-uuid`,
   title: `${actor_id === ASPEN ? "aspen" : "birch"} work`,
@@ -381,9 +382,6 @@ test("hiring lists found sessions by name, folder and activity, without IDs or c
 const workspace: Workspace = {
   workspace: { id: "workspace", name: "Workspace", created_at: 0 },
   actors,
-  projects: [],
-  tasks: [],
-  connections: [],
   onboarding_required: false,
 };
 const profiles = (chat: Chat) =>
@@ -755,9 +753,6 @@ test("the organization shows each person with the agents they own, and what each
       created_at: 0,
     },
     actors: [...actors, ada, lin, retired],
-    projects: [],
-    tasks: [],
-    connections: [],
     onboarding_required: false,
   };
   const chat = fakeChat({
@@ -803,22 +798,10 @@ test("the organization shows each person with the agents they own, and what each
   noUuids(profile);
 });
 
-test("an agent's presence prefers a connected session, then a task worker, the same everywhere", () => {
-  const worker: AgentConnection = {
-    id: "w",
-    actor_id: BIRCH,
-    project_id: "p",
-    mode: "process",
-    workspace: "/w",
-    session_id: null,
-    connected_at: 1,
-    lease_expires_at: Date.now() + 60_000,
-    disconnected_at: null,
-  };
-  // A task worker without a chat session is connected, not missing.
-  expect(agentPresence(BIRCH, [], [worker])).toEqual({
-    label: "Task worker connected",
-    tone: "connected",
+test("an agent's presence prefers a connected session, the same everywhere", () => {
+  expect(agentPresence(BIRCH, [])).toEqual({
+    label: "Not connected",
+    tone: "stopped",
   });
   // A session needing attention, however busy it last was, loses to a connected one.
   const stale = {
@@ -826,16 +809,16 @@ test("an agent's presence prefers a connected session, then a task worker, the s
     activity: "working" as const,
   };
   const idle = { ...session("s-new", ASPEN), activity: "idle" as const };
-  expect(agentPresence(ASPEN, [stale, idle], [])).toEqual({
+  expect(agentPresence(ASPEN, [stale, idle])).toEqual({
     label: "Idle",
     tone: "connected",
   });
   // Alone, it shows its attention, never painted as working.
-  expect(agentPresence(ASPEN, [stale], [])).toEqual({
+  expect(agentPresence(ASPEN, [stale])).toEqual({
     label: "Needs your attention",
     tone: "attention",
   });
-  expect(agentPresence(ASPEN, [], [])).toEqual({
+  expect(agentPresence(ASPEN, [])).toEqual({
     label: "Not connected",
     tone: "stopped",
   });
@@ -1160,22 +1143,6 @@ test("only connected attached pi offers cooperative terminal takeover", () => {
   expect(html.match(/>Take over</g)).toHaveLength(1);
 });
 
-const task = (
-  id: string,
-  title: string,
-  assignee_id: string,
-  status: Task["status"],
-): Task => ({
-  id,
-  project_id: "p-zerolux",
-  title,
-  description: "",
-  assignee_id,
-  status,
-  review_note: "",
-  created_at: 1,
-  updated_at: 2,
-});
 const company: Workspace = {
   workspace: {
     id: "workspace",
@@ -1183,19 +1150,10 @@ const company: Workspace = {
     created_at: 0,
   },
   actors,
-  projects: [
-    { id: "p-zerolux", name: "ZeroLux", description: "", created_at: 1 },
-  ],
-  tasks: [
-    task("t-review", "Ship the theme", ASPEN, "review"),
-    task("t-run", "Port the org chart", BIRCH, "running"),
-    task("t-done", "Pick the fonts", ASPEN, "done"),
-  ],
-  connections: [],
   onboarding_required: false,
 };
 
-test("tonight lists what waits for the owner, what runs now and how the projects stand", () => {
+test("tonight lists approvals and live sessions without projects or workers", () => {
   const html = renderToStaticMarkup(
     <Tonight
       workspace={company}
@@ -1219,18 +1177,17 @@ test("tonight lists what waits for the owner, what runs now and how the projects
       capabilities={[]}
     />,
   );
-  // A permission request, a task in review and a stuck session; a decided request is gone.
-  expect(html).toContain("3 things need you.");
+  // A permission request and a stuck session; a decided request is gone.
+  expect(html).toContain("2 things need you.");
   expect(html).toContain("Run bun test");
   expect(html).toContain(">Allow<");
   expect(html).toContain(">Deny<");
-  expect(html).toContain("Ship the theme");
-  expect(html).toContain('href="/projects/p-zerolux?task=t-review"');
+  expect(html).not.toContain('href="/projects');
+  expect(html).not.toContain("Projects");
   expect(html).toContain("The session was closed; Owner must reopen it.");
-  // Running now: an agent answering in a chat, and a task a worker runs.
+  // Running now: an agent answering in a chat.
   expect(html).toContain("Answering in General");
-  expect(html).toContain("Port the org chart");
-  expect(html).toContain("1 / 3 done");
+  expect(html).not.toContain("worker");
   // A kernel without meetings shows no live call.
   expect(html).not.toContain(" is live");
   noUuids(html);
@@ -1293,7 +1250,7 @@ test("a chat's Meet opens a meeting for that chat, titled after it", () => {
   expect(html).toContain("No meeting right now.");
 });
 
-test("beside a chat: who is in it and what each is doing, its tasks and its files", () => {
+test("beside a chat: members and shared files, without task controls", () => {
   const html = renderToStaticMarkup(
     <ChatAbout
       conversation={group}
@@ -1315,6 +1272,7 @@ test("beside a chat: who is in it and what each is doing, its tasks and its file
   expect(html).toContain("Claude Code");
   expect(html).toContain("Working…");
   expect(html).toContain("Stopped");
+  expect(html).not.toContain("Tasks from this chat");
   // Only the files shared in this chat.
   expect(html).toContain("notes.md");
   expect(html).toContain("2 KB");

@@ -308,9 +308,22 @@ test.skipIf(process.platform === "win32" || !stockPi || !node)(
         "model_change",
         "thinking_level_change",
       ]);
-      expect(
-        await controlRequest(descriptor, "stop", { link_id: "link" }),
-      ).toEqual({ ok: true });
+      if (child.exitCode === null) {
+        try {
+          expect(
+            await controlRequest(descriptor, "stop", { link_id: "link" }),
+          ).toEqual({ ok: true });
+        } catch (error) {
+          // The runner can remove its socket before the exit notification arrives.
+          // A missing endpoint alone is not proof of shutdown: require exit 0 below.
+          if (
+            !(error instanceof Error) ||
+            !("code" in error) ||
+            !["ENOENT", "ECONNREFUSED"].includes(String(error.code))
+          )
+            throw error;
+        }
+      }
       expect(
         await Promise.race([
           child.exited,

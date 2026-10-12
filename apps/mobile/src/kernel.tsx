@@ -1,21 +1,39 @@
 import * as SecureStore from "expo-secure-store";
-import { createContext, use, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import { fetch as expoFetch } from "expo/fetch";
+import {
+  createContext,
+  use,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   api,
-  errorMessage,
+  probeKernel,
   renameWorkspace as rename,
+  secureKernelOrigin,
+  setKernelFetch,
   setKernelUrl,
   useChat,
   useStorage,
 } from "@zerolux/chat";
 import type { Actor, Chat, Storage, Workspace } from "@zerolux/chat";
+import { AuthenticationProvider, useAuthentication } from "./auth";
 
-const KEY = "kernel-url";
+// Pin Expo SDK 57's compliant transport even if the RN-fetch compatibility flag is set.
+setKernelFetch(expoFetch);
 
+const KEY = "kernel-connection";
+const LEGACY_KEY = "kernel-url";
+interface Connection {
+  url: string;
+  workspaceId?: string;
+}
 interface Kernel {
-  /** `undefined` until the saved address is read, `null` when there is none. */
+  /** `undefined` until the saved connection is read, `null` when there is none. */
   url: string | null | undefined;
+  error: string;
   connect(url: string): Promise<void>;
   forget(): Promise<void>;
 }
@@ -23,68 +41,55 @@ interface Session {
   actors: Actor[];
   name(actorId: string): string;
   chat: Chat;
-  /** The whole company: projects, tasks, workers; undefined until the kernel answers. */
   workspace: Workspace | undefined;
   renameWorkspace(name: string): Promise<void>;
-  /** What this kernel can do, e.g. "storage-v1". */
   capabilities: string[];
-  /** The kernel's version; undefined until it answers. */
   version: string | undefined;
-  /** The company's files, one list for every screen. */
   storage: Storage;
 }
 const KernelContext = createContext<Kernel | undefined>(undefined);
 const SessionContext = createContext<Session | undefined>(undefined);
-
 function required<T>(value: T | undefined, what: string) {
   if (!value) throw new Error(`No ${what}`);
   return value;
 }
 export const useKernel = () => required(use(KernelContext), "kernel");
-/** Only on screens that the owner reaches after connecting to a kernel. */
 export const useSession = () => required(use(SessionContext), "session");
 
-/** A bare address such as `192.168.1.10:4310` is enough: `http://` goes in front of it. */
-const normalize = (input: string) =>
-  (/^https?:\/\//i.test(input.trim()) ? "" : "http://") +
-  input.trim().replace(/\/+$/, "");
-
-/** Asks the candidate itself: the address in use changes only once it is verified. */
-async function verify(url: string) {
-  try {
-    const response = await fetch(`${url}/api/health`);
-    const health = (await response.json()) as { capabilities?: string[] };
-    if (!response.ok || !health.capabilities?.includes("chat-v1"))
-      throw new Error("it has no chat");
-  } catch (error) {
-    throw new Error(`No ZeroLux kernel at ${url}: ${errorMessage(error)}`);
-  }
-}
-
-/**
- * The chat of one kernel. It is mounted again for another address, so messages that wait
- * for one kernel never go to another, and nothing is retried while disconnected.
- */
+/** One kernel's data model. It stays idle until a human is authenticated AND bound. */
 function Connected({ url, children }: { url: string; children: ReactNode }) {
   useState(() => setKernelUrl(url));
+  const auth = useAuthentication();
+  const enabled = Boolean(auth?.identity?.actor_id);
   const [workspace, setWorkspace] = useState<Workspace>();
   const workspaceVersion = useRef(0);
   const [health, setHealth] = useState<{
     version: string;
     capabilities: string[];
   }>();
-  const capabilities = health?.capabilities ?? [];
-  const chat = useChat(true);
-  const storage = useStorage(capabilities.includes("storage-v1"));
+  const capabilities = enabled ? (health?.capabilities ?? []) : [];
+  const chat = useChat(enabled);
+  const storage = useStorage(enabled && capabilities.includes("storage-v1"));
+  const guard = auth?.guard;
+  useEffect(() => guard?.(chat.canLeave), [guard, chat.canLeave]);
   useEffect(() => {
+    if (!enabled) return;
+    let current = true;
     void api<{ version: string; capabilities: string[] }>("/health").then(
-      setHealth,
+      (next) => {
+        if (current) setHealth(next);
+      },
       () => undefined,
     );
-  }, []);
-  // Names change with every chat update (the owner renames an agent), and tasks move without
-  // one (a worker finishes): read the workspace on both, as the web app does.
+    return () => {
+      current = false;
+    };
+  }, [enabled]);
   useEffect(() => {
+    if (!enabled) {
+      setWorkspace(undefined);
+      return;
+    }
     let current = true;
     const read = () => {
       const version = workspaceVersion.current;
@@ -100,18 +105,19 @@ function Connected({ url, children }: { url: string; children: ReactNode }) {
       current = false;
       clearInterval(timer);
     };
-  }, [chat.conversations, chat.sessions]);
-  const actors = workspace?.actors ?? [];
+  }, [enabled, chat.conversations, chat.sessions]);
+  const actors = enabled ? (workspace?.actors ?? []) : [];
   return (
     <SessionContext
       value={{
         actors,
         name: (id) => actors.find((actor) => actor.id === id)?.name ?? "…",
         chat,
-        workspace,
+        workspace: enabled ? workspace : undefined,
         async renameWorkspace(name) {
+          if (!enabled)
+            throw new Error("Sign in before changing the workspace");
           const info = await rename(name, url);
-          // A snapshot requested before the rename must not restore the old name.
           workspaceVersion.current++;
           setWorkspace(
             (previous) => previous && { ...previous, workspace: info },
@@ -128,29 +134,95 @@ function Connected({ url, children }: { url: string; children: ReactNode }) {
 }
 
 export function KernelProvider({ children }: { children: ReactNode }) {
-  const [url, setUrl] = useState<string | null>();
+  const [connection, setConnection] = useState<Connection | null>();
+  const [error, setError] = useState("");
+  const version = useRef(0);
+  const writes = useRef(Promise.resolve());
   useEffect(() => {
-    void SecureStore.getItemAsync(KEY).then(setUrl);
+    const current = version.current;
+    let live = true;
+    void (async () => {
+      try {
+        const saved = await SecureStore.getItemAsync(KEY);
+        let next: Connection | null = null;
+        if (saved) {
+          next = JSON.parse(saved) as Connection;
+          if (
+            !next ||
+            typeof next.url !== "string" ||
+            typeof next.workspaceId !== "string" ||
+            !next.workspaceId
+          )
+            throw new Error("Invalid connection");
+        } else {
+          const legacy = await SecureStore.getItemAsync(LEGACY_KEY);
+          // No bearer existed in the old app. Pin its public identity before the first
+          // authenticated use; the workspace must match before any credentials are loaded.
+          if (legacy) {
+            const url = secureKernelOrigin(legacy);
+            const health = await probeKernel(url);
+            if (live && current === version.current)
+              await persist({ url, workspaceId: health.workspace.id }, current);
+            return;
+          }
+        }
+        if (live && current === version.current) setConnection(next);
+      } catch {
+        if (live && current === version.current) {
+          setError(
+            "The saved connection could not be read. Reconnect to continue.",
+          );
+          setConnection(null);
+        }
+      }
+    })();
+    return () => {
+      live = false;
+    };
   }, []);
+
+  async function persist(next: Connection | null, current: number) {
+    const write = writes.current
+      .catch(() => {})
+      .then(async () => {
+        if (current !== version.current)
+          throw new Error("The connection changed");
+        if (next) await SecureStore.setItemAsync(KEY, JSON.stringify(next));
+        else await SecureStore.deleteItemAsync(KEY);
+        await SecureStore.deleteItemAsync(LEGACY_KEY);
+      });
+    writes.current = write;
+    await write;
+    if (current !== version.current) throw new Error("The connection changed");
+    setError("");
+    setConnection(next);
+  }
   const kernel: Kernel = {
-    url,
+    url: connection === undefined ? undefined : (connection?.url ?? null),
+    error,
     async connect(input) {
-      const next = normalize(input);
-      await verify(next);
-      await SecureStore.setItemAsync(KEY, next);
-      setUrl(next);
+      const current = ++version.current;
+      const address = input.trim().replace(/\/+$/, "");
+      const url = secureKernelOrigin(
+        /^https?:\/\//i.test(address) ? address : `http://${address}`,
+      );
+      const health = await probeKernel(url);
+      await persist({ url, workspaceId: health.workspace.id }, current);
     },
     async forget() {
-      await SecureStore.deleteItemAsync(KEY);
-      setUrl(null);
+      await persist(null, ++version.current);
     },
   };
   return (
     <KernelContext value={kernel}>
-      {url ? (
-        <Connected key={url} url={url}>
-          {children}
-        </Connected>
+      {connection ? (
+        <AuthenticationProvider
+          key={`${connection.url}:${connection.workspaceId}`}
+          kernel={connection.url}
+          workspaceId={connection.workspaceId}
+        >
+          <Connected url={connection.url}>{children}</Connected>
+        </AuthenticationProvider>
       ) : (
         children
       )}

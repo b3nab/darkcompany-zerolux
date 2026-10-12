@@ -21,6 +21,8 @@ export interface Discovery {
 export interface ChatSession {
   id: string;
   actor_id: string;
+  /** The kernel host serving this native session, when known. */
+  host_id: string | null;
   harness: Harness;
   native_session_id: string;
   title: string;

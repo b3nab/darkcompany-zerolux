@@ -117,6 +117,7 @@ test("any live session of an agent may join any chat", () => {
   const session = (id: string, status: ChatSession["status"]): ChatSession => ({
     id,
     actor_id: id.split("-")[1]!,
+    host_id: null,
     harness: "claude-code",
     native_session_id: id,
     title: id,
@@ -429,6 +430,7 @@ test("the activity bubble shows only agents whose current turn serves this chat"
   ): ChatSession => ({
     id,
     actor_id: id.slice(2),
+    host_id: null,
     harness: "claude-code",
     native_session_id: id,
     title: id,
@@ -561,6 +563,7 @@ test("the team lists live sessions, ones needing attention, and the latest stopp
   ): ChatSession => ({
     id,
     actor_id: "agent",
+    host_id: null,
     harness: "claude-code",
     native_session_id: native,
     title: id,

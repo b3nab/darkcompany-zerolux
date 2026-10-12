@@ -1,4 +1,5 @@
 import type { CreationDate } from "./dates";
+import { clearCredential, requestCredential } from "./credentials";
 
 /** The kernel's HTTP API, for every client: the web app, the desktop and the mobile app. */
 export type Harness = "pi" | "claude-code" | "codex";
@@ -41,6 +42,14 @@ export interface Actor extends CreationDate {
 }
 
 let base = "";
+type KernelFetch = (url: string, init?: RequestInit) => Promise<Response>;
+let transport: KernelFetch | undefined;
+/** Native apps supply their standards-compliant fetch (including redirect and cookie controls). */
+export function setKernelFetch(fetcher?: KernelFetch) {
+  transport = fetcher;
+}
+export const fetchKernel: KernelFetch = (url, init) =>
+  (transport ?? globalThis.fetch)(url, init);
 /**
  * Where the kernel is. The web app talks to the origin it was loaded from; an app sets
  * the kernel's address (e.g. `http://192.0.2.10:4310`) before anything else. A chat
@@ -76,20 +85,38 @@ export async function request<T>(
 ): Promise<T> {
   // A file goes as it is, with its own type; anything else as JSON.
   const file = body instanceof Blob;
-  const response = await fetch(`${kernel.replace(/\/+$/, "")}/api${path}`, {
-    method: body === undefined ? "GET" : "POST",
-    headers:
-      body === undefined
-        ? undefined
-        : {
-            "Content-Type": file
-              ? body.type || "application/octet-stream"
-              : "application/json",
-          },
-    body: body === undefined ? undefined : file ? body : JSON.stringify(body),
-    signal,
-  });
+  const health = path === "/health";
+  const credential = health ? undefined : requestCredential(kernel);
+  const response = await fetchKernel(
+    `${kernel.replace(/\/+$/, "")}/api${path}`,
+    {
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        ...(body === undefined
+          ? {}
+          : {
+              "Content-Type": file
+                ? body.type || "application/octet-stream"
+                : "application/json",
+            }),
+        ...(credential?.token
+          ? { Authorization: `Bearer ${credential.token}` }
+          : {}),
+      },
+      // After losing a native token, an explicit address must not fall back to cookies.
+      credentials:
+        health || (credential ? credential.native : Boolean(kernel))
+          ? "omit"
+          : "same-origin",
+      redirect: "error",
+      cache: "no-store",
+      body: body === undefined ? undefined : file ? body : JSON.stringify(body),
+      signal,
+    },
+  );
   if (!response.ok) {
+    if (response.status === 401 && credential)
+      clearCredential(kernel, credential);
     const text = await response.text();
     let message = text || `Request failed (${response.status})`;
     try {

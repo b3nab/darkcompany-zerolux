@@ -1,20 +1,12 @@
 import { useState } from "react";
+import { ownerNameError } from "@zerolux/chat";
+export { ownerNameError } from "@zerolux/chat";
 import type { SubmitEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Eyebrow } from "@/components/presence";
 import { desktopConnection, WORKSPACES_LINK } from "@/desktop";
-
-export function ownerNameError(value: string): string | undefined {
-  const name = value.trim();
-  if (!name) return "Enter your name to continue.";
-  if (name.toLowerCase() === "local owner") return "Use your own name.";
-  if (new TextEncoder().encode(name).length > 200)
-    return "Your name must be at most 200 UTF-8 bytes.";
-  if (/[\u0000-\u001f\u007f-\u009f]/u.test(name))
-    return "Your name cannot contain control characters.";
-}
 
 export function OwnerOnboarding({
   busy,
@@ -50,9 +42,8 @@ export function OwnerOnboarding({
         First, what should we call you?
       </h1>
       <p className="text-muted-foreground">
-        You are the owner of this workspace. Set your name before creating
-        projects or hiring your first agent. No placeholder agents will be
-        added.
+        You are the owner of this workspace. Set your name before hiring your
+        first agent. No placeholder agents will be added.
       </p>
       <form
         className="flex flex-col gap-3"

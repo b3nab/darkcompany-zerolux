@@ -12,7 +12,7 @@ import {
   memberTone,
   sessionState,
 } from "@zerolux/chat";
-import type { Actor, ChatSession, Workspace } from "@zerolux/chat";
+import type { Actor, ChatSession } from "@zerolux/chat";
 import { ActorMark, Lamp } from "@/components/member";
 import { Eyebrow } from "@/components/meter";
 import { Screen } from "@/components/screen";
@@ -42,8 +42,7 @@ export default function Member() {
     );
   const actors = activeActors(workspace.actors);
   const owner = actors.find((a) => a.kind === "human");
-  const tone = (actor: Actor) =>
-    memberTone(actor, owner?.id, chat.sessions, workspace.connections);
+  const tone = (actor: Actor) => memberTone(actor, owner?.id, chat.sessions);
   const open = (actor: Actor) => router.push(`/member/${actor.id}`);
   const isOwner = member.id === owner?.id;
   return (
@@ -78,8 +77,7 @@ export default function Member() {
                 ? tone(member) === "on"
                   ? "Online"
                   : "Offline"
-                : agentPresence(member.id, chat.sessions, workspace.connections)
-                    .label}
+                : agentPresence(member.id, chat.sessions).label}
             </Text>
           </View>
         </View>
@@ -94,7 +92,6 @@ export default function Member() {
           <Agent
             agent={member}
             owner={actors.find((a) => a.id === member.owner_id)}
-            workspace={workspace}
             open={open}
           />
         )}
@@ -129,7 +126,7 @@ function Person({
   tone: (actor: Actor) => ReturnType<typeof memberTone>;
   open: (actor: Actor) => void;
 }) {
-  const { chat, workspace } = useSession();
+  const { chat } = useSession();
   const first = person.name.split(" ")[0];
   return (
     <>
@@ -160,13 +157,7 @@ function Person({
               {agent.name}
             </Text>
             <Text className="text-xs text-faint">
-              {
-                agentPresence(
-                  agent.id,
-                  chat.sessions,
-                  workspace?.connections ?? [],
-                ).label
-              }
+              {agentPresence(agent.id, chat.sessions).label}
             </Text>
           </Pressable>
         ))}
@@ -185,19 +176,16 @@ function Person({
 function Agent({
   agent,
   owner,
-  workspace,
   open,
 }: {
   agent: Actor;
   owner?: Actor;
-  workspace: Workspace;
   open: (actor: Actor) => void;
 }) {
   const { chat } = useSession();
   const router = useRouter();
-  const { sessions, earlier, chats, answering, task, dm, waiting } = agentWork(
+  const { sessions, earlier, chats, answering, dm, waiting } = agentWork(
     agent,
-    workspace,
     chat,
   );
   // With nothing live, its last session stands where the live one would be.
@@ -233,10 +221,6 @@ function Agent({
                 Answering in {answering.title}
               </Text>
             </Pressable>
-          ) : task ? (
-            <Text numberOfLines={1} className="text-sm">
-              {task.title}
-            </Text>
           ) : (
             <Text className="text-sm text-faint">Nothing right now</Text>
           )}

@@ -11,7 +11,9 @@ import {
   SunIcon,
 } from "lucide-react-native";
 import type { LucideIcon } from "lucide-react-native";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { errorMessage } from "@zerolux/chat";
+import { useAuthentication } from "../../src/auth";
 import { Pressable, ScrollView, View } from "react-native";
 import { useCSSVariable } from "uniwind";
 import { Wordmark } from "@/components/brand";
@@ -41,6 +43,21 @@ const realtime = {
 export default function More() {
   const { url, forget } = useKernel();
   const { chat, version, workspace, renameWorkspace } = useSession();
+  const auth = useAuthentication();
+  const [connectionError, setConnectionError] = useState("");
+  async function changeKernel() {
+    if (!chat.canLeave()) {
+      setConnectionError(
+        "Wait for pending chat messages before changing kernels.",
+      );
+      return;
+    }
+    try {
+      await forget();
+    } catch (error) {
+      setConnectionError(errorMessage(error));
+    }
+  }
   const { theme, light } = useTheme();
   const router = useRouter();
   const [muted, faint] = useCSSVariable([
@@ -101,6 +118,23 @@ export default function More() {
             ),
           )}
         </Section>
+        <Section title="Account">
+          <View className="gap-3 px-4 py-3">
+            <Text className="text-sm text-muted-foreground">
+              {auth?.identity?.user.email}
+            </Text>
+            <Button
+              variant="outline"
+              disabled={auth?.busy}
+              onPress={() => void auth?.signOut()}
+            >
+              <Text>{auth?.busy ? "Signing out…" : "Sign out"}</Text>
+            </Button>
+            {auth?.error ? (
+              <Text className="text-sm text-destructive">{auth.error}</Text>
+            ) : null}
+          </View>
+        </Section>
         <Section title="Kernel">
           <View className="gap-1 px-4 py-3">
             <View className="flex-row items-center gap-2">
@@ -124,9 +158,18 @@ export default function More() {
             </Text>
           </View>
           <View className="border-t border-border px-4 py-3">
-            <Button variant="outline" onPress={() => void forget()}>
+            <Button
+              variant="outline"
+              disabled={auth?.busy}
+              onPress={() => void changeKernel()}
+            >
               <Text>Connect to another kernel</Text>
             </Button>
+            {connectionError ? (
+              <Text className="mt-2 text-sm text-destructive">
+                {connectionError}
+              </Text>
+            ) : null}
           </View>
         </Section>
         <View className="items-center gap-2 pt-4">

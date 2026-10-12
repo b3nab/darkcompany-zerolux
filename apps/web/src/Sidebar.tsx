@@ -1,5 +1,4 @@
 import { useState } from "react";
-import type { SubmitEvent } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router";
 import { cn } from "cn";
 import {
@@ -14,7 +13,6 @@ import {
   PhoneIcon,
   PlusIcon,
   SettingsIcon,
-  SquareKanbanIcon,
   StampIcon,
   SunIcon,
   UserPlusIcon,
@@ -30,8 +28,8 @@ import {
   workspaceAge,
 } from "@zerolux/chat";
 import type { Chat, Perform } from "@zerolux/chat";
-import { activeActors, api } from "./api";
-import type { Actor, Project, Workspace } from "./api";
+import { activeActors } from "./api";
+import type { Actor, Workspace } from "./api";
 import { agentPresence } from "./presence";
 import { themes } from "@zerolux/theme/themes";
 import { useTheme } from "./theme";
@@ -60,9 +58,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 
 export type Kernel = {
   tone: Tone;
@@ -110,12 +105,6 @@ export function Sidebar({
         icon={MessagesSquareIcon}
         label="Chat"
         count={unread}
-        toggle={toggle}
-      />
-      <Item
-        to="/projects"
-        icon={SquareKanbanIcon}
-        label="Projects"
         toggle={toggle}
       />
       <Item to="/team" icon={UsersIcon} label="Team" toggle={toggle} />
@@ -315,106 +304,6 @@ export function WorkspaceMenu({
   );
 }
 
-/** The panel of Projects: each project with the tasks still open; a new one starts here. */
-export function ProjectList({
-  workspace,
-  busy,
-  perform,
-}: {
-  workspace: Workspace;
-  busy: boolean;
-  perform: Perform;
-}) {
-  const navigate = useNavigate();
-  const [adding, setAdding] = useState(false);
-  const open = (projectId: string) =>
-    workspace.tasks.filter(
-      (t) => t.project_id === projectId && t.status !== "done",
-    ).length;
-
-  async function create(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const data = new FormData(form);
-    const ok = await perform(async () => {
-      const created = await api<Project>("/projects", {
-        name: data.get("name"),
-        description: data.get("description"),
-      });
-      navigate(`/projects/${created.id}`);
-      setAdding(false);
-    });
-    if (ok) form.reset();
-  }
-
-  return (
-    <section aria-label="Projects" className="flex min-h-0 flex-1 flex-col">
-      <PanelHeader
-        title="Projects"
-        action={
-          <button
-            type="button"
-            aria-label="New project"
-            aria-expanded={adding}
-            onClick={() => setAdding(!adding)}
-            className={add}
-          >
-            <PlusIcon />
-          </button>
-        }
-      />
-      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3">
-        {workspace.projects.map((p) => (
-          <NavLink key={p.id} to={`/projects/${p.id}`} className={row}>
-            <span
-              aria-hidden
-              className="grid size-4 shrink-0 place-items-center rounded-xs border border-input"
-            >
-              <span className="size-1.5 rounded-[1px] bg-agent" />
-            </span>
-            <span className="flex-1 truncate">{p.name}</span>
-            {open(p.id) > 0 && (
-              <span className="font-mono text-[11.5px] text-faint">
-                {open(p.id)}
-              </span>
-            )}
-          </NavLink>
-        ))}
-        {(adding || workspace.projects.length === 0) && (
-          <form
-            onSubmit={(e) => void create(e)}
-            className="mt-1 flex flex-col gap-2.5 rounded-md border bg-card p-2.5"
-          >
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="project-name">Project name</Label>
-              <Input
-                id="project-name"
-                name="name"
-                placeholder="ZeroLux"
-                required
-                maxLength={200}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="project-context">Context</Label>
-              <Textarea
-                id="project-context"
-                name="description"
-                placeholder="What are we building?"
-                maxLength={20000}
-                rows={3}
-              />
-            </div>
-            <Button type="submit" size="sm" disabled={busy}>
-              Create project
-            </Button>
-          </form>
-        )}
-      </div>
-    </section>
-  );
-}
-
 /** The panel of Team: your agents, lit while they work; each one opens its profile. */
 export function AgentList({
   workspace,
@@ -440,11 +329,7 @@ export function AgentList({
       />
       <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3">
         {agents.map((agent) => {
-          const presence = agentPresence(
-            agent.id,
-            chat.sessions,
-            workspace.connections,
-          );
+          const presence = agentPresence(agent.id, chat.sessions);
           return (
             <NavLink
               key={agent.id}

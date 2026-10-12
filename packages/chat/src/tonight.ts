@@ -1,23 +1,18 @@
 import { harnessLabels } from "./client";
 import type { MemberTone } from "./presence";
 import type { Chat } from "./useChat";
-import type { Workspace } from "./workspace";
-
-/** Where a client opens an item: a chat, a task in its project, or the agents' sessions. */
-export type Place =
-  | { chat: string }
-  | { project: string; task: string }
-  | { team: true };
+/** Where a client opens an item: a chat or the agents' sessions. */
+export type Place = { chat: string } | { team: true };
 type Activity = Pick<Chat, "approvals" | "sessions" | "conversations">;
 
 /** Something that waits for the owner. */
 export interface Need {
   key: string;
   actorId: string;
-  /** "Permission", "Review" or the harness of a stuck session. */
+  /** "Permission" or the harness of a stuck session. */
   kind: string;
   title: string;
-  /** The chat or project it belongs to. */
+  /** The chat it belongs to. */
   where?: string;
   since?: number;
   /** A permission request: the owner answers it in place. */
@@ -25,12 +20,10 @@ export interface Need {
   place: Place;
 }
 
-/** Permission requests, tasks in review and sessions that need the owner. */
-export function needsYou(workspace: Workspace, chat: Activity): Need[] {
+/** Permission requests and sessions that need the owner. */
+export function needsYou(chat: Activity): Need[] {
   const chatTitle = (id: string) =>
     chat.conversations.find((c) => c.id === id)?.title;
-  const project = (id: string) =>
-    workspace.projects.find((p) => p.id === id)?.name;
   return [
     ...chat.approvals
       .filter((a) => a.status === "pending")
@@ -43,17 +36,6 @@ export function needsYou(workspace: Workspace, chat: Activity): Need[] {
         since: a.created_at,
         approvalId: a.id,
         place: { chat: a.conversation_id },
-      })),
-    ...workspace.tasks
-      .filter((t) => t.status === "review")
-      .map((t) => ({
-        key: t.id,
-        actorId: t.assignee_id,
-        kind: "Review",
-        title: t.title,
-        where: project(t.project_id),
-        since: t.updated_at,
-        place: { project: t.project_id, task: t.id },
       })),
     ...chat.sessions
       .filter((s) => s.status === "attention")
@@ -77,8 +59,8 @@ export interface Running {
   since?: number;
 }
 
-/** Agents answering in chats and tasks that workers run. */
-export function runningNow(workspace: Workspace, chat: Activity): Running[] {
+/** Agents working in their native sessions. */
+export function runningNow(chat: Activity): Running[] {
   return [
     ...chat.sessions
       .filter((s) => s.status === "connected" && s.activity === "working")
@@ -92,15 +74,6 @@ export function runningNow(workspace: Workspace, chat: Activity): Running[] {
           place: id && title ? { chat: id } : ({ team: true } as const),
         };
       }),
-    ...workspace.tasks
-      .filter((t) => t.status === "running")
-      .map((t) => ({
-        key: t.id,
-        actorId: t.assignee_id,
-        what: t.title,
-        place: { project: t.project_id, task: t.id },
-        since: t.updated_at,
-      })),
   ];
 }
 

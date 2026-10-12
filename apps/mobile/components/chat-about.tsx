@@ -15,7 +15,7 @@ import { Eyebrow } from "@/components/meter";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 
-/** About a chat: who is in it and what each is doing, its tasks, and the files shared in it. */
+/** About a chat: who is in it, what each is doing and the files shared in it. */
 export function ChatAbout({
   conversation,
   actors,
@@ -88,11 +88,6 @@ export function ChatAbout({
             </Pressable>
           );
         })}
-      </View>
-      <View className="gap-2">
-        <Eyebrow>Tasks from this chat</Eyebrow>
-        {/* TODO: kernel: tasks started from a chat message, listed by chat, each with its status. */}
-        <Text className="text-sm text-muted-foreground">No tasks yet.</Text>
       </View>
       <View className="gap-2.5">
         <Eyebrow>Files · {files.length}</Eyebrow>

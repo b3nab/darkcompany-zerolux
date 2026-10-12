@@ -236,7 +236,7 @@ function Room({
           <View className="gap-1 rounded-md border border-agent/30 bg-agent/10 p-3">
             <Text className="text-xs text-muted-foreground">
               Agents join with their owner's place in the company: they listen,
-              answer and create tasks.
+              and answer.
             </Text>
             {invitable.map((agent) => (
               <Pressable
