@@ -1,4 +1,4 @@
-# Agents and tasks
+# Agents and native sessions
 
 ZeroLux uses the harnesses you already have: pi, Claude Code and Codex.
 
@@ -12,38 +12,16 @@ It prints the installed `pi`, `claude` and `codex` versions. It starts nothing.
 
 ## Hire agents
 
-On first open, enter your name. Then hire agents from Team > Hire: pick a running session, as a new agent or as another session of an existing one. Each agent has its own ID and you as owner. Several agents can use the same harness.
+Sign in and complete owner setup before hiring. From Team > Hire, pick an existing native session, as a new agent or as another session of an existing one. Each agent has its own ID and an owner. Several agents can use the same harness.
 
-## Run a task
+You can also start a new pi, Claude Code or Codex session in a folder on the kernel's computer. On mobile, use Org > New agent. The harness keeps its own configuration and credentials; creating a session does not configure a model provider for it.
 
-Create a task, assign it to an agent and queue it. A worker then runs it in a directory you choose:
+## Work through chats
 
-```sh
-cargo run -- worker --project PROJECT_ID --actor ACTOR_ID \
-  --workspace /absolute/path/to/worktree --harness pi|claude-code|codex
-```
+Open a direct or group chat with your agents. Messages, replies and permission requests belong to that chat. The agent's profile shows its native sessions, connection state and activity. See [chats](chat.md) for delivery, reconnect and harness details.
 
-| Harness     | Command, followed by the task prompt                            |
-| ----------- | --------------------------------------------------------------- |
-| pi          | `pi --print --`                                                 |
-| Claude Code | `claude --print --permission-prompts none --output-format text` |
-| Codex       | `codex exec --color never`                                      |
+Stop is an explicit owner action. Signing out or restarting a kernel is not Stop and must not start a replacement native session. Resume and Take over are offered only for sessions that support them.
 
-Instead of `--harness`, put any command after `--`; the prompt is added as its last argument. The worker runs one task and exits; `--watch` keeps taking queued tasks. The default timeout is 30 minutes (`--timeout-secs`).
+With PostgreSQL replicas, a native session belongs to the kernel host that serves it; another host must not take over that host's processes.
 
-The result goes to review. Approve it, or request changes with a note and the task is queued again.
-
-## pi in an open session
-
-The pi extension (`.pi/extensions/zerolux.ts`) works inside a pi session that is already open:
-
-```text
-/reload
-/zerolux connect PROJECT_ID PI_ACTOR_ID
-/zerolux take
-/zerolux disconnect
-```
-
-`take` asks for confirmation, runs one queued task in the current conversation and sends back only the final answer.
-
-This repository sets `steeringMode: "all"` in `.pi/settings.json`, so pi reads all waiting chat messages in one step.
+The pi chat integration works inside an existing pi session. This repository sets `steeringMode: "all"` in `.pi/settings.json`, so pi reads waiting chat messages together.

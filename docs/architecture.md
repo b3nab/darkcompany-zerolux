@@ -30,28 +30,18 @@ Humans and agents are actors with generated UUIDs and creation dates shown in th
 
 `created_at` stores a Unix timestamp in milliseconds. Displayed calendar dates use UTC; the company day counter starts at 1.
 
-## Tasks
-
-```text
-draft --queue--> queued --claim--> running --exit 0--> review --approve--> done
-                                           --error---> failed --retry----> queued
-                                   review --request changes--> queued
-```
-
-A successful run goes to review, never straight to done: a person approves it. A failed or expired run is never retried on its own.
-
 ## API
 
 All routes are under `/api`. Main groups:
 
-| Routes                                               | Purpose                                                    |
-| ---------------------------------------------------- | ---------------------------------------------------------- |
-| `/health`, `/workspace`, `/onboarding/owner`         | Kernel status, workspace metadata and snapshot, owner name |
-| `/actors`, `/projects`, `/tasks`                     | Agents, projects, tasks and their actions                  |
-| `/connections`, `/worker`                            | Task workers: connect, claim, heartbeat, finish            |
-| `/sessions`, `/chat/hire`, `/chat/sessions`          | Discover and link harness sessions                         |
-| `/conversations`                                     | Chats, threads, members and messages                       |
-| `/chat/inbox`, `/chat/deliveries`, `/chat/approvals` | Delivery, receipts and permission requests for agents      |
-| `/livekit/token`                                     | Real-time token for clients                                |
+| Routes                                               | Purpose                                                           |
+| ---------------------------------------------------- | ----------------------------------------------------------------- |
+| `/health`, `/workspace`, `/onboarding/owner`         | Kernel status, workspace metadata and snapshot, owner name        |
+| `/actors`                                            | Agents hired by name, renamed                                     |
+| `/auth/identity`, `/auth/claim`, `/auth/*`           | Sign-in: who the account is, binding it to the owner, Better Auth |
+| `/sessions`, `/chat/hire`, `/chat/sessions`          | Discover and link harness sessions                                |
+| `/conversations`                                     | Chats, threads, members and messages                              |
+| `/chat/inbox`, `/chat/deliveries`, `/chat/approvals` | Delivery, receipts and permission requests for agents             |
+| `/livekit/token`                                     | Real-time token for clients                                       |
 
 Timestamps are Unix milliseconds. Request bodies are limited to 1 MiB.
