@@ -6,6 +6,7 @@ import {
   useRouter,
 } from "expo-router";
 import {
+  ArrowDownIcon,
   AudioLinesIcon,
   MessagesSquareIcon,
   MicIcon,
@@ -16,7 +17,8 @@ import {
   XIcon,
 } from "lucide-react-native";
 import type { LucideIcon } from "lucide-react-native";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { LegendListRef } from "@legendapp/list/react-native";
 import { Modal, Pressable, ScrollView, TextInput, View } from "react-native";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -81,6 +83,9 @@ export default function ChatScreen() {
   const [busy, setBusy] = useState(false);
   const [about, setAbout] = useState(false);
   const [voice, setVoice] = useState<"dictation" | "message">();
+  // More than a screen above the latest messages: a button brings the reader back down.
+  const [away, setAway] = useState(false);
+  const list = useRef<LegendListRef>(null);
   const recorder = useVoice();
   const [muted, faint, onLamp] = useCSSVariable([
     "--color-muted-foreground",
@@ -464,6 +469,7 @@ export default function ChatScreen() {
           input could no longer bring it back (react-native-keyboard-controller#1615). */}
       <GestureArea className="flex-1" interpolator="ios">
         <ChatList
+          ref={list}
           data={rows}
           keyExtractor={(item) => (item as Row).key}
           renderItem={({ item }) => row(item as Row)}
@@ -476,7 +482,25 @@ export default function ChatScreen() {
           onStartReachedThreshold={0.4}
           keyboardDismissMode="interactive"
           keyboardOffset={insets.bottom}
+          onScroll={(e) => {
+            const { contentOffset, contentSize, layoutMeasurement } =
+              e.nativeEvent;
+            const below =
+              contentSize.height - layoutMeasurement.height - contentOffset.y;
+            setAway(below > layoutMeasurement.height);
+          }}
         />
+        {away ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Back to the latest messages"
+            onPress={() => void list.current?.scrollToEnd({ animated: true })}
+            hitSlop={8}
+            className="absolute right-4 bottom-4 size-10 items-center justify-center rounded-full border border-border bg-card shadow-md active:bg-accent"
+          >
+            <ArrowDownIcon color={muted} size={20} strokeWidth={1.75} />
+          </Pressable>
+        ) : null}
       </GestureArea>
       <KeyboardStickyView offset={{ closed: 0, opened: insets.bottom }}>
         {error || chat.error || storage.error ? (
