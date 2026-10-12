@@ -10,7 +10,22 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+        env:
+          POSTGRES_USER: zerolux_test
+          POSTGRES_PASSWORD: fixture-only-password
+          POSTGRES_DB: zerolux_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U zerolux_test -d zerolux_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
+      ZEROLUX_TEST_POSTGRES_URL: postgresql://zerolux_test:fixture-only-password@127.0.0.1:5432/zerolux_test
       CC: clang-21
       CXX: clang++-21
       LIBCLANG_PATH: /usr/lib/llvm-21/lib
