@@ -11,6 +11,19 @@ use zerolux::{
 mod support;
 use support::{installed, subscriber};
 
+/// Sockets are released by the peer's threads after the room is closed, not on the same
+/// instant: wait for the count to come back, within a bound that only catches a leak.
+async fn released(baseline: usize) {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while sockets() > baseline {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("the sockets of a stopped subscription are released");
+    assert_eq!(sockets(), baseline);
+}
+
 /// Network sockets held by this process: what a WebRTC peer keeps until its room is closed.
 fn sockets() -> usize {
     let listing = std::process::Command::new("lsof")
@@ -47,7 +60,7 @@ async fn stopped_subscriptions_release_their_sockets() {
     assert!(sockets() > baseline, "a joined room holds sockets");
     stop.send_replace(true);
     link.await.unwrap().unwrap();
-    assert_eq!(sockets(), baseline);
+    released(baseline).await;
 
     // Stopped while still joining: the join completes and the room is closed all the same.
     let (invalidate, _invalidations) = mpsc::channel(1);
@@ -64,7 +77,7 @@ async fn stopped_subscriptions_release_their_sockets() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     stop.send_replace(true);
     link.await.unwrap().unwrap();
-    assert_eq!(sockets(), baseline);
+    released(baseline).await;
 
     livekit.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(dir);
