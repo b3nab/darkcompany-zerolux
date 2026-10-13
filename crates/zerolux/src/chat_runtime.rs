@@ -934,6 +934,9 @@ impl ChatRuntime {
                 "The chat link is stopped and its token revoked. Native cancellation was not confirmed because this kernel had no active adapter.",
             ));
         };
+        // An adapter that had already ended (its link lost) before the owner's Stop is not a
+        // stop that failed: there was nothing live to cancel, and the note says so.
+        let gone = agent.task.is_finished();
         agent.stop.send_replace(true);
         let (driver, subscriber) = tokio::join!(finish(&mut agent.task), async {
             if let Some(subscriber) = &mut agent.subscriber {
@@ -942,6 +945,17 @@ impl ChatRuntime {
                 Ok(())
             }
         });
+        if gone && let Err(error) = &driver {
+            tracing::warn!(
+                session_id = id,
+                error = format!("{error:#}"),
+                "Stopped a link that had already ended"
+            );
+            subscriber?;
+            return Ok(Some(
+                "The chat link is stopped and its token revoked. Native cancellation was not confirmed because its adapter had already ended; work may still be running in the harness.",
+            ));
+        }
         driver?;
         subscriber?;
         Ok(agent.stop_note)
