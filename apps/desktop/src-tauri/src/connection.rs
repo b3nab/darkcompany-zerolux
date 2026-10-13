@@ -97,10 +97,6 @@ pub async fn verify(value: &str, expected_id: Option<&str>) -> Result<VerifiedWo
             "The kernel at {url} serves a different workspace than this saved connection"
         );
     }
-    ensure!(
-        health["api_version"].as_u64() == Some(zerolux::api::API_VERSION as u64),
-        "The kernel at {url} is not compatible with this desktop interface. Update the kernel and desktop to matching API versions."
-    );
     let name = health["workspace"]["name"]
         .as_str()
         .filter(|name| !name.trim().is_empty())
@@ -203,19 +199,6 @@ mod tests {
                 "200 OK",
                 r#"{"name":"zerolux","workspace":{"id":""}}"#.to_owned(),
                 "did not name its workspace",
-            ),
-            (
-                "200 OK",
-                r#"{"name":"zerolux","workspace":{"id":"old"}}"#.to_owned(),
-                "not compatible",
-            ),
-            (
-                "200 OK",
-                format!(
-                    r#"{{"name":"zerolux","api_version":{},"workspace":{{"id":"future"}}}}"#,
-                    zerolux::api::API_VERSION + 1
-                ),
-                "not compatible",
             ),
             ("200 OK", "not json".to_owned(), "not JSON"),
             ("503 Service Unavailable", "{}".to_owned(), "answered 503"),

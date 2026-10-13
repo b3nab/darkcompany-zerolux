@@ -115,18 +115,23 @@ export async function probeKernel(kernel: string): Promise<AuthHealth> {
   const health = value as AuthHealth | null;
   if (
     !health ||
-    health.api_version !== 2 ||
     !Array.isArray(health.capabilities) ||
-    !health.capabilities.includes("auth-v1") ||
     typeof health.workspace?.id !== "string" ||
     !health.workspace.id ||
-    typeof health.workspace.name !== "string" ||
-    typeof health.auth?.setup_required !== "boolean"
+    typeof health.workspace.name !== "string"
   )
-    throw new AuthProtocolError(
-      "This kernel needs an update before authenticated access is available",
-    );
+    throw new AuthProtocolError("This is not a ZeroLux kernel");
+  // A kernel without sign-in: its version is what it is, the client works as it did.
+  if (!health.capabilities.includes("auth-v1"))
+    return { ...health, auth: { setup_required: false } };
+  if (typeof health.auth?.setup_required !== "boolean")
+    throw new AuthProtocolError("This kernel's sign-in is not understood");
   return health;
+}
+
+/** Whether a kernel asks people to sign in at all. */
+export function requiresSignIn(health: AuthHealth) {
+  return health.capabilities.includes("auth-v1");
 }
 
 /** One verified kernel connection, not a global login that can follow arbitrary addresses. */
@@ -254,6 +259,15 @@ export class AuthConnection {
       this.refuse("The workspace identity changed; no credentials were sent");
     this.workspaceId = health.workspace.id;
     this.health = health;
+    if (!requiresSignIn(health)) {
+      this.credential = bindCredential(
+        this.kernel,
+        health.workspace.id,
+        null,
+        false,
+      );
+      return { health, identity: null };
+    }
     const token = this.storage
       ? await this.storage.read(this.kernel, health.workspace.id)
       : null;

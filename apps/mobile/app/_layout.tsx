@@ -7,6 +7,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useCSSVariable } from "uniwind";
 import { KernelProvider, useKernel } from "../src/kernel";
+import { requiresSignIn } from "@zerolux/chat";
 import { useAuthentication } from "../src/auth";
 import { restoreTheme, useTheme } from "../src/theme";
 
@@ -30,7 +31,12 @@ function Navigator() {
   const background = useCSSVariable("--color-background");
   const { url } = useKernel();
   const auth = useAuthentication();
-  const authorized = Boolean(url && auth?.identity?.actor_id);
+  // Signed in, or a kernel without sign-in at all.
+  const authorized = Boolean(
+    url &&
+    (auth?.identity?.actor_id ||
+      (auth?.health && !requiresSignIn(auth.health))),
+  );
   return (
     <Stack
       screenOptions={{

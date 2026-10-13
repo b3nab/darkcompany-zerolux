@@ -10,6 +10,7 @@ import {
 import {
   AuthConnection,
   errorMessage,
+  requiresSignIn,
   type AuthHealth,
   type AuthIdentity,
 } from "@zerolux/chat";
@@ -181,6 +182,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
         {children}
       </AuthenticationContext>
     );
+  // A kernel without sign-in: the workspace as it always was.
+  if (health && !requiresSignIn(health)) return children;
 
   const enrolling =
     identity?.setup_required ?? health?.auth.setup_required === true;

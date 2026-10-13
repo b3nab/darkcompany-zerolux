@@ -36,6 +36,7 @@ function fixture(
     nativeHeader: true,
     identityUnauthorized: false,
     claimUnavailable: false,
+    legacy: false,
   };
   const storage: AuthStorage = {
     async read(kernel, id) {
@@ -60,12 +61,18 @@ function fixture(
     if (state.unavailable)
       return Response.json({ error: "Unavailable" }, { status: 503 });
     if (path === "/api/health")
-      return Response.json({
-        api_version: 2,
-        capabilities: ["auth-v1", "chat-v1"],
-        workspace: { id: state.workspace, name: "Company" },
-        auth: { setup_required: state.setup },
-      });
+      return state.legacy
+        ? Response.json({
+            api_version: 1,
+            capabilities: ["chat-v1"],
+            workspace: { id: state.workspace, name: "Company" },
+          })
+        : Response.json({
+            api_version: 2,
+            capabilities: ["auth-v1", "chat-v1"],
+            workspace: { id: state.workspace, name: "Company" },
+            auth: { setup_required: state.setup },
+          });
     if (path === "/api/auth/get-session")
       return Response.json(
         state.signed ? { session: { id: "session" } } : null,
@@ -431,4 +438,16 @@ test("secure-store keys cannot collide across address or workspace, and public a
   expect(() =>
     secureKernelOrigin("https://user:secret@company.example"),
   ).toThrow();
+});
+
+test("a kernel without sign-in is used as it is, whatever its version, without credentials", async () => {
+  const { client, state, calls, reads } = fixture(true);
+  state.legacy = true;
+  const result = await client.restore();
+  expect(result.identity).toBeNull();
+  expect(result.health.capabilities).toEqual(["chat-v1"]);
+  expect(result.health.auth.setup_required).toBe(false);
+  // Nothing was read from storage and no sign-in request was made.
+  expect(reads).toEqual([]);
+  expect(calls.map((c) => new URL(c.url).pathname)).toEqual(["/api/health"]);
 });

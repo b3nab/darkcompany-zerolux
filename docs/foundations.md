@@ -92,7 +92,8 @@ when due (one-day update age). Private authorization checks never extend them.
 
 - `/api/health` adds capability `auth-v1` and
   `auth: {setup_required: boolean}`. The breaking authentication requirement
-  increments `api_version` to 2.
+  is announced by `api_version` 2; clients never refuse a kernel by its version,
+  they use the capabilities it declares.
 - `GET /api/auth/identity` requires a valid human session and returns
   `{user: {id, name, email}, actor_id: string | null, setup_required: boolean}`.
   It allows an unbound account to see that enrollment is required, not domain data.

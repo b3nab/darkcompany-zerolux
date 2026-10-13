@@ -1193,9 +1193,8 @@ fn carries_agent_token(request: &Request) -> bool {
 async fn workspace(State(store): State<Store>) -> Result<Json<Workspace>, Error> {
     Ok(Json(store.workspace().await?))
 }
-/// The HTTP API contract clients check before talking to a kernel. Bumped only when a
-/// change breaks a client that followed the previous number; features go in `capabilities`.
-/// 2: the domain requires a signed-in, bound account (`auth-v1`).
+/// The HTTP API's generation, for information: clients decide by `capabilities`, never by
+/// refusing a number. 2: the domain requires a signed-in, bound account (`auth-v1`).
 pub const API_VERSION: u32 = 2;
 
 /// Reachable without credentials: what this kernel is, the company it runs, and whether an

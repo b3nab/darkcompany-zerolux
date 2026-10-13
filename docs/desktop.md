@@ -27,7 +27,7 @@ A server on the same computer can still be **external to the desktop**. For exam
 
 The workspace's **name is shared** with everyone using it. Renaming does not change its identity or history. The saved **address belongs to this client**. Change an existing connection's address only when the new address serves the same workspace; add a different workspace separately. Identity continuity is not authentication.
 
-The desktop loads its packaged interface and calls the selected kernel's HTTP API. Each workspace window keeps its own verified kernel address. Browser clients still load the interface served by their kernel. The desktop requires a matching `api_version` in `/api/health`; older or incompatible kernels must be updated before opening them. macOS uses an overlay title bar with native traffic lights; Windows and Linux use controls in the interface (not yet verified on those systems).
+The desktop loads its packaged interface and calls the selected kernel's HTTP API. Each workspace window keeps its own verified kernel address. Browser clients still load the interface served by their kernel. The desktop uses what the kernel declares in `/api/health` (`capabilities`); sign-in is offered when the kernel declares `auth-v1`, and an older kernel is used as it is. macOS uses an overlay title bar with native traffic lights; Windows and Linux use controls in the interface (not yet verified on those systems).
 
 ## Switching, drafts and closing
 
