@@ -90,15 +90,13 @@ impl Kernel {
         request.send().await.unwrap()
     }
 
-    async fn sign_up(&self, name: &str, email: &str, setup: Option<&str>) -> reqwest::Response {
-        let mut request = self
-            .client
+    async fn sign_up(&self, name: &str, email: &str) -> reqwest::Response {
+        self.client
             .post(format!("{}/api/auth/sign-up/email", self.url))
-            .json(&json!({ "name": name, "email": email, "password": "correct horse battery" }));
-        if let Some(setup) = setup {
-            request = request.header("x-zerolux-setup-token", setup);
-        }
-        request.send().await.unwrap()
+            .json(&json!({ "name": name, "email": email, "password": "correct horse battery" }))
+            .send()
+            .await
+            .unwrap()
     }
 
     async fn sign_in(&self, email: &str) -> String {
@@ -143,7 +141,7 @@ fn token_of(response: &reqwest::Response) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_first_account_claims_the_owner_with_the_setup_credential_and_signs_in_after_restart() {
+async fn the_first_account_becomes_the_owner_and_signs_in_after_restart() {
     if !installed("bun") || !installed("livekit-server") {
         eprintln!("bun or livekit-server not installed: skipped");
         return;
@@ -160,67 +158,29 @@ async fn the_first_account_claims_the_owner_with_the_setup_credential_and_signs_
             .contains(&json!("auth-v1"))
     );
     assert_eq!(health["auth"]["setup_required"], true);
-    for response in kernel
+    for value in kernel
         .get("/api/health", None)
         .await
         .headers()
         .get_all(header::CACHE_CONTROL)
     {
-        assert_eq!(response, "no-store");
-    }
-    // The setup credential: a private file of the data directory, never in the API.
-    let setup_path = dir.path().join("data/auth/setup-token");
-    let setup = std::fs::read_to_string(&setup_path).unwrap();
-    assert!(setup.len() >= 32);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            std::fs::metadata(&setup_path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
+        assert_eq!(value, "no-store");
     }
     // Nobody is the owner without credentials any more.
     assert_eq!(
         kernel.get("/api/workspace", None).await.status(),
         StatusCode::UNAUTHORIZED
     );
-    // Signing up is not open: it needs the setup credential.
+    // A name the owner may not have is refused before an account exists; the kernel's own
+    // enrollment header is not a caller's to claim.
     assert_eq!(
         kernel
-            .sign_up("Owner fixture", "owner@example.test", None)
-            .await
-            .status(),
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        kernel
-            .sign_up("Owner fixture", "owner@example.test", Some("wrong"))
-            .await
-            .status(),
-        StatusCode::FORBIDDEN
-    );
-    // Nor by a path that only normalizes to the signup, nor with a name the owner may not
-    // have, nor by claiming the kernel's own enrollment header.
-    let raw = raw_post(
-        kernel.address(),
-        "/api/auth/sign-up/../sign-up/email",
-        &["x-zerolux-auth-enroll: 1"],
-        &json!({ "name": "Owner fixture", "email": "owner@example.test", "password": "correct horse battery" })
-            .to_string(),
-    )
-    .await;
-    assert!(raw.starts_with("HTTP/1.1 403"), "{raw}");
-    assert_eq!(
-        kernel
-            .sign_up("Local owner", "owner@example.test", Some(&setup))
+            .sign_up("Local owner", "owner@example.test")
             .await
             .status(),
         StatusCode::BAD_REQUEST
     );
-    let signed_up = kernel
-        .sign_up("Owner fixture", "owner@example.test", Some(&setup))
-        .await;
+    let signed_up = kernel.sign_up("Owner fixture", "owner@example.test").await;
     let status = signed_up.status();
     assert_eq!(
         status,
@@ -229,7 +189,7 @@ async fn the_first_account_claims_the_owner_with_the_setup_credential_and_signs_
         signed_up.text().await.unwrap()
     );
     let token = token_of(&signed_up);
-    // Signed in but not bound: told so, and nothing of the workspace.
+    // Signed in but not bound yet: told so, and nothing of the workspace.
     let identity: Value = kernel
         .get("/api/auth/identity", Some(&token))
         .await
@@ -243,27 +203,14 @@ async fn the_first_account_claims_the_owner_with_the_setup_credential_and_signs_
         kernel.get("/api/workspace", Some(&token)).await.status(),
         StatusCode::FORBIDDEN
     );
-    // The claim binds the account to the owner, names them, and consumes the credential.
-    let wrong = kernel
-        .post(
-            "/api/auth/claim",
-            Some(&token),
-            json!({ "setup_token": "wrong" }),
-        )
-        .await;
-    assert_eq!(wrong.status(), StatusCode::FORBIDDEN);
+    // The claim binds the first account to the owner and names them.
     let claimed = kernel
-        .post(
-            "/api/auth/claim",
-            Some(&token),
-            json!({ "setup_token": setup }),
-        )
+        .post("/api/auth/claim", Some(&token), json!({}))
         .await;
     assert_eq!(claimed.status(), StatusCode::OK);
     let claimed: Value = claimed.json().await.unwrap();
     assert!(claimed["actor_id"].is_string());
     assert_eq!(claimed["setup_required"], false);
-    assert!(!setup_path.exists(), "consumed");
     assert_eq!(kernel.health().await["auth"]["setup_required"], false);
     let workspace: Value = kernel
         .get("/api/workspace", Some(&token))
@@ -281,25 +228,26 @@ async fn the_first_account_claims_the_owner_with_the_setup_credential_and_signs_
     assert_eq!(owner["name"], "Owner fixture");
     assert_eq!(owner["id"], claimed["actor_id"]);
     assert!(owner.get("auth_subject").is_none(), "never shown");
-    // Once bound, a second claim is nothing; a second account cannot sign up.
+    // Once the owner has an account, a second claim is nothing and nobody else signs up.
     assert_eq!(
         kernel
-            .post(
-                "/api/auth/claim",
-                Some(&token),
-                json!({ "setup_token": setup })
-            )
+            .post("/api/auth/claim", Some(&token), json!({}))
             .await
             .status(),
         StatusCode::CONFLICT
     );
     assert_eq!(
-        kernel
-            .sign_up("Other", "other@example.test", Some(&setup))
-            .await
-            .status(),
+        kernel.sign_up("Other", "other@example.test").await.status(),
         StatusCode::FORBIDDEN
     );
+    let raw = raw_post(
+        kernel.address(),
+        "/api/auth/sign-up/../sign-up/email",
+        &["x-zerolux-auth-enroll: 1"],
+        &json!({ "name": "Other", "email": "other@example.test", "password": "correct horse battery" }).to_string(),
+    )
+    .await;
+    assert!(raw.starts_with("HTTP/1.1 403"), "{raw}");
     // Signing out revokes the token on the next request; signing in gives a new one.
     assert_eq!(
         kernel
@@ -334,7 +282,6 @@ async fn the_first_account_claims_the_owner_with_the_setup_credential_and_signs_
     // After a restart the account, its sessions and the binding are still there.
     let kernel = Kernel::start(dir.path(), database.location().clone()).await;
     assert_eq!(kernel.health().await["auth"]["setup_required"], false);
-    assert!(!setup_path.exists());
     assert_eq!(
         kernel.get("/api/workspace", Some(&token)).await.status(),
         StatusCode::OK
@@ -363,38 +310,24 @@ async fn two_kernels_of_one_workspace_share_sign_in_and_keep_their_own_sessions(
     let database = db::TestDatabase::new(dir_a.path().join("unused.db")).await;
     let a = Kernel::start(dir_a.path(), database.location().clone()).await;
     let b = Kernel::start(dir_b.path(), database.location().clone()).await;
-    // One setup credential, made by whichever kernel came first, valid on both.
-    let setup_a = std::fs::read_to_string(dir_a.path().join("data/auth/setup-token")).ok();
-    let setup_b = std::fs::read_to_string(dir_b.path().join("data/auth/setup-token")).ok();
-    let setup = setup_a
-        .or(setup_b)
-        .expect("one kernel delivered the credential");
     assert_eq!(b.health().await["auth"]["setup_required"], true);
-    let signed_up = a
-        .sign_up("Owner fixture", "owner@example.test", Some(&setup))
-        .await;
+    let signed_up = a.sign_up("Owner fixture", "owner@example.test").await;
     assert_eq!(signed_up.status(), StatusCode::OK);
     let token = token_of(&signed_up);
     assert_eq!(
-        a.post(
-            "/api/auth/claim",
-            Some(&token),
-            json!({ "setup_token": setup })
-        )
-        .await
-        .status(),
+        a.post("/api/auth/claim", Some(&token), json!({}))
+            .await
+            .status(),
         StatusCode::OK
     );
-    // The same session and binding on the other kernel; the credential is spent there too.
+    // The same session and binding on the other kernel; signing up is closed there too.
     assert_eq!(
         b.get("/api/workspace", Some(&token)).await.status(),
         StatusCode::OK
     );
     assert_eq!(b.health().await["auth"]["setup_required"], false);
     assert_eq!(
-        b.sign_up("Other", "other@example.test", Some(&setup))
-            .await
-            .status(),
+        b.sign_up("Other", "other@example.test").await.status(),
         StatusCode::FORBIDDEN
     );
     // Agent sessions belong to the host that started them: a restart of A recovers A's,

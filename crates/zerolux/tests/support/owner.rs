@@ -32,40 +32,43 @@ pub fn bun_dir() -> PathBuf {
         .expect("bun is installed")
 }
 
-/// A client that is the owner: signed up and bound with the setup credential of `data_dir`,
-/// or signed in again when that already happened (a restarted kernel).
-pub async fn client(base: &str, data_dir: &Path, timeout: Duration) -> Client {
+/// A client that is the owner: the first account, signed up and claimed, or signed in again
+/// when that already happened (a restarted kernel).
+pub async fn client(base: &str, timeout: Duration) -> Client {
     let anonymous = Client::builder()
         .no_proxy()
         .timeout(timeout)
         .build()
         .unwrap();
-    let setup = std::fs::read_to_string(data_dir.join("auth/setup-token")).ok();
-    let token = match &setup {
-        Some(setup) => {
-            let response = anonymous
-                .post(format!("{base}/api/auth/sign-up/email"))
-                .header("x-zerolux-setup-token", setup.trim())
-                .json(&json!({ "name": "Fixture owner", "email": EMAIL, "password": PASSWORD }))
-                .send()
-                .await
-                .unwrap()
-                .error_for_status()
-                .unwrap();
-            token_of(&response)
-        }
-        None => {
-            let response = anonymous
-                .post(format!("{base}/api/auth/sign-in/email"))
-                .json(&json!({ "email": EMAIL, "password": PASSWORD }))
-                .send()
-                .await
-                .unwrap()
-                .error_for_status()
-                .unwrap();
-            token_of(&response)
-        }
+    let health: serde_json::Value = anonymous
+        .get(format!("{base}/api/health"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let first = health["auth"]["setup_required"] == true;
+    let response = if first {
+        anonymous
+            .post(format!("{base}/api/auth/sign-up/email"))
+            .json(&json!({ "name": "Fixture owner", "email": EMAIL, "password": PASSWORD }))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+    } else {
+        anonymous
+            .post(format!("{base}/api/auth/sign-in/email"))
+            .json(&json!({ "email": EMAIL, "password": PASSWORD }))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
     };
+    let token = token_of(&response);
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         reqwest::header::AUTHORIZATION,
@@ -77,10 +80,9 @@ pub async fn client(base: &str, data_dir: &Path, timeout: Duration) -> Client {
         .default_headers(headers)
         .build()
         .unwrap();
-    if let Some(setup) = setup {
+    if first {
         owner
             .post(format!("{base}/api/auth/claim"))
-            .json(&json!({ "setup_token": setup.trim() }))
             .send()
             .await
             .unwrap()

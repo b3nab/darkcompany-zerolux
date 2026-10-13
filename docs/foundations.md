@@ -36,8 +36,8 @@ a time per workspace (SQLite's immediate transaction; a PostgreSQL advisory
 lock), so a check made inside the transaction still holds when it commits.
 Reads take one snapshot. A SQLite workspace is served by one kernel (a lock file
 next to the database). A PostgreSQL workspace is served by any number of kernels:
-the Better Auth secret and the setup credential live in the `workspace` row, so
-a sign-in on one kernel is valid on all; each agent session records the host
+the Better Auth secret lives in the `workspace` row, so a sign-in on one kernel
+is valid on all; each agent session records the host
 (`chat_sessions.host_id`, from `<data-dir>/host-id`) whose native process it is,
 and only that kernel recovers and relinks it. Kernels of one workspace start
 their authentication services one at a time. Several kernels need one external
@@ -72,10 +72,10 @@ when due (one-day update age). Private authorization checks never extend them.
   Neither a browser cookie nor a human account becomes an agent credential.
 - Better Auth identifies a user. The kernel binds that subject to a domain actor
   and authorizes the action. Registration alone grants no workspace privileges.
-- Initial enrollment binds the authenticated subject to the existing owner actor
-  using a one-time setup secret delivered locally by the kernel. It must not be a
-  first-visitor-wins endpoint. Successful binding consumes the setup credential;
-  concurrent claims cannot replace the owner. Existing names/history remain.
+- Registration is open until the owner has an account. The first authenticated
+  account to complete the claim binds to the existing owner actor, and registration
+  then closes. Concurrent claims cannot replace the owner. Existing names/history
+  remain. Complete registration before exposing a new workspace to untrusted users.
 - `/api/health` remains public for connection identity and setup status. Domain
   endpoints require a bound human identity or their existing scoped agent token.
   No implicit owner identity for a request without credentials.
@@ -96,21 +96,20 @@ when due (one-day update age). Private authorization checks never extend them.
 - `GET /api/auth/identity` requires a valid human session and returns
   `{user: {id, name, email}, actor_id: string | null, setup_required: boolean}`.
   It allows an unbound account to see that enrollment is required, not domain data.
-- `POST /api/auth/sign-up/email` proxies Better Auth's signup only after validating
-  `x-zerolux-setup-token`. This is not an unrestricted registration endpoint.
-  Better Auth applies its database-backed rate limiter. Multiple accounts can be
-  created with a still-valid setup credential before claim; none is privileged
-  until bound. The kernel must not hold a write transaction across the sidecar
-  call: both components write the same SQLite database.
-- `POST /api/auth/claim` accepts `{setup_token}` under a valid human session and
-  atomically binds its subject to the existing owner. It consumes the setup token
-  and returns the identity response. Keeping claim separate allows recovery if
-  signup succeeded but an interrupted request did not finish enrollment.
+- `POST /api/auth/sign-up/email` accepts name, email and password while
+  `auth.setup_required` is true. Once the owner is bound it returns 403; clients
+  show login instead. Better Auth applies its database-backed rate limiter.
+  An account is not privileged until bound. The kernel must not hold a write
+  transaction across the sidecar call: both components write the same SQLite database.
+- `POST /api/auth/claim` has no request body. Under a valid human session it
+  atomically binds the first claiming account to the existing owner and returns
+  the identity response. Clients claim after signup. Keeping claim separate allows
+  recovery through sign-in if registration succeeded but enrollment was interrupted.
 - Sign-in/out, get-session, list/revoke sessions and change-password use the
   matching Better Auth endpoints under `/api/auth`. Preserve its HTTP statuses,
   cookies and `set-auth-token`; do not turn an auth failure into a success envelope.
-- Desktop CORS must allow `authorization`, `content-type`,
-  `x-zerolux-setup-token`, and expose `set-auth-token` for the known app origins.
+- Desktop CORS must allow `authorization` and `content-type`, and expose
+  `set-auth-token` for the known app origins.
 
 ### Private service protocol (version 1)
 
@@ -168,14 +167,13 @@ is not automatically a trusted proxy.
 - `/api/auth/*`: Better Auth's HTTP handler. The kernel proxies the supported
   authentication routes, preserving status, Set-Cookie and `set-auth-token`,
   never exposing private `/internal/*` routes. Signup additionally requires
-  `x-zerolux-auth-enroll: 1`, injected **only** after the kernel validates the
-  setup credential. Requests cannot opt themselves into enrollment.
+  `x-zerolux-auth-enroll: 1`, injected **only** after the kernel checks that the
+  owner has no account yet. Requests cannot grant themselves that permission.
 
 Use bounded startup/HTTP/shutdown deadlines. Stop the auth child on kernel
 shutdown; an auth outage must not kill, restart or duplicate native agent work.
 The Better Auth secret is a column of the `workspace` row (never serialized to
-clients); the setup credential is delivered as a private file of the data
-directory and only its hash is stored. Neither belongs in the repository or logs.
+clients). It does not belong in the repository or logs.
 
 ## Acceptance
 

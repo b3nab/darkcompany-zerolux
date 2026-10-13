@@ -187,15 +187,15 @@ export class AuthConnection {
 
   private async exchange<T>(
     path: string,
+    method: "GET" | "POST",
     body?: unknown,
-    extra: Record<string, string> = {},
     epoch = this.epoch,
   ): Promise<T> {
     this.current(epoch);
     const { response, value } = await authRequest(
       `${this.kernel}/api/auth${path}`,
       {
-        method: body === undefined ? "GET" : "POST",
+        method,
         credentials: this.storage ? "omit" : "same-origin",
         redirect: "error",
         headers: {
@@ -203,7 +203,6 @@ export class AuthConnection {
           ...(this.credential?.token
             ? { Authorization: `Bearer ${this.credential.token}` }
             : {}),
-          ...extra,
         },
         body: body === undefined ? undefined : JSON.stringify(body),
       },
@@ -269,8 +268,8 @@ export class AuthConnection {
     try {
       const session = await this.exchange<unknown>(
         "/get-session",
+        "GET",
         undefined,
-        {},
         epoch,
       );
       if (session)
@@ -278,8 +277,8 @@ export class AuthConnection {
           health,
           identity: await this.exchange<AuthIdentity>(
             "/identity",
+            "GET",
             undefined,
-            {},
             epoch,
           ),
         };
@@ -295,38 +294,37 @@ export class AuthConnection {
     const epoch = ++this.epoch;
     await this.exchange(
       "/sign-in/email",
+      "POST",
       { email: email.trim(), password },
-      {},
       epoch,
     );
-    return this.exchange<AuthIdentity>("/identity", undefined, {}, epoch);
+    return this.exchange<AuthIdentity>("/identity", "GET", undefined, epoch);
   }
 
   async signUp(
     name: string,
     email: string,
     password: string,
-    setupToken: string,
   ): Promise<AuthIdentity> {
     if (!this.health) throw new Error("Verify the workspace before signing up");
     const epoch = ++this.epoch;
     await this.exchange(
       "/sign-up/email",
+      "POST",
       { name: name.trim(), email: email.trim(), password },
-      { "x-zerolux-setup-token": setupToken.trim() },
       epoch,
     );
     // Signup and binding are separate: a failed claim can be retried after signing in.
-    return this.claim(setupToken);
+    return this.claim();
   }
 
-  async claim(setupToken: string): Promise<AuthIdentity> {
+  async claim(): Promise<AuthIdentity> {
     if (!this.health) throw new Error("Verify the workspace before enrollment");
     const epoch = ++this.epoch;
     const identity = await this.exchange<AuthIdentity>(
       "/claim",
-      { setup_token: setupToken.trim() },
-      {},
+      "POST",
+      undefined,
       epoch,
     );
     this.health.auth.setup_required = identity.setup_required;
@@ -338,7 +336,7 @@ export class AuthConnection {
       throw new Error("Verify the workspace before signing out");
     const epoch = ++this.epoch;
     try {
-      await this.exchange("/sign-out", {}, {}, epoch);
+      await this.exchange("/sign-out", "POST", {}, epoch);
     } catch (error) {
       if (!(error instanceof ApiError && error.status === 401)) throw error;
     }

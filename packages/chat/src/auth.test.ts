@@ -35,6 +35,7 @@ function fixture(
     unavailable: false,
     nativeHeader: true,
     identityUnauthorized: false,
+    claimUnavailable: false,
   };
   const storage: AuthStorage = {
     async read(kernel, id) {
@@ -73,6 +74,8 @@ function fixture(
       return state.identityUnauthorized
         ? Response.json({ error: "Unauthorized" }, { status: 401 })
         : Response.json(identity());
+    if (path === "/api/auth/sign-up/email" && !state.setup)
+      return Response.json({ error: "Sign in instead" }, { status: 403 });
     if (["/api/auth/sign-in/email", "/api/auth/sign-up/email"].includes(path)) {
       state.signed = true;
       return Response.json(
@@ -85,6 +88,12 @@ function fixture(
       );
     }
     if (path === "/api/auth/claim") {
+      if (state.claimUnavailable)
+        return Response.json({ error: "Unavailable" }, { status: 503 });
+      if (!state.signed)
+        return Response.json({ error: "Unauthorized" }, { status: 401 });
+      if (!state.setup)
+        return Response.json({ error: "Owner already bound" }, { status: 403 });
       state.bound = true;
       state.setup = false;
       return Response.json(identity());
@@ -146,7 +155,7 @@ test("a changed workspace disconnects an active credential and cannot accept a s
     f.client.signIn("owner@example.test", "do not send this"),
   ).rejects.toThrow("Verify the workspace");
   await expect(
-    f.client.signUp("Owner", "owner@example.test", "do not send this", "proof"),
+    f.client.signUp("Owner", "owner@example.test", "do not send this"),
   ).rejects.toThrow("Verify the workspace");
   expect(f.calls).toHaveLength(count);
   await request("https://company.example", "/workspace");
@@ -220,27 +229,78 @@ test("a missing native token header is an error, never an apparent successful lo
   expect(f.saved.size).toBe(0);
 });
 
-test("signup passes the setup proof only to its kernel and claims the existing owner after login", async () => {
+test("signup sends only account details and claims the existing owner with a bodyless POST", async () => {
   const f = fixture();
   await f.client.restore();
   const identity = await f.client.signUp(
-    "Owner",
-    "owner@example.test",
+    " Owner ",
+    " owner@example.test ",
     "test password only",
-    "one-time-setup",
   );
   expect(identity.actor_id).toBe("existing-owner");
+  expect(identity.setup_required).toBe(false);
   const signup = f.calls.find((c) => c.url.endsWith("/sign-up/email"))!;
-  expect(new Headers(signup.init.headers).get("x-zerolux-setup-token")).toBe(
-    "one-time-setup",
-  );
-  const claim = f.calls.find((c) => c.url.endsWith("/claim"))!;
-  expect(JSON.parse(claim.init.body as string)).toEqual({
-    setup_token: "one-time-setup",
+  expect(signup.init.method).toBe("POST");
+  expect(JSON.parse(signup.init.body as string)).toEqual({
+    name: "Owner",
+    email: "owner@example.test",
+    password: "test password only",
   });
-  expect(new Headers(claim.init.headers).get("authorization")).toBe(
-    "Bearer signed.session",
+  expect([...new Headers(signup.init.headers).keys()]).toEqual([
+    "content-type",
+  ]);
+  const claim = f.calls.find((c) => c.url.endsWith("/claim"))!;
+  expect(claim.init.method).toBe("POST");
+  expect(claim.init.body).toBeUndefined();
+  expect(Object.fromEntries(new Headers(claim.init.headers))).toEqual({
+    authorization: "Bearer signed.session",
+  });
+});
+
+test("an interrupted claim can finish after signing in without registering again", async () => {
+  const f = fixture();
+  await f.client.restore();
+  f.state.claimUnavailable = true;
+  await expect(
+    f.client.signUp("Owner", "owner@example.test", "fixture password"),
+  ).rejects.toThrow("Unavailable");
+  expect(f.state.bound).toBe(false);
+  f.state.claimUnavailable = false;
+  const signedIn = await f.client.signIn(
+    "owner@example.test",
+    "fixture password",
   );
+  expect(signedIn.actor_id).toBeNull();
+  expect((await f.client.claim()).actor_id).toBe("existing-owner");
+  expect(f.calls.filter((c) => c.url.endsWith("/sign-up/email"))).toHaveLength(
+    1,
+  );
+});
+
+test("closed registration stays a failure and never attempts a claim", async () => {
+  const f = fixture();
+  f.state.setup = false;
+  const restored = await f.client.restore();
+  expect(restored.health.auth.setup_required).toBe(false);
+  await expect(
+    f.client.signUp("Other", "other@example.test", "fixture password"),
+  ).rejects.toThrow("Sign in instead");
+  expect(f.calls.some((c) => c.url.endsWith("/claim"))).toBe(false);
+  expect(f.saved.size).toBe(0);
+});
+
+test("browser signup claims through its cookie session without a request body", async () => {
+  const f = fixture(false);
+  await f.client.restore();
+  expect(
+    (await f.client.signUp("Owner", "owner@example.test", "fixture password"))
+      .actor_id,
+  ).toBe("existing-owner");
+  const claim = f.calls.find((c) => c.url.endsWith("/claim"))!;
+  expect(claim.init.method).toBe("POST");
+  expect(claim.init.body).toBeUndefined();
+  expect(claim.init.credentials).toBe("same-origin");
+  expect([...new Headers(claim.init.headers).keys()]).toEqual([]);
 });
 
 test("browser login uses cookies, without saving a bearer or sending it with domain requests", async () => {
@@ -313,7 +373,6 @@ test("native authentication works on an explicitly selected LAN HTTP connection"
         "Owner",
         "owner@example.test",
         "fixture-only-password",
-        "setup-proof",
       )
     ).actor_id,
   ).toBe("existing-owner");

@@ -34,16 +34,21 @@ struct FakePi {
 }
 
 fn fake_pi(dir: &std::path::Path, native: &str) -> FakePi {
-    let socket = dir.join("pi.sock");
+    fake_pi_named(dir, native, "pi-fixture")
+}
+
+/// Another live pi on the same session, as a terminal opened on it would be.
+fn fake_pi_named(dir: &std::path::Path, native: &str, instance: &str) -> FakePi {
+    let socket = dir.join(format!("{instance}.sock"));
     let listener = tokio::net::UnixListener::bind(&socket).unwrap();
     let record = json!({
-        "version":1, "instance_id":"pi-fixture", "endpoint":socket,
+        "version":1, "instance_id":instance, "endpoint":socket,
         "nonce":"a".repeat(64), "native_session_id":native,
         "workspace":std::fs::canonicalize(dir).unwrap()
     });
     let registry = dir.join("agent/zerolux-links");
     std::fs::create_dir_all(&registry).unwrap();
-    let descriptor = registry.join("fixture.json");
+    let descriptor = registry.join(format!("{instance}.json"));
     std::fs::write(&descriptor, record.to_string()).unwrap();
     std::fs::set_permissions(&descriptor, std::fs::Permissions::from_mode(0o600)).unwrap();
     let fake = FakePi {
@@ -352,6 +357,56 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
     assert!(
         sessions.iter().all(|s| s.stopped_at.is_some()),
         "a link paired after the owner's Stop is torn down: {sessions:?}"
+    );
+
+    // Scenario 5: a second live pi on the same session (a terminal opened on it): the link
+    // is lost, and the relink goes to the newest pi; nothing is refused as a duplicate.
+    pi.paired.store(false, std::sync::atomic::Ordering::SeqCst);
+    let hired = runtime.hire(&owner, &candidate.id, "", Some(actor.id.clone()));
+    let (hired, _) = tokio::join!(hired, async {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        pi.release.notify_one();
+    });
+    let (_, live) = hired.unwrap();
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let terminal = fake_pi_named(dir.path(), native, "pi-terminal");
+    store
+        .set_chat_session_status(&owner, &live.id, agent(&live.id))
+        .await
+        .unwrap();
+    let before = terminal.pairs.load(std::sync::atomic::Ordering::SeqCst);
+    let old_pairs = pi.pairs.load(std::sync::atomic::Ordering::SeqCst);
+    let (relinked, _) = tokio::join!(runtime.reconnect(), async {
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while terminal.pairs.load(std::sync::atomic::Ordering::SeqCst) == before {
+                if pi.pairs.load(std::sync::atomic::Ordering::SeqCst) != old_pairs {
+                    pi.release.notify_one();
+                    panic!("the old pi was paired instead of the newest");
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the newest pi is the one paired");
+        terminal.release.notify_one();
+    });
+    relinked.unwrap();
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while !terminal.paired.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the terminal pi is paired");
+    assert_eq!(
+        store
+            .chat_sessions(&owner)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|s| s.stopped_at.is_none())
+            .count(),
+        1
     );
 
     runtime.shutdown().await.unwrap();

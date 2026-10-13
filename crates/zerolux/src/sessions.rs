@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -251,12 +251,12 @@ async fn live_pi(registry: &Path) -> Result<Vec<Candidate>> {
 
 /// Live pi processes: their candidates, and the verified descriptors that reached them.
 async fn live_pi_with_descriptors(registry: &Path) -> Result<(Vec<Candidate>, Vec<PiDescriptor>)> {
-    let mut candidates = Vec::new();
+    let mut candidates: Vec<(std::time::SystemTime, Candidate)> = Vec::new();
     let mut live = Vec::new();
     let mut entries = match tokio::fs::read_dir(registry).await {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok((candidates, live));
+            return Ok((Vec::new(), live));
         }
         Err(error) => return Err(error.into()),
     };
@@ -284,12 +284,10 @@ async fn live_pi_with_descriptors(registry: &Path) -> Result<(Vec<Candidate>, Ve
         if workspace != record.workspace {
             continue;
         }
-        // A pi that links several workspaces is hireable while another kernel holds a link;
-        // an older extension holds one link only.
+        // A live pi is hireable and relinkable as it is, even mid-turn or linked elsewhere:
+        // the extension takes a new token for its live link as a relink.
         let taking_over = actual["taking_over"] == true;
-        let ready = !taking_over
-            && actual["busy"] == false
-            && (actual["paired"] == false || actual["multi_workspace"] == true);
+        let ready = !taking_over;
         let mut found = candidate(
             NativeSessionTarget {
                 harness: Harness::Pi,
@@ -303,31 +301,29 @@ async fn live_pi_with_descriptors(registry: &Path) -> Result<(Vec<Candidate>, Ve
             ready,
             if taking_over {
                 "This terminal pi is handing over its execution; recovery waits for its process to exit."
-            } else if ready {
-                "Existing session ready. Native extension dialogs may still require pi."
             } else {
-                "This pi session is busy or already linked. Wait or stop its existing link before hiring."
+                "Existing session ready. Native extension dialogs may still require pi."
             },
         );
-        // The extension treats a new token for its live link as a relink, even mid-turn.
         found.resumable = !taking_over;
-        candidates.push(found);
+        let started = entry
+            .metadata()
+            .await
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        // When the process started, as its activity until the catalogue says more: the
+        // newest pi on a session comes first wherever candidates are ordered.
+        found.public.last_activity_at = started
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_millis() as i64);
+        candidates.push((started, found));
         live.push(record);
     }
-    let mut counts = HashMap::new();
-    for entry in &candidates {
-        *counts
-            .entry(entry.target.native_session_id.clone())
-            .or_insert(0usize) += 1;
-    }
-    for entry in &mut candidates {
-        if counts[&entry.target.native_session_id] > 1 {
-            entry.resumable = false;
-            entry.public.availability = "attention".into();
-            entry.public.reason = Some("Several live pi processes claim this session identity. Resolve the duplicate processes before hiring.".into());
-        }
-    }
-    Ok((candidates, live))
+    // Several live pi on one session (a terminal opened on a session the kernel also runs,
+    // for instance): the newest one is the one to link; nothing is refused.
+    candidates.sort_by_key(|(started, _)| std::cmp::Reverse(*started));
+    Ok((candidates.into_iter().map(|(_, c)| c).collect(), live))
 }
 
 /// The pi catalogue comes from a live pi: its extension lists the machine's sessions with

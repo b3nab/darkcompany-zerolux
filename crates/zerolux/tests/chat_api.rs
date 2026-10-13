@@ -226,12 +226,7 @@ async fn child_kernel_discovers_and_hires_an_isolated_native_session_over_http()
         }
     });
     let url = format!("http://127.0.0.1:{port}/api");
-    let client = owner::client(
-        &format!("http://127.0.0.1:{port}"),
-        dir.path(),
-        Duration::from_secs(20),
-    )
-    .await;
+    let client = owner::client(&format!("http://127.0.0.1:{port}"), Duration::from_secs(20)).await;
     let discovery = client
         .get(format!("{url}/sessions"))
         .send()

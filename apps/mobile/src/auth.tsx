@@ -39,14 +39,9 @@ interface Authentication {
   busy: boolean;
   error: string;
   refresh(): Promise<void>;
-  signIn(email: string, password: string, setup?: string): Promise<boolean>;
-  signUp(
-    name: string,
-    email: string,
-    password: string,
-    setup: string,
-  ): Promise<boolean>;
-  claim(setup: string): Promise<boolean>;
+  signIn(email: string, password: string): Promise<boolean>;
+  signUp(name: string, email: string, password: string): Promise<boolean>;
+  claim(): Promise<boolean>;
   signOut(): Promise<boolean>;
   guard(canLeave: () => boolean): () => void;
 }
@@ -176,16 +171,16 @@ export function AuthenticationProvider({
         error,
         refresh,
         guard,
-        signIn: (email, password, setup) =>
+        signIn: (email, password) =>
           perform(async () => {
             const next = await client.signIn(email, password);
-            return !next.actor_id && next.setup_required && setup?.trim()
-              ? client.claim(setup)
+            return !next.actor_id && next.setup_required
+              ? client.claim()
               : next;
           }),
-        signUp: (name, email, password, setup) =>
-          perform(() => client.signUp(name, email, password, setup)),
-        claim: (setup) => perform(() => client.claim(setup)),
+        signUp: (name, email, password) =>
+          perform(() => client.signUp(name, email, password)),
+        claim: () => perform(() => client.claim()),
         signOut: () =>
           perform(async () => {
             await client.signOut();

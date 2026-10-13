@@ -237,8 +237,8 @@ impl MigrationTrait for Bootstrap {
 }
 
 /// Sign-in and more than one kernel: the human subject bound to the owner, the workspace's
-/// own authentication secret and setup credential (shared by every kernel serving it), and
-/// the host each agent session lives on.
+/// own authentication secret (shared by every kernel serving it), and the host each agent
+/// session lives on.
 struct Auth;
 
 impl MigrationName for Auth {
@@ -256,7 +256,6 @@ impl MigrationTrait for Auth {
                 "ALTER TABLE actors ADD COLUMN auth_subject TEXT;
                 CREATE UNIQUE INDEX one_actor_per_subject ON actors(auth_subject) WHERE auth_subject IS NOT NULL;
                 ALTER TABLE workspace ADD COLUMN auth_secret TEXT;
-                ALTER TABLE workspace ADD COLUMN setup_token_hash TEXT;
                 ALTER TABLE chat_sessions ADD COLUMN host_id TEXT;",
             )
             .await?;
@@ -268,7 +267,6 @@ impl MigrationTrait for Auth {
             .get_connection()
             .execute_unprepared(
                 "ALTER TABLE chat_sessions DROP COLUMN host_id;
-                ALTER TABLE workspace DROP COLUMN setup_token_hash;
                 ALTER TABLE workspace DROP COLUMN auth_secret;
                 DROP INDEX one_actor_per_subject;
                 ALTER TABLE actors DROP COLUMN auth_subject;",

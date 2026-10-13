@@ -124,23 +124,8 @@ impl Server {
                 if let Some(turn) = turn {
                     turn.commit().await?;
                 }
-                // The setup credential, while no account is bound: delivered as a private
-                // file here, never logged. A consumed one leaves no file behind.
-                let setup_path = data_dir.join("auth/setup-token");
-                match store.setup_token().await? {
-                    Some(token) => {
-                        tokio::fs::create_dir_all(data_dir.join("auth")).await?;
-                        crate::auth::write_private(&setup_path, &token).await?;
-                        tracing::info!(path = %setup_path.display(), "No account is bound to the owner yet: the setup credential is in this file");
-                    }
-                    None if store.owner_bound().await? => {
-                        let _ = tokio::fs::remove_file(&setup_path).await;
-                    }
-                    None => {}
-                }
                 Some(Arc::new(api::Auth {
                     service: Arc::new(service),
-                    setup_path,
                 }))
             }
             None => None,

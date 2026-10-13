@@ -17,33 +17,26 @@ export default function Authenticate() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [setup, setSetup] = useState("");
   const [error, setError] = useState("");
   if (!auth) return null;
   const enrollment =
     auth.identity?.setup_required ?? auth.health?.auth.setup_required ?? false;
   const signup = enrollment && !existing && !auth.identity;
-  const invalid = auth.identity
-    ? !setup.trim()
-    : !email.trim() ||
+  const invalid =
+    !auth.identity &&
+    (!email.trim() ||
       !password ||
-      (signup &&
-        (Boolean(ownerNameError(name)) ||
-          password.length < 12 ||
-          !setup.trim()));
+      (signup && (Boolean(ownerNameError(name)) || password.length < 12)));
 
   async function submit() {
     if (!auth || auth.busy || auth.loading || invalid || !auth.health) return;
     setError("");
     const accepted = auth.identity
-      ? await auth.claim(setup)
+      ? await auth.claim()
       : signup
-        ? await auth.signUp(name, email, password, setup)
-        : await auth.signIn(email, password, setup);
-    if (accepted) {
-      setPassword("");
-      setSetup("");
-    }
+        ? await auth.signUp(name, email, password)
+        : await auth.signIn(email, password);
+    if (accepted) setPassword("");
   }
   async function changeKernel() {
     if (!chat.canLeave()) {
@@ -78,7 +71,7 @@ export default function Authenticate() {
                   ? "Bind your account to this workspace’s existing owner. Nothing in the company is recreated."
                   : "This account is not a member of this workspace. Sign out to use another account."
                 : signup
-                  ? "Create your account and claim the existing owner with the kernel’s one-time setup token."
+                  ? "Create your account to become this workspace’s owner."
                   : "Sign in to your workspace."}
           </Text>
         </View>
@@ -138,28 +131,6 @@ export default function Authenticate() {
                 </View>
               </>
             )}
-            {enrollment && (
-              <View className="gap-2">
-                <Text className="text-sm">
-                  One-time setup token
-                  {!signup && !auth.identity ? " · optional until claim" : ""}
-                </Text>
-                <Input
-                  accessibilityLabel="One-time setup token"
-                  value={setup}
-                  onChangeText={setSetup}
-                  secureTextEntry
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  autoComplete="off"
-                  editable={!auth.busy}
-                />
-                <Text className="text-sm leading-5 text-muted-foreground">
-                  Read it locally on the computer running this kernel. A public
-                  visitor cannot become the owner.
-                </Text>
-              </View>
-            )}
             {(!auth.identity || enrollment) && (
               <Button
                 disabled={auth.busy || Boolean(invalid)}
@@ -171,7 +142,7 @@ export default function Authenticate() {
                     : auth.identity
                       ? "Claim workspace"
                       : signup
-                        ? "Create account and claim"
+                        ? "Create account"
                         : "Sign in"}
                 </Text>
               </Button>

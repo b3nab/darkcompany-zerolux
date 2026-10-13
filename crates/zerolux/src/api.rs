@@ -104,8 +104,6 @@ impl Exposed {
 /// without credentials are the local owner's, as before any account existed.
 pub struct Auth {
     pub service: Arc<AuthService>,
-    /// Where this kernel delivered the setup credential; removed once it is consumed.
-    pub setup_path: PathBuf,
 }
 
 /// Who a request is from, as the middleware established it.
@@ -401,7 +399,7 @@ async fn require_identity(
         }
         Identity::Unbound(_) => refused(
             StatusCode::FORBIDDEN,
-            "This account is not bound to the workspace owner; claim it with the setup credential",
+            "This account is not the workspace owner",
         ),
         Identity::Anonymous => Error::Unauthorized.into_response(),
     }
@@ -1073,7 +1071,7 @@ fn desktop_preflight(origin: &str) -> Response {
     );
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
-        header::HeaderValue::from_static("content-type, authorization, x-zerolux-setup-token"),
+        header::HeaderValue::from_static("content-type, authorization"),
     );
     headers.insert(
         header::ACCESS_CONTROL_MAX_AGE,
@@ -1260,18 +1258,13 @@ async fn auth_identity(
     }
 }
 
-#[derive(Deserialize)]
-struct SetupClaim {
-    setup_token: String,
-}
-
-/// Binds the signed-in account to the owner, with the setup credential, once.
+/// Binds the signed-in account to the owner: the first account to claim is the owner; no
+/// later account is.
 async fn auth_claim(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
-    ChatJson(input): ChatJson<SetupClaim>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let auth = auth_of(&state)?;
+    auth_of(&state)?;
     let session = match identity {
         Identity::Unbound(session) => session,
         Identity::Known(who, _) if who.is_owner() => {
@@ -1285,20 +1278,22 @@ async fn auth_claim(
     };
     let owner = state
         .store
-        .bind_owner(&session.subject, &session.name, &input.setup_token)
+        .bind_owner(&session.subject, &session.name)
         .await
         .map_err(|error| match error {
-            Error::Forbidden => failure(StatusCode::FORBIDDEN, "The setup credential is not valid"),
+            Error::Conflict => failure(
+                StatusCode::FORBIDDEN,
+                "This workspace already has its owner",
+            ),
             other => other.into(),
         })?;
-    let _ = tokio::fs::remove_file(&auth.setup_path).await;
     Ok(Json(identity_json(&session, Some(&owner.id), false)))
 }
 
 /// Better Auth's own endpoints, through the kernel: sign-in, sign-out, sessions, password.
-/// Signing up needs the setup credential: this is not an open registration. What ends or
-/// may end sessions also disconnects the person's realtime clients: the ones still signed
-/// in come back on their own.
+/// Signing up is open until the owner has an account, and closed after. What ends or may
+/// end sessions also disconnects the person's realtime clients: the ones still signed in
+/// come back on their own.
 async fn auth_proxy(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
@@ -1333,17 +1328,12 @@ async fn auth_proxy(
     );
     let peer = peer(&request);
     let enroll = if signup {
-        let presented = request
-            .headers()
-            .get("x-zerolux-setup-token")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
-        match state.store.setup_token_valid(presented).await {
-            Ok(true) => {}
-            Ok(false) => {
+        match state.store.owner_bound().await {
+            Ok(false) => {}
+            Ok(true) => {
                 return refused(
                     StatusCode::FORBIDDEN,
-                    "Signing up needs the setup credential of this workspace",
+                    "This workspace already has its owner; sign in instead",
                 );
             }
             Err(error) => return error.into_response(),

@@ -95,14 +95,6 @@ pub(crate) fn token_hash(token: &str) -> String {
     format!("{:x}", sha2::Sha256::digest(token.as_bytes()))
 }
 
-pub(crate) fn constant_time_eq(a: &str, b: &str) -> bool {
-    a.len() == b.len()
-        && a.bytes()
-            .zip(b.bytes())
-            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-            == 0
-}
-
 /// The owner's own name: no placeholder, no control characters.
 pub(crate) fn owner_name(value: &str) -> Result<String> {
     let name = text(value, "Your name", 200, true)?;
@@ -257,7 +249,6 @@ impl Store {
                 created_at: sea_orm::Set(now),
                 only_one: sea_orm::Set(1),
                 auth_secret: sea_orm::Set(None),
-                setup_token_hash: sea_orm::Set(None),
             }
             .insert(&tx)
             .await?;
@@ -301,8 +292,8 @@ impl Store {
         Ok(owner)
     }
 
-    /// Whether a human account is bound to the owner yet: until then enrollment is open to
-    /// whoever holds the setup credential, and nobody is signed in as the owner.
+    /// Whether a human account is bound to the owner yet: until then signing up is open and
+    /// nobody is signed in as the owner; the first account to claim is the owner.
     pub async fn owner_bound(&self) -> Result<bool> {
         Ok(self.owner().await?.auth_subject.is_some())
     }
@@ -330,61 +321,6 @@ impl Store {
         Ok(secret)
     }
 
-    /// The setup credential while no account is bound: `Some(new)` when this call made one
-    /// (the caller delivers it locally), `None` when one exists already or none is needed.
-    /// Once an account is bound, whatever credential existed is gone.
-    pub async fn setup_token(&self) -> Result<Option<String>> {
-        let tx = self.write().await?;
-        let bound = actors::Entity::find()
-            .filter(actors::Column::Kind.eq("human"))
-            .one(&tx)
-            .await?
-            .ok_or(Error::NotFound)?
-            .auth_subject
-            .is_some();
-        let workspace = workspace::Entity::find()
-            .one(&tx)
-            .await?
-            .ok_or(Error::NotFound)?;
-        let made = match (bound, workspace.setup_token_hash) {
-            (true, Some(_)) => {
-                workspace::Entity::update_many()
-                    .col_expr(
-                        workspace::Column::SetupTokenHash,
-                        Expr::value(None::<String>),
-                    )
-                    .exec(&tx)
-                    .await?;
-                None
-            }
-            (true, None) | (false, Some(_)) => None,
-            (false, None) => {
-                let token = random_token();
-                workspace::Entity::update_many()
-                    .col_expr(
-                        workspace::Column::SetupTokenHash,
-                        Expr::value(Some(token_hash(&token))),
-                    )
-                    .exec(&tx)
-                    .await?;
-                Some(token)
-            }
-        };
-        tx.commit().await?;
-        Ok(made)
-    }
-
-    /// Whether `presented` is the current setup credential.
-    pub async fn setup_token_valid(&self, presented: &str) -> Result<bool> {
-        let workspace = workspace::Entity::find()
-            .one(&self.db)
-            .await?
-            .ok_or(Error::NotFound)?;
-        Ok(workspace
-            .setup_token_hash
-            .is_some_and(|hash| constant_time_eq(&hash, &token_hash(presented))))
-    }
-
     /// The actor a signed-in subject is: the owner, once bound; nobody otherwise.
     pub async fn actor_for_subject(&self, subject: &str) -> Result<Option<Actor>> {
         Ok(actors::Entity::find()
@@ -393,16 +329,11 @@ impl Store {
             .await?)
     }
 
-    /// Binds a signed-in subject to the owner with the setup credential, once, consuming
-    /// it. A confirmed name stays; otherwise the account's name becomes the owner's, with
+    /// Binds a signed-in subject to the owner, once: the first account to claim is the
+    /// owner. A confirmed name stays; otherwise the account's name becomes the owner's, with
     /// the same checks as naming oneself. The same subject binding again is no change;
-    /// another subject is a conflict: the owner is one.
-    pub async fn bind_owner(
-        &self,
-        subject: &str,
-        account_name: &str,
-        presented: &str,
-    ) -> Result<Actor> {
+    /// another subject after that is a conflict: the owner is one.
+    pub async fn bind_owner(&self, subject: &str, account_name: &str) -> Result<Actor> {
         let tx = self.write().await?;
         let owner = actors::Entity::find()
             .filter(actors::Column::Kind.eq("human"))
@@ -414,23 +345,6 @@ impl Store {
             Some(_) => return Err(Error::Conflict),
             None => {}
         }
-        let workspace = workspace::Entity::find()
-            .one(&tx)
-            .await?
-            .ok_or(Error::NotFound)?;
-        if !workspace
-            .setup_token_hash
-            .is_some_and(|hash| constant_time_eq(&hash, &token_hash(presented)))
-        {
-            return Err(Error::Forbidden);
-        }
-        workspace::Entity::update_many()
-            .col_expr(
-                workspace::Column::SetupTokenHash,
-                Expr::value(None::<String>),
-            )
-            .exec(&tx)
-            .await?;
         let mut update = actors::Entity::update_many()
             .col_expr(
                 actors::Column::AuthSubject,

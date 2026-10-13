@@ -275,7 +275,7 @@ async fn entrusted_terminal_is_resumed_after_exit_without_changing_context() {
         .unwrap();
     let kernel = start(&root, port);
     ready(&client, &base).await;
-    let client = owner::client(&base, &root, Duration::from_secs(75)).await;
+    let client = owner::client(&base, Duration::from_secs(75)).await;
     let discovered = api(&client, &base, "/sessions", None).await;
     let candidate = discovered["sessions"]
         .as_array()

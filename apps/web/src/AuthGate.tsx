@@ -70,7 +70,6 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [setup, setSetup] = useState("");
 
   const load = useCallback(async () => {
     const version = ++loadVersion.current;
@@ -139,7 +138,6 @@ export function AuthGate({ children }: { children: ReactNode }) {
       if (live.current) {
         setIdentity(null);
         setPassword("");
-        setSetup("");
       }
       await load();
     } catch (error) {
@@ -158,18 +156,16 @@ export function AuthGate({ children }: { children: ReactNode }) {
     setError("");
     try {
       let next: AuthIdentity;
-      if (identity) next = await client.claim(setup);
+      if (identity) next = await client.claim();
       else if (health?.auth.setup_required && !existing)
-        next = await client.signUp(name, email, password, setup);
+        next = await client.signUp(name, email, password);
       else {
         next = await client.signIn(email, password);
-        if (!next.actor_id && next.setup_required && setup.trim())
-          next = await client.claim(setup);
+        if (!next.actor_id && next.setup_required) next = await client.claim();
       }
       if (live.current) {
         setIdentity(next);
         setPassword("");
-        if (next.actor_id) setSetup("");
       }
     } catch (error) {
       if (live.current) setError(errorMessage(error));
@@ -186,12 +182,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
       </AuthenticationContext>
     );
 
-  const enrolling = health?.auth.setup_required === true;
+  const enrolling =
+    identity?.setup_required ?? health?.auth.setup_required === true;
   const creating = enrolling && !existing && !identity;
   const blocked =
     busy ||
-    (creating && (Boolean(ownerNameError(name)) || password.length < 12)) ||
-    (enrolling && (creating || Boolean(identity)) && !setup.trim());
+    (creating && (Boolean(ownerNameError(name)) || password.length < 12));
   return (
     <div className="min-h-dvh bg-background text-foreground">
       <div
@@ -216,9 +212,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
         <h1 className="text-3xl font-semibold tracking-tight">
           {loading
             ? "Checking your workspace…"
-            : enrolling
-              ? "Secure your workspace"
-              : "Sign in"}
+            : creating
+              ? "Create account"
+              : identity && enrolling
+                ? "Connect account"
+                : "Sign in"}
         </h1>
         {error && (
           <p role="alert" className="text-sm text-destructive">
@@ -255,9 +253,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
         ) : (
           <>
             <p className="text-sm text-muted-foreground">
-              {enrolling
-                ? "Connect your account to the workspace’s existing owner. Its people and history stay unchanged."
-                : "Use your account for this workspace."}
+              {creating
+                ? "Create your account to become this workspace’s owner. Its people and history stay unchanged."
+                : enrolling
+                  ? "Connect your account to the workspace’s owner. Its people and history stay unchanged."
+                  : "Use your account for this workspace."}
             </p>
             <form
               className="flex flex-col gap-3"
@@ -322,34 +322,13 @@ export function AuthGate({ children }: { children: ReactNode }) {
                   )}
                 </>
               )}
-              {enrolling && (
-                <>
-                  <Label htmlFor="auth-setup">
-                    One-time setup token
-                    {existing && !identity ? " · optional until claim" : ""}
-                  </Label>
-                  <Input
-                    id="auth-setup"
-                    type="password"
-                    autoComplete="off"
-                    required={creating || Boolean(identity)}
-                    value={setup}
-                    disabled={busy}
-                    onChange={(event) => setSetup(event.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Provided locally by the kernel, not by visiting this page.
-                    It can only associate the first owner account.
-                  </p>
-                </>
-              )}
               <Button type="submit" className="self-start" disabled={blocked}>
                 {busy
                   ? "Please wait…"
                   : identity
                     ? "Connect account"
                     : creating
-                      ? "Create account & continue"
+                      ? "Create account"
                       : "Sign in"}
               </Button>
             </form>

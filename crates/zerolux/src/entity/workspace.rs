@@ -13,9 +13,6 @@ pub struct Model {
     /// The Better Auth signing secret of this workspace: every kernel serving it uses it.
     #[serde(skip_serializing, default)]
     pub auth_secret: Option<String>,
-    /// The setup credential (hashed) while no account is bound to the owner.
-    #[serde(skip_serializing, default)]
-    pub setup_token_hash: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

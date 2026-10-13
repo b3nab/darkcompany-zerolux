@@ -23,7 +23,7 @@ bun run build
 cargo run -- serve
 ```
 
-Open http://127.0.0.1:4310. The first time, create your account with the setup credential the kernel wrote to `.zerolux/auth/setup-token` (also named in its log): that account becomes the owner, and the credential is spent. Data lives in `.zerolux/zerolux.db`.
+Open http://127.0.0.1:4310. The first time, create your account: it becomes the owner, and no other account can be created after it. Data lives in `.zerolux/zerolux.db`.
 
 `serve` options: `--port`, `--database` (a SQLite file, or a `postgresql://` URL for a server; `ZEROLUX_DATABASE`), `--data-dir` (links, sockets, the host identity and LiveKit assets; by default the SQLite file's directory, or `.zerolux` with PostgreSQL), `--auth-entry` (the authentication service, run with `bun`; the checkout's by default) and `--expose <ip>` to also serve one more address of this computer, for your other devices. A SQLite workspace is served by one kernel at a time (a lock file next to the database). A PostgreSQL workspace can be served by several kernels at once, each with its own data directory: they share sign-in and chats, and each links only the agent sessions it started; give them one external LiveKit (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`) so clients of all of them get the same notices.
 
