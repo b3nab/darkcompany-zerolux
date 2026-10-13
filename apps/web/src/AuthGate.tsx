@@ -189,8 +189,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     identity?.setup_required ?? health?.auth.setup_required === true;
   const creating = enrolling && !existing && !identity;
   const blocked =
-    busy ||
-    (creating && (Boolean(ownerNameError(name)) || password.length < 12));
+    busy || (creating && (Boolean(ownerNameError(name)) || !password));
   return (
     <div className="min-h-dvh bg-background text-foreground">
       <div
@@ -312,17 +311,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
                       creating ? "new-password" : "current-password"
                     }
                     required
-                    minLength={creating ? 12 : undefined}
                     maxLength={128}
                     value={password}
                     disabled={busy}
                     onChange={(event) => setPassword(event.target.value)}
                   />
-                  {creating && (
-                    <p className="text-xs text-muted-foreground">
-                      Use at least 12 characters.
-                    </p>
-                  )}
                 </>
               )}
               <Button type="submit" className="self-start" disabled={blocked}>

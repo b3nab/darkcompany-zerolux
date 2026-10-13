@@ -92,7 +92,7 @@ export async function createAuth(input: AuthConfig) {
       updateAge: 60 * 60 * 24,
       cookieCache: { enabled: false },
     },
-    emailAndPassword: { enabled: true, minPasswordLength: 12 },
+    emailAndPassword: { enabled: true },
     plugins: [bearer({ requireSignature: true })],
     advanced: {
       cookiePrefix: `zerolux-${config.workspace_id}`,

@@ -26,7 +26,7 @@ export default function Authenticate() {
     !auth.identity &&
     (!email.trim() ||
       !password ||
-      (signup && (Boolean(ownerNameError(name)) || password.length < 12)));
+      (signup && (Boolean(ownerNameError(name)) || !password)));
 
   async function submit() {
     if (!auth || auth.busy || auth.loading || invalid || !auth.health) return;
@@ -114,9 +114,7 @@ export default function Authenticate() {
                   />
                 </View>
                 <View className="gap-2">
-                  <Text className="text-sm">
-                    Password{signup ? " · at least 12 characters" : ""}
-                  </Text>
+                  <Text className="text-sm">Password</Text>
                   <Input
                     accessibilityLabel="Password"
                     value={password}
