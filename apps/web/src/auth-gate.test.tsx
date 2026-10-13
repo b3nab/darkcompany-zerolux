@@ -62,9 +62,14 @@ function ready(setupRequired: boolean, identity: AuthIdentity | null = null) {
 const inputIds = (html: string) =>
   [...html.matchAll(/<input\b[^>]*\bid="([^"]+)"/g)].map((match) => match[1]);
 
-test("an unclaimed workspace offers account creation with only name, email and password", () => {
+test("an unclaimed workspace offers account creation with name, email, password and its confirmation", () => {
   const html = ready(true);
-  expect(inputIds(html)).toEqual(["auth-name", "auth-email", "auth-password"]);
+  expect(inputIds(html)).toEqual([
+    "auth-name",
+    "auth-email",
+    "auth-password",
+    "auth-confirmation",
+  ]);
   expect(html).toContain("Create account");
   expect(html).not.toContain("One-time");
   expect(html).not.toContain("Private workspace data");

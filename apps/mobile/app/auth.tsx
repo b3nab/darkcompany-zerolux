@@ -17,6 +17,7 @@ export default function Authenticate() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState("");
   if (!auth) return null;
   const enrollment =
@@ -26,7 +27,10 @@ export default function Authenticate() {
     !auth.identity &&
     (!email.trim() ||
       !password ||
-      (signup && (Boolean(ownerNameError(name)) || !password)));
+      (signup &&
+        (Boolean(ownerNameError(name)) ||
+          !password ||
+          confirmation !== password)));
 
   async function submit() {
     if (!auth || auth.busy || auth.loading || invalid || !auth.health) return;
@@ -36,7 +40,10 @@ export default function Authenticate() {
       : signup
         ? await auth.signUp(name, email, password)
         : await auth.signIn(email, password);
-    if (accepted) setPassword("");
+    if (accepted) {
+      setPassword("");
+      setConfirmation("");
+    }
   }
   async function changeKernel() {
     if (!chat.canLeave()) {
@@ -127,6 +134,27 @@ export default function Authenticate() {
                     onSubmitEditing={() => void submit()}
                   />
                 </View>
+                {signup && (
+                  <View className="gap-2">
+                    <Text className="text-sm">Confirm password</Text>
+                    <Input
+                      accessibilityLabel="Confirm password"
+                      value={confirmation}
+                      onChangeText={setConfirmation}
+                      secureTextEntry
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      autoComplete="new-password"
+                      editable={!auth.busy}
+                      onSubmitEditing={() => void submit()}
+                    />
+                    {confirmation && confirmation !== password ? (
+                      <Text className="text-sm text-destructive">
+                        The passwords do not match.
+                      </Text>
+                    ) : null}
+                  </View>
+                )}
               </>
             )}
             {(!auth.identity || enrollment) && (

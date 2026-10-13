@@ -71,6 +71,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
 
   const load = useCallback(async () => {
     const version = ++loadVersion.current;
@@ -167,6 +168,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       if (live.current) {
         setIdentity(next);
         setPassword("");
+        setConfirmation("");
       }
     } catch (error) {
       if (live.current) setError(errorMessage(error));
@@ -189,7 +191,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
     identity?.setup_required ?? health?.auth.setup_required === true;
   const creating = enrolling && !existing && !identity;
   const blocked =
-    busy || (creating && (Boolean(ownerNameError(name)) || !password));
+    busy ||
+    (creating &&
+      (Boolean(ownerNameError(name)) ||
+        !password ||
+        confirmation !== password));
   return (
     <div className="min-h-dvh bg-background text-foreground">
       <div
@@ -316,6 +322,30 @@ export function AuthGate({ children }: { children: ReactNode }) {
                     disabled={busy}
                     onChange={(event) => setPassword(event.target.value)}
                   />
+                  {creating && (
+                    <>
+                      <Label htmlFor="auth-confirmation">
+                        Confirm password
+                      </Label>
+                      <Input
+                        id="auth-confirmation"
+                        type="password"
+                        autoComplete="new-password"
+                        required
+                        maxLength={128}
+                        value={confirmation}
+                        disabled={busy}
+                        onChange={(event) =>
+                          setConfirmation(event.target.value)
+                        }
+                      />
+                      {confirmation && confirmation !== password && (
+                        <p className="text-xs text-destructive">
+                          The passwords do not match.
+                        </p>
+                      )}
+                    </>
+                  )}
                 </>
               )}
               <Button type="submit" className="self-start" disabled={blocked}>
