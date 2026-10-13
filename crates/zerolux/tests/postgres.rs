@@ -77,7 +77,11 @@ async fn the_bootstrap_schema_applies_to_postgres_in_a_database_of_its_own() {
     assert!(!tables.contains(&"_sqlx_migrations".to_owned()));
     assert_eq!(
         ledger,
-        vec!["m0001_bootstrap".to_owned(), "m0002_auth".to_owned()]
+        vec![
+            "m0001_bootstrap".to_owned(),
+            "m0002_auth".to_owned(),
+            "m0003_agent_settings".to_owned()
+        ]
     );
 }
 

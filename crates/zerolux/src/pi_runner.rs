@@ -247,7 +247,8 @@ impl RunnerLink {
             native_session_id: self.record.native_session_id.clone(),
             workspace: self.record.workspace.clone(),
             title: "pi".into(),
-            native_locator: json!({"kind":"pi-runner","session_file":description["session_file"],"profile":description["profile"],"runner":self.path}),
+            native_locator: json!({"kind":"pi-runner","session_file":description["session_file"],"profile":description["profile"],"runner":self.path,
+                "model":description["model"]["id"],"effort":description["thinking"]}),
         })
     }
     pub(crate) async fn describe(&self) -> Result<Value> {

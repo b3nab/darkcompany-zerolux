@@ -219,6 +219,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/chat/sessions/{id}/resume", post(resume_session))
         .route("/chat/sessions/{id}/takeover", post(takeover_pi_session))
         .route("/actors/{id}/name", post(rename_agent))
+        .route("/actors/{id}/settings", post(agent_settings))
         .route("/chat/sessions", get(chat_sessions))
         .route("/chat/sessions/{id}/stop", post(stop_session))
         .route("/chat/sessions/{id}/status", post(session_status))
@@ -818,6 +819,17 @@ async fn rename_agent(
 ) -> Result<Json<Value>, Error> {
     Ok(Json(
         json!({ "actor": store.rename_agent(&who, &id, &input.name).await? }),
+    ))
+}
+
+async fn agent_settings(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<AgentSettings>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(
+        json!({ "actor": store.set_agent_settings(&who, &id, input).await? }),
     ))
 }
 

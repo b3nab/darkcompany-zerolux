@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     claude_runner::RunnerLink,
-    model::{ClaudePermissionMode, CreateClaudeSession, IssuedChatSession},
+    model::{AgentSettings, ClaudePermissionMode, CreateClaudeSession, IssuedChatSession},
 };
 use serde_json::json;
 
@@ -16,14 +16,23 @@ impl ChatRuntime {
         }
         let workspace = super::workspace_dir(&input.workspace)?;
         let native_id = uuid::Uuid::new_v4().to_string();
-        self.start_owned(who, HireChatSession {
+        let chosen = AgentSettings {
+            model: input.model.clone(),
+            effort: input.effort.clone(),
+            ..AgentSettings::default()
+        };
+        let started = self.start_owned(who, HireChatSession {
             name: input.name, actor_id: input.actor_id, harness: Harness::ClaudeCode,
             native_session_id: native_id, title: "Claude Code".into(),
             workspace,
             // Started by ZeroLux with Claude Code's own system prompt, as a terminal would.
             native_locator: json!({"kind":"claude-runner","permission_mode":input.permission_mode,"system_prompt":"claude_code"}),
             resume: false,
-        }, input.permission_mode, false).await
+        }, input.permission_mode, false).await?;
+        self.store
+            .set_agent_settings(who, &started.0.id, chosen)
+            .await?;
+        Ok(started)
     }
 
     pub async fn resume_claude(
@@ -94,6 +103,17 @@ impl ChatRuntime {
             .map(str::to_owned);
         let issued = self.store.hire_chat_session(who, input).await?;
         self.changed();
+        // The mode this session runs with is the agent's setting from now on.
+        self.store
+            .set_agent_settings(
+                who,
+                &issued.actor.id,
+                AgentSettings {
+                    permission_mode: Some(mode.name().to_owned()),
+                    ..AgentSettings::default()
+                },
+            )
+            .await?;
         let launched = self
             .runners
             .launch(

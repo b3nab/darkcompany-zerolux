@@ -34,6 +34,11 @@ const actor = (
   kind,
   owner_id: kind === "agent" ? "owner" : null,
   harness: kind === "agent" ? "claude-code" : null,
+  model: null,
+  effort: null,
+  permission_mode: null,
+  approval_policy: null,
+  sandbox: null,
   created_at: 0,
   archived: false,
 });

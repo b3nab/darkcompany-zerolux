@@ -642,6 +642,11 @@ impl Store {
                     name_confirmed: Set(false),
                     created_at: Set(now_ms()),
                     auth_subject: Set(None),
+                    model: Set(None),
+                    effort: Set(None),
+                    permission_mode: Set(None),
+                    approval_policy: Set(None),
+                    sandbox: Set(None),
                 }
                 .insert(&tx)
                 .await?
@@ -1269,6 +1274,125 @@ impl Store {
         }
         tx.commit().await?;
         Ok(actor)
+    }
+
+    /// What an agent runs with, set by the owner. The harness's own settings go only to
+    /// that harness; names are the harnesses' own values.
+    pub async fn set_agent_settings(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+        input: AgentSettings,
+    ) -> Result<Actor> {
+        let tx = self.write().await?;
+        owner_in(&tx, who).await?;
+        let actor = actors::Entity::find_by_id(id)
+            .filter(actors::Column::OwnerId.eq(&who.actor_id))
+            .filter(actors::Column::Kind.eq("agent"))
+            .filter(actors::Column::Archived.eq(false))
+            .one(&tx)
+            .await?
+            .ok_or(Error::NotFound)?;
+        let harness = actor.harness.as_deref().unwrap_or_default();
+        let value = |field: Option<String>,
+                     label: &str,
+                     allowed: &[&str]|
+         -> Result<Option<Option<String>>> {
+            let Some(value) = field else {
+                return Ok(None);
+            };
+            let value = value.trim().to_owned();
+            if value.is_empty() {
+                return Ok(Some(None));
+            }
+            if !allowed.is_empty() && !allowed.contains(&value.as_str()) {
+                return Err(Error::Invalid(format!(
+                    "{label} must be one of {}",
+                    allowed.join(", ")
+                )));
+            }
+            text(&value, label, 200, true)?;
+            Ok(Some(Some(value)))
+        };
+        let mut update = actors::Entity::update_many().filter(actors::Column::Id.eq(id));
+        let mut changed = false;
+        if let Some(model) = value(input.model, "Model", &[])? {
+            update = update.col_expr(actors::Column::Model, Expr::value(model));
+            changed = true;
+        }
+        if let Some(effort) = value(input.effort, "Effort", &[])? {
+            update = update.col_expr(actors::Column::Effort, Expr::value(effort));
+            changed = true;
+        }
+        if let Some(mode) = value(
+            input.permission_mode,
+            "Permission mode",
+            &["default", "acceptEdits", "plan", "auto"],
+        )? {
+            if harness != "claude-code" && mode.is_some() {
+                return Err(Error::Invalid(
+                    "Permission mode is Claude Code's setting".into(),
+                ));
+            }
+            update = update.col_expr(actors::Column::PermissionMode, Expr::value(mode));
+            changed = true;
+        }
+        if let Some(policy) = value(
+            input.approval_policy,
+            "Approval policy",
+            &["untrusted", "on-request", "never"],
+        )? {
+            if harness != "codex" && policy.is_some() {
+                return Err(Error::Invalid("Approval policy is Codex's setting".into()));
+            }
+            update = update.col_expr(actors::Column::ApprovalPolicy, Expr::value(policy));
+            changed = true;
+        }
+        if let Some(sandbox) = value(
+            input.sandbox,
+            "Sandbox",
+            &["read-only", "workspace-write", "danger-full-access"],
+        )? {
+            if harness != "codex" && sandbox.is_some() {
+                return Err(Error::Invalid("Sandbox is Codex's setting".into()));
+            }
+            update = update.col_expr(actors::Column::Sandbox, Expr::value(sandbox));
+            changed = true;
+        }
+        if !changed {
+            return Ok(actor);
+        }
+        let actor = update
+            .exec_with_returning(&tx)
+            .await?
+            .pop()
+            .ok_or(Error::NotFound)?;
+        tx.commit().await?;
+        Ok(actor)
+    }
+
+    /// What the harness reported for a linked session: the agent's model and effort, as
+    /// they are now. Nothing the owner set is overwritten with nothing.
+    pub async fn observe_agent_settings(
+        &self,
+        actor_id: &str,
+        model: Option<&str>,
+        effort: Option<&str>,
+    ) -> Result<()> {
+        if model.is_none() && effort.is_none() {
+            return Ok(());
+        }
+        let tx = self.write().await?;
+        let mut update = actors::Entity::update_many().filter(actors::Column::Id.eq(actor_id));
+        if let Some(model) = model.filter(|m| !m.is_empty()) {
+            update = update.col_expr(actors::Column::Model, Expr::value(Some(model.to_owned())));
+        }
+        if let Some(effort) = effort.filter(|e| !e.is_empty()) {
+            update = update.col_expr(actors::Column::Effort, Expr::value(Some(effort.to_owned())));
+        }
+        update.exec(&tx).await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Opens a thread under `parent` rooted at a message, or joins the open one rooted there:

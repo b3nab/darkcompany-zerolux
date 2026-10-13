@@ -17,7 +17,14 @@ import { Storage } from "./Storage";
 import { Tonight } from "./Tonight";
 import { ChatAbout } from "./components/chat-about";
 import { agentPresence } from "./presence";
-import { AgentProfile, Hire, HireForm, StartAgent, Team } from "./Team";
+import {
+  AgentProfile,
+  AgentSettingsForm,
+  Hire,
+  HireForm,
+  StartAgent,
+  Team,
+} from "./Team";
 import type { Actor, Workspace } from "./api";
 import type {
   Approval,
@@ -42,6 +49,11 @@ const agent = (id: string, name: string): Actor => ({
   kind: "agent",
   owner_id: OWNER,
   harness: "claude-code",
+  model: null,
+  effort: null,
+  permission_mode: null,
+  approval_policy: null,
+  sandbox: null,
   created_at: 0,
   archived: false,
 });
@@ -52,6 +64,11 @@ const actors: Actor[] = [
     kind: "human",
     owner_id: null,
     harness: null,
+    model: null,
+    effort: null,
+    permission_mode: null,
+    approval_policy: null,
+    sandbox: null,
     created_at: 0,
     archived: false,
   },
@@ -429,10 +446,12 @@ test("the team lists each agent once; its profile says where it runs and what ca
   expect(team).toContain(">zerolux<");
   expect(team).not.toContain("old aspen");
   const html = profiles(chat);
-  // Where each session runs; what the kernel does not report yet is said so.
+  // Session facts stay separate from the agent's saved settings.
   expect(html).toContain("/home/owner/github/zerolux");
   expect(html).toContain("You, then hired");
-  expect(html).toContain("Not reported yet");
+  expect(html).toContain('aria-label="Agent settings"');
+  expect(html).toContain("Harness settings");
+  expect(html).not.toContain("Not reported yet");
   // An unconfirmed stop keeps its note, once; a stop without a reason is gone.
   expect(
     html.match(/Stopped here; the running turn may still finish\./g),
@@ -742,6 +761,11 @@ test("the organization shows each person with the agents they own, and what each
     kind: "agent",
     owner_id: "ada",
     harness: "pi",
+    model: null,
+    effort: null,
+    permission_mode: null,
+    approval_policy: null,
+    sandbox: null,
     created_at: 0,
     archived: false,
   };
@@ -1089,9 +1113,94 @@ test("starting an agent asks for a harness, an agent, a folder and how it asks p
   ])
     expect(html).toContain(mode);
   expect(html).not.toContain("Codex settings");
+  for (const id of ["start-model", "start-effort"]) {
+    expect(html).toMatch(new RegExp(`<input[^>]*id="${id}"`));
+    expect(html).not.toMatch(
+      new RegExp(`<input(?=[^>]*id="${id}")[^>]*required=""`),
+    );
+  }
   // Nothing starts without a folder.
   expect(html).toMatch(/<button type="submit"[^>]*disabled=""[^>]*>Start</);
   noUuids(html);
+});
+
+test("agent profiles show saved settings rather than per-session placeholders", () => {
+  const configured = {
+    ...actors[1]!,
+    model: "fixture-model",
+    effort: "high",
+    permission_mode: "plan",
+  };
+  const html = renderToStaticMarkup(
+    <AgentProfile
+      agent={configured}
+      workspace={workspace}
+      chat={fakeChat()}
+      busy={false}
+      perform={perform}
+    />,
+  );
+  expect(html.match(/aria-label="Agent settings"/g)).toHaveLength(1);
+  expect(html).toContain('value="fixture-model"');
+  expect(html).toContain('value="high"');
+  expect(html).toMatch(/<option[^>]*value="plan"[^>]*selected=""/);
+  expect(html).not.toContain("Not reported yet");
+  expect(html).toContain("Running sessions are not changed here.");
+});
+
+test("settings forms expose only the agent's harness controls, including an unset choice", () => {
+  for (const harness of ["pi", "claude-code", "codex"] as const) {
+    const html = renderToStaticMarkup(
+      <AgentSettingsForm
+        agent={{
+          ...actors[1]!,
+          harness,
+          permission_mode: "auto",
+          approval_policy: "on-request",
+          sandbox: "workspace-write",
+        }}
+        busy={false}
+        save={perform}
+      />,
+    );
+    expect(html).toContain('id="agent-setting-model"');
+    expect(html).toContain('id="agent-setting-effort"');
+    expect(html.includes('id="agent-setting-permission_mode"')).toBe(
+      harness === "claude-code",
+    );
+    expect(html.includes('id="agent-setting-approval_policy"')).toBe(
+      harness === "codex",
+    );
+    expect(html.includes('id="agent-setting-sandbox"')).toBe(
+      harness === "codex",
+    );
+    expect(html).toContain('placeholder="Harness settings"');
+    if (harness !== "pi")
+      expect(html).toMatch(
+        /<option[^>]*value=""[^>]*>Harness settings<\/option>/,
+      );
+    if (harness === "codex") {
+      expect(html).toMatch(/<option[^>]*value="on-request"[^>]*selected=""/);
+      expect(html).toMatch(
+        /<option[^>]*value="workspace-write"[^>]*selected=""/,
+      );
+    }
+  }
+});
+
+test("saving agent settings disables all controls and never disguises an unknown saved value", () => {
+  const html = renderToStaticMarkup(
+    <AgentSettingsForm
+      agent={{ ...actors[1]!, permission_mode: "future-mode" }}
+      busy
+      save={perform}
+    />,
+  );
+  expect(html).toMatch(/<input[^>]*id="agent-setting-model"[^>]*disabled=""/);
+  expect(html).toMatch(/<input[^>]*id="agent-setting-effort"[^>]*disabled=""/);
+  expect(html).toMatch(/<select[^>]*disabled=""/);
+  expect(html).toMatch(/<option[^>]*value="future-mode"[^>]*selected=""/);
+  expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Save settings<\/button>/);
 });
 
 test("managed Claude and terminal pi offer Resume; other attached sessions do not", () => {

@@ -12,13 +12,20 @@ import {
   api,
   probeKernel,
   renameWorkspace as rename,
+  setAgentSettings as saveAgentSettings,
   secureKernelOrigin,
   setKernelFetch,
   setKernelUrl,
   useChat,
   useStorage,
 } from "@zerolux/chat";
-import type { Actor, Chat, Storage, Workspace } from "@zerolux/chat";
+import type {
+  Actor,
+  AgentSettings,
+  Chat,
+  Storage,
+  Workspace,
+} from "@zerolux/chat";
 import { AuthenticationProvider, useAuthentication } from "./auth";
 
 // Pin Expo SDK 57's compliant transport even if the RN-fetch compatibility flag is set.
@@ -43,6 +50,7 @@ interface Session {
   chat: Chat;
   workspace: Workspace | undefined;
   renameWorkspace(name: string): Promise<void>;
+  setAgentSettings(id: string, settings: AgentSettings): Promise<void>;
   capabilities: string[];
   version: string | undefined;
   storage: Storage;
@@ -121,6 +129,20 @@ function Connected({ url, children }: { url: string; children: ReactNode }) {
           workspaceVersion.current++;
           setWorkspace(
             (previous) => previous && { ...previous, workspace: info },
+          );
+        },
+        async setAgentSettings(id, settings) {
+          if (!enabled) throw new Error("Sign in before changing an agent");
+          const actor = await saveAgentSettings(id, settings, url);
+          workspaceVersion.current++;
+          setWorkspace(
+            (previous) =>
+              previous && {
+                ...previous,
+                actors: previous.actors.map((old) =>
+                  old.id === actor.id ? actor : old,
+                ),
+              },
           );
         },
         capabilities,

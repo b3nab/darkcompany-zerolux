@@ -2479,3 +2479,76 @@ async fn every_listed_chat_carries_its_newest_message() {
     let parent = listed.iter().find(|c| c.id == room.id).unwrap();
     assert_eq!(parent.last_message.as_ref().unwrap().text, "Hello owner");
 }
+
+#[tokio::test]
+async fn an_agents_model_effort_and_harness_settings_are_the_owners_to_set() {
+    let f = Fixture::new().await;
+    let (aspen, aspen_id) = f.hire("aspen", None).await;
+    assert_eq!(aspen.actor.model, None);
+    let set = |settings: AgentSettings| {
+        f.store
+            .set_agent_settings(&f.owner, &aspen.actor.id, settings)
+    };
+    // Model and effort for every harness; Claude Code's permission mode for a Claude agent.
+    let actor = set(AgentSettings {
+        model: Some(" claude-opus ".into()),
+        effort: Some("high".into()),
+        permission_mode: Some("acceptEdits".into()),
+        ..AgentSettings::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(actor.model.as_deref(), Some("claude-opus"));
+    assert_eq!(actor.effort.as_deref(), Some("high"));
+    assert_eq!(actor.permission_mode.as_deref(), Some("acceptEdits"));
+    // A field left out is unchanged; an empty one is cleared.
+    let actor = set(AgentSettings {
+        effort: Some("".into()),
+        ..AgentSettings::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(actor.model.as_deref(), Some("claude-opus"));
+    assert_eq!(actor.effort, None);
+    // Another harness's setting, or an unknown value, is refused.
+    for wrong in [
+        AgentSettings {
+            approval_policy: Some("never".into()),
+            ..AgentSettings::default()
+        },
+        AgentSettings {
+            permission_mode: Some("yolo".into()),
+            ..AgentSettings::default()
+        },
+    ] {
+        assert!(matches!(set(wrong).await, Err(Error::Invalid(_))));
+    }
+    // Only the owner sets them.
+    assert!(matches!(
+        f.store
+            .set_agent_settings(&aspen_id, &aspen.actor.id, AgentSettings::default())
+            .await,
+        Err(Error::Forbidden)
+    ));
+    // What the harness reports is recorded, and never replaced with nothing.
+    f.store
+        .observe_agent_settings(&aspen.actor.id, Some("claude-sonnet"), None)
+        .await
+        .unwrap();
+    f.store
+        .observe_agent_settings(&aspen.actor.id, None, Some(""))
+        .await
+        .unwrap();
+    let actor = f
+        .store
+        .workspace()
+        .await
+        .unwrap()
+        .actors
+        .into_iter()
+        .find(|a| a.id == aspen.actor.id)
+        .unwrap();
+    assert_eq!(actor.model.as_deref(), Some("claude-sonnet"));
+    assert_eq!(actor.effort, None);
+    assert_eq!(actor.permission_mode.as_deref(), Some("acceptEdits"));
+}

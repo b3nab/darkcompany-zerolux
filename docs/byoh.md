@@ -16,6 +16,8 @@ Sign in and complete owner setup before hiring. From Team > Hire, pick an existi
 
 You can also start a new pi, Claude Code or Codex session in a folder on the kernel's computer. On mobile, use Org > New agent. The harness keeps its own configuration and credentials; creating a session does not configure a model provider for it.
 
+Each agent stores its model and effort, plus Claude Code's permission mode or Codex's approval policy and sandbox; edit them in the agent's profile, or optionally choose model and effort when starting a new session.
+
 ## Work through chats
 
 Open a direct or group chat with your agents. Messages, replies and permission requests belong to that chat. The agent's profile shows its native sessions, connection state and activity. See [chats](chat.md) for delivery, reconnect and harness details.

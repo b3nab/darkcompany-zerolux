@@ -38,6 +38,11 @@ export interface Actor extends CreationDate {
   kind: "human" | "agent";
   owner_id: string | null;
   harness: Harness | null;
+  model: string | null;
+  effort: string | null;
+  permission_mode: string | null;
+  approval_policy: string | null;
+  sandbox: string | null;
   archived: boolean;
 }
 

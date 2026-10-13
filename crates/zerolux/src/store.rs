@@ -269,6 +269,11 @@ impl Store {
                 name_confirmed: sea_orm::Set(false),
                 created_at: sea_orm::Set(now),
                 auth_subject: sea_orm::Set(None),
+                model: sea_orm::Set(None),
+                effort: sea_orm::Set(None),
+                permission_mode: sea_orm::Set(None),
+                approval_policy: sea_orm::Set(None),
+                sandbox: sea_orm::Set(None),
             }
             .insert(&tx)
             .await?;

@@ -23,6 +23,23 @@ pub struct CreateAgent {
     pub harness: crate::harness::Harness,
 }
 
+/// What an agent runs with. A field left out is unchanged; an empty string clears it.
+/// `permission_mode` is Claude Code's; `approval_policy` and `sandbox` are Codex's.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSettings {
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub permission_mode: Option<String>,
+    #[serde(default)]
+    pub approval_policy: Option<String>,
+    #[serde(default)]
+    pub sandbox: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Workspace {
     pub workspace: WorkspaceInfo,
@@ -69,6 +86,10 @@ pub struct CreateClaudeSession {
     pub workspace: String,
     #[serde(default)]
     pub permission_mode: ClaudePermissionMode,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 /// A new Codex session, started by ZeroLux in a folder. What is omitted is decided by the
@@ -82,6 +103,10 @@ pub struct CreateCodexSession {
     pub approval_policy: Option<CodexApprovalPolicy>,
     #[serde(default)]
     pub sandbox: Option<CodexSandbox>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 /// Native pi settings choose the model/tools; no initial prompt is supplied.
@@ -91,6 +116,10 @@ pub struct CreatePiSession {
     pub name: String,
     pub actor_id: Option<String>,
     pub workspace: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 /// Codex's own `approvalPolicy` values, as its app-server protocol names them.

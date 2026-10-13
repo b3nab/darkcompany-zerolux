@@ -7,6 +7,9 @@ import { activeActors, errorMessage, harnessLabels } from "./api";
 import type { Actor, Workspace } from "./api";
 import {
   agentWork,
+  agentLaunchSettings,
+  agentSettingFields,
+  setAgentSettings,
   ago,
   byProject,
   claudeModes,
@@ -16,6 +19,7 @@ import {
   sessionState,
 } from "@zerolux/chat";
 import type {
+  AgentSettings,
   ChatSession,
   ClaudeMode,
   CodexApprovalPolicy,
@@ -264,6 +268,8 @@ export function StartAgent({
   const actorId = pick ? agents[Number(pick)]?.id : undefined;
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
+  const [model, setModel] = useState("");
+  const [effort, setEffort] = useState("");
   const [mode, setMode] = useState<ClaudeMode>("default");
   // Codex: unset means Codex's own settings, never a choice made for the owner.
   const [policy, setPolicy] = useState<CodexApprovalPolicy | "">("");
@@ -274,6 +280,7 @@ export function StartAgent({
     const common = {
       name: name.trim() || label,
       workspace: workspace.trim(),
+      ...agentLaunchSettings(model, effort),
       ...(actorId ? { actor_id: actorId } : {}),
     };
     const started = await perform(() =>
@@ -290,6 +297,8 @@ export function StartAgent({
     if (started) {
       setName("");
       setWorkspace("");
+      setModel("");
+      setEffort("");
     }
   }
   return (
@@ -314,6 +323,11 @@ export function StartAgent({
           onChange={(e) => {
             setHarness(e.target.value as Startable);
             setPick("");
+            setModel("");
+            setEffort("");
+            setMode("default");
+            setPolicy("");
+            setSandbox("");
           }}
         >
           {startable.map((h) => (
@@ -330,7 +344,14 @@ export function StartAgent({
             id="start-agent"
             className="w-full"
             value={pick}
-            onChange={(e) => setPick(e.target.value)}
+            onChange={(e) => {
+              const pick = e.target.value;
+              const agent = pick ? agents[Number(pick)] : undefined;
+              setPick(pick);
+              setMode((agent?.permission_mode as ClaudeMode) || "default");
+              setPolicy((agent?.approval_policy as CodexApprovalPolicy) || "");
+              setSandbox((agent?.sandbox as CodexSandbox) || "");
+            }}
           >
             <NativeSelectOption value="">A new agent</NativeSelectOption>
             {agents.map((a, i) => (
@@ -369,6 +390,28 @@ export function StartAgent({
             <option key={folder} value={folder} />
           ))}
         </datalist>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="start-model">Model · optional</Label>
+          <Input
+            id="start-model"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="Agent or harness settings"
+            autoComplete="off"
+          />
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="start-effort">Effort · optional</Label>
+          <Input
+            id="start-effort"
+            value={effort}
+            onChange={(e) => setEffort(e.target.value)}
+            placeholder="Agent or harness settings"
+            autoComplete="off"
+          />
+        </div>
       </div>
       {harness === "claude-code" ? (
         <div className="flex flex-col gap-2">
@@ -427,7 +470,8 @@ export function StartAgent({
         </>
       ) : (
         <p className="text-sm text-muted-foreground">
-          Uses pi's own model, tools and project settings.
+          Uses pi's own tools and project settings. Blank model and effort keep
+          the agent or harness settings.
         </p>
       )}
       <Button
@@ -710,6 +754,16 @@ export function AgentProfile({
           </Fact>
         </Facts>
       </section>
+      <AgentSettingsForm
+        key={agent.id}
+        agent={agent}
+        busy={busy}
+        save={(settings) =>
+          perform(async () => {
+            await setAgentSettings(agent.id, settings);
+          })
+        }
+      />
       {current.length > 0 && (
         <section className="flex flex-col gap-3 border-b px-5 py-4">
           <Eyebrow>
@@ -758,6 +812,92 @@ export function AgentProfile({
         <p className="text-sm text-muted-foreground">Not tracked yet.</p>
       </section>
     </>
+  );
+}
+
+/** Saved agent defaults, not an assertion about a running session's configuration. */
+export function AgentSettingsForm({
+  agent,
+  busy,
+  save,
+}: {
+  agent: Actor;
+  busy: boolean;
+  save: (settings: AgentSettings) => Promise<boolean>;
+}) {
+  const [changes, setChanges] = useState<AgentSettings>({});
+  async function submit(event: SubmitEvent) {
+    event.preventDefault();
+    if (busy || !Object.keys(changes).length) return;
+    if (await save(changes)) setChanges({});
+  }
+  return (
+    <form
+      aria-label="Agent settings"
+      className="flex flex-col gap-3 border-b px-5 py-4"
+      onSubmit={(event) => void submit(event)}
+    >
+      <Eyebrow>Agent settings</Eyebrow>
+      <p className="text-xs text-muted-foreground">
+        Saved for new sessions. Leave a field blank to clear the saved choice.
+        Running sessions are not changed here.
+      </p>
+      {agentSettingFields(agent.harness).map(({ key, label, options }) => {
+        const value = changes[key] ?? agent[key] ?? "";
+        const change = (value: string) =>
+          setChanges((previous) => ({ ...previous, [key]: value }));
+        return (
+          <div key={key} className="flex flex-col gap-2">
+            <Label htmlFor={`agent-setting-${key}`}>{label}</Label>
+            {options ? (
+              <NativeSelect
+                id={`agent-setting-${key}`}
+                className="w-full"
+                value={value}
+                disabled={busy}
+                onChange={(event) => change(event.target.value)}
+              >
+                <NativeSelectOption value="">
+                  Harness settings
+                </NativeSelectOption>
+                {value && !(value in options) && (
+                  <NativeSelectOption value={value}>{value}</NativeSelectOption>
+                )}
+                {Object.entries(options).map(([value, label]) => (
+                  <NativeSelectOption key={value} value={value}>
+                    {label}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            ) : (
+              <Input
+                id={`agent-setting-${key}`}
+                value={value}
+                placeholder="Harness settings"
+                autoComplete="off"
+                disabled={busy}
+                onChange={(event) => change(event.target.value)}
+              />
+            )}
+          </div>
+        );
+      })}
+      <div className="flex gap-2">
+        <Button type="submit" disabled={busy || !Object.keys(changes).length}>
+          Save settings
+        </Button>
+        {!!Object.keys(changes).length && (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
+            onClick={() => setChanges({})}
+          >
+            Cancel
+          </Button>
+        )}
+      </div>
+    </form>
   );
 }
 
@@ -894,16 +1034,6 @@ function SessionCard({
           </Fact>
           <Fact label="Started by">
             {session.origin === "owned" ? "ZeroLux" : "You, then hired"}
-          </Fact>
-          {/* TODO: kernel: each session's model, reasoning effort and launch profile (Claude Code's permission mode, Codex approvals and sandbox, pi's settings), shown here. */}
-          <Fact label="Model" className="text-faint">
-            Not reported yet
-          </Fact>
-          <Fact label="Effort" className="text-faint">
-            Not reported yet
-          </Fact>
-          <Fact label="Permissions" className="text-faint">
-            Not reported yet
           </Fact>
         </Facts>
       )}

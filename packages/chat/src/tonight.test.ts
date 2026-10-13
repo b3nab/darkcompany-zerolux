@@ -14,6 +14,11 @@ const owner: Actor = {
   kind: "human",
   owner_id: null,
   harness: null,
+  model: null,
+  effort: null,
+  permission_mode: null,
+  approval_policy: null,
+  sandbox: null,
   created_at: 0,
   archived: false,
 };

@@ -5,6 +5,7 @@ import {
   activeActors,
   agentPresence,
   agentWork,
+  agentSettingFields,
   creationDateLabel,
   errorMessage,
   folderName,
@@ -12,10 +13,12 @@ import {
   memberTone,
   sessionState,
 } from "@zerolux/chat";
-import type { Actor, ChatSession } from "@zerolux/chat";
+import type { Actor, AgentSettings, ChatSession } from "@zerolux/chat";
 import { ActorMark, Lamp } from "@/components/member";
 import { Eyebrow } from "@/components/meter";
 import { Screen } from "@/components/screen";
+import { Choice } from "@/components/choice";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
@@ -231,6 +234,7 @@ function Agent({
           </Text>
         </Row>
       </View>
+      <AgentSettingsForm key={agent.id} agent={agent} />
       <Sessions
         agent={agent}
         current={current}
@@ -271,6 +275,93 @@ function Agent({
         <Text className="text-sm text-muted-foreground">Not tracked yet.</Text>
       </View>
     </>
+  );
+}
+
+function AgentSettingsForm({ agent }: { agent: Actor }) {
+  const { setAgentSettings } = useSession();
+  const [changes, setChanges] = useState<AgentSettings>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function save() {
+    if (busy || !Object.keys(changes).length) return;
+    setBusy(true);
+    setError("");
+    try {
+      await setAgentSettings(agent.id, changes);
+      setChanges({});
+    } catch (error) {
+      setError(errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <View className="gap-3 border-b border-border pb-4">
+      <Eyebrow>Agent settings</Eyebrow>
+      <Text className="text-xs text-muted-foreground">
+        Saved for new sessions. Leave a field blank to clear the saved choice.
+        Running sessions are not changed here.
+      </Text>
+      {agentSettingFields(agent.harness).map(({ key, label, options }) => {
+        const value = changes[key] ?? agent[key] ?? "";
+        const change = (value: string) =>
+          setChanges((previous) => ({ ...previous, [key]: value }));
+        return options ? (
+          <Choice
+            key={key}
+            label={label}
+            value={value}
+            options={
+              value && !(value in options)
+                ? { ...options, [value]: value }
+                : options
+            }
+            onChange={change}
+            none="Harness settings"
+            disabled={busy}
+          />
+        ) : (
+          <View key={key} className="gap-2">
+            <Text className="text-sm font-medium">{label}</Text>
+            <Input
+              accessibilityLabel={label}
+              value={value}
+              onChangeText={change}
+              placeholder="Harness settings"
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!busy}
+            />
+          </View>
+        );
+      })}
+      {error ? (
+        <Text accessibilityRole="alert" className="text-sm text-destructive">
+          {error}
+        </Text>
+      ) : null}
+      <View className="flex-row gap-2">
+        <Button
+          disabled={busy || !Object.keys(changes).length}
+          onPress={() => void save()}
+        >
+          <Text>{busy ? "Saving…" : "Save settings"}</Text>
+        </Button>
+        {!!Object.keys(changes).length && (
+          <Button
+            variant="outline"
+            disabled={busy}
+            onPress={() => {
+              setChanges({});
+              setError("");
+            }}
+          >
+            <Text>Cancel</Text>
+          </Button>
+        )}
+      </View>
+    </View>
   );
 }
 
@@ -399,16 +490,6 @@ function Sessions({
               <Text className="text-sm">
                 {s.origin === "owned" ? "ZeroLux" : "You, then hired"}
               </Text>
-            </Row>
-            {/* TODO: kernel: each session's model, reasoning effort and launch profile (Claude Code's permission mode, Codex approvals and sandbox, pi's settings), shown here. */}
-            <Row label="Model">
-              <Text className="text-sm text-faint">Not reported yet</Text>
-            </Row>
-            <Row label="Effort">
-              <Text className="text-sm text-faint">Not reported yet</Text>
-            </Row>
-            <Row label="Permissions">
-              <Text className="text-sm text-faint">Not reported yet</Text>
             </Row>
           </View>
         ) : null}

@@ -2,6 +2,7 @@ import { Stack, useRouter } from "expo-router";
 import { useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import {
+  agentLaunchSettings,
   claudeModes,
   codexApprovalPolicies,
   codexSandboxes,
@@ -17,7 +18,7 @@ import { Screen } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Text } from "@/components/ui/text";
-import { cn } from "@/lib/utils";
+import { Choice } from "@/components/choice";
 import { useSession } from "../../src/kernel";
 
 /** The harnesses the kernel can start a session of. */
@@ -27,45 +28,6 @@ const startable = {
   pi: harnessLabels.pi,
 } as const;
 type Startable = keyof typeof startable;
-
-/** One choice among a few, as chips. `""` is the first, unset option when `none` is given. */
-function Choice<T extends string>({
-  label,
-  options,
-  value,
-  onChange,
-  none,
-}: {
-  label: string;
-  options: Record<T, string>;
-  value: T | "";
-  onChange: (next: T | "") => void;
-  none?: string;
-}) {
-  const chip = (key: T | "", text: string) => (
-    <Pressable
-      key={key}
-      onPress={() => onChange(key)}
-      accessibilityRole="button"
-      accessibilityState={{ selected: value === key }}
-      className={cn(
-        "rounded-full border px-2.5 py-1",
-        value === key ? "border-human bg-human/10" : "border-border",
-      )}
-    >
-      <Text className="text-xs">{text}</Text>
-    </Pressable>
-  );
-  return (
-    <View className="gap-2">
-      <Text className="text-sm font-medium">{label}</Text>
-      <View className="flex-row flex-wrap gap-1.5">
-        {none ? chip("", none) : null}
-        {(Object.keys(options) as T[]).map((key) => chip(key, options[key]))}
-      </View>
-    </View>
-  );
-}
 
 /**
  * A new agent the kernel starts in a folder on its own computer, as a new agent or as
@@ -79,6 +41,8 @@ export default function NewAgent() {
   const [actorId, setActorId] = useState<string | "">("");
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
+  const [model, setModel] = useState("");
+  const [effort, setEffort] = useState("");
   const [mode, setMode] = useState<ClaudeMode>("default");
   const [policy, setPolicy] = useState<CodexApprovalPolicy | "">("");
   const [sandbox, setSandbox] = useState<CodexSandbox | "">("");
@@ -98,6 +62,7 @@ export default function NewAgent() {
     const common = {
       name: name.trim() || label,
       workspace: workspace.trim(),
+      ...agentLaunchSettings(model, effort),
       ...(actorId ? { actor_id: actorId } : {}),
     };
     try {
@@ -136,6 +101,11 @@ export default function NewAgent() {
           onChange={(next) => {
             if (next) setHarness(next);
             setActorId("");
+            setModel("");
+            setEffort("");
+            setMode("default");
+            setPolicy("");
+            setSandbox("");
           }}
         />
         {agents.length > 0 ? (
@@ -145,7 +115,13 @@ export default function NewAgent() {
               agents.map((a) => [a.id, `Another session of ${a.name}`]),
             )}
             value={actorId}
-            onChange={setActorId}
+            onChange={(id) => {
+              const agent = agents.find((agent) => agent.id === id);
+              setActorId(id);
+              setMode((agent?.permission_mode as ClaudeMode) || "default");
+              setPolicy((agent?.approval_policy as CodexApprovalPolicy) || "");
+              setSandbox((agent?.sandbox as CodexSandbox) || "");
+            }}
             none="A new agent"
           />
         ) : null}
@@ -187,6 +163,30 @@ export default function NewAgent() {
             </View>
           ) : null}
         </View>
+        <View className="gap-2">
+          <Text className="text-sm font-medium">Model · optional</Text>
+          <Input
+            accessibilityLabel="Model"
+            value={model}
+            onChangeText={setModel}
+            placeholder="Agent or harness settings"
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!busy}
+          />
+        </View>
+        <View className="gap-2">
+          <Text className="text-sm font-medium">Effort · optional</Text>
+          <Input
+            accessibilityLabel="Effort"
+            value={effort}
+            onChangeText={setEffort}
+            placeholder="Agent or harness settings"
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!busy}
+          />
+        </View>
         {harness === "claude-code" ? (
           <Choice
             label="Permissions"
@@ -196,8 +196,8 @@ export default function NewAgent() {
           />
         ) : harness === "pi" ? (
           <Text className="text-sm text-muted-foreground">
-            Model, thinking and permissions come from pi's own configuration on
-            that computer; ZeroLux sets none.
+            Uses pi's own tools and project settings. Blank model and effort
+            keep the agent or harness settings.
           </Text>
         ) : (
           <>

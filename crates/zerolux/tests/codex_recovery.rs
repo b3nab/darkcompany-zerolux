@@ -455,6 +455,8 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
         workspace: workspace.into(),
         approval_policy: None,
         sandbox: None,
+        model: None,
+        effort: None,
     };
     for (invalid, actor_id) in [
         ("work", None),

@@ -205,7 +205,11 @@ pub struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(Bootstrap), Box::new(Auth)]
+        vec![
+            Box::new(Bootstrap),
+            Box::new(Auth),
+            Box::new(AgentRunSettings),
+        ]
     }
 }
 
@@ -276,6 +280,47 @@ impl MigrationTrait for Auth {
     }
 }
 
+/// What an agent runs with: model and effort for every harness, and the settings of its
+/// own harness (Claude Code's permission mode; Codex's approval policy and sandbox).
+struct AgentRunSettings;
+
+impl MigrationName for AgentRunSettings {
+    fn name(&self) -> &str {
+        "m0003_agent_settings"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for AgentRunSettings {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                "ALTER TABLE actors ADD COLUMN model TEXT;
+                ALTER TABLE actors ADD COLUMN effort TEXT;
+                ALTER TABLE actors ADD COLUMN permission_mode TEXT;
+                ALTER TABLE actors ADD COLUMN approval_policy TEXT;
+                ALTER TABLE actors ADD COLUMN sandbox TEXT;",
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                "ALTER TABLE actors DROP COLUMN sandbox;
+                ALTER TABLE actors DROP COLUMN approval_policy;
+                ALTER TABLE actors DROP COLUMN permission_mode;
+                ALTER TABLE actors DROP COLUMN effort;
+                ALTER TABLE actors DROP COLUMN model;",
+            )
+            .await?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,7 +351,12 @@ mod tests {
     #[async_trait::async_trait]
     impl MigratorTrait for BrokenMigrator {
         fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-            vec![Box::new(Bootstrap), Box::new(Auth), Box::new(Broken)]
+            vec![
+                Box::new(Bootstrap),
+                Box::new(Auth),
+                Box::new(AgentRunSettings),
+                Box::new(Broken),
+            ]
         }
     }
 

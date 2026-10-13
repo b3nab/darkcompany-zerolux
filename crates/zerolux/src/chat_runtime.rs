@@ -14,7 +14,8 @@ use crate::{
     harness::Harness,
     livekit::{ClientToken, LiveKit},
     model::{
-        Actor, ChatIdentity, ChatSession, ChatSessionStatus, CreateCodexSession, HireChatSession,
+        Actor, AgentSettings, ChatIdentity, ChatSession, ChatSessionStatus, CreateCodexSession,
+        HireChatSession,
     },
     sessions,
     store::{Error, Store},
@@ -331,6 +332,26 @@ impl ChatRuntime {
             Err(error) => return Err(error.into()),
         };
         self.changed();
+        // What the harness reports it runs with, on the agent.
+        let (model, effort) = match &driver {
+            Some(NativeDriver::Codex(codex)) => (
+                codex.settings()["model"].as_str().map(str::to_owned),
+                codex.settings()["reasoningEffort"]
+                    .as_str()
+                    .map(str::to_owned),
+            ),
+            _ => (
+                target.native_locator["model"].as_str().map(str::to_owned),
+                target.native_locator["effort"].as_str().map(str::to_owned),
+            ),
+        };
+        if let Err(error) = self
+            .store
+            .observe_agent_settings(&issued.actor.id, model.as_deref(), effort.as_deref())
+            .await
+        {
+            tracing::warn!(error = %error, "Agent settings were not recorded");
+        }
         let paired = if let Some(driver) = driver {
             self.connect_native(driver, &issued.session, issued.token)
                 .await
@@ -386,16 +407,38 @@ impl ChatRuntime {
             workspace,
             native_locator: serde_json::json!({"endpoint": endpoint}),
         };
-        self.bind(
-            who,
-            target,
-            &input.name,
-            input.actor_id,
-            false,
-            Some(NativeDriver::Codex(Box::new(driver))),
-        )
-        .await
-        .context(CodexStartFailure::Unlinked { thread_id })
+        let (actor, session) = self
+            .bind(
+                who,
+                target,
+                &input.name,
+                input.actor_id,
+                false,
+                Some(NativeDriver::Codex(Box::new(driver))),
+            )
+            .await
+            .context(CodexStartFailure::Unlinked { thread_id })?;
+        // What this session was started with is the agent's setting from now on.
+        self.store
+            .set_agent_settings(
+                who,
+                &actor.id,
+                AgentSettings {
+                    model: input.model,
+                    effort: input.effort,
+                    approval_policy: input
+                        .approval_policy
+                        .and_then(|p| serde_json::to_value(p).ok())
+                        .and_then(|v| v.as_str().map(str::to_owned)),
+                    sandbox: input
+                        .sandbox
+                        .and_then(|s| serde_json::to_value(s).ok())
+                        .and_then(|v| v.as_str().map(str::to_owned)),
+                    ..AgentSettings::default()
+                },
+            )
+            .await?;
+        Ok((actor, session))
     }
 
     #[cfg(unix)]
@@ -420,8 +463,21 @@ impl ChatRuntime {
         let native_session_id = host.native_id().to_owned();
         let result = async {
             let target = host.target().await?;
-            self.link(who, target, &input.name, input.actor_id, false)
-                .await
+            let (actor, session) = self
+                .link(who, target, &input.name, input.actor_id, false)
+                .await?;
+            self.store
+                .set_agent_settings(
+                    who,
+                    &actor.id,
+                    AgentSettings {
+                        model: input.model.clone(),
+                        effort: input.effort.clone(),
+                        ..AgentSettings::default()
+                    },
+                )
+                .await?;
+            Ok::<_, anyhow::Error>((actor, session))
         }
         .await;
         // A failed response is not permission to start another identity or kill native work.

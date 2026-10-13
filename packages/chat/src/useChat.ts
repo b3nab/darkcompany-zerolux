@@ -333,6 +333,8 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       name: string;
       workspace: string;
       permission_mode: ClaudeMode;
+      model?: string;
+      effort?: string;
       actor_id?: string;
     }) {
       await api("/chat/claude-sessions", input);
@@ -344,6 +346,8 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       workspace: string;
       approval_policy?: CodexApprovalPolicy;
       sandbox?: CodexSandbox;
+      model?: string;
+      effort?: string;
       actor_id?: string;
     }) {
       await api("/chat/codex-sessions", input);
@@ -353,6 +357,8 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     async startPi(input: {
       name: string;
       workspace: string;
+      model?: string;
+      effort?: string;
       actor_id?: string;
     }) {
       await api("/chat/pi-sessions", input);
