@@ -755,6 +755,13 @@ test("managed startup enables Chrome and uses the native preset without model or
   await f.runner.handle("stop", { link_id: "link" });
 });
 
+test("managed startup exposes native session state events to the adapter", async () => {
+  const f = fixture(false, { managed: true });
+  await f.bind("t1");
+  expect(f.starts[0]?.env?.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS).toBe("1");
+  await f.runner.handle("stop", { link_id: "link" });
+});
+
 test("host shutdown waits for actual native exit", async () => {
   let exit!: () => void;
   const exited = new Promise<void>((resolve) => (exit = resolve));

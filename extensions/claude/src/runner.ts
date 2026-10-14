@@ -368,6 +368,7 @@ export class Runner {
         const options: Options = {
           permissionMode: this.config.mode,
           extraArgs: { chrome: null },
+          env: { ...process.env, CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1" },
           ...(this.initial.model ? { model: this.initial.model } : {}),
           ...(this.initial.effort
             ? { effort: this.initial.effort as EffortLevel }
