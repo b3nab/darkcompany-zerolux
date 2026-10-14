@@ -693,7 +693,7 @@ function MessageRow({
   );
 }
 
-/** When it was sent and, one tap away, who has it and who read it. */
+/** When it was sent and its mark; hovering the mark tells who has it and who read it. */
 function Stamp({
   message: m,
   name,
@@ -704,41 +704,28 @@ function Stamp({
   className?: string;
 }) {
   const mark = receipt(m.deliveries);
-  const time = (
-    <>
+  // As in chat apps: no tap opens it; the details ride on the mark.
+  const detail =
+    mark &&
+    [
+      receiptLabels[mark],
+      ...m.deliveries.map(
+        (d) =>
+          `${name(d.actor_id)}: ${deliveryLabels[d.status]}${d.last_error ? ` (${d.last_error})` : ""}`,
+      ),
+    ].join("\n");
+  return (
+    <span
+      className={cn(
+        "flex items-center gap-1 font-mono text-[11px] text-faint",
+        className,
+      )}
+    >
       <time dateTime={new Date(m.created_at).toISOString()}>
         {clockTime(m.created_at)}
       </time>
-      {mark && <Marks mark={mark} />}
-    </>
-  );
-  const line = cn(
-    "flex items-center gap-1 font-mono text-[11px] text-faint",
-    className,
-  );
-  return m.deliveries.length ? (
-    <details className="group">
-      <summary
-        className={cn(
-          line,
-          "cursor-pointer list-none [&::-webkit-details-marker]:hidden",
-        )}
-      >
-        {time}
-      </summary>
-      <ul className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">
-        {m.deliveries.map((d) => (
-          <li key={d.id} data-status={d.status}>
-            {name(d.actor_id)} · {deliveryLabels[d.status]}
-            {d.last_error && (
-              <small className="block text-destructive">{d.last_error}</small>
-            )}
-          </li>
-        ))}
-      </ul>
-    </details>
-  ) : (
-    <span className={line}>{time}</span>
+      {mark && <Marks mark={mark} detail={detail!} />}
+    </span>
   );
 }
 
@@ -792,6 +779,10 @@ function Composer({
       box.current.style.height = "auto";
       box.current.style.height = `${box.current.scrollHeight}px`;
     }
+    // Opening a chat puts you in its box where a keyboard is at hand; a touch screen keeps
+    // its keyboard down until you tap.
+    if (matchMedia("(pointer: fine)").matches)
+      box.current?.focus({ preventScroll: true });
   }, []);
   const tooLong = new TextEncoder().encode(text).length > MAX_TEXT;
   // What stops a message from going, or what went wrong with a recording or an upload.
@@ -1031,16 +1022,16 @@ function DayLabel({ children }: { children: React.ReactNode }) {
 }
 
 /** One mark per message: ✓ saved, ✓✓ everyone has it, ✓✓ lit when everyone read it. */
-function Marks({ mark }: { mark: Receipt }) {
+function Marks({ mark, detail }: { mark: Receipt; detail: string }) {
   return (
     <span
       data-receipt={mark}
-      title={receiptLabels[mark]}
+      title={detail}
       className="relative inline-flex text-faint data-[receipt=read]:text-agent-foreground"
     >
       <CheckIcon aria-hidden className="size-3.5" />
       {mark !== "sent" && <CheckIcon aria-hidden className="-ml-2 size-3.5" />}
-      <span className="sr-only">{receiptLabels[mark]}</span>
+      <span className="sr-only">{detail}</span>
     </span>
   );
 }

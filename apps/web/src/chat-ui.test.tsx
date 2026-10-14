@@ -226,13 +226,12 @@ test("a group shows history and per-agent delivery states, and reaches every age
   );
   expect(html).toContain("Show earlier messages");
   expect(html).toContain("Can you &lt;b&gt;check&lt;/b&gt; the test?");
-  // One compact mark per message; who has it, who read it and why is one tap away.
-  expect(html).toMatch(/<span data-receipt="sent" title="Sent"/);
-  expect(html).toMatch(/<details[^>]*><summary[^>]*><time/);
-  expect(html).toContain("aspen · Read");
-  expect(html).toMatch(
-    /birch · Sent, not confirmed<small[^>]*>Session closed while delivering<\/small>/,
+  // One compact mark per message, as in chat apps: who has it, who read it and why ride on the
+  // mark, and no tap opens a list under the message.
+  expect(html).toContain(
+    'data-receipt="sent" title="Sent\naspen: Read\nbirch: Sent, not confirmed (Session closed while delivering)"',
   );
+  expect(html).not.toContain("<details");
   // A group chat names the author of others' messages, not of your own; agents speak in mono.
   expect(html).toMatch(
     /<strong class="[^"]*\bfont-mono\b[^"]*">aspen<\/strong>/,
