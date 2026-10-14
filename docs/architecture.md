@@ -2,8 +2,8 @@
 
 ## Parts
 
-- **Kernel** (`crates/zerolux`): a Rust library and CLI executable with a shared server lifecycle. It serves the JSON API and the web app, stores data, runs the chat runtime and the harness drivers. Built on Axum and SQLx.
-- **Database**: SQLite, built in and used by default.
+- **Kernel** (`crates/zerolux`): a Rust library and CLI executable with a shared server lifecycle. It serves the JSON API and the web app, stores data, runs the chat runtime and the harness drivers. Built on Axum and SeaORM.
+- **Database**: SQLite, built in and supported permanently, or shared PostgreSQL for replicas. See [foundations](foundations.md).
 - **Clients**: web (`apps/web`), desktop (`apps/desktop`) and mobile (`apps/mobile`) share chat logic (`packages/chat`) and [themes](themes.md) (`packages/theme`). Tauri uses the packaged interface to connect to a kernel, or explicitly hosts the kernel library for a local workspace. Connection identity, lifecycle, assets and desktop-private preferences are described in [desktop](desktop.md).
 - **Harnesses**: pi, Claude Code and Codex sessions join as agents. The kernel drives Codex through its app-server and Claude Code through its session inbox; pi runs the ZeroLux extension (`extensions/pi`). Detached hosts in `extensions/claude` and `extensions/pi` keep managed execution independent of the kernel's lifetime. New sessions use native configuration. Claude and Codex recover through their native resume APIs with the saved session identity; managed pi also keeps the launch profile needed by its RPC host.
 - **Real time**: LiveKit carries small change events; clients then read messages and state over HTTP.
@@ -14,7 +14,7 @@ The kernel owns workspace rules and persistent state, independently of its CLI o
 
 ## Control plane and execution hosts
 
-A workspace has one authoritative kernel: its control plane. Harnesses may run on that machine or on an owner's PC or VPS, through a desktop or CLI/server host. An execution host is not another authoritative kernel for the same workspace.
+A workspace has one authoritative control plane, served by a local SQLite kernel or replicas sharing PostgreSQL and authentication. Native process ownership remains host-local. Harnesses may run on that machine or on an owner's PC or VPS, through a desktop or CLI/server host. An execution host is not an independent authority for the same workspace.
 
 The harness host owns its native processes, session files, configuration and execution leases. The kernel owns company state and coordinates actions on the appropriate host. An unreachable host is not proof that its native execution died, and does not authorize starting a replacement elsewhere.
 
@@ -28,6 +28,8 @@ The workspace has a generated ID, an editable name and a creation date, preserve
 
 Humans and agents are actors with generated UUIDs and creation dates shown in their profiles. Each agent has a human owner. The owner is found among the workspace actors, never by a fixed ID.
 
+Native settings are observed, not enforced defaults. Harness adapters project public values and native model/effort catalogs; the kernel validates all linked sessions before changing any of them and persists confirmed snapshots in their locators. Actor fields are the common last-confirmed values across active sessions. Owner controls are serialized per actor, without holding database transactions across native requests. Unavailable or foreign-host controls fail closed, and partial native changes are not represented as atomic success. Clients share catalog-backed selectors and cancel stale settings requests when their actor or workspace changes. See [native settings](byoh.md#native-settings).
+
 `created_at` stores a Unix timestamp in milliseconds. Displayed calendar dates use UTC; the company day counter starts at 1.
 
 ## API
@@ -38,6 +40,7 @@ All routes are under `/api`. Main groups:
 | ---------------------------------------------------- | ----------------------------------------------------------------- |
 | `/health`, `/workspace`, `/onboarding/owner`         | Kernel status, workspace metadata and snapshot, owner name        |
 | `/actors`                                            | Agents hired by name, renamed                                     |
+| `/actors/{id}/settings`, `/chat/settings-catalog`    | Observed native settings, live changes and harness choices        |
 | `/auth/identity`, `/auth/claim`, `/auth/*`           | Sign-in: who the account is, binding it to the owner, Better Auth |
 | `/sessions`, `/chat/hire`, `/chat/sessions`          | Discover and link harness sessions                                |
 | `/conversations`                                     | Chats, threads, members and messages                              |
