@@ -45,12 +45,13 @@ interface Kernel {
   forget(): Promise<void>;
 }
 interface Session {
+  url: string;
   actors: Actor[];
   name(actorId: string): string;
   chat: Chat;
   workspace: Workspace | undefined;
   renameWorkspace(name: string): Promise<void>;
-  setAgentSettings(id: string, settings: AgentSettings): Promise<void>;
+  setAgentSettings(id: string, settings: AgentSettings): Promise<Actor>;
   capabilities: string[];
   version: string | undefined;
   storage: Storage;
@@ -118,6 +119,7 @@ function Connected({ url, children }: { url: string; children: ReactNode }) {
   return (
     <SessionContext
       value={{
+        url,
         actors,
         name: (id) => actors.find((actor) => actor.id === id)?.name ?? "…",
         chat,
@@ -144,6 +146,7 @@ function Connected({ url, children }: { url: string; children: ReactNode }) {
                 ),
               },
           );
+          return actor;
         },
         capabilities,
         version: health?.version,

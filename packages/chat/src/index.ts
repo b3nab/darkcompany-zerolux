@@ -3,6 +3,7 @@ export * from "./auth";
 export * from "./chat";
 export * from "./realtime";
 export * from "./useChat";
+export * from "./useAgentSettings";
 export * from "./storage";
 export * from "./meetings";
 export * from "./voice";

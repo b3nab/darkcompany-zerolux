@@ -3,6 +3,8 @@ import { useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import {
   agentLaunchSettings,
+  agentSettingFields,
+  useModelCatalog,
   claudeModes,
   codexApprovalPolicies,
   codexSandboxes,
@@ -19,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Text } from "@/components/ui/text";
 import { Choice } from "@/components/choice";
+import { SettingSelect } from "@/components/setting-select";
 import { useSession } from "../../src/kernel";
 
 /** The harnesses the kernel can start a session of. */
@@ -35,7 +38,7 @@ type Startable = keyof typeof startable;
  * for Codex follows the user's own Codex configuration.
  */
 export default function NewAgent() {
-  const { chat, actors } = useSession();
+  const { chat, actors, url } = useSession();
   const router = useRouter();
   const [harness, setHarness] = useState<Startable>("claude-code");
   const [actorId, setActorId] = useState<string | "">("");
@@ -51,6 +54,12 @@ export default function NewAgent() {
   const agents = actors.filter(
     (a) => a.kind === "agent" && !a.archived && a.harness === harness,
   );
+  const catalog = useModelCatalog(harness, url);
+  const launchFields = agentSettingFields(
+    harness,
+    catalog.data?.models ?? [],
+    model || agents.find((agent) => agent.id === actorId)?.model,
+  ).slice(0, 2);
   const folders = [...new Set(chat.sessions.map((s) => s.workspace))];
   const label = harnessLabels[harness];
   const ready = workspace.trim().length > 0;
@@ -163,30 +172,33 @@ export default function NewAgent() {
             </View>
           ) : null}
         </View>
-        <View className="gap-2">
-          <Text className="text-sm font-medium">Model · optional</Text>
-          <Input
-            accessibilityLabel="Model"
-            value={model}
-            onChangeText={setModel}
-            placeholder="Agent or harness settings"
-            autoCapitalize="none"
-            autoCorrect={false}
-            editable={!busy}
+        {launchFields.map(({ key, label, options }) => (
+          <SettingSelect
+            key={key}
+            label={label}
+            value={key === "model" ? model : effort}
+            options={options}
+            none="Agent or harness choice"
+            disabled={
+              busy || catalog.loading || Object.keys(options).length === 0
+            }
+            onChange={(value) => {
+              if (key === "model") {
+                setModel(value);
+                setEffort("");
+              } else setEffort(value);
+            }}
           />
-        </View>
-        <View className="gap-2">
-          <Text className="text-sm font-medium">Effort · optional</Text>
-          <Input
-            accessibilityLabel="Effort"
-            value={effort}
-            onChangeText={setEffort}
-            placeholder="Agent or harness settings"
-            autoCapitalize="none"
-            autoCorrect={false}
-            editable={!busy}
-          />
-        </View>
+        ))}
+        {!catalog.loading && catalog.data?.models.length === 0 && (
+          <Text className="text-xs text-muted-foreground">
+            Connect this harness to load its model choices. You can start with
+            its own settings.
+          </Text>
+        )}
+        {catalog.error && (
+          <Text className="text-xs text-attention">{catalog.error}</Text>
+        )}
         {harness === "claude-code" ? (
           <Choice
             label="Permissions"
@@ -196,8 +208,7 @@ export default function NewAgent() {
           />
         ) : harness === "pi" ? (
           <Text className="text-sm text-muted-foreground">
-            Uses pi's own tools and project settings. Blank model and effort
-            keep the agent or harness settings.
+            Uses pi's own tools and project settings.
           </Text>
         ) : (
           <>

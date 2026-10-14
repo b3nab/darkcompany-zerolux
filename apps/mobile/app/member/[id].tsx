@@ -6,6 +6,9 @@ import {
   agentPresence,
   agentWork,
   agentSettingFields,
+  canApplyAgentSettings,
+  agentModelOption,
+  useAgentSettings,
   creationDateLabel,
   errorMessage,
   folderName,
@@ -17,8 +20,7 @@ import type { Actor, AgentSettings, ChatSession } from "@zerolux/chat";
 import { ActorMark, Lamp } from "@/components/member";
 import { Eyebrow } from "@/components/meter";
 import { Screen } from "@/components/screen";
-import { Choice } from "@/components/choice";
-import { Input } from "@/components/ui/input";
+import { SettingSelect } from "@/components/setting-select";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
@@ -279,63 +281,113 @@ function Agent({
 }
 
 function AgentSettingsForm({ agent }: { agent: Actor }) {
-  const { setAgentSettings } = useSession();
+  const { setAgentSettings, url, chat } = useSession();
+  const revision = chat.sessions
+    .filter((session) => session.actor_id === agent.id)
+    .map((session) => `${session.id}:${session.status}:${session.activity}`)
+    .join("|");
+  const native = useAgentSettings(agent, revision, url);
+  const current = native.data?.actor ?? agent;
+  const models = native.data?.models ?? [];
   const [changes, setChanges] = useState<AgentSettings>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const fields = agentSettingFields(
+    agent.harness,
+    models,
+    changes.model ?? current.model,
+  );
+  const applicable = canApplyAgentSettings(
+    changes,
+    fields,
+    native.data?.editable ?? [],
+  );
   async function save() {
-    if (busy || !Object.keys(changes).length) return;
+    if (busy || native.loading || native.error || !applicable) return;
     setBusy(true);
     setError("");
     try {
-      await setAgentSettings(agent.id, changes);
+      const actor = await setAgentSettings(agent.id, changes);
+      native.accept(actor);
       setChanges({});
     } catch (error) {
       setError(errorMessage(error));
     } finally {
+      native.refresh();
       setBusy(false);
     }
   }
   return (
     <View className="gap-3 border-b border-border pb-4">
       <Eyebrow>Agent settings</Eyebrow>
-      <Text className="text-xs text-muted-foreground">
-        Saved for new sessions. Leave a field blank to clear the saved choice.
-        Running sessions are not changed here.
-      </Text>
-      {agentSettingFields(agent.harness).map(({ key, label, options }) => {
-        const value = changes[key] ?? agent[key] ?? "";
-        const change = (value: string) =>
-          setChanges((previous) => ({ ...previous, [key]: value }));
-        return options ? (
-          <Choice
+      {native.loading && (
+        <Text className="text-xs text-muted-foreground">
+          Reading native settings…
+        </Text>
+      )}
+      {fields.map(({ key, label, options }) => {
+        let value = changes[key] ?? current[key] ?? "";
+        if (
+          key === "effort" &&
+          changes.model !== undefined &&
+          !Object.hasOwn(options, value)
+        )
+          value = "";
+        return (
+          <SettingSelect
             key={key}
             label={label}
             value={value}
-            options={
-              value && !(value in options)
-                ? { ...options, [value]: value }
-                : options
+            options={options}
+            disabled={
+              busy ||
+              native.loading ||
+              Boolean(native.error) ||
+              !native.data?.editable.includes(key) ||
+              Object.keys(options).length === 0
             }
-            onChange={change}
-            none="Harness settings"
-            disabled={busy}
+            placeholder={
+              changes.model && key === "effort" ? "Native choice" : undefined
+            }
+            onChange={(value) =>
+              setChanges((previous) => {
+                const next = { ...previous, [key]: value };
+                if (
+                  key === "model" &&
+                  next.effort &&
+                  !agentModelOption(models, value)?.efforts.includes(
+                    next.effort,
+                  )
+                )
+                  delete next.effort;
+                return next;
+              })
+            }
           />
-        ) : (
-          <View key={key} className="gap-2">
-            <Text className="text-sm font-medium">{label}</Text>
-            <Input
-              accessibilityLabel={label}
-              value={value}
-              onChangeText={change}
-              placeholder="Harness settings"
-              autoCapitalize="none"
-              autoCorrect={false}
-              editable={!busy}
-            />
-          </View>
         );
       })}
+      {native.data?.sessions.map(
+        (session) =>
+          session.error && (
+            <Text key={session.id} className="text-xs text-attention">
+              {session.error}
+            </Text>
+          ),
+      )}
+      {native.data &&
+        agent.harness === "codex" &&
+        native.data.sessions.length > 0 &&
+        !native.data.editable.includes("sandbox") &&
+        !native.data.sessions.some((session) => session.error) && (
+          <Text className="text-xs text-muted-foreground">
+            Codex allows approval and sandbox changes between turns.
+          </Text>
+        )}
+      {native.error && (
+        <Text accessibilityRole="alert" className="text-sm text-destructive">
+          {native.error}
+        </Text>
+      )}
       {error ? (
         <Text accessibilityRole="alert" className="text-sm text-destructive">
           {error}
@@ -343,10 +395,12 @@ function AgentSettingsForm({ agent }: { agent: Actor }) {
       ) : null}
       <View className="flex-row gap-2">
         <Button
-          disabled={busy || !Object.keys(changes).length}
+          disabled={
+            busy || native.loading || Boolean(native.error) || !applicable
+          }
           onPress={() => void save()}
         >
-          <Text>{busy ? "Saving…" : "Save settings"}</Text>
+          <Text>{busy ? "Applying…" : "Apply"}</Text>
         </Button>
         {!!Object.keys(changes).length && (
           <Button
@@ -360,6 +414,13 @@ function AgentSettingsForm({ agent }: { agent: Actor }) {
             <Text>Cancel</Text>
           </Button>
         )}
+        <Button
+          variant="outline"
+          disabled={busy || native.loading}
+          onPress={native.refresh}
+        >
+          <Text>Refresh</Text>
+        </Button>
       </View>
     </View>
   );

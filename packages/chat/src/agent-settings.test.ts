@@ -4,6 +4,7 @@ import type { Actor } from "./client";
 import {
   agentLaunchSettings,
   agentSettingFields,
+  canApplyAgentSettings,
   setAgentSettings,
 } from "./workspace";
 
@@ -27,7 +28,7 @@ afterEach(() => {
   setKernelUrl("");
 });
 
-test("agent settings post only supplied fields, preserve clearing and return the saved actor", async () => {
+test("agent settings post only supplied native choices and return the confirmed actor", async () => {
   let sent: { url: string; init: RequestInit } | undefined;
   globalThis.fetch = (async (url: string, init: RequestInit) => {
     sent = { url, init };
@@ -36,7 +37,7 @@ test("agent settings post only supplied fields, preserve clearing and return the
   expect(
     await setAgentSettings(actor.id, {
       model: "  fixture-model  ",
-      effort: "  ",
+      effort: " high ",
       permission_mode: undefined,
     }),
   ).toEqual(actor);
@@ -44,7 +45,7 @@ test("agent settings post only supplied fields, preserve clearing and return the
   expect(sent?.init.method).toBe("POST");
   expect(JSON.parse(sent!.init.body as string)).toEqual({
     model: "fixture-model",
-    effort: "",
+    effort: "high",
   });
 });
 
@@ -106,6 +107,56 @@ test("both clients offer common settings and only the native controls of each ha
     "workspace-write",
     "danger-full-access",
   ]);
+});
+
+test("model and effort selectors use only the native catalog, including unfamiliar choices", () => {
+  expect(
+    agentSettingFields("pi")
+      .slice(0, 2)
+      .map((field) => field.options),
+  ).toEqual([{}, {}]);
+  const models = [
+    {
+      value: "native-alias",
+      resolved_model: "native-version",
+      label: "From the harness",
+      efforts: ["native-effort"],
+    },
+    { value: "other-native-model", label: "Other choice", efforts: [] },
+  ];
+  const fields = agentSettingFields("claude-code", models, "native-version");
+  expect(fields[0]!.options).toEqual({
+    "native-alias": "From the harness",
+    "other-native-model": "Other choice",
+  });
+  expect(fields[1]!.options).toEqual({ "native-effort": "native-effort" });
+  expect(
+    agentSettingFields("claude-code", models, "other-native-model")[1]!.options,
+  ).toEqual({});
+});
+
+test("retained drafts cannot be applied when native capabilities or choices change", () => {
+  const fields = agentSettingFields(
+    "pi",
+    [{ value: "native-model", label: "Native", efforts: ["native-effort"] }],
+    "native-model",
+  );
+  expect(
+    canApplyAgentSettings({ effort: "native-effort" }, fields, [
+      "model",
+      "effort",
+    ]),
+  ).toBe(true);
+  expect(
+    canApplyAgentSettings({ effort: "native-effort" }, fields, ["model"]),
+  ).toBe(false);
+  expect(
+    canApplyAgentSettings({ effort: "removed-effort" }, fields, ["effort"]),
+  ).toBe(false);
+  expect(
+    canApplyAgentSettings({ model: "removed-model" }, fields, ["model"]),
+  ).toBe(false);
+  expect(canApplyAgentSettings({}, fields, ["model", "effort"])).toBe(false);
 });
 
 test("blank launch fields omit overrides rather than clearing the agent's saved settings", () => {

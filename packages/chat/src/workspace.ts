@@ -37,7 +37,7 @@ export async function renameWorkspace(
   return result.workspace;
 }
 
-/** Missing fields stay unchanged; an empty string clears an agent's saved choice. */
+/** Missing fields stay unchanged. Values are native choices, applied to connected sessions. */
 export interface AgentSettings {
   model?: string;
   effort?: string;
@@ -46,19 +46,63 @@ export interface AgentSettings {
   sandbox?: string;
 }
 
+export interface AgentModelOption {
+  value: string;
+  label: string;
+  resolved_model?: string;
+  efforts: string[];
+}
+
+export interface AgentSettingsView {
+  actor: Actor;
+  models: AgentModelOption[];
+  editable: (keyof AgentSettings)[];
+  sessions: {
+    id: string;
+    values: Partial<Record<keyof AgentSettings, string | null>> | null;
+    error: string | null;
+  }[];
+}
+
+export function agentModelOption(
+  models: AgentModelOption[],
+  value: string | null | undefined,
+) {
+  return models.find(
+    (model) => model.value === value || model.resolved_model === value,
+  );
+}
+
 export interface AgentSettingField {
   key: keyof AgentSettings;
   label: string;
-  options?: Record<string, string>;
+  options: Record<string, string>;
 }
 
 /** Both clients show only settings belonging to this agent's harness. */
 export function agentSettingFields(
   harness: Actor["harness"],
+  models: AgentModelOption[] = [],
+  model?: string | null,
 ): AgentSettingField[] {
   return [
-    { key: "model", label: "Model" },
-    { key: "effort", label: "Effort" },
+    {
+      key: "model",
+      label: "Model",
+      options: Object.fromEntries(
+        models.map((model) => [model.value, model.label]),
+      ),
+    },
+    {
+      key: "effort",
+      label: "Effort",
+      options: Object.fromEntries(
+        (agentModelOption(models, model)?.efforts ?? []).map((effort) => [
+          effort,
+          effort,
+        ]),
+      ),
+    },
     ...(harness === "claude-code"
       ? [
           {
@@ -82,6 +126,27 @@ export function agentSettingFields(
           ]
         : []),
   ];
+}
+
+/** A retained draft cannot be applied after its choices or live capabilities disappear. */
+export function canApplyAgentSettings(
+  changes: AgentSettings,
+  fields: AgentSettingField[],
+  editable: (keyof AgentSettings)[],
+) {
+  const entries = Object.entries(changes);
+  return (
+    entries.length > 0 &&
+    entries.every(([key, value]) =>
+      fields.some(
+        (field) =>
+          field.key === key &&
+          editable.includes(field.key) &&
+          typeof value === "string" &&
+          Object.hasOwn(field.options, value),
+      ),
+    )
+  );
 }
 
 export async function setAgentSettings(

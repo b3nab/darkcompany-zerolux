@@ -450,7 +450,7 @@ test("the team lists each agent once; its profile says where it runs and what ca
   expect(html).toContain("/home/owner/github/zerolux");
   expect(html).toContain("You, then hired");
   expect(html).toContain('aria-label="Agent settings"');
-  expect(html).toContain("Harness settings");
+  expect(html).toContain("Reading native settings…");
   expect(html).not.toContain("Not reported yet");
   // An unconfirmed stop keeps its note, once; a stop without a reason is gone.
   expect(
@@ -1114,7 +1114,7 @@ test("starting an agent asks for a harness, an agent, a folder and how it asks p
     expect(html).toContain(mode);
   expect(html).not.toContain("Codex settings");
   for (const id of ["start-model", "start-effort"]) {
-    expect(html).toMatch(new RegExp(`<input[^>]*id="${id}"`));
+    expect(html).toMatch(new RegExp(`<select[^>]*id="${id}"`));
     expect(html).not.toMatch(
       new RegExp(`<input(?=[^>]*id="${id}")[^>]*required=""`),
     );
@@ -1124,7 +1124,7 @@ test("starting an agent asks for a harness, an agent, a folder and how it asks p
   noUuids(html);
 });
 
-test("agent profiles show saved settings rather than per-session placeholders", () => {
+test("agent profiles retain last reported values while native settings load", () => {
   const configured = {
     ...actors[1]!,
     model: "fixture-model",
@@ -1145,10 +1145,11 @@ test("agent profiles show saved settings rather than per-session placeholders", 
   expect(html).toContain('value="high"');
   expect(html).toMatch(/<option[^>]*value="plan"[^>]*selected=""/);
   expect(html).not.toContain("Not reported yet");
-  expect(html).toContain("Running sessions are not changed here.");
+  expect(html).not.toContain("Running sessions are not changed here.");
+  expect(html).toContain("Reading native settings…");
 });
 
-test("settings forms expose only the agent's harness controls, including an unset choice", () => {
+test("settings forms use selectors for native fields and only the agent's harness controls", () => {
   for (const harness of ["pi", "claude-code", "codex"] as const) {
     const html = renderToStaticMarkup(
       <AgentSettingsForm
@@ -1160,7 +1161,7 @@ test("settings forms expose only the agent's harness controls, including an unse
           sandbox: "workspace-write",
         }}
         busy={false}
-        save={perform}
+        save={async () => undefined}
       />,
     );
     expect(html).toContain('id="agent-setting-model"');
@@ -1174,11 +1175,8 @@ test("settings forms expose only the agent's harness controls, including an unse
     expect(html.includes('id="agent-setting-sandbox"')).toBe(
       harness === "codex",
     );
-    expect(html).toContain('placeholder="Harness settings"');
-    if (harness !== "pi")
-      expect(html).toMatch(
-        /<option[^>]*value=""[^>]*>Harness settings<\/option>/,
-      );
+    expect(html).not.toContain("<input");
+    expect(html).toContain("Not reported or varies by session");
     if (harness === "codex") {
       expect(html).toMatch(/<option[^>]*value="on-request"[^>]*selected=""/);
       expect(html).toMatch(
@@ -1193,14 +1191,14 @@ test("saving agent settings disables all controls and never disguises an unknown
     <AgentSettingsForm
       agent={{ ...actors[1]!, permission_mode: "future-mode" }}
       busy
-      save={perform}
+      save={async () => undefined}
     />,
   );
-  expect(html).toMatch(/<input[^>]*id="agent-setting-model"[^>]*disabled=""/);
-  expect(html).toMatch(/<input[^>]*id="agent-setting-effort"[^>]*disabled=""/);
+  expect(html).toMatch(/<select[^>]*id="agent-setting-model"[^>]*disabled=""/);
+  expect(html).toMatch(/<select[^>]*id="agent-setting-effort"[^>]*disabled=""/);
   expect(html).toMatch(/<select[^>]*disabled=""/);
   expect(html).toMatch(/<option[^>]*value="future-mode"[^>]*selected=""/);
-  expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Save settings<\/button>/);
+  expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Apply<\/button>/);
 });
 
 test("managed Claude and terminal pi offer Resume; other attached sessions do not", () => {

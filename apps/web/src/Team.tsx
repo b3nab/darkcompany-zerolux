@@ -9,6 +9,10 @@ import {
   agentWork,
   agentLaunchSettings,
   agentSettingFields,
+  canApplyAgentSettings,
+  agentModelOption,
+  useAgentSettings,
+  useModelCatalog,
   setAgentSettings,
   ago,
   byProject,
@@ -274,6 +278,12 @@ export function StartAgent({
   // Codex: unset means Codex's own settings, never a choice made for the owner.
   const [policy, setPolicy] = useState<CodexApprovalPolicy | "">("");
   const [sandbox, setSandbox] = useState<CodexSandbox | "">("");
+  const catalog = useModelCatalog(harness);
+  const launchFields = agentSettingFields(
+    harness,
+    catalog.data?.models ?? [],
+    model || agents.find((agent) => agent.id === actorId)?.model,
+  ).slice(0, 2);
   const label = harnessLabels[harness];
   async function submit(event: SubmitEvent) {
     event.preventDefault();
@@ -392,27 +402,43 @@ export function StartAgent({
         </datalist>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="start-model">Model · optional</Label>
-          <Input
-            id="start-model"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            placeholder="Agent or harness settings"
-            autoComplete="off"
-          />
-        </div>
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="start-effort">Effort · optional</Label>
-          <Input
-            id="start-effort"
-            value={effort}
-            onChange={(e) => setEffort(e.target.value)}
-            placeholder="Agent or harness settings"
-            autoComplete="off"
-          />
-        </div>
+        {launchFields.map(({ key, label, options }) => (
+          <div key={key} className="flex flex-col gap-2">
+            <Label htmlFor={`start-${key}`}>{label} · optional</Label>
+            <NativeSelect
+              id={`start-${key}`}
+              value={key === "model" ? model : effort}
+              disabled={
+                busy || catalog.loading || Object.keys(options).length === 0
+              }
+              onChange={(event) => {
+                if (key === "model") {
+                  setModel(event.target.value);
+                  setEffort("");
+                } else setEffort(event.target.value);
+              }}
+            >
+              <NativeSelectOption value="">
+                Agent or harness choice
+              </NativeSelectOption>
+              {Object.entries(options).map(([value, label]) => (
+                <NativeSelectOption key={value} value={value}>
+                  {label}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </div>
+        ))}
       </div>
+      {!catalog.loading && catalog.data?.models.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          Connect this harness to load its model choices. You can start with its
+          own settings.
+        </p>
+      )}
+      {catalog.error && (
+        <p className="text-xs text-attention">{catalog.error}</p>
+      )}
       {harness === "claude-code" ? (
         <div className="flex flex-col gap-2">
           <Label htmlFor="start-mode">Permissions</Label>
@@ -470,8 +496,7 @@ export function StartAgent({
         </>
       ) : (
         <p className="text-sm text-muted-foreground">
-          Uses pi's own tools and project settings. Blank model and effort keep
-          the agent or harness settings.
+          Uses pi's own tools and project settings.
         </p>
       )}
       <Button
@@ -758,11 +783,18 @@ export function AgentProfile({
         key={agent.id}
         agent={agent}
         busy={busy}
-        save={(settings) =>
-          perform(async () => {
-            await setAgentSettings(agent.id, settings);
-          })
-        }
+        revision={sessions
+          .map(
+            (session) => `${session.id}:${session.status}:${session.activity}`,
+          )
+          .join("|")}
+        save={async (settings) => {
+          let actor: Actor | undefined;
+          const ok = await perform(async () => {
+            actor = await setAgentSettings(agent.id, settings);
+          });
+          return ok ? actor : undefined;
+        }}
       />
       {current.length > 0 && (
         <section className="flex flex-col gap-3 border-b px-5 py-4">
@@ -815,21 +847,39 @@ export function AgentProfile({
   );
 }
 
-/** Saved agent defaults, not an assertion about a running session's configuration. */
+/** Native choices and confirmed current values; Apply changes the connected sessions. */
 export function AgentSettingsForm({
   agent,
   busy,
   save,
+  revision = "",
 }: {
   agent: Actor;
   busy: boolean;
-  save: (settings: AgentSettings) => Promise<boolean>;
+  save: (settings: AgentSettings) => Promise<Actor | undefined>;
+  revision?: string;
 }) {
+  const native = useAgentSettings(agent, revision);
+  const current = native.data?.actor ?? agent;
+  const models = native.data?.models ?? [];
   const [changes, setChanges] = useState<AgentSettings>({});
+  const model = changes.model ?? current.model;
+  const locked = busy || native.loading || Boolean(native.error);
+  const fields = agentSettingFields(agent.harness, models, model);
+  const applicable = canApplyAgentSettings(
+    changes,
+    fields,
+    native.data?.editable ?? [],
+  );
   async function submit(event: SubmitEvent) {
     event.preventDefault();
-    if (busy || !Object.keys(changes).length) return;
-    if (await save(changes)) setChanges({});
+    if (locked || !applicable) return;
+    const actor = await save(changes);
+    if (actor) {
+      native.accept(actor);
+      setChanges({});
+    }
+    native.refresh(); // A failed response may still have followed a native change.
   }
   return (
     <form
@@ -838,53 +888,95 @@ export function AgentSettingsForm({
       onSubmit={(event) => void submit(event)}
     >
       <Eyebrow>Agent settings</Eyebrow>
-      <p className="text-xs text-muted-foreground">
-        Saved for new sessions. Leave a field blank to clear the saved choice.
-        Running sessions are not changed here.
-      </p>
-      {agentSettingFields(agent.harness).map(({ key, label, options }) => {
-        const value = changes[key] ?? agent[key] ?? "";
-        const change = (value: string) =>
-          setChanges((previous) => ({ ...previous, [key]: value }));
+      {native.loading && (
+        <p className="text-xs text-muted-foreground">
+          Reading native settings…
+        </p>
+      )}
+      {fields.map(({ key, label, options }) => {
+        let value = changes[key] ?? current[key] ?? "";
+        if (
+          key === "effort" &&
+          changes.model !== undefined &&
+          !Object.hasOwn(options, value)
+        )
+          value = "";
         return (
           <div key={key} className="flex flex-col gap-2">
             <Label htmlFor={`agent-setting-${key}`}>{label}</Label>
-            {options ? (
-              <NativeSelect
-                id={`agent-setting-${key}`}
-                className="w-full"
-                value={value}
-                disabled={busy}
-                onChange={(event) => change(event.target.value)}
-              >
-                <NativeSelectOption value="">
-                  Harness settings
+            <NativeSelect
+              id={`agent-setting-${key}`}
+              className="w-full"
+              value={value}
+              disabled={
+                locked ||
+                !native.data?.editable.includes(key) ||
+                Object.keys(options).length === 0
+              }
+              onChange={(event) => {
+                const value = event.target.value;
+                setChanges((previous) => {
+                  const next = { ...previous, [key]: value };
+                  if (
+                    key === "model" &&
+                    next.effort &&
+                    !agentModelOption(models, value)?.efforts.includes(
+                      next.effort,
+                    )
+                  )
+                    delete next.effort;
+                  return next;
+                });
+              }}
+            >
+              <NativeSelectOption value="" disabled>
+                {changes.model && key === "effort"
+                  ? "Native choice"
+                  : "Not reported or varies by session"}
+              </NativeSelectOption>
+              {value && !Object.hasOwn(options, value) && (
+                <NativeSelectOption value={value} disabled>
+                  {value}
                 </NativeSelectOption>
-                {value && !(value in options) && (
-                  <NativeSelectOption value={value}>{value}</NativeSelectOption>
-                )}
-                {Object.entries(options).map(([value, label]) => (
-                  <NativeSelectOption key={value} value={value}>
-                    {label}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-            ) : (
-              <Input
-                id={`agent-setting-${key}`}
-                value={value}
-                placeholder="Harness settings"
-                autoComplete="off"
-                disabled={busy}
-                onChange={(event) => change(event.target.value)}
-              />
-            )}
+              )}
+              {Object.entries(options).map(([value, label]) => (
+                <NativeSelectOption key={value} value={value}>
+                  {label}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
           </div>
         );
       })}
+      {native.data?.sessions.map(
+        (session) =>
+          session.error && (
+            <p
+              key={session.id}
+              role="status"
+              className="text-xs text-attention"
+            >
+              {session.error}
+            </p>
+          ),
+      )}
+      {native.data &&
+        agent.harness === "codex" &&
+        native.data.sessions.length > 0 &&
+        !native.data.editable.includes("sandbox") &&
+        !native.data.sessions.some((session) => session.error) && (
+          <p className="text-xs text-muted-foreground">
+            Codex allows approval and sandbox changes between turns.
+          </p>
+        )}
+      {native.error && (
+        <p role="alert" className="text-sm text-destructive">
+          {native.error}
+        </p>
+      )}
       <div className="flex gap-2">
-        <Button type="submit" disabled={busy || !Object.keys(changes).length}>
-          Save settings
+        <Button type="submit" disabled={locked || !applicable}>
+          Apply
         </Button>
         {!!Object.keys(changes).length && (
           <Button
@@ -896,6 +988,14 @@ export function AgentSettingsForm({
             Cancel
           </Button>
         )}
+        <Button
+          type="button"
+          variant="outline"
+          disabled={busy || native.loading}
+          onClick={native.refresh}
+        >
+          Refresh
+        </Button>
       </div>
     </form>
   );
