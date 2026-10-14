@@ -10,6 +10,8 @@ import {
   localURL,
   nativeFingerprint,
   readControlDescriptor,
+  settingsPatch,
+  type NativeSettingsPatch,
 } from "@zerolux/bridge";
 import { PiExecutionLease, processExists } from "./execution-lease.ts";
 import {
@@ -40,6 +42,7 @@ export interface PiRunnerConfig {
   entry: string;
   /** Set only by the execution host for one explicit creation request. */
   creation?: boolean;
+  initial?: NativeSettingsPatch;
 }
 export interface PiRunnerDeps {
   connect(base: string, token: string): ChatRequest;
@@ -58,6 +61,7 @@ type Child = Bun.Subprocess<"pipe", "pipe", "inherit">;
 
 /** Detached host for ONE stock native pi RPC process. No prompts, no automatic replay/retry. */
 export class PiRunner {
+  private readonly initial: NativeSettingsPatch;
   private lease?: PiExecutionLease;
   private profile?: PiExecutionProfile;
   private snapshot?: Snapshot;
@@ -87,7 +91,9 @@ export class PiRunner {
   constructor(
     readonly config: PiRunnerConfig,
     private readonly deps: PiRunnerDeps = defaults,
-  ) {}
+  ) {
+    this.initial = settingsPatch(config.initial ?? {}, ["model", "effort"]);
+  }
 
   async prepare() {
     this.lease = await PiExecutionLease.acquire(this.config, {
@@ -341,7 +347,14 @@ export class PiRunner {
             "--mode",
             "rpc",
             ...(this.config.creation
-              ? []
+              ? [
+                  ...(this.initial.model
+                    ? ["--model", this.initial.model]
+                    : []),
+                  ...(this.initial.effort
+                    ? ["--thinking", this.initial.effort]
+                    : []),
+                ]
               : [
                   "--provider",
                   snapshot.model!.provider,
@@ -359,6 +372,15 @@ export class PiRunner {
       await child.stdin.flush();
       const state = await ready;
       if (this.config.creation) {
+        if (
+          (this.initial.model &&
+            `${state.model.provider}/${state.model.id}` !==
+              this.initial.model) ||
+          (this.initial.effort && state.thinking !== this.initial.effort)
+        )
+          throw new Error(
+            "Native pi did not confirm the requested startup settings; no chat input was dispatched",
+          );
         // Native pi persists model/thinking in this SDK-generated file. A private
         // sidecar must never mask lost/missing native history with a fallback.
         const saved = await readSavedPi(
@@ -764,7 +786,12 @@ async function main() {
   config.workspace = await realpath(config.workspace);
   config.entry = Bun.main;
   if (config.creation)
-    config = await newPiSession(config.workspace, config.entry, config.pi);
+    config = await newPiSession(
+      config.workspace,
+      config.entry,
+      config.pi,
+      config.initial,
+    );
   await mkdir(registry, { recursive: true, mode: 0o700 });
   const runner = new PiRunner(config);
   await runner.prepare();

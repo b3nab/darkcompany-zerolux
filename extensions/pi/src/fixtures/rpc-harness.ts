@@ -23,11 +23,28 @@ const file = realpathSync(value("--session")!);
 if (!file.startsWith(root + "/"))
   throw new Error("Fixture refuses a session outside its temporary HOME");
 const manager = SessionManager.open(file);
-const model = {
-  provider: value("--provider") ?? "fixture",
-  id: value("--model") ?? "native-model",
-};
-const thinking = value("--thinking") ?? "high";
+const models = ["native-model", "native-alternate"].map((id) => ({
+  provider: "fixture",
+  id,
+  name: `Fixture ${id}`,
+  reasoning: true,
+}));
+const saved = manager.buildSessionContext();
+const selected = value("--model") ?? saved.model?.modelId ?? "native-model";
+const separator = selected.indexOf("/");
+const provider =
+  separator < 0
+    ? (value("--provider") ?? saved.model?.provider ?? "fixture")
+    : selected.slice(0, separator);
+const modelId = separator < 0 ? selected : selected.slice(separator + 1);
+let model = models.find(
+  (model) => model.provider === provider && model.id === modelId,
+)!;
+if (!model) throw new Error("Unavailable fixture model");
+let thinking = (value("--thinking") ??
+  (saved.model ? saved.thinkingLevel : "high")) as ReturnType<
+  ExtensionAPI["getThinkingLevel"]
+>;
 if (!manager.buildSessionContext().model) {
   manager.appendModelChange(model.provider, model.id);
   manager.appendThinkingLevelChange(thinking as "high");
@@ -40,6 +57,8 @@ appendFileSync(
     native: manager.getSessionId(),
     file,
     explicit_model: Boolean(value("--model")),
+    model: `${model.provider}/${model.id}`,
+    effort: thinking,
   }) + "\n",
 );
 const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
@@ -51,8 +70,11 @@ const ctx = {
   mode: value("--mode") === "rpc" ? "rpc" : "tui",
   cwd: process.cwd(),
   sessionManager: manager,
-  model,
+  get model() {
+    return model;
+  },
   modelRegistry: {
+    getAvailable: () => models,
     hasConfiguredAuth: () => !existsSync(join(root, "no-auth")),
   },
   isIdle: () => idle,
@@ -77,6 +99,17 @@ const pi = {
   },
   registerCommand() {},
   getThinkingLevel: () => thinking,
+  setModel: async (next: typeof model) => {
+    if (existsSync(join(root, "no-auth"))) return false;
+    model = next;
+    manager.appendModelChange(model.provider, model.id);
+    await emit("model_select");
+    return true;
+  },
+  setThinkingLevel: (next: typeof thinking) => {
+    thinking = next;
+    manager.appendThinkingLevelChange(next);
+  },
   events: {
     on(name: string, handler: (...args: any[]) => void) {
       events.on(name, handler);

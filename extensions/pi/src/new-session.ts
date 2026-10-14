@@ -7,13 +7,16 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { savePiProfile } from "./execution-profile.ts";
 import type { PiRunnerConfig } from "./runner.ts";
+import { settingsPatch } from "@zerolux/bridge";
 
 /** One explicit creation request. Native SDK generates the identity/header; no recovery use. */
 export async function newPiSession(
   workspace: string,
   entry: string,
   pi: string,
+  settings: unknown = {},
 ): Promise<PiRunnerConfig> {
+  const initial = settingsPatch(settings, ["model", "effort"]);
   workspace = await realpath(workspace);
   const extension = join(
     dirname(entry),
@@ -73,5 +76,6 @@ export async function newPiSession(
     pi,
     entry,
     creation: true,
+    initial,
   };
 }

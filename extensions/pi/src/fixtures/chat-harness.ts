@@ -22,6 +22,7 @@ const context = {
   cwd: process.cwd(),
   mode: "tui",
   hasUI: true,
+  modelRegistry: { getAvailable: () => [] },
   sessionManager: {
     getSessionId: () => "11111111-1111-4111-8111-111111111111",
     getSessionName: () => "Deterministic pi fixture",
@@ -46,6 +47,9 @@ const emit = async (name: string, event: unknown) => {
   await handlers.get(name)?.(event, context);
 };
 chatExtension({
+  getThinkingLevel: () => "off",
+  setThinkingLevel: () => {},
+  setModel: async () => false,
   on: (name: string, handler: Handler) => {
     handlers.set(name, handler);
     return () => handlers.delete(name);

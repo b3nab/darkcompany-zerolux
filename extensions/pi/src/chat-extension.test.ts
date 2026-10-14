@@ -12,7 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import chatExtension from "./chat-extension.ts";
+import setupChatExtension from "./chat-extension.ts";
+
+// These lifecycle fixtures have no model configured, but still expose the native SDK accessor.
+const chatExtension = (api: ExtensionAPI) =>
+  setupChatExtension({ ...api, getThinkingLevel: () => "off" });
 
 function rpc(endpoint: string, body: unknown): Promise<any> {
   return new Promise((resolve, reject) => {

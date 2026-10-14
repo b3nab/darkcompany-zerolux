@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  appendFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -123,13 +124,16 @@ process.stdin.on("data", bytes => {
   }
 });
 process.stdin.on("end", () => process.exit(0));
-// A question to the user, when the test leaves one: pi asks and waits for the answer.
-import { existsSync, unlinkSync } from "node:fs";
+// An append-only queue preserves native event order. A truncating/unlinked mailbox
+// can lose a request while the parent writes it, or overwrite a preceding event.
+import { existsSync } from "node:fs";
+let consumed = 0;
 setInterval(() => {
   const ask = join(root, "ask");
   if (!existsSync(ask)) return;
-  const request = readFileSync(ask, "utf8"); unlinkSync(ask);
-  console.log(request.trim());
+  const requests = readFileSync(ask, "utf8");
+  const end = requests.lastIndexOf("\\n") + 1;
+  if (end > consumed) { process.stdout.write(requests.slice(consumed, end)); consumed = end; }
 }, 50);
 `,
     { mode: 0o700 },
@@ -234,7 +238,7 @@ setInterval(() => {
         : writeFile(join(root, "turn"), JSON.stringify(value)),
     /** pi asks its user something. */
     ask: (request: Record<string, unknown>) =>
-      writeFile(join(root, "ask"), JSON.stringify(request) + "\n"),
+      appendFile(join(root, "ask"), JSON.stringify(request) + "\n"),
     answers: () =>
       readFile(join(root, "answers"), "utf8")
         .then((text) =>

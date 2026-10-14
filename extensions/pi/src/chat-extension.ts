@@ -14,9 +14,11 @@ import {
   chatRequest,
   localURL,
   nativeFingerprint,
+  integrationCode,
   type ChatHost,
 } from "@zerolux/bridge";
 import { ChatControl, type PairRequest } from "./chat-control.ts";
+import { PiSettings } from "./settings.ts";
 import { listMetadata } from "./discover.ts";
 import { checkTerminalTakeover } from "./terminal-takeover.ts";
 import { installWake } from "./wake.ts";
@@ -97,6 +99,7 @@ interface Link {
 
 /** The key of a link: its workspace. A kernel that names none gets the legacy single slot. */
 const LEGACY = "";
+const installedCode = integrationCode(import.meta.url);
 
 export default function chatExtension(pi: ExtensionAPI) {
   // An explicit --extension may also be installed in the project. One native
@@ -123,6 +126,8 @@ export default function chatExtension(pi: ExtensionAPI) {
   let uiPrompts = 0;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let context: ExtensionContext | undefined;
+  let pendingUpdate: { linkId: string; revision: string } | undefined;
+  let updateQueued = false;
   let managed: Awaited<ReturnType<typeof verifyManaged>>;
   let metadata: NativeMetadata = { pid: process.pid };
   pi.on("session_start", async (_event, ctx) => {
@@ -168,6 +173,37 @@ export default function chatExtension(pi: ExtensionAPI) {
           : `chat: connected (${connected} workspaces)`,
     );
   };
+  const cancelUpdate = () => {
+    pendingUpdate = undefined;
+    for (const bridge of bridges()) bridge.resumeInput();
+  };
+  const updateIdle = () =>
+    !disposed &&
+    !pairing &&
+    !takingOver &&
+    !stopping &&
+    settled &&
+    uiPrompts === 0 &&
+    context?.isIdle() &&
+    !context.hasPendingMessages() &&
+    queuedInputs.size === 0 &&
+    bridges().every((bridge) => !bridge.busy && !bridge.syncing);
+  const scheduleUpdate = () => {
+    if (!pendingUpdate || updateQueued || !updateIdle()) return;
+    try {
+      if (installedCode?.current() !== pendingUpdate.revision) {
+        cancelUpdate();
+        return;
+      }
+      updateQueued = true;
+      // A native extension command, not model input; no autowake or new inference.
+      pi.sendUserMessage("/zerolux-chat auto-reload", {
+        deliverAs: "followUp",
+      });
+    } catch {
+      cancelUpdate();
+    }
+  };
   /** Ends one link (its workspace) or all of them. Never Stops the agent. */
   const stop = (key?: string): Promise<void> => {
     // Wait for cleanup, then apply this request too: it may name another workspace.
@@ -176,6 +212,10 @@ export default function chatExtension(pi: ExtensionAPI) {
       key === undefined
         ? [...links.entries()]
         : [...links.entries()].filter(([k]) => k === key);
+    if (
+      ending.some(([, link]) => link.bridge.sessionId === pendingUpdate?.linkId)
+    )
+      cancelUpdate();
     for (const [k] of ending) links.delete(k);
     if (links.size === 0 && refreshTimer) {
       clearTimeout(refreshTimer);
@@ -203,6 +243,7 @@ export default function chatExtension(pi: ExtensionAPI) {
         .then(() => {
           if (links.get(key)?.bridge === current && !current.connected)
             return stop(key);
+          scheduleUpdate();
         })
         .catch(() => {});
     }
@@ -497,6 +538,49 @@ export default function chatExtension(pi: ExtensionAPI) {
         await stop();
         return;
       }
+      if (args.trim() === "auto-reload") {
+        const update = pendingUpdate;
+        if (!update) return;
+        try {
+          await ctx.waitForIdle();
+          await Promise.all(bridges().map((bridge) => bridge.pauseInput()));
+          const link = [...links.values()].find(
+            (link) => link.bridge.sessionId === update.linkId,
+          );
+          if (!link?.bridge.connected || pendingUpdate !== update) return;
+          const { session } = await link.transport.request<{
+            session: { id: string; status: string };
+          }>("/chat/inbox");
+          if (
+            session.id !== update.linkId ||
+            session.status === "stopped" ||
+            installedCode?.current() !== update.revision
+          ) {
+            cancelUpdate();
+            return;
+          }
+          if (!updateIdle()) return;
+          // No pending native input, receipts, replies or dialogs are discarded.
+          // Detach quietly: this is not an owner's Stop and must not resume admission.
+          pendingUpdate = undefined;
+          const ending = [...links.values()];
+          links.clear();
+          const children = ending.map((link) => {
+            link.bridge.handOff();
+            link.transport.close();
+            return link.child?.stop();
+          });
+          // Invoke reload before yielding to new private input; clean old subscribers
+          // afterwards without touching the now-stale extension context.
+          await ctx.reload();
+          await Promise.allSettled(children);
+        } catch {
+          if (!disposed) cancelUpdate();
+        } finally {
+          updateQueued = false;
+        }
+        return;
+      }
       if (args.trim() === "reload") {
         // pi refuses to reload during a turn. Closing the link first keeps a chat
         // message from starting one; the kernel relinks the reloaded extension.
@@ -518,9 +602,17 @@ export default function chatExtension(pi: ExtensionAPI) {
     dialogShared = !ctx.isIdle() || ctx.hasPendingMessages();
     if (disposed) return;
     const workspace = await realpath(ctx.cwd);
+    const settings = new PiSettings(pi, ctx);
+    let settingOps: Promise<unknown> = Promise.resolve();
     const current = new ChatControl(join(getAgentDir(), "zerolux-links"), {
       describe: () => ({
         ...metadata,
+        ...settings.values(),
+        capabilities: [
+          "agent-settings-v1",
+          ...(installedCode ? ["integration-update-v1"] : []),
+        ],
+        integration_revision: installedCode?.revision,
         native_session_id: ctx.sessionManager.getSessionId(),
         workspace,
         title:
@@ -544,6 +636,58 @@ export default function chatExtension(pi: ExtensionAPI) {
         return turn
           ? { ...turn, link_id: link!.bridge.sessionId }
           : { delivery: null };
+      },
+      settings: (id, values, check) => {
+        const operation = settingOps
+          .catch(() => {})
+          .then(async () => {
+            if (disposed || takingOver || stopping)
+              throw new Error("The native session is changing");
+            if (values === undefined) return settings.read();
+            if (
+              !id ||
+              ![...links.values()].some(
+                (link) => link.bridge.connected && link.bridge.sessionId === id,
+              )
+            )
+              throw new Error("Unknown or disconnected link");
+            return settings.apply(values, check);
+          });
+        settingOps = operation;
+        return operation;
+      },
+      update: async (linkId, revision) => {
+        const link = [...links.values()].find(
+          (link) => link.bridge.sessionId === linkId,
+        );
+        if (
+          !installedCode ||
+          disposed ||
+          takingOver ||
+          stopping ||
+          !link?.bridge.connected
+        )
+          throw new Error("Unknown or disconnected link");
+        try {
+          if (
+            installedCode.revision === revision ||
+            installedCode.current() !== revision
+          ) {
+            cancelUpdate();
+            return { pending: false };
+          }
+          if (
+            pendingUpdate?.linkId !== linkId ||
+            pendingUpdate.revision !== revision
+          )
+            pendingUpdate = { linkId, revision };
+          await Promise.all(bridges().map((bridge) => bridge.pauseInput()));
+          scheduleUpdate();
+          return { pending: true };
+        } catch (error) {
+          cancelUpdate();
+          throw error;
+        }
       },
       // The kernel asks a live pi for the session list: pi's own SDK, in this process.
       sessions: () => listMetadata(process.env.PI_CODING_AGENT_SESSION_DIR),
@@ -660,8 +804,12 @@ export default function chatExtension(pi: ExtensionAPI) {
     settled = true;
     dialogShared = false;
     await Promise.all(bridges().map((bridge) => bridge.settled()));
-    // agent_settled is notification-only. Dispatch another delivery on a later event-loop tick.
-    if (!disposed && links.size > 0) refreshTimer = setTimeout(refresh, 0);
+    // Native reload/dispatch must happen after this notification-only callback returns.
+    if (!disposed && links.size > 0)
+      refreshTimer = setTimeout(() => {
+        scheduleUpdate();
+        refresh();
+      }, 0);
   });
   pi.on("ui_prompt_start", () => {
     uiPrompts++;
@@ -674,6 +822,7 @@ export default function chatExtension(pi: ExtensionAPI) {
   });
   pi.on("ui_prompt_end", () => {
     uiPrompts = Math.max(0, uiPrompts - 1);
+    if (pendingUpdate) setTimeout(scheduleUpdate, 0);
     for (const bridge of bridges())
       if (bridge.busy) void bridge.ready().catch(() => {});
   });

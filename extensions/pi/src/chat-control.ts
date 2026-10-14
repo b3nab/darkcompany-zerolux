@@ -1,4 +1,4 @@
-import { LocalControl } from "@zerolux/bridge";
+import { LocalControl, type NativeSettingsSnapshot } from "@zerolux/bridge";
 
 export interface LiveDescription {
   native_session_id: string;
@@ -30,6 +30,12 @@ export interface ControlHost {
   sessions(): Promise<unknown[]>;
   pair(request: PairRequest): Promise<string>;
   stop(linkId: string): Promise<void>;
+  update?(linkId: string, revision: string): Promise<{ pending: boolean }>;
+  settings?(
+    linkId: string | undefined,
+    values: unknown,
+    check: boolean,
+  ): Promise<NativeSettingsSnapshot>;
   takeover?(request: TakeoverRequest): Promise<{ accepted: boolean }>;
   /**
    * Whose work the running turn is, across every link of this pi: the delivery of the one
@@ -48,6 +54,32 @@ export class ChatControl extends LocalControl {
         describe: () => ({ ...host.describe() }),
         async handle(method, request) {
           if (method === "sessions") return { sessions: await host.sessions() };
+          if (method === "settings" && host.settings) {
+            if (
+              (request.link_id !== undefined &&
+                typeof request.link_id !== "string") ||
+              (request.check !== undefined &&
+                typeof request.check !== "boolean")
+            )
+              throw new Error("Invalid settings request");
+            return {
+              settings: await host.settings(
+                request.link_id as string | undefined,
+                request.values,
+                request.check === true,
+              ),
+            };
+          }
+          if (method === "update" && host.update) {
+            if (
+              typeof request.link_id !== "string" ||
+              !request.link_id ||
+              typeof request.revision !== "string" ||
+              !/^[a-f0-9]{64}$/.test(request.revision)
+            )
+              throw new Error("Invalid integration update request");
+            return host.update(request.link_id, request.revision);
+          }
           if (method === "turn")
             return { ...(host.turn?.() ?? { delivery: null }) };
           if (method === "stop" && typeof request.link_id === "string") {
