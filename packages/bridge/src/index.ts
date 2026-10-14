@@ -1,4 +1,6 @@
 export * from "./chat-bridge.ts";
+export * from "./agent-settings.ts";
+export * from "./integration-code.ts";
 export { AgentLinkChild } from "./agent-link.ts";
 export { Transport } from "./transport.ts";
 export { localURL } from "./local-url.ts";

@@ -235,6 +235,7 @@ export class ChatBridge {
   private notifying = new Set<string>();
   private flushing?: Promise<void>;
   private closed = false;
+  private inputPaused = false;
   private dirty = false;
   private refresh?: Promise<void>;
   private nativeSettled = true;
@@ -315,6 +316,17 @@ export class ChatBridge {
     return this.refresh;
   }
 
+  /** Finish admitted claims; later input remains stored while the integration updates. */
+  async pauseInput() {
+    this.inputPaused = true;
+    await this.refresh;
+  }
+
+  resumeInput() {
+    this.inputPaused = false;
+    void this.invalidate();
+  }
+
   /** Delivers everything waiting at once: into the running turn, or starting one. */
   private async drain() {
     // Claims refused in this pass wait for the next change, so another chat can go first.
@@ -337,6 +349,7 @@ export class ChatBridge {
               "ZeroLux refused a message the agent wrote while it was unreachable; it was not published",
             );
           });
+        if (this.inputPaused) continue;
         const waiting = inbox.deliveries.filter(
           (d) =>
             d.status === "stored" &&
