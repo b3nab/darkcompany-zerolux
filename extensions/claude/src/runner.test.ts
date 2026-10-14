@@ -23,6 +23,8 @@ function fixture(
     systemPrompt?: "claude_code";
     execution?: ClaudeExecution;
     managed?: boolean;
+    initial?: { model: string; effort: string };
+    appliedModel?: string;
   } = {},
 ) {
   const session = {
@@ -108,6 +110,7 @@ function fixture(
   let emit!: (m: SDKMessage) => void;
   let interrupts = 0,
     closes = 0;
+  const reportedModel = options.appliedModel;
   const start: StartQuery = ({ prompt, options }) => {
     starts.push(options);
     void (async () => {
@@ -129,6 +132,19 @@ function fixture(
       }
     }
     return Object.assign(stream(), {
+      initializationResult: async () => ({}),
+      supportedModels: async () =>
+        ["native-model", "other-model"].map((value) => ({
+          value,
+          displayName: value,
+          supportedEffortLevels: ["high"],
+        })),
+      getSettings: async () => ({
+        applied: {
+          model: reportedModel ?? options.model ?? "native-model",
+          effort: options.effort ?? "high",
+        },
+      }),
       interrupt: async () => {
         interrupts++;
         return undefined;
@@ -149,6 +165,7 @@ function fixture(
       nativeSessionId: "native",
       workspace: "/work",
       mode: "default",
+      initial: options.initial,
       ...(options.managed ? { managed: true } : {}),
       ...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
     },
@@ -243,6 +260,29 @@ function fixture(
       }),
   };
 }
+
+test("unconfirmed startup settings cannot dispatch queued input or silently start again", async () => {
+  const f = fixture(false, {
+    initial: { model: "other-model", effort: "high" },
+    appliedModel: "native-model",
+  });
+  f.message("waiting", "Queued before binding");
+  try {
+    await expect(f.bind("t1")).rejects.toThrow("did not confirm");
+    await f.runner.agent.refresh();
+    await expect(f.bind("t2")).rejects.toThrow(
+      "Native startup settings were not confirmed",
+    );
+    expect(f.starts).toHaveLength(1);
+    expect(f.starts[0]).toMatchObject({ model: "other-model", effort: "high" });
+    expect(f.inputs).toEqual([]);
+    expect(f.calls.filter((call) => call.path.endsWith("/dispatch"))).toEqual(
+      [],
+    );
+  } finally {
+    f.runner.agent.close();
+  }
+});
 
 test.each([false, true])(
   "startup metadata is independent of transport binding (managed=%s)",

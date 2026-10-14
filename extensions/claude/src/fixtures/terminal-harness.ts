@@ -17,7 +17,14 @@ writeFileSync(
       role: "user",
       content: "Remember the terminal's original conversation.",
     },
-  }) + "\n",
+  }) +
+    "\n" +
+    JSON.stringify({
+      type: "permission-mode",
+      sessionId: id,
+      permissionMode: "auto",
+    }) +
+    "\n",
 );
 mkdirSync("/tmp/cc-socks", { recursive: true, mode: 0o700 });
 const socket = `/tmp/cc-socks/${process.pid}.sock`;

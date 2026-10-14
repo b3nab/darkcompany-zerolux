@@ -16,6 +16,7 @@ import {
   type ChatRequest,
 } from "@zerolux/bridge";
 import { z } from "zod";
+import { ClaudeSettings } from "./settings.ts";
 
 export type StartQuery = (input: {
   prompt: AsyncIterable<SDKUserMessage>;
@@ -69,6 +70,8 @@ export class ClaudeAgent {
   readonly bridge: ChatBridge;
   private readonly input = new Input();
   private query?: Query;
+  private dispatchEnabled = true;
+  readonly settings = new ClaudeSettings(() => this.query);
   private state: "idle" | "running" | "requires_action" = "idle";
   /** The chat the running turn is for: the first batch since the agent was idle decides. */
   private turnChat?: string;
@@ -133,11 +136,39 @@ export class ClaudeAgent {
 
   /** Working on a turn, or input still waiting for one. */
   get busy() {
-    return this.state !== "idle" || !this.input.empty;
+    return (
+      this.state !== "idle" || !this.input.empty || this.written.length > 0
+    );
+  }
+
+  /** Accepted input, unread messages and unconfirmed output must survive an update. */
+  get updateReady() {
+    return (
+      !this.busy &&
+      !this.bridge.busy &&
+      !this.bridge.syncing &&
+      this.peers.length === 0 &&
+      this.waiting.size === 0 &&
+      this.approvalReceipts.size === 0
+    );
+  }
+
+  /** Pause only new deliveries. Already accepted work and its approvals keep running. */
+  async prepareUpdate() {
+    await this.bridge.pauseInput();
+    // Flush replies and receipts even when no new LiveKit event arrives.
+    await this.refresh();
+    return this.updateReady;
+  }
+
+  /** Startup configuration must be confirmed before any queued owner input is admitted. */
+  setDispatchEnabled(enabled: boolean) {
+    this.dispatchEnabled = enabled;
   }
 
   /** ZeroLux changed: new messages, an approval decided, the link stopped. */
   async refresh() {
+    if (!this.dispatchEnabled) return;
     await Promise.all([
       this.bridge.invalidate(),
       this.decisions(),
@@ -193,6 +224,7 @@ export class ClaudeAgent {
   }
 
   private handle(message: SDKMessage) {
+    this.settings.observe(message);
     if (
       message.type === "system" &&
       message.subtype === "session_state_changed"

@@ -36,6 +36,9 @@ function scripted(
   options: Options,
 ): Query {
   const sessionId = options.resume ?? options.sessionId ?? "";
+  let model = options.model ?? "native-default";
+  let effort = options.effort ?? "high";
+  let permissionMode = options.permissionMode ?? "default";
   // The model remains scripted in this fixture. A real, isolated child exercises the
   // SDK spawn contract/lease, with no Claude binary, credentials or model requests.
   const native = options.spawnClaudeCodeProcess?.({
@@ -92,6 +95,15 @@ function scripted(
         : null,
   });
 
+  emit({
+    type: "system",
+    subtype: "init",
+    model,
+    effort,
+    permissionMode,
+    session_id: sessionId,
+    uuid: randomUUID(),
+  });
   void (async () => {
     for await (const input of prompt) {
       if (closed) return;
@@ -156,6 +168,42 @@ function scripted(
     }
   }
   return Object.assign(stream(), {
+    initializationResult: async () => ({}),
+    getSettings: async () => ({
+      applied: { model, effort },
+      effective: { env: { PRIVATE_FIXTURE_VALUE: "must-not-be-published" } },
+    }),
+    supportedModels: async () => [
+      {
+        value: "native-default",
+        displayName: "Native default",
+        supportedEffortLevels: ["low", "high"],
+      },
+      {
+        value: "native-alternate",
+        displayName: "Native alternate",
+        supportedEffortLevels: ["medium", "high"],
+      },
+    ],
+    applyFlagSettings: async (settings: {
+      model?: string;
+      effortLevel?: Options["effort"];
+    }) => {
+      if (settings.model) model = settings.model;
+      if (settings.effortLevel) effort = settings.effortLevel;
+      trace("settings", { model, effort });
+    },
+    setPermissionMode: async (mode: NonNullable<Options["permissionMode"]>) => {
+      permissionMode = mode;
+      trace("settings", { permissionMode });
+      emit({
+        type: "system",
+        subtype: "status",
+        permissionMode,
+        session_id: sessionId,
+        uuid: randomUUID(),
+      });
+    },
     interrupt: async () => {
       trace("interrupt");
       abort.abort();

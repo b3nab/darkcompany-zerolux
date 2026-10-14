@@ -6,6 +6,7 @@ import {
   query,
   type PermissionMode,
   type Options,
+  type EffortLevel,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   AgentLinkChild,
@@ -13,6 +14,11 @@ import {
   LocalControl,
   Transport,
   localURL,
+  settingsPatch,
+  integrationCode,
+  type IntegrationCode,
+  type NativeAgentSettings,
+  type NativeSettingsPatch,
   type ChatRequest,
   type Inbox,
 } from "@zerolux/bridge";
@@ -20,8 +26,7 @@ import { ClaudeAgent, type StartQuery } from "./agent.ts";
 import { acquireSessionLock } from "@zerolux/bridge/session-lock";
 import { waitAndExec } from "@zerolux/bridge/exec-gate";
 import { ClaudeExecution } from "./execution.ts";
-
-const MODES: PermissionMode[] = ["default", "acceptEdits", "plan", "auto"];
+import { PERMISSION_MODES } from "./settings.ts";
 
 export interface Subscriber {
   start(executable: string, base: string, token: string): Promise<void>;
@@ -35,6 +40,7 @@ export interface RunnerDeps {
   saved(nativeSessionId: string, workspace: string): Promise<boolean>;
   /** The same SDK child, guarded by this host's existing exclusive lease. */
   execution?: ClaudeExecution;
+  code?: IntegrationCode;
 }
 export interface RunnerConfig {
   nativeSessionId: string;
@@ -44,6 +50,8 @@ export interface RunnerConfig {
   managed?: boolean;
   /** Native prompt preset for new sessions or resumed terminal conversations. */
   systemPrompt?: "claude_code";
+  /** Session-only native launch flags; validated before any chat input is dispatched. */
+  initial?: NativeSettingsPatch;
 }
 
 /**
@@ -65,6 +73,10 @@ export class Runner {
   /** Control operations run one at a time, in the order they arrive. */
   private ops: Promise<unknown> = Promise.resolve();
   private started = false;
+  private startupFailed = false;
+  private updateTarget?: string;
+  private updatePrepared?: NativeAgentSettings;
+  private readonly initial: NativeSettingsPatch;
   private stopped = false;
   private stopRequested = false;
   private pendingBinds = 0;
@@ -80,11 +92,16 @@ export class Runner {
     private readonly config: RunnerConfig,
     private readonly deps: RunnerDeps,
   ) {
-    this.transport = new Transport(() => void this.stopSubscriber());
+    this.initial = settingsPatch(config.initial ?? {}, ["model", "effort"]);
+    this.transport = new Transport(() => {
+      this.agent.setDispatchEnabled(false);
+      void this.stopSubscriber();
+    });
     this.agent = new ClaudeAgent(
       { nativeSessionId: config.nativeSessionId, workspace: config.workspace },
       this.transport.request,
     );
+    this.agent.setDispatchEnabled(false);
   }
 
   describe() {
@@ -93,6 +110,14 @@ export class Runner {
       native_session_id: this.config.nativeSessionId,
       workspace: this.config.workspace,
       permission_mode: this.config.mode,
+      capabilities: [
+        "agent-settings-v1",
+        ...(this.config.managed && this.deps.code && this.deps.execution
+          ? ["integration-update-v1"]
+          : []),
+      ],
+      integration_revision: this.deps.code?.revision,
+      settings: this.agent.settings.values(),
       title: `Claude Code — ${basename(this.config.workspace)}`,
       busy: this.agent.busy,
       // Native startup stays issued across prepare/revocation, including legacy hosts.
@@ -132,6 +157,7 @@ export class Runner {
 
   private requestStop() {
     this.stopRequested = true;
+    this.agent.setDispatchEnabled(false);
     this.deps.execution?.requestStop();
     // Stop closes delivery admission immediately, not after the pending bind ACK.
     this.bridgeStopping ??= this.agent.bridge.stop().catch(() => {});
@@ -156,12 +182,134 @@ export class Runner {
     }
     if (method === "bind") return this.bind(request);
     if (!mine) throw new Error("Unknown link");
+    if (method === "settings") {
+      if (this.stopRequested || !this.transport.bound)
+        throw new Error("The session is not connected");
+      if (this.updateTarget && request.values !== undefined)
+        throw new Error(
+          "The integration is updating; refresh before changing settings",
+        );
+      return {
+        settings:
+          request.values === undefined
+            ? await this.agent.settings.read()
+            : await this.agent.settings.apply(
+                request.values,
+                request.check === true,
+              ),
+      };
+    }
+    if (method === "update") return this.prepareUpdate(request);
+    if (method === "update_commit") return this.commitUpdate(request);
+    if (method === "update_cancel") {
+      this.cancelUpdate();
+      return {};
+    }
     if (method === "prepare") return this.prepare();
     if (method === "stop") return this.stop();
     throw new Error("Unknown control operation");
   }
 
+  private cancelUpdate() {
+    this.updateTarget = undefined;
+    this.updatePrepared = undefined;
+    if (!this.stopRequested) this.agent.bridge.resumeInput();
+  }
+
+  private async prepareUpdate(request: Record<string, unknown>) {
+    const code = this.deps.code;
+    const revision = request.revision;
+    if (
+      !this.config.managed ||
+      !this.deps.execution ||
+      !code ||
+      typeof revision !== "string" ||
+      !/^[a-f0-9]{64}$/.test(revision)
+    )
+      throw new Error("Unsupported integration update");
+    if (this.stopRequested || !this.transport.bound)
+      throw new Error("The session is not connected");
+    try {
+      if (revision === code.revision || code.current() !== revision) {
+        this.cancelUpdate();
+        return { pending: false };
+      }
+      // Do not close a new session before Claude has persisted its native identity.
+      if (
+        !this.started ||
+        !(await this.deps.saved(
+          this.config.nativeSessionId,
+          this.config.workspace,
+        ))
+      )
+        return { pending: true };
+      this.updateTarget = revision;
+      this.updatePrepared = undefined;
+      if (!(await this.agent.prepareUpdate())) return { pending: true };
+      const { values } = await this.agent.settings.read();
+      if (
+        !values.model ||
+        !values.permission_mode ||
+        !PERMISSION_MODES.includes(values.permission_mode as PermissionMode)
+      )
+        throw new Error("Native settings are not confirmed");
+      if (
+        this.stopRequested ||
+        !this.agent.updateReady ||
+        code.current() !== revision
+      )
+        throw new Error("The integration update checkpoint changed");
+      this.updatePrepared = { ...values };
+      return { pending: true, ready: true, settings: values };
+    } catch (error) {
+      this.cancelUpdate();
+      throw error;
+    }
+  }
+
+  private async commitUpdate(request: Record<string, unknown>) {
+    const checkpoint = this.updatePrepared;
+    if (
+      this.stopRequested ||
+      !this.transport.bound ||
+      !checkpoint ||
+      request.revision !== this.updateTarget ||
+      !this.agent.updateReady
+    )
+      throw new Error("The integration update is not ready");
+    try {
+      // Close only while the effective settings still match what the kernel saved.
+      const { values } = await this.agent.settings.read();
+      if (
+        this.stopRequested ||
+        !this.transport.bound ||
+        !this.agent.updateReady ||
+        this.deps.code?.current() !== this.updateTarget ||
+        values.model !== checkpoint.model ||
+        values.effort !== checkpoint.effort ||
+        values.permission_mode !== checkpoint.permission_mode
+      )
+        throw new Error("The integration update checkpoint changed");
+    } catch (error) {
+      this.cancelUpdate();
+      throw error;
+    }
+    this.updatePrepared = undefined;
+    // The kernel persisted the native checkpoint first. No Owner Stop or new input:
+    // normal recovery resumes the same identity only after verified native exit.
+    this.agent.bridge.handOff();
+    this.transport.close();
+    await this.closeNative();
+    await this.stopSubscriber();
+    this.ended();
+    return { updating: true };
+  }
+
   private async bind(request: Record<string, unknown>) {
+    if (this.startupFailed)
+      throw new Error(
+        "Native startup settings were not confirmed; Stop before resuming this session",
+      );
     if (this.stopRequested)
       throw new Error("The session was stopped before binding");
     const { base_url, token, executable } = request;
@@ -219,6 +367,10 @@ export class Runner {
           );
         const options: Options = {
           permissionMode: this.config.mode,
+          ...(this.initial.model ? { model: this.initial.model } : {}),
+          ...(this.initial.effort
+            ? { effort: this.initial.effort as EffortLevel }
+            : {}),
           ...(this.config.managed && this.config.systemPrompt
             ? {
                 systemPrompt: {
@@ -254,6 +406,14 @@ export class Runner {
             ),
           )
           .finally(this.ended);
+        if (Object.keys(this.initial).length) {
+          try {
+            await this.agent.settings.verifyStart(this.initial);
+          } catch (error) {
+            this.startupFailed = true;
+            throw error;
+          }
+        }
       } else this.agent.bridge.forgetShown(); // A rebind follows a kernel restart.
       if (this.stopRequested)
         throw new Error("The session was stopped while binding");
@@ -268,12 +428,18 @@ export class Runner {
     }
     this.subscriber = subscriber;
     this.credentials = credentials;
+    this.agent.setDispatchEnabled(true);
+    // Rebinding after a kernel restart invalidates its earlier update preparation.
+    // Reopen admission only now that the new token and native startup are confirmed.
+    if (this.updateTarget) this.cancelUpdate();
     void this.agent.refresh();
     return { link_id: this.identity.id };
   }
 
   /** The kernel is about to rotate the token: nothing goes out with the old one after this. */
   private async prepare() {
+    this.agent.setDispatchEnabled(false);
+    this.updatePrepared = undefined;
     await this.stopSubscriber();
     await this.transport.pause();
     return {};
@@ -321,6 +487,8 @@ export class Runner {
  * Starts a runner from its environment, as the kernel launches it, and resolves with its exit
  * code once the session ends. `ready` sees the runner before the kernel can bind it.
  */
+const installedCode = integrationCode(import.meta.url);
+
 export async function launch(
   deps: RunnerDeps,
   ready?: (runner: Runner) => void,
@@ -333,19 +501,28 @@ export async function launch(
     throw new Error(
       "ZEROLUX_RUNNER_REGISTRY, ZEROLUX_NATIVE_SESSION, ZEROLUX_WORKSPACE and ZEROLUX_PERMISSION_MODE are required",
     );
-  if (!MODES.includes(mode)) throw new Error(`Unknown permission mode ${mode}`);
+  if (!PERMISSION_MODES.includes(mode))
+    throw new Error(`Unknown permission mode ${mode}`);
   const workspace = await realpath(env.ZEROLUX_WORKSPACE);
   const managed = env.ZEROLUX_CLAUDE_MANAGED === "1";
   const systemPrompt = managed ? env.ZEROLUX_SYSTEM_PROMPT : undefined;
   if (systemPrompt !== undefined && systemPrompt !== "claude_code")
     throw new Error(`Unknown system prompt ${systemPrompt}`);
-  const runnerDeps: RunnerDeps = { ...deps };
+  const runnerDeps: RunnerDeps = { code: installedCode, ...deps };
   const runner = new Runner(
     {
       nativeSessionId,
       workspace,
       mode,
-      ...(managed ? { managed } : {}),
+      ...(managed
+        ? {
+            managed,
+            initial: settingsPatch(
+              JSON.parse(env.ZEROLUX_INITIAL_SETTINGS ?? "{}"),
+              ["model", "effort"],
+            ),
+          }
+        : {}),
       ...(systemPrompt ? { systemPrompt: "claude_code" } : {}),
     },
     runnerDeps,
