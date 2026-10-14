@@ -779,10 +779,35 @@ function Composer({
       box.current.style.height = "auto";
       box.current.style.height = `${box.current.scrollHeight}px`;
     }
-    // Opening a chat puts you in its box where a keyboard is at hand; a touch screen keeps
-    // its keyboard down until you tap.
-    if (matchMedia("(pointer: fine)").matches)
+    // Opening a chat puts you in its box where a keyboard is at hand; a touch screen keeps its
+    // keyboard down until you tap.
+    if (!matchMedia("(pointer: fine)").matches) return;
+    box.current?.focus({ preventScroll: true });
+    // Clicks keep doing what they do, selecting text included. What you type or paste
+    // elsewhere in the chat lands in the box, as in Element and Mattermost: focus moves on
+    // keydown, before the character is written.
+    const keys = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return;
+      const paste =
+        (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v";
+      const typed =
+        (event.key.length === 1 || event.key === "Dead") &&
+        !event.metaKey &&
+        !event.ctrlKey;
+      if (!paste && !typed) return;
+      // Another field, or a dialog, keeps its keys; Space presses the control it is on.
+      const at = document.activeElement;
+      if (
+        at?.closest(
+          "input, textarea, select, [contenteditable=true], [role=dialog]",
+        ) ||
+        (event.key === " " && at?.closest("button, a, [role=button]"))
+      )
+        return;
       box.current?.focus({ preventScroll: true });
+    };
+    document.addEventListener("keydown", keys);
+    return () => document.removeEventListener("keydown", keys);
   }, []);
   const tooLong = new TextEncoder().encode(text).length > MAX_TEXT;
   // What stops a message from going, or what went wrong with a recording or an upload.
