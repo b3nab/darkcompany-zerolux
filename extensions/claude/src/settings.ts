@@ -53,7 +53,12 @@ export class ClaudeSettings {
     const query = this.query();
     if (!query || typeof query.getSettings !== "function")
       throw new Error("The native Claude session cannot report its settings");
-    await query.initializationResult();
+    this.current.permission_mode ??=
+      (
+        (await query.initializationResult()) as {
+          current_permission_mode?: PermissionMode;
+        }
+      ).current_permission_mode ?? null;
     const [raw, models] = await Promise.all([
       query.getSettings(),
       query.supportedModels(),
