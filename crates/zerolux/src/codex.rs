@@ -20,8 +20,7 @@ use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 use uuid::Uuid;
 
 use crate::{
-    chat_driver::{Delivery, Kernel, MAX_TEXT, prompt, string},
-    chat_tools::ChatLink,
+    chat_driver::{Delivery, Kernel, MAX_TEXT, is_loopback, prompt, string},
     model::{AgentSettings, CodexApprovalPolicy, CodexSandbox},
 };
 
@@ -111,7 +110,7 @@ impl CodexRpc {
             } else {
                 let url = reqwest::Url::parse(endpoint)
                     .map_err(|_| anyhow!("Invalid Codex runtime endpoint"))?;
-                let local = crate::chat_tools::is_loopback(&url);
+                let local = is_loopback(&url);
                 ensure!(
                     url.scheme() == "ws"
                         && local
@@ -690,19 +689,12 @@ impl CodexDriver {
     pub async fn run(
         mut self,
         kernel_url: String,
-        links: std::path::PathBuf,
         session_id: String,
         token: String,
         mut changed: mpsc::Receiver<()>,
         mut stop: watch::Receiver<bool>,
     ) -> Result<()> {
-        let link = ChatLink::create(
-            &links,
-            &kernel_url,
-            &token,
-            &format!("codex:{}", self.thread_id),
-        )?;
-        let kernel = Kernel::new(kernel_url, session_id, token, link)?;
+        let kernel = Kernel::new(kernel_url, session_id, token)?;
         let result = async {
             if *stop.borrow() { return Ok(()); }
             kernel.status("connected", None).await?;
@@ -839,8 +831,8 @@ impl CodexDriver {
             return Ok(true);
         }
         {
-            // Claim the whole snapshot. Consecutive chat runs retain their own envelope,
-            // reply command and roster, in sequence order, inside one native input.
+            // Claim the whole snapshot. Consecutive chat runs retain their own envelope
+            // and roster, in sequence order, inside one native input.
             let mut batch = Vec::new();
             for mut delivery in pending
                 .into_iter()
@@ -868,7 +860,7 @@ impl CodexDriver {
             };
             let prompt = batch
                 .chunk_by(|a, b| a.message.conversation_id == b.message.conversation_id)
-                .map(|run| prompt(run, &inbox, &kernel.link, false))
+                .map(|run| prompt(run, &inbox))
                 .collect::<Result<Vec<_>>>()?
                 .join("\n\n");
             for mut carried in batch {

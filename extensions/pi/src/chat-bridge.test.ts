@@ -343,7 +343,7 @@ describe("permanent pi chat", () => {
     expect(content.startsWith('[ZeroLux] 1 new message in "General"')).toBe(
       true,
     );
-    // Like chat-send for Claude Code: the chat and the message to answer.
+    // The chat and the message to answer.
     expect(content).toContain(
       'call zerolux_send with chat "room" and reply_to "delivery"',
     );

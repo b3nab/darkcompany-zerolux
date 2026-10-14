@@ -343,7 +343,6 @@ async fn run(
     let (stop, stop_rx) = watch::channel(false);
     let task = tokio::spawn(driver.run(
         kernel.url.clone(),
-        std::env::temp_dir().join(uuid::Uuid::new_v4().to_string()),
         SESSION.into(),
         "fixture-secret".into(),
         rx,
@@ -612,13 +611,13 @@ async fn waiting_chats_share_one_native_input_with_ordered_scoped_envelopes() {
         assert_eq!(input["clientUserMessageId"], THIRD);
         let text = input["input"][0]["text"].as_str().unwrap();
         let first = text
-            .find(&format!(" --to {CONVERSATION} --reply {DELIVERY}"))
+            .find(&format!("Chat: {CONVERSATION}; delivery: {DELIVERY}"))
             .unwrap();
         let second = text
-            .find(&format!(" --to {SIDE} --reply {SECOND}"))
+            .find(&format!("Chat: {SIDE}; delivery: {SECOND}"))
             .unwrap();
         let third = text
-            .find(&format!(" --to {CONVERSATION} --reply {THIRD}"))
+            .find(&format!("Chat: {CONVERSATION}; delivery: {THIRD}"))
             .unwrap();
         assert!(first < second && second < third);
         assert_eq!(
@@ -1189,12 +1188,12 @@ async fn a_shared_turn_publishes_nothing_and_is_read() {
 }
 
 #[tokio::test]
-async fn explicit_peer_send_and_reply_win_over_fallback_and_link_is_cleaned_up() {
+async fn native_input_has_no_credential_or_script_reply_channel() {
     let runtime = Runtime::new().await;
     let kernel = KernelFixture::new("stored").await;
     let (_changed, stop, task) = run(&runtime, &kernel).await;
     runtime.wait(|s| s.queue.len() == 1).await;
-    let link = {
+    {
         let state = runtime.state.lock().unwrap();
         let prompt = state
             .requests
@@ -1203,52 +1202,26 @@ async fn explicit_peer_send_and_reply_win_over_fallback_and_link_is_cleaned_up()
             .unwrap()["params"]["input"][0]["text"]
             .as_str()
             .unwrap();
-        let line = prompt
-            .lines()
-            .find(|line| line.starts_with("Reply, text on stdin:"))
-            .unwrap();
-        let (_, command) = line.split_once(" chat-send --link ").unwrap();
-        std::path::PathBuf::from(
-            command
-                .strip_suffix(&format!(" --to {CONVERSATION} --reply {DELIVERY}"))
-                .unwrap(),
-        )
-    };
-    assert!(link.exists());
-    let peer_message = json!({"conversation_id":CONVERSATION,"id":"7cb1e1a6-1361-43c9-8fef-fce83bdc1962","text":"Peer, check this result.", "reply_to_delivery_id":null});
-    zerolux::chat_tools::send(&link, peer_message.clone())
-        .await
-        .unwrap();
-    zerolux::chat_tools::send(&link, peer_message)
-        .await
-        .unwrap();
-    zerolux::chat_tools::send(&link, json!({"conversation_id":CONVERSATION,"id":"fcb4bde4-e806-41ac-9e24-bd9833104c60","text":"Explicit final reply.", "reply_to_delivery_id":DELIVERY})).await.unwrap();
+        assert!(prompt.contains(&format!("Chat: {CONVERSATION}; delivery: {DELIVERY}")));
+        assert!(prompt.contains("This connection does not provide ZeroLux send or thread tools"));
+        assert!(!prompt.contains("fixture-secret"));
+        assert!(!prompt.contains("--link"));
+        assert!(!prompt.contains("text on stdin"));
+    }
     runtime.emit(completed(
-        "explicit",
+        "private",
         vec![
             user("input", Some(DELIVERY)),
-            assistant(
-                "final",
-                "Automatic fallback must not duplicate.",
-                "final_answer",
-            ),
+            assistant("final", "Native output stays private.", "final_answer"),
         ],
     ));
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(
-        kernel.state.lock().unwrap().deliveries[0]["status"],
-        "read",
-        "registered in a turn: in front of the model, so read"
-    );
     {
         let state = kernel.state.lock().unwrap();
-        assert_eq!(state.replies.len(), 2);
-        assert_eq!(state.replies[0]["text"], "Peer, check this result.");
-        assert_eq!(state.replies[1]["text"], "Explicit final reply.");
-        assert_eq!(state.session_status, "connected");
+        assert_eq!(state.deliveries[0]["status"], "read");
+        assert!(state.replies.is_empty());
     }
     finish(stop, task).await;
-    assert!(!link.exists());
 }
 
 #[tokio::test]
@@ -1264,7 +1237,6 @@ async fn revoked_token_still_cancels_owned_queue_and_reports_unconfirmed_cancell
         let (_stop, stop_rx) = watch::channel(false);
         let task = tokio::spawn(driver.run(
             kernel.url.clone(),
-            std::env::temp_dir().join(uuid::Uuid::new_v4().to_string()),
             SESSION.into(),
             "fixture-secret".into(),
             rx,
@@ -1388,7 +1360,6 @@ async fn lost_queue_ack_is_not_retried_and_reconnect_recovers_pending_queue() {
         driver
             .run(
                 kernel.url.clone(),
-                std::env::temp_dir().join(uuid::Uuid::new_v4().to_string()),
                 SESSION.into(),
                 "fixture-secret".into(),
                 rx,
@@ -1520,7 +1491,6 @@ async fn a_lost_turn_completion_is_recovered_from_the_native_status() {
     let (stop, stop_rx) = watch::channel(false);
     let task = tokio::spawn(driver.run(
         kernel.url.clone(),
-        std::env::temp_dir().join(uuid::Uuid::new_v4().to_string()),
         SESSION.into(),
         "fixture-secret".into(),
         rx,
@@ -1555,7 +1525,6 @@ async fn lagged_approval_events_recover_new_requests_and_explicit_resolution_onl
     let (stop, stop_rx) = watch::channel(false);
     let task = tokio::spawn(driver.run(
         kernel.url.clone(),
-        std::env::temp_dir().join(uuid::Uuid::new_v4().to_string()),
         SESSION.into(),
         "fixture-secret".into(),
         rx,

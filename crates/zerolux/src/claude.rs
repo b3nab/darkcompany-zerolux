@@ -28,10 +28,7 @@ use tokio::{
     sync::{mpsc, watch},
 };
 
-use crate::{
-    chat_driver::{ChatMessage, Delivery, Kernel, MAX_TEXT, prompt},
-    chat_tools::ChatLink,
-};
+use crate::chat_driver::{ChatMessage, Delivery, Kernel, MAX_TEXT, prompt};
 
 const SOCKETS: &str = "/tmp/cc-socks";
 const LIST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -180,13 +177,15 @@ fn joins_turn(line: &str) -> bool {
     serde_json::from_str::<Entry>(line).is_ok_and(|entry| entry.kind == "attachment")
 }
 
-/// The envelope named after `delivery` is present as itself: its own command line, at the
-/// start of a line. Quoted inside another message it carries a "> " prefix; a bare mention of
-/// the ID is not the envelope.
+/// The envelope identifies its delivery on an unquoted metadata line. Also recognize
+/// previously delivered envelopes for receipts; never generate or execute their old commands.
 fn holds_envelope(text: &str, delivery: &str) -> bool {
-    let ending = format!(" --reply {delivery}");
-    text.lines()
-        .any(|line| line.starts_with("Reply, text on stdin: ") && line.ends_with(&ending))
+    let ending = format!("; delivery: {delivery}");
+    let legacy = format!(" --reply {delivery}");
+    text.lines().any(|line| {
+        (line.starts_with("Chat: ") && line.ends_with(&ending))
+            || (line.starts_with("Reply, text on stdin: ") && line.ends_with(&legacy))
+    })
 }
 
 /// What one transcript line says about the model: a turn opens with a `user` entry that is a
@@ -521,19 +520,12 @@ impl ClaudeSession {
     pub async fn run(
         self,
         kernel_url: String,
-        links: std::path::PathBuf,
         session_id: String,
         token: String,
         mut changed: mpsc::Receiver<()>,
         mut stop: watch::Receiver<bool>,
     ) -> Result<()> {
-        let link = ChatLink::create(
-            &links,
-            &kernel_url,
-            &token,
-            &format!("claude-code:{}", self.session_id()),
-        )?;
-        let kernel = Kernel::new(kernel_url, session_id, token, link)?;
+        let kernel = Kernel::new(kernel_url, session_id, token)?;
         let result = async {
             kernel.status("connected", None).await?;
             let mut reported = None;
@@ -697,10 +689,7 @@ impl ClaudeSession {
             envelopes
                 .chats
                 .insert(envelope.clone(), batch[0].message.conversation_id.clone());
-            if let Err(error) = self
-                .deliver(&prompt(&batch, &inbox, &kernel.link, false)?)
-                .await
-            {
+            if let Err(error) = self.deliver(&prompt(&batch, &inbox)?).await {
                 for delivery in &batch {
                     kernel
                         .receipt(
@@ -889,10 +878,6 @@ mod tests {
         })
     }
 
-    fn links() -> PathBuf {
-        std::env::temp_dir().join(uuid::Uuid::new_v4().to_string())
-    }
-
     /// This process stands in for the session: alive for as long as the test runs.
     fn me() -> u32 {
         std::process::id()
@@ -942,8 +927,7 @@ mod tests {
         let (url, calls) = kernel(inbox("read"), axum::http::StatusCode::OK).await;
         let (_wake, changed) = mpsc::channel(1);
         let (_stopper, stop) = watch::channel(false);
-        let run =
-            tokio::spawn(session.run(url, links(), "link".into(), "token".into(), changed, stop));
+        let run = tokio::spawn(session.run(url, "link".into(), "token".into(), changed, stop));
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(!run.is_finished(), "alive: linked");
         child.kill().await.unwrap();
@@ -992,7 +976,11 @@ mod tests {
         }
         assert_eq!(evidence("not json"), None);
 
-        let envelope = "[ZeroLux] 1 new message\nReply, text on stdin: zerolux chat-send --to c --reply d\nEach message";
+        let envelope = "[ZeroLux] 1 new message\nChat: c; delivery: d\nEach message";
+        assert!(holds_envelope(
+            "Reply, text on stdin: old-command --reply d",
+            "d"
+        ));
         assert!(holds_envelope(envelope, "d"));
         assert!(holds_envelope(
             &format!("Another session:\n{envelope}"),
@@ -1072,8 +1060,7 @@ mod tests {
         let (url, calls) = kernel(inbox("stored"), axum::http::StatusCode::OK).await;
         let (_wake, changed) = mpsc::channel(1);
         let (stopper, stop) = watch::channel(false);
-        let run =
-            tokio::spawn(session.run(url, links(), "link".into(), "token".into(), changed, stop));
+        let run = tokio::spawn(session.run(url, "link".into(), "token".into(), changed, stop));
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut bytes = Vec::new();
         stream.read_to_end(&mut bytes).await.unwrap();
@@ -1135,22 +1122,10 @@ mod tests {
         let (_wake_b, changed_b) = mpsc::channel(1);
         let (stop_a, stopped_a) = watch::channel(false);
         let (stop_b, stopped_b) = watch::channel(false);
-        let run_a = tokio::spawn(first.run(
-            url_a,
-            links(),
-            "link".into(),
-            "token-a".into(),
-            changed_a,
-            stopped_a,
-        ));
-        let run_b = tokio::spawn(second.run(
-            url_b,
-            links(),
-            "link".into(),
-            "token-b".into(),
-            changed_b,
-            stopped_b,
-        ));
+        let run_a =
+            tokio::spawn(first.run(url_a, "link".into(), "token-a".into(), changed_a, stopped_a));
+        let run_b =
+            tokio::spawn(second.run(url_b, "link".into(), "token-b".into(), changed_b, stopped_b));
         let mut delivered = Vec::new();
         for _ in 0..2 {
             // Generous: two deliveries with the whole suite running in parallel on a busy CPU.
@@ -1187,8 +1162,7 @@ mod tests {
         let (url, calls) = kernel(inbox("stored"), axum::http::StatusCode::OK).await;
         let (_wake, changed) = mpsc::channel(1);
         let (stopper, stop) = watch::channel(false);
-        let run =
-            tokio::spawn(session.run(url, links(), "link".into(), "token".into(), changed, stop));
+        let run = tokio::spawn(session.run(url, "link".into(), "token".into(), changed, stop));
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut bytes = Vec::new();
         stream.read_to_end(&mut bytes).await.unwrap();
@@ -1261,8 +1235,7 @@ mod tests {
         let (url, calls) = kernel(inbox("stored"), axum::http::StatusCode::OK).await;
         let (_wake, changed) = mpsc::channel(1);
         let (stopper, stop) = watch::channel(false);
-        let run =
-            tokio::spawn(session.run(url, links(), "link".into(), "token".into(), changed, stop));
+        let run = tokio::spawn(session.run(url, "link".into(), "token".into(), changed, stop));
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut bytes = Vec::new();
         stream.read_to_end(&mut bytes).await.unwrap();
@@ -1333,8 +1306,7 @@ mod tests {
         let (url, calls) = kernel(inbox("read"), axum::http::StatusCode::OK).await;
         let (wake, changed) = mpsc::channel(1);
         let (stopper, stop) = watch::channel(false);
-        let run =
-            tokio::spawn(session.run(url, links(), "link".into(), "token".into(), changed, stop));
+        let run = tokio::spawn(session.run(url, "link".into(), "token".into(), changed, stop));
         let activities = |calls: &Vec<String>| -> Vec<String> {
             calls
                 .iter()
@@ -1390,8 +1362,7 @@ mod tests {
         let (url, calls) = kernel(inbox("read"), axum::http::StatusCode::OK).await;
         let (wake, changed) = mpsc::channel(1);
         let (stopper, stop) = watch::channel(false);
-        let run =
-            tokio::spawn(session.run(url, links(), "link".into(), "token".into(), changed, stop));
+        let run = tokio::spawn(session.run(url, "link".into(), "token".into(), changed, stop));
         tokio::time::sleep(Duration::from_millis(1200)).await;
         writeln!(file, "{}", json!({"type":"attachment","attachment":{"type":"queued_command","prompt":"[ZeroLux] 1 new message\nReply, text on stdin: x --to room --reply delivery\n","origin":{"kind":"peer"}}})).unwrap();
         tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -1450,8 +1421,7 @@ mod tests {
         let (url, calls) = kernel(owed, axum::http::StatusCode::OK).await;
         let (_wake, changed) = mpsc::channel(1);
         let (stopper, stop) = watch::channel(false);
-        let run =
-            tokio::spawn(session.run(url, links(), "link".into(), "token".into(), changed, stop));
+        let run = tokio::spawn(session.run(url, "link".into(), "token".into(), changed, stop));
         let activities = |calls: &Vec<String>| -> Vec<String> {
             calls
                 .iter()
@@ -1502,8 +1472,7 @@ mod tests {
         let (url, calls) = kernel(inbox("read"), axum::http::StatusCode::OK).await;
         let (_wake, changed) = mpsc::channel(1);
         let (stopper, stop) = watch::channel(false);
-        let run =
-            tokio::spawn(session.run(url, links(), "link".into(), "token".into(), changed, stop));
+        let run = tokio::spawn(session.run(url, "link".into(), "token".into(), changed, stop));
         let activities = |calls: &Vec<String>| -> Vec<String> {
             calls
                 .iter()
@@ -1627,8 +1596,7 @@ mod tests {
         let (url, calls) = kernel(inbox("stored"), axum::http::StatusCode::OK).await;
         let (_wake, changed) = mpsc::channel(1);
         let (stopper, stop) = watch::channel(false);
-        let run =
-            tokio::spawn(session.run(url, links(), "link".into(), "token".into(), changed, stop));
+        let run = tokio::spawn(session.run(url, "link".into(), "token".into(), changed, stop));
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut bytes = Vec::new();
         stream.read_to_end(&mut bytes).await.unwrap();
@@ -1728,8 +1696,7 @@ mod tests {
         let (url, calls) = kernel(inbox("stored"), axum::http::StatusCode::OK).await;
         let (wake, changed) = mpsc::channel(1);
         let (stopper, stop) = watch::channel(false);
-        let run =
-            tokio::spawn(session.run(url, links(), "link".into(), "token".into(), changed, stop));
+        let run = tokio::spawn(session.run(url, "link".into(), "token".into(), changed, stop));
 
         let (mut stream, _) = listener.accept().await.unwrap();
         assert!(
@@ -1746,7 +1713,7 @@ mod tests {
         let line: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let prompt = line["message"]["content"].as_str().unwrap();
         assert!(prompt.ends_with("\n> Can you check the test?"));
-        assert!(prompt.contains(" --reply delivery\n"));
+        assert!(prompt.contains("Chat: room; delivery: delivery\n"));
         assert!(prompt.contains("Your terminal answer stays private"));
         assert!(
             !prompt.contains("token"),
@@ -1786,8 +1753,7 @@ mod tests {
         let (url, calls) = kernel(inbox("stored"), axum::http::StatusCode::CONFLICT).await;
         let (_wake, changed) = mpsc::channel(1);
         let (stopper, stop) = watch::channel(false);
-        let run =
-            tokio::spawn(session.run(url, links(), "link".into(), "token".into(), changed, stop));
+        let run = tokio::spawn(session.run(url, "link".into(), "token".into(), changed, stop));
         let written = tokio::time::timeout(Duration::from_millis(500), listener.accept()).await;
         assert!(written.is_err(), "nothing reaches the session");
         stopper.send(true).unwrap();
@@ -1814,7 +1780,7 @@ mod tests {
         let (_wake, changed) = mpsc::channel(1);
         let (_stopper, stop) = watch::channel(false);
         let result = session
-            .run(url, links(), "link".into(), "token".into(), changed, stop)
+            .run(url, "link".into(), "token".into(), changed, stop)
             .await;
         assert!(result.is_err());
         let calls = calls.lock().unwrap();
@@ -1846,7 +1812,7 @@ mod tests {
             let (_wake, changed) = mpsc::channel(1);
             let (_stopper, stop) = watch::channel(stopped);
             let result = session
-                .run(url, links(), "link".into(), "token".into(), changed, stop)
+                .run(url, "link".into(), "token".into(), changed, stop)
                 .await;
             let asked_attention = calls
                 .lock()

@@ -71,7 +71,6 @@ impl NativeDriver {
     async fn run(
         self,
         base_url: String,
-        links: PathBuf,
         session_id: String,
         token: String,
         invalidations: mpsc::Receiver<()>,
@@ -80,13 +79,13 @@ impl NativeDriver {
         match self {
             Self::Codex(driver) => {
                 driver
-                    .run(base_url, links, session_id, token, invalidations, stop)
+                    .run(base_url, session_id, token, invalidations, stop)
                     .await
             }
             #[cfg(unix)]
             Self::Claude(driver) => {
                 driver
-                    .run(base_url, links, session_id, token, invalidations, stop)
+                    .run(base_url, session_id, token, invalidations, stop)
                     .await
             }
         }
@@ -109,7 +108,6 @@ pub struct ChatRuntime {
     store: Store,
     livekit: Arc<LiveKit>,
     base_url: String,
-    links: PathBuf,
     #[cfg(unix)]
     runners: crate::claude_runner::Registry,
     #[cfg(unix)]
@@ -195,7 +193,10 @@ impl ChatRuntime {
             revisions
         };
         #[cfg(not(unix))]
-        let integration_revisions = HashMap::new();
+        let integration_revisions = {
+            let _ = links;
+            HashMap::new()
+        };
         Ok(Arc::new(Self {
             store,
             livekit,
@@ -204,7 +205,6 @@ impl ChatRuntime {
             runners: crate::claude_runner::Registry::new(links.join("claude"), program.clone()),
             #[cfg(unix)]
             pi_runners: crate::pi_runner::Registry::new(links.join("pi"), program),
-            links,
             changed,
             wake,
             stop,
@@ -860,7 +860,6 @@ impl ChatRuntime {
             Ok::<(), anyhow::Error>(())
         });
         let base_url = self.base_url.clone();
-        let links = self.links.clone();
         let session_id = session.id.clone();
         let store = self.store.clone();
         let changed = self.changed.clone();
@@ -874,7 +873,7 @@ impl ChatRuntime {
                     }
                     _ = stop.wait_for(|stopped| *stopped) => return Ok(()),
                 }
-                driver.run(base_url, links, session_id.clone(), token, invalidations, stop.clone()).await
+                driver.run(base_url, session_id.clone(), token, invalidations, stop.clone()).await
             }.await;
             if let Err(error) = &result {
                 tracing::warn!(

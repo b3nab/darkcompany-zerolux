@@ -14,11 +14,8 @@ fn main() -> anyhow::Result<()> {
         unsafe { std::env::set_var("PATH", path) };
     }
     zerolux::cli::init_logging();
-    // Native harness links use current_exe. These helpers must never open a webview.
-    if matches!(
-        std::env::args().nth(1).as_deref(),
-        Some("agent-link" | "chat-send")
-    ) {
+    // The LiveKit subscription helper must never open a webview.
+    if std::env::args().nth(1).as_deref() == Some("agent-link") {
         return tokio::runtime::Runtime::new()?.block_on(zerolux::cli::run());
     }
     app::run(preferences::LaunchOptions::read())

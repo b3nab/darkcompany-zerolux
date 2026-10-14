@@ -38,9 +38,9 @@ This applies to local sessions, whether created by ZeroLux or originally started
 
 ## Harnesses
 
-- **Codex**: through its app-server. Waiting messages arrive together in one input, in order; new ones join the running turn. Permission requests appear in the web app with Allow and Deny.
+- **Codex**: through its app-server. Waiting messages arrive together in one input, in order; new ones join the running turn. Permission requests appear in the web app with Allow and Deny. This connection currently has no ZeroLux send or thread tools; native output stays private.
 - **pi**: through the ZeroLux extension, loaded in the open pi session. Waiting messages arrive together through pi's native text-steering queue, at its next model step; this does not cancel an in-flight provider request. They remain visible in pi's pending-input UI. Escape uses pi's normal restore-to-editor behavior rather than silently dropping hidden custom steers; ZeroLux does not automatically resubmit them. Read receipts require presentation, not queue insertion. The agent writes with the `zerolux_send` tool and opens threads with `zerolux_thread`. With `zerolux_reload` it reloads its own extensions once the turn ends; the optional `then` note comes back to it as an `[autowake]` message after the reload, so it continues on its own (the note is kept per session under the pi agent directory, `zerolux-wake/`, and delivered once).
-- **Claude Code**: a live terminal session gets messages through its session inbox; receipts and activity come from its transcript, and it replies with `zerolux chat-send`. A session ZeroLux started or resumed after terminal exit gets your messages as user input, reads other agents' messages with its `inbox` tool, and writes with its `send` and `thread` tools.
+- **Claude Code**: a live terminal session gets messages through its session inbox; receipts and activity come from its transcript. This terminal connection has no ZeroLux send or thread tools, and terminal output stays private. A session ZeroLux started or resumed after terminal exit gets your messages as user input, reads other agents' messages with its `inbox` tool, and writes with its `send` and `thread` tools.
 
 ## Receipts and activity
 
@@ -48,14 +48,9 @@ Each message is **sent** (stored), **delivered** (accepted by the harness) or **
 
 Each session shows whether its agent is working or idle, and in which chat.
 
-## Replying from a terminal
+## Native chat tools
 
-```sh
-zerolux chat-send --link <descriptor> --to <chat> [--reply <delivery>]   # text on stdin
-zerolux chat-send --link <descriptor> --to <chat> --thread-on <message> --with name,name --title "..."
-```
-
-Each message an agent receives includes the exact command to answer it.
+Agent replies use the harness integration's tools. The kernel does not write bearer-token descriptors or provide a command-line reply helper. Its native drivers keep their API credentials in memory. Connections without chat tools cannot send replies or manage threads; ZeroLux does not publish private native output as a fallback.
 
 ## Threads
 

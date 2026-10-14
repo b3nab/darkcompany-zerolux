@@ -52,29 +52,6 @@ enum Command {
     Doctor,
     /// Receive chat invalidations for an attached harness over a private stdin/stdout channel.
     AgentLink,
-    /// Send the text on stdin to a chat through a private link descriptor.
-    ChatSend {
-        #[arg(long)]
-        link: PathBuf,
-        /// Conversation that receives the text on stdin.
-        #[arg(long)]
-        to: String,
-        /// Delivery this message is the final reply to.
-        #[arg(long)]
-        reply: Option<String>,
-        /// Message ID; repeat it only to retry the same send.
-        #[arg(long)]
-        id: Option<String>,
-        /// Root message (or delivery); open or join its thread.
-        #[arg(long)]
-        thread_on: Option<String>,
-        /// Participating agents, comma-separated.
-        #[arg(long, requires = "thread_on", value_delimiter = ',')]
-        with: Vec<String>,
-        /// Title of a thread being opened.
-        #[arg(long, requires = "thread_on")]
-        title: Option<String>,
-    },
 }
 
 pub fn init_logging() {
@@ -134,18 +111,6 @@ pub async fn run() -> anyhow::Result<()> {
             .await?;
         }
         Command::AgentLink => crate::agent_link::cli().await?,
-        Command::ChatSend {
-            link,
-            to,
-            reply,
-            id,
-            thread_on,
-            with,
-            title,
-        } => {
-            let thread = thread_on.map(|root| crate::chat_tools::Thread { root, with, title });
-            crate::chat_tools::cli(link, to, reply, id, thread).await?;
-        }
         Command::Doctor => println!(
             "{}",
             serde_json::to_string_pretty(&crate::harness::doctor().await)?
@@ -157,6 +122,13 @@ pub async fn run() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removed_reply_helper_is_not_a_command() {
+        let error = Cli::try_parse_from(["zerolux", "chat-send"]).err().unwrap();
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+    }
+
     #[test]
     fn serve_rejects_an_unknown_sign_in_option() {
         let error =
