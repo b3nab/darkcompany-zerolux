@@ -741,12 +741,13 @@ test("once the session is named, another link cannot stop or prepare it", async 
   expect(f.interrupts() + f.closes()).toBe(0);
 });
 
-test("managed startup uses the selected native preset without model or effort overrides", async () => {
+test("managed startup enables Chrome and uses the native preset without model or effort overrides", async () => {
   const f = fixture(false, { managed: true, systemPrompt: "claude_code" });
   await f.bind("t1");
   expect(f.starts[0]).toMatchObject({
     sessionId: "native",
     permissionMode: "default",
+    extraArgs: { chrome: null },
     systemPrompt: { type: "preset", preset: "claude_code" },
   });
   for (const key of ["model", "effort", "hooks"])
