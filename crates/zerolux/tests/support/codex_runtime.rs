@@ -1,6 +1,7 @@
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -35,6 +36,7 @@ pub(crate) struct NativeState {
     /// After thread/start the runtime also holds the new thread; reads of it answer.
     pub(crate) started: bool,
     cwd: Option<String>,
+    thread_settings: HashMap<String, Value>,
 }
 
 /// The thread a `thread/start` creates.
@@ -163,9 +165,13 @@ fn native_response(state: &mut NativeState, request: &Value) -> Option<Value> {
     if state.drop_cancel_ack && matches!(method, "thread/queue/delete" | "turn/interrupt") {
         return None;
     }
-    let mut current = settings();
     // The started thread is a thread of its own: asked for it, the runtime answers for it.
     let asked = request["params"]["threadId"].as_str();
+    let mut current = state
+        .thread_settings
+        .get(asked.unwrap_or(THREAD))
+        .cloned()
+        .unwrap_or_else(settings);
     if state.started && asked == Some(STARTED) {
         current["thread"]["id"] = json!(STARTED);
         current["thread"]["sessionId"] = json!(STARTED);
@@ -178,6 +184,12 @@ fn native_response(state: &mut NativeState, request: &Value) -> Option<Value> {
     }
     Some(match method {
         "initialize" => json!({"userAgent":"fixture/0.159.0"}),
+        "model/list" if request["params"]["cursor"].is_null() => {
+            json!({"data":[{"model":"fixture-model","displayName":"Fixture model","supportedReasoningEfforts":[{"reasoningEffort":"medium"},{"reasoningEffort":"high"}]}],"nextCursor":"second"})
+        }
+        "model/list" => {
+            json!({"data":[{"model":"fixture-alternate","displayName":"Fixture alternate","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]}],"nextCursor":null})
+        }
         "thread/read" => {
             let mut thread = current["thread"].clone();
             if state.unloaded {
@@ -213,6 +225,20 @@ fn native_response(state: &mut NativeState, request: &Value) -> Option<Value> {
             let mut value = current;
             value["thread"]["id"] = json!(STARTED);
             value["thread"]["sessionId"] = json!(STARTED);
+            for field in ["model", "approvalPolicy"] {
+                if let Some(choice) = request["params"].get(field) {
+                    value[field] = choice.clone();
+                }
+            }
+            if let Some(effort) = request["params"]["config"].get("model_reasoning_effort") {
+                value["reasoningEffort"] = effort.clone();
+            }
+            if let Some(sandbox) = request["params"]["sandbox"].as_str() {
+                value["sandbox"] = json!({"type":match sandbox {
+                    "read-only" => "readOnly", "workspace-write" => "workspaceWrite", "danger-full-access" => "dangerFullAccess", _ => panic!("Unexpected fixture sandbox"),
+                }});
+            }
+            state.thread_settings.insert(STARTED.into(), value.clone());
             value
         }
         "thread/queue/list" => json!({"data":state.queue,"nextCursor":null}),

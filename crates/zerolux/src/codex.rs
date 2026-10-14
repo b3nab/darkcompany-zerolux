@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::{
     chat_driver::{Delivery, Kernel, MAX_TEXT, prompt, string},
     chat_tools::ChatLink,
-    model::{CodexApprovalPolicy, CodexSandbox},
+    model::{AgentSettings, CodexApprovalPolicy, CodexSandbox},
 };
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -387,6 +387,7 @@ pub struct CodexDriver {
     events: broadcast::Receiver<Value>,
     thread_id: String,
     settings: Value,
+    native_settings: crate::codex_settings::CodexSettings,
     deliveries: HashMap<String, Delivery>,
     turns: HashMap<String, TurnState>,
     settled: HashSet<String>,
@@ -419,9 +420,10 @@ impl CodexDriver {
         workspace: &str,
         approval_policy: Option<CodexApprovalPolicy>,
         sandbox: Option<CodexSandbox>,
+        initial: &AgentSettings,
     ) -> Result<Self> {
         let rpc = CodexRpc::connect(endpoint).await?;
-        Self::start_with_rpc(rpc, workspace, approval_policy, sandbox).await
+        Self::start_configured_with_rpc(rpc, workspace, approval_policy, sandbox, initial).await
     }
 
     pub async fn start_with_rpc(
@@ -430,7 +432,43 @@ impl CodexDriver {
         approval_policy: Option<CodexApprovalPolicy>,
         sandbox: Option<CodexSandbox>,
     ) -> Result<Self> {
+        Self::start_configured_with_rpc(
+            rpc,
+            workspace,
+            approval_policy,
+            sandbox,
+            &AgentSettings::default(),
+        )
+        .await
+    }
+
+    pub async fn start_configured_with_rpc(
+        rpc: CodexRpc,
+        workspace: &str,
+        approval_policy: Option<CodexApprovalPolicy>,
+        sandbox: Option<CodexSandbox>,
+        initial: &AgentSettings,
+    ) -> Result<Self> {
+        let models = if initial.model.is_some() || initial.effort.is_some() {
+            Some(crate::codex_settings::models(&rpc).await?)
+        } else {
+            None
+        };
+        if initial.model.is_some() {
+            crate::agent_settings::NativeSettings {
+                values: AgentSettings::default(),
+                models: models.clone().unwrap_or_default(),
+                editable: vec!["model".into(), "effort".into()],
+            }
+            .validate(initial)?;
+        }
         let mut params = json!({"cwd":workspace,"ephemeral":false});
+        if let Some(model) = &initial.model {
+            params["model"] = json!(model);
+        }
+        if let Some(effort) = &initial.effort {
+            params["config"] = json!({"model_reasoning_effort":effort});
+        }
         if let Some(policy) = approval_policy {
             params["approvalPolicy"] = serde_json::to_value(policy)?;
         }
@@ -458,6 +496,20 @@ impl CodexDriver {
                     && created["thread"]["ephemeral"] != true,
                 "The new Codex session cannot receive queued messages"
             );
+            let snapshot = crate::agent_settings::NativeSettings {
+                values: crate::agent_settings::codex_values(&created),
+                models: models.unwrap_or_default(),
+                editable: vec!["model".into(), "effort".into()],
+            };
+            if initial.model.is_some() || initial.effort.is_some() {
+                snapshot.validate(initial)?;
+            }
+            let mut chosen = initial.clone();
+            chosen.approval_policy = serde_json::to_value(approval_policy)?
+                .as_str()
+                .map(str::to_owned);
+            chosen.sandbox = serde_json::to_value(sandbox)?.as_str().map(str::to_owned);
+            snapshot.confirm(&chosen)?;
             Self::attached(rpc, events, created, None)
         })()
         .context(CodexStartFailure::Unlinked { thread_id })
@@ -563,11 +615,19 @@ impl CodexDriver {
             "Codex returned a different thread"
         );
         settings["thread"]["turns"] = json!([]);
+        let native_settings = crate::codex_settings::CodexSettings {
+            rpc: rpc.clone(),
+            thread_id: thread_id.clone(),
+            state: watch::channel(settings.clone()).0,
+            turn: watch::channel(None).0,
+            ready: watch::channel(false).0,
+        };
         Ok(Self {
             rpc,
             events,
             thread_id,
             settings,
+            native_settings,
             deliveries: HashMap::new(),
             turns: HashMap::new(),
             settled: HashSet::new(),
@@ -583,6 +643,9 @@ impl CodexDriver {
     }
     pub fn settings(&self) -> &Value {
         &self.settings
+    }
+    pub(crate) fn settings_control(&self) -> crate::codex_settings::CodexSettings {
+        self.native_settings.clone()
     }
     pub fn can_create_context(&self) -> bool {
         context_params(&self.settings).is_ok()
@@ -652,12 +715,14 @@ impl CodexDriver {
                     event = self.events.recv() => match event {
                         Ok(event) if event["method"] == CLOSED => bail!("Codex connection closed; pending prompts will not be resent"),
                         Ok(event) => {
+                            self.native_settings.observe(&event);
                             let method = event["method"].as_str().map(str::to_owned);
                             let ours = event["params"]["threadId"] == self.thread_id;
                             let turn = event["params"]["turn"]["id"].as_str().map(str::to_owned);
                             match method.as_deref() {
                                 Some("turn/started") if ours => {
                                     self.active_turn = turn;
+                                    self.native_settings.turn.send_replace(self.active_turn.clone());
                                     self.turn_chats.clear();
                                     self.turn_private = false;
                                     kernel.activity(Some("working"), None).await?;
@@ -665,6 +730,7 @@ impl CodexDriver {
                                 Some("turn/completed") if ours => {
                                     if self.active_turn == turn {
                                         self.active_turn = None;
+                                        self.native_settings.turn.send_replace(None);
                                     }
                                     self.turn_chats.clear();
                                     self.turn_private = false;
@@ -980,6 +1046,10 @@ impl CodexDriver {
             );
             self.consume_turn(kernel, turn).await?;
         }
+        self.native_settings
+            .turn
+            .send_replace(self.active_turn.clone());
+        self.native_settings.ready.send_replace(true);
         let chat = self.turn_conversation();
         kernel
             .activity(activity(&history["thread"]["status"]), chat.as_deref())

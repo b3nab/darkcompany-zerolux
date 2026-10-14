@@ -5,6 +5,21 @@ use crate::{
 };
 use serde_json::json;
 
+// A surviving runner keeps its launch fingerprint; a cold replacement must instead
+// preserve its last confirmed effective permissions, including owner changes made live.
+fn restored_mode(
+    locator: &mut Value,
+    launch: ClaudePermissionMode,
+) -> Result<ClaudePermissionMode> {
+    let mode = match locator["settings"]["permission_mode"].as_str() {
+        Some(value) => serde_json::from_value(json!(value))
+            .context("The saved effective Claude permission mode is unsupported")?,
+        None => launch,
+    };
+    locator["permission_mode"] = json!(mode);
+    Ok(mode)
+}
+
 impl ChatRuntime {
     pub async fn create_claude(
         &self,
@@ -16,23 +31,41 @@ impl ChatRuntime {
         }
         let workspace = super::workspace_dir(&input.workspace)?;
         let native_id = uuid::Uuid::new_v4().to_string();
-        let chosen = AgentSettings {
-            model: input.model.clone(),
-            effort: input.effort.clone(),
+        let chosen = self
+            .launch_choices(
+                who,
+                input.actor_id.as_deref(),
+                "claude-code",
+                AgentSettings {
+                    model: input.model,
+                    effort: input.effort,
+                    permission_mode: input.permission_mode.map(|mode| mode.name().to_owned()),
+                    ..AgentSettings::default()
+                },
+            )
+            .await?;
+        let mode: ClaudePermissionMode = chosen
+            .permission_mode
+            .as_ref()
+            .map(|mode| serde_json::from_value(json!(mode)))
+            .transpose()?
+            .unwrap_or_default();
+        let initial = AgentSettings {
+            model: chosen.model,
+            effort: chosen.effort,
             ..AgentSettings::default()
-        };
+        }
+        .patch_json();
         let started = self.start_owned(who, HireChatSession {
             name: input.name, actor_id: input.actor_id, harness: Harness::ClaudeCode,
             native_session_id: native_id, title: "Claude Code".into(),
             workspace,
             // Started by ZeroLux with Claude Code's own system prompt, as a terminal would.
-            native_locator: json!({"kind":"claude-runner","permission_mode":input.permission_mode,"system_prompt":"claude_code"}),
+            native_locator: json!({"kind":"claude-runner","permission_mode":mode,"system_prompt":"claude_code","initial_settings":initial}),
             resume: false,
-        }, input.permission_mode, false).await?;
-        self.store
-            .set_agent_settings(who, &started.0.id, chosen)
-            .await?;
-        Ok(started)
+        }, mode, false).await?;
+        let native = self.agent_settings(who, &started.0.id).await?;
+        Ok((native.actor, started.1))
     }
 
     pub async fn resume_claude(
@@ -66,7 +99,8 @@ impl ChatRuntime {
         if session.stopped_at.is_none() {
             self.store.stop_chat_session(who, id).await?;
         }
-        let locator = self.store.chat_session_locator(who, id).await?;
+        let mut locator = self.store.chat_session_locator(who, id).await?;
+        let mode = restored_mode(&mut locator, mode)?;
         if let Some(previous) = self.agents.lock().await.remove(id) {
             previous.release().await;
         }
@@ -101,6 +135,16 @@ impl ChatRuntime {
         let system_prompt = input.native_locator["system_prompt"]
             .as_str()
             .map(str::to_owned);
+        let settings = if resume_native {
+            &input.native_locator["settings"]
+        } else {
+            &input.native_locator["initial_settings"]
+        };
+        let initial = AgentSettings {
+            model: settings["model"].as_str().map(str::to_owned),
+            effort: settings["effort"].as_str().map(str::to_owned),
+            ..AgentSettings::default()
+        };
         let issued = self.store.hire_chat_session(who, input).await?;
         self.changed();
         // The mode this session runs with is the agent's setting from now on.
@@ -121,6 +165,7 @@ impl ChatRuntime {
                 &issued.session.workspace,
                 mode,
                 system_prompt.as_deref(),
+                &initial,
             )
             .await;
         let link = match launched {
@@ -160,7 +205,10 @@ impl ChatRuntime {
             return Err(error);
         }
         self.changed();
-        Ok((issued.actor, current))
+        Ok((
+            self.store.settings_actor(who, &issued.actor.id).await?,
+            current,
+        ))
     }
 
     async fn owned_attention(&self, who: &ChatIdentity, id: &str) {
@@ -217,7 +265,8 @@ impl ChatRuntime {
             self.runners
                 .check_native_stopped(&session.native_session_id, &session.workspace)
                 .await?;
-            let locator = self.store.chat_session_locator(who, &session.id).await?;
+            let mut locator = self.store.chat_session_locator(who, &session.id).await?;
+            let mode = restored_mode(&mut locator, mode)?;
             drop(agents);
             return self.restore_claude(who, session, locator, mode).await;
         };
@@ -261,14 +310,17 @@ impl ChatRuntime {
         self.runners
             .check_terminal_stopped(&session.native_session_id, pid)
             .await?;
-        // No settings sidecar: the SDK resumes the native transcript. New permission
-        // requests use the existing approval bridge; the terminal is never killed here.
+        let mode =
+            crate::claude::ClaudeSession::saved_permission_mode(&session.native_session_id).await?;
+        // Preserve the native resume mode. Missing/unsupported metadata never becomes
+        // a default permission choice, and the terminal is never killed here.
         self.restore_claude(
             who,
             session,
-            json!({"kind":"claude-runner","permission_mode":"default","system_prompt":"claude_code"}),
-            ClaudePermissionMode::Default,
-        ).await
+            json!({"kind":"claude-runner","permission_mode":mode,"system_prompt":"claude_code"}),
+            mode,
+        )
+        .await
     }
 
     async fn restore_claude(
@@ -361,6 +413,7 @@ impl ChatRuntime {
                 task,
                 subscriber: None,
                 stop_note: None,
+                settings: None,
             },
         );
     }
@@ -386,5 +439,37 @@ impl ChatRuntime {
                 .check_native_exit(&session.native_session_id, &session.workspace)?;
         }
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    #[test]
+    fn cold_recovery_keeps_confirmed_mode_instead_of_launch_default() {
+        let mut locator =
+            json!({"permission_mode":"default","settings":{"permission_mode":"auto"}});
+        let mode = restored_mode(&mut locator, ClaudePermissionMode::Default).unwrap();
+        assert_eq!(mode.name(), "auto");
+        assert_eq!(locator["permission_mode"], "auto");
+        assert!(
+            restored_mode(
+                &mut json!({"settings":{"permission_mode":"future-mode"}}),
+                mode
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn recovery_without_confirmed_changes_keeps_the_original_explicit_mode() {
+        let mut locator = json!({"permission_mode":"plan"});
+        assert_eq!(
+            restored_mode(&mut locator, ClaudePermissionMode::Plan)
+                .unwrap()
+                .name(),
+            "plan"
+        );
     }
 }

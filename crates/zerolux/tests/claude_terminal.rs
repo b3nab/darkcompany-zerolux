@@ -343,6 +343,10 @@ async fn entrusted_terminal_is_resumed_after_exit_without_changing_context() {
     let starts: Vec<_> = rows.iter().filter(|r| r["event"] == "start").collect();
     assert_eq!(starts.len(), 1);
     assert_eq!(starts[0]["resume"], true);
+    assert_eq!(
+        starts[0]["mode"], "auto",
+        "Recovery must preserve the native terminal's mode"
+    );
     assert_eq!(starts[0]["session"], native);
     assert_eq!(starts[0]["history"], history_hash);
     assert!(

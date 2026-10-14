@@ -1,0 +1,216 @@
+//! Settings controls on an already attached Codex thread. No resume, prompt, or replay.
+use std::{collections::HashSet, time::Duration};
+
+use anyhow::{Context, Result, bail, ensure};
+use serde_json::{Value, json};
+use tokio::sync::watch;
+
+use crate::{
+    agent_settings::{ModelOption, NativeSettings, codex_values},
+    codex::CodexRpc,
+    model::AgentSettings,
+    store::Error,
+};
+
+#[cfg(test)]
+mod tests;
+
+#[derive(Clone)]
+pub(crate) struct CodexSettings {
+    pub rpc: CodexRpc,
+    pub thread_id: String,
+    pub state: watch::Sender<Value>,
+    pub turn: watch::Sender<Option<String>>,
+    pub ready: watch::Sender<bool>,
+}
+
+impl CodexSettings {
+    pub fn values(&self) -> AgentSettings {
+        codex_values(&self.state.borrow())
+    }
+
+    pub fn observe(&self, event: &Value) {
+        if event["params"]["threadId"] != self.thread_id {
+            return;
+        }
+        if event["method"] == "thread/settings/updated" {
+            let native = &event["params"]["threadSettings"];
+            if !native.is_object() {
+                return;
+            }
+            let mut current = self.state.borrow().clone();
+            for (source, target) in [
+                ("model", "model"),
+                ("effort", "reasoningEffort"),
+                ("approvalPolicy", "approvalPolicy"),
+                ("sandboxPolicy", "sandbox"),
+            ] {
+                if let Some(value) = native.get(source) {
+                    current[target] = value.clone();
+                }
+            }
+            self.state.send_replace(current);
+        }
+    }
+
+    pub async fn read(&self) -> Result<NativeSettings> {
+        let models = models(&self.rpc).await?;
+        let mut editable = Vec::new();
+        if *self.ready.borrow() {
+            editable.extend(["model".into(), "effort".into()]);
+            if self.turn.borrow().is_none() {
+                editable.extend(["approval_policy".into(), "sandbox".into()]);
+            }
+        }
+        Ok(NativeSettings {
+            values: self.values(),
+            models,
+            editable,
+        })
+    }
+
+    pub async fn apply(&self, patch: &AgentSettings, check: bool) -> Result<NativeSettings> {
+        let before = self.read().await?;
+        before.validate(patch)?;
+        let policy = patch
+            .approval_policy
+            .as_deref()
+            .map(|value| match value {
+                "untrusted" | "on-request" | "never" => Ok(value),
+                _ => Err(Error::Invalid("Unknown Codex approval policy".into())),
+            })
+            .transpose()?;
+        let sandbox = patch
+            .sandbox
+            .as_deref()
+            .map(|value| match value {
+                "read-only" => Ok(json!({"type":"readOnly"})),
+                "workspace-write" => Ok(json!({"type":"workspaceWrite"})),
+                "danger-full-access" => Ok(json!({"type":"dangerFullAccess"})),
+                _ => Err(Error::Invalid("Unknown Codex sandbox".into())),
+            })
+            .transpose()?;
+        if check || patch.fields().iter().all(|(_, value)| value.is_none()) {
+            return Ok(before);
+        }
+        let turn = self.turn.borrow().clone();
+        if turn.is_some() && (policy.is_some() || sandbox.is_some()) {
+            return Err(Error::Invalid(
+                "Codex changes approval policy and sandbox between turns; nothing was applied"
+                    .into(),
+            )
+            .into());
+        }
+        let mut params = json!({"threadId":self.thread_id});
+        if let Some(value) = &patch.model
+            && patch.model != before.values.model
+        {
+            params["model"] = json!(value);
+        }
+        if let Some(value) = &patch.effort
+            && patch.effort != before.values.effort
+        {
+            params["effort"] = json!(value);
+        }
+        if let Some(value) = policy
+            && patch.approval_policy != before.values.approval_policy
+        {
+            params["approvalPolicy"] = json!(value);
+        }
+        if let Some(value) = sandbox
+            && patch.sandbox != before.values.sandbox
+        {
+            params["sandboxPolicy"] = value;
+        }
+        let permissions_changed =
+            params.get("approvalPolicy").is_some() || params.get("sandboxPolicy").is_some();
+        let mut observed = self.state.subscribe();
+        self.rpc.request("thread/settings/update", params).await?;
+        if let Some(turn) = turn
+            && (patch.model.is_some() || patch.effort.is_some())
+        {
+            let mut params = json!({"threadId":self.thread_id,"turnId":turn});
+            if let Some(value) = &patch.model {
+                params["model"] = json!(value);
+            }
+            if let Some(value) = &patch.effort {
+                params["effort"] = json!(value);
+            }
+            let result = self.rpc.request("turn/settings/update", params).await?;
+            ensure!(
+                matches!(
+                    result["status"].as_str(),
+                    Some("applied" | "targetUnavailable")
+                ),
+                "Codex did not confirm the running turn's settings"
+            );
+            // targetUnavailable means that exact turn ended. The thread's confirmed
+            // settings already apply to its next turn; never start or replay one here.
+        }
+        let confirmed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let snapshot = NativeSettings { values: self.values(), models: before.models.clone(), editable: before.editable.clone() };
+                if snapshot.confirm(patch).is_ok() { return Ok::<_, anyhow::Error>(snapshot); }
+                observed.changed().await?;
+            }
+        }).await.context("Codex accepted the change but its resulting settings were not confirmed; refresh before making another change")??;
+        ensure!(
+            !permissions_changed || self.turn.borrow().is_none(),
+            "Codex changed the thread settings, but a turn started before confirmation; its running permissions were not changed"
+        );
+        Ok(confirmed)
+    }
+}
+
+pub(crate) async fn models(rpc: &CodexRpc) -> Result<Vec<ModelOption>> {
+    let mut result = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut seen = HashSet::new();
+    for _ in 0..100 {
+        let page = rpc
+            .request(
+                "model/list",
+                json!({"limit":100,"cursor":cursor,"includeHidden":false}),
+            )
+            .await?;
+        for model in page["data"]
+            .as_array()
+            .context("Codex did not return its model catalog")?
+        {
+            if model["hidden"] == true {
+                continue;
+            }
+            result.push(ModelOption {
+                value: model["model"]
+                    .as_str()
+                    .context("Missing native model value")?
+                    .to_owned(),
+                label: model["displayName"]
+                    .as_str()
+                    .context("Missing native model label")?
+                    .to_owned(),
+                resolved_model: None,
+                efforts: model["supportedReasoningEfforts"]
+                    .as_array()
+                    .context("Missing native effort choices")?
+                    .iter()
+                    .map(|option| {
+                        option["reasoningEffort"]
+                            .as_str()
+                            .map(str::to_owned)
+                            .context("Invalid native effort choice")
+                    })
+                    .collect::<Result<_>>()?,
+            });
+        }
+        cursor = page["nextCursor"].as_str().map(str::to_owned);
+        let Some(cursor) = &cursor else {
+            return Ok(result);
+        };
+        ensure!(
+            seen.insert(cursor.clone()),
+            "Codex repeated a catalog cursor"
+        );
+    }
+    bail!("Codex model catalog exceeded its pagination bound")
+}

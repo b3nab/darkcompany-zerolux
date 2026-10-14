@@ -31,6 +31,7 @@ struct AgentTask {
     task: JoinHandle<Result<()>>,
     subscriber: Option<JoinHandle<Result<()>>>,
     stop_note: Option<&'static str>,
+    settings: Option<crate::codex_settings::CodexSettings>,
 }
 
 impl AgentTask {
@@ -120,6 +121,9 @@ pub struct ChatRuntime {
     stop: watch::Sender<bool>,
     agents: Mutex<HashMap<String, AgentTask>>,
     publisher: Mutex<Option<JoinHandle<()>>>,
+    settings_gates: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Installed code at kernel activation, not edits made later in a checkout.
+    integration_revisions: HashMap<&'static str, String>,
 }
 
 impl ChatRuntime {
@@ -171,6 +175,27 @@ impl ChatRuntime {
         ));
         #[cfg(unix)]
         let program = program.unwrap_or_default();
+        #[cfg(unix)]
+        let integration_revisions = {
+            let mut revisions = HashMap::new();
+            if let Ok(revision) = crate::integration_code::revision(&program.entry) {
+                revisions.insert("claude-code", revision);
+            }
+            if let Some(entry) = &program.pi_entry {
+                let extension =
+                    entry.with_file_name(if entry.extension().is_some_and(|ext| ext == "ts") {
+                        "chat-extension.ts"
+                    } else {
+                        "chat-extension.js"
+                    });
+                if let Ok(revision) = crate::integration_code::revision(&extension) {
+                    revisions.insert("pi", revision);
+                }
+            }
+            revisions
+        };
+        #[cfg(not(unix))]
+        let integration_revisions = HashMap::new();
         Ok(Arc::new(Self {
             store,
             livekit,
@@ -185,6 +210,8 @@ impl ChatRuntime {
             stop,
             agents: Mutex::new(HashMap::new()),
             publisher: Mutex::new(Some(publisher)),
+            settings_gates: Mutex::new(HashMap::new()),
+            integration_revisions,
         }))
     }
 
@@ -396,9 +423,33 @@ impl ChatRuntime {
             .check_hire(who, Harness::Codex, input.actor_id.as_deref(), &input.name)
             .await?;
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
+        let chosen = self
+            .launch_choices(
+                who,
+                input.actor_id.as_deref(),
+                "codex",
+                AgentSettings {
+                    model: input.model,
+                    effort: input.effort,
+                    approval_policy: serde_json::to_value(input.approval_policy)?
+                        .as_str()
+                        .map(str::to_owned),
+                    sandbox: serde_json::to_value(input.sandbox)?
+                        .as_str()
+                        .map(str::to_owned),
+                    ..AgentSettings::default()
+                },
+            )
+            .await?;
+        let initial = AgentSettings {
+            model: chosen.model,
+            effort: chosen.effort,
+            ..AgentSettings::default()
+        };
+        let policy = serde_json::from_value(serde_json::json!(chosen.approval_policy))?;
+        let sandbox = serde_json::from_value(serde_json::json!(chosen.sandbox))?;
         let endpoint = sessions::ensure_codex_daemon().await?;
-        let driver =
-            CodexDriver::start(&endpoint, &workspace, input.approval_policy, input.sandbox).await?;
+        let driver = CodexDriver::start(&endpoint, &workspace, policy, sandbox, &initial).await?;
         let thread_id = driver.thread_id().to_owned();
         let target = sessions::NativeSessionTarget {
             harness: Harness::Codex,
@@ -418,27 +469,8 @@ impl ChatRuntime {
             )
             .await
             .context(CodexStartFailure::Unlinked { thread_id })?;
-        // What this session was started with is the agent's setting from now on.
-        self.store
-            .set_agent_settings(
-                who,
-                &actor.id,
-                AgentSettings {
-                    model: input.model,
-                    effort: input.effort,
-                    approval_policy: input
-                        .approval_policy
-                        .and_then(|p| serde_json::to_value(p).ok())
-                        .and_then(|v| v.as_str().map(str::to_owned)),
-                    sandbox: input
-                        .sandbox
-                        .and_then(|s| serde_json::to_value(s).ok())
-                        .and_then(|v| v.as_str().map(str::to_owned)),
-                    ..AgentSettings::default()
-                },
-            )
-            .await?;
-        Ok((actor, session))
+        let native = self.agent_settings(who, &actor.id).await?;
+        Ok((native.actor, session))
     }
 
     #[cfg(unix)]
@@ -455,9 +487,21 @@ impl ChatRuntime {
             .check_hire(who, Harness::Pi, input.actor_id.as_deref(), &input.name)
             .await?;
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
+        let initial = self
+            .launch_choices(
+                who,
+                input.actor_id.as_deref(),
+                "pi",
+                AgentSettings {
+                    model: input.model,
+                    effort: input.effort,
+                    ..AgentSettings::default()
+                },
+            )
+            .await?;
         let host = self
             .pi_runners
-            .create(&workspace)
+            .create(&workspace, &initial)
             .await
             .context(PiStartFailure::Uncertain)?;
         let native_session_id = host.native_id().to_owned();
@@ -466,18 +510,8 @@ impl ChatRuntime {
             let (actor, session) = self
                 .link(who, target, &input.name, input.actor_id, false)
                 .await?;
-            self.store
-                .set_agent_settings(
-                    who,
-                    &actor.id,
-                    AgentSettings {
-                        model: input.model.clone(),
-                        effort: input.effort.clone(),
-                        ..AgentSettings::default()
-                    },
-                )
-                .await?;
-            Ok::<_, anyhow::Error>((actor, session))
+            let native = self.agent_settings(who, &actor.id).await?;
+            Ok::<_, anyhow::Error>((native.actor, session))
         }
         .await;
         // A failed response is not permission to start another identity or kill native work.
@@ -799,6 +833,11 @@ impl ChatRuntime {
                 && identity.actor_id == session.actor_id,
             "The adapter token does not match the hired session"
         );
+        let settings = match &driver {
+            NativeDriver::Codex(driver) => Some(driver.settings_control()),
+            #[cfg(unix)]
+            NativeDriver::Claude(_) => None,
+        };
         let (stopper, mut stop) = watch::channel(false);
         let (invalidate, mut invalidations) = mpsc::channel(1);
         // In-process: woken from the outbox directly. The first signal says "ready", like a
@@ -864,6 +903,7 @@ impl ChatRuntime {
                 task,
                 subscriber: Some(subscriber),
                 stop_note: None,
+                settings,
             },
         );
         Ok(())
@@ -960,6 +1000,7 @@ impl ChatRuntime {
                 task,
                 subscriber: None,
                 stop_note: if owned { None } else { Some("The chat link is stopped and its token revoked. Native cancellation was not confirmed; pi may continue its native turn.") },
+                settings: None,
             },
         );
         Ok(())
@@ -1048,6 +1089,7 @@ impl ChatRuntime {
 
 #[cfg(unix)]
 mod owned;
+mod settings;
 
 async fn finish(task: &mut JoinHandle<Result<()>>) -> Result<()> {
     match tokio::time::timeout(Duration::from_secs(10), &mut *task).await {

@@ -219,7 +219,11 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/chat/sessions/{id}/resume", post(resume_session))
         .route("/chat/sessions/{id}/takeover", post(takeover_pi_session))
         .route("/actors/{id}/name", post(rename_agent))
-        .route("/actors/{id}/settings", post(agent_settings))
+        .route(
+            "/actors/{id}/settings",
+            get(read_agent_settings).post(agent_settings),
+        )
+        .route("/chat/settings-catalog", get(settings_catalog))
         .route("/chat/sessions", get(chat_sessions))
         .route("/chat/sessions/{id}/stop", post(stop_session))
         .route("/chat/sessions/{id}/status", post(session_status))
@@ -823,13 +827,50 @@ async fn rename_agent(
 }
 
 async fn agent_settings(
-    State(store): State<Store>,
+    State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
-    ChatJson(input): ChatJson<AgentSettings>,
-) -> Result<Json<Value>, Error> {
+    ChatJson(input): ChatJson<Value>,
+) -> Result<Json<Value>, ApiFailure> {
+    if !who.is_owner() {
+        return Err(Error::Forbidden.into());
+    }
     Ok(Json(
-        json!({ "actor": store.set_agent_settings(&who, &id, input).await? }),
+        json!({ "actor": runtime(&state)?.change_agent_settings(&who, &id, crate::agent_settings::patch(input)?).await.map_err(runtime_error)? }),
+    ))
+}
+
+async fn read_agent_settings(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    if !who.is_owner() {
+        return Err(Error::Forbidden.into());
+    }
+    Ok(Json(json!(
+        runtime(&state)?
+            .agent_settings(&who, &id)
+            .await
+            .map_err(runtime_error)?
+    )))
+}
+
+#[derive(Deserialize)]
+struct CatalogQuery {
+    harness: crate::harness::Harness,
+}
+
+async fn settings_catalog(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Query(input): Query<CatalogQuery>,
+) -> Result<Json<Value>, ApiFailure> {
+    if !who.is_owner() {
+        return Err(Error::Forbidden.into());
+    }
+    Ok(Json(
+        json!({ "models": runtime(&state)?.settings_catalog(&who, input.harness.id()).await.map_err(runtime_error)? }),
     ))
 }
 

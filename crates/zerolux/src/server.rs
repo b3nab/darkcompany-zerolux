@@ -195,6 +195,17 @@ impl Server {
                     }
                 }
             });
+            let settings = runtime.clone();
+            let settings_observer = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(10));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    interval.tick().await;
+                    if let Err(error) = settings.refresh_agent_settings().await {
+                        tracing::warn!(error = %error, "Native settings observation failed");
+                    }
+                }
+            });
             // People whose sign-in ended while connected to the notice room are disconnected.
             let sweep = runtime.clone();
             let sweeper = tokio::spawn(async move {
@@ -233,8 +244,10 @@ impl Server {
             }
             relinker.abort();
             sweeper.abort();
+            settings_observer.abort();
             let _ = relinker.await;
             let _ = sweeper.await;
+            let _ = settings_observer.await;
             let runtime_stopped = runtime.shutdown().await;
             let livekit_stopped = livekit.shutdown().await;
             if let Some(auth) = &auth {

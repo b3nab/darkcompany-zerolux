@@ -101,10 +101,14 @@ impl Registry {
         sessions::ensure_pi_stopped(Path::new(agent_dir), native).await?;
         self.launch(workspace, json!({"nativeSessionId":native,"workspace":workspace,"file":file,"profile":profile,"pi":"pi"}), Some(native)).await
     }
-    pub(crate) async fn create(&self, workspace: &str) -> Result<RunnerLink> {
+    pub(crate) async fn create(
+        &self,
+        workspace: &str,
+        initial: &crate::model::AgentSettings,
+    ) -> Result<RunnerLink> {
         self.launch(
             workspace,
-            json!({"workspace":workspace,"pi":"pi","creation":true}),
+            json!({"workspace":workspace,"pi":"pi","creation":true,"initial":initial.patch_json()}),
             None,
         )
         .await

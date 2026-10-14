@@ -20,7 +20,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     net::UnixStream,
@@ -408,7 +408,46 @@ impl Envelopes {
     }
 }
 
+/// Claude's persisted resume mode, not a guess from launch defaults or a message's text.
+fn permission_record(line: &str, session_id: &str) -> Option<Value> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Record {
+        #[serde(rename = "type")]
+        kind: String,
+        session_id: String,
+        permission_mode: Value,
+    }
+    let record: Record = serde_json::from_str(line).ok()?;
+    (record.kind == "permission-mode" && record.session_id == session_id)
+        .then_some(record.permission_mode)
+}
+
 impl ClaudeSession {
+    /// A bounded, read-only projection of native resume metadata. An unknown mode must
+    /// stop recovery rather than silently weakening or replacing the owner's permissions.
+    pub(crate) async fn saved_permission_mode(
+        session_id: &str,
+    ) -> Result<crate::model::ClaudePermissionMode> {
+        let projects = projects_dir(
+            std::env::var_os("CLAUDE_CONFIG_DIR"),
+            std::env::var_os("HOME"),
+        )?;
+        let path = Transcript::locate(&projects, session_id)
+            .context("The saved Claude transcript is missing")?;
+        let mut file = tokio::fs::File::open(path).await?;
+        let len = file.metadata().await?.len();
+        file.seek(SeekFrom::Start(len.saturating_sub(RECENT)))
+            .await?;
+        let mut bytes = Vec::new();
+        file.take(RECENT).read_to_end(&mut bytes).await?;
+        let mode = String::from_utf8_lossy(&bytes).lines().rev()
+            .find_map(|line| permission_record(line, session_id))
+            .context("Claude's saved permission mode is unavailable; reopen the native terminal before reconnecting")?;
+        serde_json::from_value(mode)
+            .context("Claude's saved permission mode is unsupported; no replacement was started")
+    }
+
     /// Verifies that the hired session is still alive in its workspace. Read-only: it lists the
     /// sessions and inspects the socket, without opening or resuming anything.
     pub async fn attach(session_id: &str, workspace: &str) -> Result<Self> {
@@ -700,6 +739,38 @@ mod tests {
     use tokio::{io::AsyncReadExt, net::UnixListener};
 
     use super::*;
+
+    #[test]
+    fn only_native_permission_metadata_selects_a_resume_mode() {
+        assert_eq!(
+            permission_record(
+                r#"{"type":"permission-mode","sessionId":"session-a","permissionMode":"auto"}"#,
+                "session-a"
+            ),
+            Some(json!("auto"))
+        );
+        assert_eq!(
+            permission_record(
+                r#"{"type":"permission-mode","sessionId":"session-b","permissionMode":"auto"}"#,
+                "session-a"
+            ),
+            None
+        );
+        assert_eq!(
+            permission_record(
+                r#"{"type":"user","sessionId":"session-a","permissionMode":"default","message":{"content":"permission-mode auto"}}"#,
+                "session-a"
+            ),
+            None
+        );
+        let unknown = permission_record(
+            r#"{"type":"permission-mode","sessionId":"session-a","permissionMode":"future-mode"}"#,
+            "session-a",
+        )
+        .unwrap();
+        assert!(serde_json::from_value::<crate::model::ClaudePermissionMode>(unknown).is_err());
+        assert_eq!(permission_record("incomplete", "session-a"), None);
+    }
 
     fn listed(json: serde_json::Value) -> Vec<Listed> {
         serde_json::from_value(json).unwrap()

@@ -35,7 +35,7 @@ impl Fixture {
             .canonicalize()
             .unwrap();
         let wrapper = root.join("bun-fixture");
-        std::fs::write(&wrapper, format!("#!/bin/sh\nexec /usr/bin/env -i HOME=\"{}\" TMPDIR=\"{}\" PATH=/usr/bin:/bin ZEROLUX_RUNNER_REGISTRY=\"$ZEROLUX_RUNNER_REGISTRY\" ZEROLUX_NATIVE_SESSION=\"$ZEROLUX_NATIVE_SESSION\" ZEROLUX_WORKSPACE=\"$ZEROLUX_WORKSPACE\" ZEROLUX_PERMISSION_MODE=\"$ZEROLUX_PERMISSION_MODE\" ZEROLUX_CLAUDE_MANAGED=\"$ZEROLUX_CLAUDE_MANAGED\" ${{ZEROLUX_SYSTEM_PROMPT:+ZEROLUX_SYSTEM_PROMPT=$ZEROLUX_SYSTEM_PROMPT}} \"{}\" \"$@\"\n", root.join("home").display(), root.join("tmp").display(), bun.display())).unwrap();
+        std::fs::write(&wrapper, format!("#!/bin/sh\nexec /usr/bin/env -i HOME=\"{}\" TMPDIR=\"{}\" PATH=/usr/bin:/bin ZEROLUX_RUNNER_REGISTRY=\"$ZEROLUX_RUNNER_REGISTRY\" ZEROLUX_NATIVE_SESSION=\"$ZEROLUX_NATIVE_SESSION\" ZEROLUX_WORKSPACE=\"$ZEROLUX_WORKSPACE\" ZEROLUX_PERMISSION_MODE=\"$ZEROLUX_PERMISSION_MODE\" ZEROLUX_INITIAL_SETTINGS=\"$ZEROLUX_INITIAL_SETTINGS\" ZEROLUX_CLAUDE_MANAGED=\"$ZEROLUX_CLAUDE_MANAGED\" ${{ZEROLUX_SYSTEM_PROMPT:+ZEROLUX_SYSTEM_PROMPT=$ZEROLUX_SYSTEM_PROMPT}} \"{}\" \"$@\"\n", root.join("home").display(), root.join("tmp").display(), bun.display())).unwrap();
         let claude = root.join("claude-fixture");
         std::fs::write(&claude, "#!/bin/sh\nprintf '%s\\n' '[]'\n").unwrap();
         for file in [&wrapper, &claude] {
@@ -206,6 +206,142 @@ impl Drop for Kernel {
 }
 fn count(rows: &[Value], event: &str) -> usize {
     rows.iter().filter(|row| row["event"] == event).count()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_settings_are_confirmed_at_start_and_changed_without_new_input() {
+    let fixture = Fixture::new();
+    let kernel = Kernel::start(&fixture, 0).await;
+    let started = kernel
+        .api(
+            "/chat/claude-sessions",
+            Some(json!({
+                "name":"Configured fixture", "workspace":fixture.dir.path().join("workspace"),
+                "model":"native-alternate", "effort":"medium", "permission_mode":"plan"
+            })),
+        )
+        .await;
+    let actor = started["actor"]["id"].as_str().unwrap();
+    let session = started["session"]["id"].as_str().unwrap();
+    assert_eq!(started["actor"]["model"], "native-alternate");
+    assert_eq!(started["actor"]["effort"], "medium");
+    assert_eq!(started["actor"]["permission_mode"], "plan");
+    let path = format!("/actors/{actor}/settings");
+    let view = kernel.api(&path, None).await;
+    assert_eq!(view["models"][0]["value"], "native-default");
+    assert_eq!(view["models"][1]["efforts"], json!(["medium", "high"]));
+    assert!(!view.to_string().contains("must-not-be-published"));
+    let changed = kernel
+        .api(
+            &path,
+            Some(json!({"model":"native-default", "effort":"low", "permission_mode":"auto"})),
+        )
+        .await;
+    assert_eq!(changed["actor"]["model"], "native-default");
+    assert_eq!(changed["actor"]["effort"], "low");
+    assert_eq!(changed["actor"]["permission_mode"], "auto");
+    let traces = fixture.trace();
+    assert_eq!(count(&traces, "start"), 1);
+    assert_eq!(count(&traces, "input"), 0);
+    let mutations = count(&traces, "settings");
+    let rejected = kernel
+        .client
+        .post(format!("{}/api{path}", kernel.url))
+        .json(&json!({"effort":"invented"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(!rejected.status().is_success());
+    assert_eq!(count(&fixture.trace(), "settings"), mutations);
+    // Launching another session inherits this agent's confirmed choices before any input.
+    let next = kernel.api("/chat/claude-sessions", Some(json!({"name":"", "actor_id":actor, "workspace":fixture.dir.path().join("workspace")}))).await;
+    assert_eq!(next["actor"]["model"], "native-default");
+    assert_eq!(next["actor"]["effort"], "low");
+    assert_eq!(next["actor"]["permission_mode"], "auto");
+    assert_eq!(count(&fixture.trace(), "input"), 0);
+    let different = kernel.api("/chat/claude-sessions", Some(json!({
+        "name":"", "actor_id":actor, "workspace":fixture.dir.path().join("workspace"), "model":"native-alternate"
+    }))).await;
+    assert!(
+        different["actor"]["model"].is_null(),
+        "Different native models must not be presented as one effective choice"
+    );
+    assert!(different["actor"]["effort"].is_null());
+    let traces = fixture.trace();
+    let started = traces
+        .iter()
+        .rev()
+        .find(|event| event["event"] == "start")
+        .unwrap();
+    assert_eq!(started["model"], "native-alternate");
+    assert!(
+        started["effort"].is_null(),
+        "A new model without an effort override must not inherit the previous model's effort"
+    );
+    let mutations = count(&fixture.trace(), "settings");
+    let refused = kernel
+        .client
+        .post(format!("{}/api{path}", kernel.url))
+        .json(&json!({"effort":"low"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(!refused.status().is_success());
+    assert_eq!(
+        count(&fixture.trace(), "settings"),
+        mutations,
+        "All sessions are preflighted before any mutation"
+    );
+    kernel
+        .api(
+            &path,
+            Some(json!({"model":"native-default", "effort":"high"})),
+        )
+        .await;
+    let view = kernel.api(&path, None).await;
+    assert_eq!(view["actor"]["model"], "native-default");
+    assert_eq!(view["sessions"].as_array().unwrap().len(), 3);
+    assert!(
+        view["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|session| session["values"]["effort"] == "high")
+    );
+    for id in [
+        session,
+        next["session"]["id"].as_str().unwrap(),
+        different["session"]["id"].as_str().unwrap(),
+    ] {
+        kernel
+            .api(&format!("/chat/sessions/{id}/stop"), Some(json!({})))
+            .await;
+    }
+    let resumed = kernel
+        .api(&format!("/chat/sessions/{session}/resume"), Some(json!({})))
+        .await;
+    let traces = fixture.trace();
+    let restored = traces
+        .iter()
+        .rev()
+        .find(|row| row["event"] == "start")
+        .unwrap();
+    assert_eq!(
+        restored["mode"], "auto",
+        "Resume keeps the live permission change, not the original plan mode"
+    );
+    assert_eq!(restored["resume"], true);
+    assert_eq!(count(&traces, "input"), 0);
+    kernel
+        .api(
+            &format!(
+                "/chat/sessions/{}/stop",
+                resumed["session"]["id"].as_str().unwrap()
+            ),
+            Some(json!({})),
+        )
+        .await;
+    kernel.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -488,8 +624,8 @@ async fn managed_claude_bootstrap_lifecycle() {
     let start = trace.iter().rev().find(|v| v["event"] == "start").unwrap();
     assert_eq!(start["resume"], true);
     assert_eq!(start["mode"], "plan");
-    assert!(start["model"].is_null());
-    assert!(start["effort"].is_null());
+    assert_eq!(start["model"], "native-default");
+    assert_eq!(start["effort"], "high");
     assert_eq!(count(&trace, "input"), 2);
     let stopped = kernel
         .api(&format!("/chat/sessions/{restored}/stop"), Some(json!({})))

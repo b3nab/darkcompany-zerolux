@@ -1,4 +1,5 @@
 pub mod agent_link;
+pub mod agent_settings;
 pub mod api;
 pub mod auth;
 pub mod byoh;
@@ -12,9 +13,11 @@ pub mod claude;
 pub mod claude_runner;
 pub mod cli;
 pub mod codex;
+mod codex_settings;
 pub mod db;
 pub mod entity;
 pub mod harness;
+mod integration_code;
 pub mod lease;
 pub mod livekit;
 pub mod model;

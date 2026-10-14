@@ -210,6 +210,7 @@ pub(crate) async fn control(record: &PiDescriptor, mut request: Value) -> Result
     let (deadline, limit) = match request["method"].as_str() {
         Some("pair" | "bind" | "takeover") => (Duration::from_secs(60), 64 * 1024),
         Some("sessions") => (Duration::from_secs(15), CATALOGUE_LIMIT),
+        Some("settings") => (Duration::from_secs(10), 2 * 1024 * 1024),
         _ => (Duration::from_secs(5), 64 * 1024),
     };
     request["nonce"] = Value::String(record.nonce.clone());
@@ -295,7 +296,8 @@ async fn live_pi_with_descriptors(registry: &Path) -> Result<(Vec<Candidate>, Ve
                 title: title(&actual, "title", "pi session"),
                 workspace,
                 native_locator: json!({"descriptor":path,"instance_id":record.instance_id,
-                    "pid":record.pid,"session_file":actual["session_file"],"profile":actual["profile"],"runner":actual["runner"]}),
+                    "pid":record.pid,"session_file":actual["session_file"],"profile":actual["profile"],"runner":actual["runner"],
+                    "model":actual["model"],"effort":actual["effort"]}),
             },
             None,
             ready,

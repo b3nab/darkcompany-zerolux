@@ -23,7 +23,8 @@ pub struct CreateAgent {
     pub harness: crate::harness::Harness,
 }
 
-/// What an agent runs with. A field left out is unchanged; an empty string clears it.
+/// Public native values, or requested choices. Missing fields are unknown/unchanged.
+/// Live controls accept concrete choices, never empty-string or null resets.
 /// `permission_mode` is Claude Code's; `approval_policy` and `sandbox` are Codex's.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -85,7 +86,7 @@ pub struct CreateClaudeSession {
     pub actor_id: Option<String>,
     pub workspace: String,
     #[serde(default)]
-    pub permission_mode: ClaudePermissionMode,
+    pub permission_mode: Option<ClaudePermissionMode>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]

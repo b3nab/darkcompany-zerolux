@@ -1276,6 +1276,90 @@ impl Store {
         Ok(actor)
     }
 
+    pub(crate) async fn settings_actor(&self, who: &ChatIdentity, id: &str) -> Result<Actor> {
+        let tx = self.read().await?;
+        owner_in(&tx, who).await?;
+        let actor = actors::Entity::find_by_id(id)
+            .filter(actors::Column::OwnerId.eq(&who.actor_id))
+            .filter(actors::Column::Kind.eq("agent"))
+            .filter(actors::Column::Archived.eq(false))
+            .one(&tx)
+            .await?
+            .ok_or(Error::NotFound)?;
+        tx.commit().await?;
+        Ok(actor)
+    }
+
+    /// Record a confirmed native snapshot on that session. The agent shows a value only
+    /// when all its active sessions agree. A late reply cannot change a stopped session.
+    pub(crate) async fn observe_native_settings(
+        &self,
+        session_id: &str,
+        native_id: &str,
+        values: &AgentSettings,
+    ) -> Result<()> {
+        let tx = self.write().await?;
+        let session = chat_sessions::Entity::find_by_id(session_id)
+            .filter(chat_sessions::Column::NativeSessionId.eq(native_id))
+            .filter(chat_sessions::Column::StoppedAt.is_null())
+            .one(&tx)
+            .await?
+            .ok_or(Error::StoppedByOwner)?;
+        if session.host_id.as_deref() != self.host() {
+            return Err(Error::Forbidden);
+        }
+        let mut locator: Value = decode(&session.native_locator_json)?;
+        let value = serde_json::to_value(values)
+            .map_err(|e| Error::Database(DbErr::Json(e.to_string())))?;
+        if locator["settings"] != value {
+            locator["settings"] = value;
+            chat_sessions::Entity::update_many()
+                .filter(chat_sessions::Column::Id.eq(session_id))
+                .col_expr(
+                    chat_sessions::Column::NativeLocatorJson,
+                    Expr::value(locator.to_string()),
+                )
+                .exec(&tx)
+                .await?;
+        }
+        let linked = chat_sessions::Entity::find()
+            .filter(chat_sessions::Column::ActorId.eq(&session.actor_id))
+            .filter(chat_sessions::Column::StoppedAt.is_null())
+            .all(&tx)
+            .await?;
+        let snapshots = linked
+            .iter()
+            .map(|session| {
+                decode::<Value>(&session.native_locator_json)
+                    .map(|locator| locator["settings"].clone())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let common = |field: &str| -> Option<String> {
+            let first = snapshots.first()?[field].as_str()?;
+            snapshots
+                .iter()
+                .all(|snapshot| snapshot[field].as_str() == Some(first))
+                .then(|| first.to_owned())
+        };
+        actors::Entity::update_many()
+            .filter(actors::Column::Id.eq(&session.actor_id))
+            .col_expr(actors::Column::Model, Expr::value(common("model")))
+            .col_expr(actors::Column::Effort, Expr::value(common("effort")))
+            .col_expr(
+                actors::Column::PermissionMode,
+                Expr::value(common("permission_mode")),
+            )
+            .col_expr(
+                actors::Column::ApprovalPolicy,
+                Expr::value(common("approval_policy")),
+            )
+            .col_expr(actors::Column::Sandbox, Expr::value(common("sandbox")))
+            .exec(&tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// What an agent runs with, set by the owner. The harness's own settings go only to
     /// that harness; names are the harnesses' own values.
     pub async fn set_agent_settings(
@@ -1500,6 +1584,43 @@ impl Store {
     }
 
     /// Closes a thread; any participant may. Reading stays, writing stops.
+    /// Record the one shutdown request before issuing it. A lost reply, including a
+    /// kernel crash, must never become a second automatic native shutdown request.
+    pub(crate) async fn claim_integration_update(
+        &self,
+        session_id: &str,
+        native_id: &str,
+        instance_id: &str,
+        revision: &str,
+    ) -> Result<bool> {
+        let tx = self.write().await?;
+        let session = chat_sessions::Entity::find_by_id(session_id)
+            .filter(chat_sessions::Column::NativeSessionId.eq(native_id))
+            .filter(chat_sessions::Column::StoppedAt.is_null())
+            .one(&tx)
+            .await?
+            .ok_or(Error::StoppedByOwner)?;
+        if session.host_id.as_deref() != self.host() {
+            return Err(Error::Forbidden);
+        }
+        let mut locator: Value = decode(&session.native_locator_json)?;
+        let intent = json!({"instance_id":instance_id,"revision":revision});
+        if locator["integration_update"] == intent {
+            return Ok(false);
+        }
+        locator["integration_update"] = intent;
+        chat_sessions::Entity::update_many()
+            .filter(chat_sessions::Column::Id.eq(session_id))
+            .col_expr(
+                chat_sessions::Column::NativeLocatorJson,
+                Expr::value(locator.to_string()),
+            )
+            .exec(&tx)
+            .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
     pub async fn close_thread(&self, who: &ChatIdentity, id: &str) -> Result<Conversation> {
         let tx = self.write().await?;
         access_in(&tx, who, id).await?;

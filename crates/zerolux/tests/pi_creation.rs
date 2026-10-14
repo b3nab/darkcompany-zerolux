@@ -258,6 +258,25 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     assert_eq!(original.len(), 1);
     assert_eq!(original[0]["native"], native);
     assert_eq!(original[0]["explicit_model"], false);
+    assert_eq!(created["actor"]["model"], "fixture/native-model");
+    assert_eq!(created["actor"]["effort"], "high");
+    let settings_path = format!("/actors/{actor}/settings");
+    let choices = api(&client, &base, &settings_path, None).await;
+    assert_eq!(choices["models"].as_array().unwrap().len(), 2);
+    let changed = api(
+        &client,
+        &base,
+        &settings_path,
+        Some(json!({"model":"fixture/native-alternate", "effort":"low"})),
+    )
+    .await;
+    assert_eq!(changed["actor"]["model"], "fixture/native-alternate");
+    assert_eq!(changed["actor"]["effort"], "low");
+    assert_eq!(
+        starts(&root).len(),
+        1,
+        "A live setting does not restart native pi"
+    );
     assert!(
         !root.join("home/native-inputs.jsonl").exists(),
         "creation submitted a synthetic prompt"
@@ -324,6 +343,8 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     assert_eq!(resumed[1]["native"], native);
     assert_eq!(resumed[1]["file"], original[0]["file"]);
     assert_eq!(resumed[1]["explicit_model"], true);
+    assert_eq!(resumed[1]["model"], "fixture/native-alternate");
+    assert_eq!(resumed[1]["effort"], "low");
     assert!(
         fs::read(resumed[1]["file"].as_str().unwrap())
             .unwrap()
@@ -464,6 +485,30 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     )
     .await;
 
+    let configured = api(&client, &base, "/chat/pi-sessions", Some(json!({
+        "name":"", "actor_id":actor, "workspace":root.join("work"), "model":"fixture/native-model", "effort":"medium"
+    }))).await;
+    assert_ne!(configured["session"]["native_session_id"], native);
+    assert_eq!(configured["actor"]["id"], actor);
+    assert_eq!(starts(&root)[5]["model"], "fixture/native-model");
+    assert_eq!(starts(&root)[5]["effort"], "medium");
+    assert_eq!(configured["actor"]["model"], "fixture/native-model");
+    assert_eq!(configured["actor"]["effort"], "medium");
+    assert_eq!(
+        fs::read(root.join("home/native-inputs.jsonl")).unwrap(),
+        inputs
+    );
+    api(
+        &client,
+        &base,
+        &format!(
+            "/chat/sessions/{}/stop",
+            configured["session"]["id"].as_str().unwrap()
+        ),
+        Some(json!({})),
+    )
+    .await;
+
     // A native guard failure retains the known identity, rather than minting/retrying another.
     fs::write(root.join("home/no-auth"), "fixture").unwrap();
     let failure = client
@@ -475,11 +520,11 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     assert_eq!(failure.status(), 502);
     let failure: Value = failure.json().await.unwrap();
     let failed_starts = starts(&root);
-    assert_eq!(failed_starts.len(), 6);
-    assert_eq!(failure["native_session_id"], failed_starts[5]["native"]);
+    assert_eq!(failed_starts.len(), 7);
+    assert_eq!(failure["native_session_id"], failed_starts[6]["native"]);
     assert!(failure["native_session_id"].is_string());
     tokio::time::sleep(Duration::from_secs(2)).await;
-    assert_eq!(starts(&root).len(), 6);
+    assert_eq!(starts(&root).len(), 7);
     assert_eq!(
         fs::read(root.join("home/native-inputs.jsonl")).unwrap(),
         inputs

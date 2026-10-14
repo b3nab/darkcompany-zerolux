@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
-use crate::model::ClaudePermissionMode as PermissionMode;
+use crate::model::{AgentSettings, ClaudePermissionMode as PermissionMode};
 
 mod execution;
 #[cfg(test)]
@@ -216,6 +216,7 @@ impl Registry {
         workspace: &str,
         mode: PermissionMode,
         system_prompt: Option<&str>,
+        initial: &AgentSettings,
     ) -> Result<RunnerLink> {
         ensure!(
             self.find(native_id, workspace, mode).await?.is_none(),
@@ -245,6 +246,7 @@ impl Registry {
             .env("ZEROLUX_NATIVE_SESSION", native_id)
             .env("ZEROLUX_WORKSPACE", workspace)
             .env("ZEROLUX_PERMISSION_MODE", mode.name())
+            .env("ZEROLUX_INITIAL_SETTINGS", initial.patch_json().to_string())
             .env_remove("ZEROLUX_SYSTEM_PROMPT")
             .env("ZEROLUX_CLAUDE_MANAGED", "1")
             .env_remove("ZEROLUX_CLAUDE_EXECUTABLE")
@@ -421,9 +423,12 @@ impl Registry {
 }
 
 impl RunnerLink {
-    async fn request(&self, mut request: Value) -> Result<Value> {
+    pub(crate) async fn request(&self, mut request: Value) -> Result<Value> {
         request["nonce"] = json!(self.record.nonce);
-        let deadline = if matches!(request["method"].as_str(), Some("bind" | "prepare")) {
+        let deadline = if matches!(
+            request["method"].as_str(),
+            Some("bind" | "prepare" | "update_commit")
+        ) {
             60
         } else {
             5
@@ -432,9 +437,14 @@ impl RunnerLink {
             let mut socket = tokio::net::UnixStream::connect(&self.record.endpoint).await?;
             socket.write_all(format!("{request}\n").as_bytes()).await?;
             let mut bytes = Vec::new();
-            socket.take(64 * 1024 + 1).read_to_end(&mut bytes).await?;
+            let limit = if request["method"] == "settings" {
+                2 * 1024 * 1024
+            } else {
+                64 * 1024
+            };
+            socket.take(limit + 1).read_to_end(&mut bytes).await?;
             ensure!(
-                bytes.len() <= 64 * 1024,
+                bytes.len() as u64 <= limit,
                 "Runner control response too large"
             );
             let response: Value = serde_json::from_slice(&bytes)?;
@@ -457,6 +467,27 @@ impl RunnerLink {
         );
         Ok(value)
     }
+    pub(crate) async fn settings(
+        &self,
+        session_id: &str,
+        patch: Option<&crate::model::AgentSettings>,
+        check: bool,
+    ) -> Result<crate::agent_settings::NativeSettings> {
+        let description = self.describe().await?;
+        ensure!(
+            description["capabilities"]
+                .as_array()
+                .is_some_and(|values| values.iter().any(|value| value == "agent-settings-v1")),
+            "The Claude runner needs an update before its settings can be controlled"
+        );
+        let mut request = json!({"method":"settings","link_id":session_id,"check":check});
+        if let Some(patch) = patch {
+            request["values"] = patch.patch_json();
+        }
+        let result = self.request(request).await?;
+        Ok(serde_json::from_value(result["settings"].clone())?)
+    }
+
     pub(crate) async fn check_bind(&self) -> Result<()> {
         // A live host (including older ones) keeps its query across prepare/bind itself.
         // Authenticate its identity; do not require new metadata to reattach that query.

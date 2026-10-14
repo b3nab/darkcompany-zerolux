@@ -18,7 +18,7 @@ use tokio::{
 };
 use zerolux::{
     codex::{CodexDriver, CodexRpc},
-    model::{CodexApprovalPolicy, CodexSandbox},
+    model::{AgentSettings, CodexApprovalPolicy, CodexSandbox},
 };
 
 #[path = "support/codex_runtime.rs"]
@@ -1691,6 +1691,53 @@ async fn a_session_started_by_zerolux_sends_only_the_owner_choices_and_no_prompt
     assert_eq!(
         last["params"],
         json!({"cwd":"/fixture","ephemeral":false,"approvalPolicy":"never","sandbox":"danger-full-access"})
+    );
+}
+
+#[tokio::test]
+async fn native_model_and_effort_are_validated_and_applied_before_a_thread_can_receive_input() {
+    let runtime = Runtime::new_in(std::path::Path::new("/fixture")).await;
+    let rpc = CodexRpc::connect(&runtime.endpoint).await.unwrap();
+    let chosen = AgentSettings {
+        model: Some("fixture-alternate".into()),
+        effort: Some("low".into()),
+        ..AgentSettings::default()
+    };
+    let driver = CodexDriver::start_configured_with_rpc(
+        rpc,
+        "/fixture",
+        Some(CodexApprovalPolicy::Untrusted),
+        Some(CodexSandbox::ReadOnly),
+        &chosen,
+    )
+    .await
+    .unwrap();
+    assert_eq!(driver.settings()["model"], "fixture-alternate");
+    assert_eq!(driver.settings()["reasoningEffort"], "low");
+    assert_eq!(driver.settings()["approvalPolicy"], "untrusted");
+    assert_eq!(driver.settings()["sandbox"]["type"], "readOnly");
+    assert_eq!(
+        runtime.count("model/list"),
+        2,
+        "Every native catalog page is used"
+    );
+    assert_eq!(runtime.count("thread/start"), 1);
+    assert_eq!(runtime.count("thread/queue/add"), 0);
+    assert_eq!(runtime.count("turn/start"), 0);
+    let rpc = CodexRpc::connect(&runtime.endpoint).await.unwrap();
+    let invalid = AgentSettings {
+        effort: Some("medium".into()),
+        ..chosen
+    };
+    assert!(
+        CodexDriver::start_configured_with_rpc(rpc, "/fixture", None, None, &invalid)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        runtime.count("thread/start"),
+        1,
+        "Unsupported effort is rejected before any new identity"
     );
 }
 
