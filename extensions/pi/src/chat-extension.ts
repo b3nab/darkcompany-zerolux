@@ -501,6 +501,32 @@ export default function chatExtension(pi: ExtensionAPI) {
     },
   });
   pi.registerTool({
+    name: "zerolux_close_thread",
+    label: "Close ZeroLux thread",
+    description:
+      "Close a ZeroLux thread you participate in after its work is finished. Send and confirm any final messages first. Pass the thread's chat ID, not its parent chat.",
+    executionMode: "sequential",
+    parameters: Type.Object({
+      chat: Type.String({
+        description: "The thread's chat ID, not its parent chat",
+      }),
+    }),
+    async execute(_id, args, signal) {
+      if (signal?.aborted)
+        throw new Error("Thread closure cancelled before sending");
+      const thread = await linkOf(args.chat).closeThread(args.chat);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Closed the thread ${JSON.stringify(thread.title)}.`,
+          },
+        ],
+        details: undefined,
+      };
+    },
+  });
+  pi.registerTool({
     name: "zerolux_reload",
     label: "Reload pi",
     description:

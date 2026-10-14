@@ -340,6 +340,26 @@ export class ClaudeAgent {
             };
           },
         ),
+        tool(
+          "close_thread",
+          "Close a ZeroLux thread you participate in after its work is finished. Send and confirm any final messages first. Pass the thread's chat ID, not its parent chat.",
+          {
+            chat: z
+              .string()
+              .describe("The thread's chat ID, not its parent chat"),
+          },
+          async ({ chat }) => {
+            const thread = await this.bridge.closeThread(chat);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Closed the thread ${JSON.stringify(thread.title)}.`,
+                },
+              ],
+            };
+          },
+        ),
       ],
     });
   }

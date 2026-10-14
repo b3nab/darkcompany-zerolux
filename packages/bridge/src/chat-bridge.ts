@@ -51,8 +51,7 @@ export interface Inbox {
 }
 /** Who wrote a batch: the owner, or another agent, whose message is peer input. */
 export type Sender =
-  | { kind: "owner" }
-  | { kind: "peer"; actor_id: string; name: string };
+  { kind: "owner" } | { kind: "peer"; actor_id: string; name: string };
 /** One sender's consecutive messages in one chat; its ID is the last delivery's. */
 export interface Batch {
   content: string;
@@ -693,6 +692,46 @@ export class ChatBridge {
     if (!this.conversations.some((c) => c.id === conversation.id))
       this.conversations = [...this.conversations, conversation];
     return { id: conversation.id, title: conversation.title, created };
+  }
+
+  /** Closes a participating thread through this link's authenticated connection. */
+  async closeThread(chat: string) {
+    if (!this.session || this.closed)
+      throw new Error("No ZeroLux chat is connected");
+    const thread = this.conversations.find((c) => c.id === chat && c.parent_id);
+    if (!thread) throw new Error("Choose a thread, not its parent chat");
+    if (
+      !thread.members.some(
+        (member) =>
+          member.actor_id === this.session!.actor_id &&
+          member.session_id === this.session!.id,
+      )
+    )
+      throw new Error("Only a participant can close this thread");
+    if (
+      [...this.outgoing.values()].some(
+        (message) => message.conversation === chat,
+      )
+    )
+      throw new Error(
+        "Wait for pending messages to be published before closing the thread",
+      );
+    // No queue or automatic retry: an unconfirmed mutation is not reported as successful.
+    const { conversation } = await this.request<{ conversation: Conversation }>(
+      `/conversations/${encodeURIComponent(chat)}/close`,
+      {},
+    );
+    if (
+      conversation?.id !== chat ||
+      conversation.parent_id !== thread.parent_id ||
+      typeof conversation.closed_at !== "number" ||
+      !Number.isFinite(conversation.closed_at)
+    )
+      throw new Error("ZeroLux did not confirm the thread closure");
+    this.conversations = this.conversations.map((current) =>
+      current.id === chat ? conversation : current,
+    );
+    return { id: conversation.id, title: conversation.title };
   }
 
   /** Writes in a chat. "pending": ZeroLux is unreachable, the message goes out once later. */

@@ -106,6 +106,13 @@ function fixture() {
         throw new ChatHttpError(status);
       }
     }
+    if (path.endsWith("/close")) {
+      const thread = inbox.conversations.find(
+        (conversation) => path === `/conversations/${conversation.id}/close`,
+      )!;
+      thread.closed_at = 123;
+      return structuredClone({ conversation: thread }) as T;
+    }
     if (path.endsWith("/threads"))
       return {
         conversation: {
@@ -261,7 +268,31 @@ describe("permanent pi chat", () => {
     expect(events).not.toContain("message_end");
     expect(events).not.toContain("agent_before_settle");
     expect(commands).toEqual(["zerolux-chat"]);
-    expect(tools).toEqual(["zerolux_send", "zerolux_thread", "zerolux_reload"]);
+    expect(tools).toEqual([
+      "zerolux_send",
+      "zerolux_thread",
+      "zerolux_close_thread",
+      "zerolux_reload",
+    ]);
+  });
+  test("thread closure is sequential and cancelled before looking up a connection", async () => {
+    const tools = new Map<string, any>();
+    chatExtension({
+      on() {},
+      registerTool: (tool: { name: string }) => tools.set(tool.name, tool),
+      registerCommand() {},
+      events: { on: () => () => {}, emit() {} },
+    } as unknown as ExtensionAPI);
+    const tool = tools.get("zerolux_close_thread");
+    expect(tool.executionMode).toBe("sequential");
+    const cancel = new AbortController();
+    cancel.abort();
+    await expect(
+      tool.execute("call", { chat: "thread" }, cancel.signal),
+    ).rejects.toThrow("Thread closure cancelled before sending");
+    await expect(tool.execute("call", { chat: "thread" })).rejects.toThrow(
+      "No ZeroLux chat is connected",
+    );
   });
   test("pi reloads itself only once its turn ends: the tool asks, the command waits for idle, the note wakes it", async () => {
     const root = await mkdtemp(join(tmpdir(), "zerolux-reload-"));
@@ -932,6 +963,124 @@ describe("permanent pi chat", () => {
     ).rejects.toThrow("Threads open on a message of a chat you are in");
     expect(body).toBeUndefined();
   });
+  describe("thread closure", () => {
+    function threadFixture() {
+      const f = fixture();
+      f.inbox.deliveries = [];
+      const thread: Inbox["conversations"][number] = {
+        ...f.inbox.conversations[0]!,
+        id: "thread",
+        kind: "thread",
+        title: "Finished work",
+        parent_id: "room",
+        closed_at: null,
+      };
+      f.inbox.conversations.push(thread);
+      return { ...f, thread };
+    }
+
+    test("uses the authenticated connection and accepts only a confirmed closure", async () => {
+      const f = threadFixture();
+      await f.bridge.connect();
+      await f.bridge.invalidate();
+      expect(await f.bridge.closeThread("thread")).toEqual({
+        id: "thread",
+        title: "Finished work",
+      });
+      expect(f.thread.closed_at).toBe(123);
+      expect(f.calls.filter((call) => call.path.endsWith("/close"))).toEqual([
+        { path: "/conversations/thread/close", body: {} },
+      ]);
+    });
+
+    test("rejects parent chats, unknown threads and nonparticipants before sending", async () => {
+      const f = threadFixture();
+      f.thread.members = [];
+      await f.bridge.connect();
+      await f.bridge.invalidate();
+      for (const id of ["room", "unknown"])
+        await expect(f.bridge.closeThread(id)).rejects.toThrow(
+          "Choose a thread",
+        );
+      await expect(f.bridge.closeThread("thread")).rejects.toThrow(
+        "Only a participant",
+      );
+      expect(f.calls.some((call) => call.path.endsWith("/close"))).toBe(false);
+      await f.bridge.stop();
+      await expect(f.bridge.closeThread("thread")).rejects.toThrow(
+        "No ZeroLux chat is connected",
+      );
+    });
+
+    test("waits for pending messages instead of closing over an unsent reply", async () => {
+      const f = threadFixture();
+      await f.bridge.connect();
+      await f.bridge.invalidate();
+      f.failReply();
+      expect(await f.bridge.post("thread", "Final report")).toBe("pending");
+      await expect(f.bridge.closeThread("thread")).rejects.toThrow(
+        "Wait for pending messages",
+      );
+      expect(f.calls.some((call) => call.path.endsWith("/close"))).toBe(false);
+      await f.bridge.invalidate();
+      expect(await f.bridge.closeThread("thread")).toEqual({
+        id: "thread",
+        title: "Finished work",
+      });
+    });
+
+    test.each([403, 502])(
+      "does not retry a refused or unconfirmed closure (%i)",
+      async (status) => {
+        const f = threadFixture();
+        let attempts = 0;
+        const bridge = new ChatBridge(
+          f.host,
+          async <T>(path: string, body?: unknown) => {
+            if (path.endsWith("/close")) {
+              attempts++;
+              throw new ChatHttpError(status);
+            }
+            return f.transport<T>(path, body);
+          },
+        );
+        await bridge.connect();
+        await bridge.invalidate();
+        await expect(bridge.closeThread("thread")).rejects.toThrow(
+          `HTTP ${status}`,
+        );
+        await bridge.invalidate();
+        expect(attempts).toBe(1);
+        expect(f.thread.closed_at).toBeNull();
+      },
+    );
+
+    test("does not report success for a missing confirmation or a different thread", async () => {
+      for (const patch of [
+        { closed_at: null },
+        { id: "other" },
+        { parent_id: "other" },
+      ]) {
+        const f = threadFixture();
+        const bridge = new ChatBridge(
+          f.host,
+          async <T>(path: string, body?: unknown) => {
+            if (path.endsWith("/close"))
+              return {
+                conversation: { ...f.thread, closed_at: 123, ...patch },
+              } as T;
+            return f.transport<T>(path, body);
+          },
+        );
+        await bridge.connect();
+        await bridge.invalidate();
+        await expect(bridge.closeThread("thread")).rejects.toThrow(
+          "ZeroLux did not confirm the thread closure",
+        );
+      }
+    });
+  });
+
   test("a lost activity update is sent again, so ZeroLux never stays on Working", async () => {
     const f = fixture();
     f.inbox.deliveries = [];
