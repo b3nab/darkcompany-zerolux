@@ -2,6 +2,7 @@ import * as DocumentPicker from "expo-document-picker";
 import {
   useFocusEffect,
   useLocalSearchParams,
+  useNavigation,
   usePathname,
   useRouter,
 } from "expo-router";
@@ -16,6 +17,7 @@ import {
   SendIcon,
   XIcon,
 } from "lucide-react-native";
+import type { NativeStackNavigationProp } from "expo-router";
 import type { LucideIcon } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LegendListRef } from "@legendapp/list/react-native";
@@ -78,6 +80,7 @@ export default function ChatScreen() {
   const insets = useSafeAreaInsets();
   // The unsent text waits in its chat while you are elsewhere in the app.
   const [draft, setDraft] = useState(() => draftOf(id));
+  // A long press shows who has a message and who read it, as Info does in chat apps.
   const [detail, setDetail] = useState<string>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -86,6 +89,7 @@ export default function ChatScreen() {
   // More than a screen above the latest messages: a button brings the reader back down.
   const [away, setAway] = useState(false);
   const list = useRef<LegendListRef>(null);
+  const input = useRef<TextInput>(null);
   const recorder = useVoice();
   const [muted, faint, onLamp] = useCSSVariable([
     "--color-muted-foreground",
@@ -119,6 +123,16 @@ export default function ChatScreen() {
     }, [conversation?.id]),
   );
   useEffect(() => saveDraft(id, draft), [id, draft]);
+  // Entering a chat puts you in its box once the screen has slid in, not during the slide.
+  const navigation =
+    useNavigation<NativeStackNavigationProp<Record<string, object>>>();
+  useEffect(
+    () =>
+      navigation.addListener("transitionEnd", (e) => {
+        if (!e.data.closing) input.current?.focus();
+      }),
+    [navigation],
+  );
   // Opening a member from the panel leaves the chat: the sheet goes with it.
   const pathname = usePathname();
   useEffect(() => setAbout(false), [pathname]);
@@ -269,7 +283,7 @@ export default function ChatScreen() {
             "max-w-[86%] gap-0.5 self-end rounded-md rounded-br-xs border border-human/25 bg-human/10 px-3 py-2",
             continued ? "mt-1" : "mt-3",
           )}
-          onPress={() => setDetail(shown ? undefined : m.id)}
+          onLongPress={() => setDetail(shown ? undefined : m.id)}
         >
           <MessageBody text={m.text} />
           {stamp}
@@ -282,7 +296,7 @@ export default function ChatScreen() {
     return (
       <Pressable
         className={cn("flex-row gap-2.5", continued ? "mt-1" : "mt-3")}
-        onPress={() => setDetail(shown ? undefined : m.id)}
+        onLongPress={() => setDetail(shown ? undefined : m.id)}
       >
         <View className="w-8">
           {continued ? null : (
@@ -556,6 +570,7 @@ export default function ChatScreen() {
             {tool(PaperclipIcon, "Attach a file", attach, !storage.available)}
             <View className="min-h-10 flex-1 flex-row items-end rounded-md border border-input bg-background">
               <TextInput
+                ref={input}
                 className="max-h-36 flex-1 px-3 py-2.5 font-sans text-base text-foreground"
                 placeholderTextColor={faint}
                 value={draft}
