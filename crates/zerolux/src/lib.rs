@@ -20,6 +20,7 @@ mod integration_code;
 pub mod lease;
 pub mod livekit;
 pub mod model;
+pub mod native_events;
 pub mod native_output;
 #[cfg(unix)]
 mod pi_runner;

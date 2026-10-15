@@ -229,6 +229,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/chat/sessions/{id}/status", post(session_status))
         .route("/chat/sessions/{id}/activity", post(session_activity))
         .route("/chat/sessions/{id}/output", get(session_output))
+        .route("/chat/sessions/{id}/events", get(session_events))
         .route("/chat/sessions/{id}/interrupt", post(interrupt_session))
         .route(
             "/conversations",
@@ -761,6 +762,17 @@ async fn session_output(
 ) -> Result<Json<crate::native_output::Page>, Error> {
     let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
     Ok(Json(store.native_output(&who, &id, query.after).await?))
+}
+
+/// The agent's native record in the Agent Console's common model.
+async fn session_events(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    query: Result<Query<OutputQuery>, QueryRejection>,
+) -> Result<Json<crate::native_output::EventPage>, Error> {
+    let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
+    Ok(Json(store.native_events(&who, &id, query.after).await?))
 }
 
 /// Stops the native turn in progress; the session stays linked.

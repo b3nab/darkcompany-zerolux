@@ -31,7 +31,7 @@ use crate::{
 pub const PAGE_BYTES: u64 = 512 * 1024;
 const WATCH_EVERY: Duration = Duration::from_secs(1);
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Record {
     /// Byte offset of the record in the native file.
     pub at: u64,
@@ -169,6 +169,34 @@ impl Store {
             ))),
         }
     }
+
+    /// The same records in the Agent Console's common model, the same for every harness.
+    pub async fn native_events(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+        after: u64,
+    ) -> Result<EventPage> {
+        let page = self.native_output(who, id, after).await?;
+        Ok(EventPage {
+            events: crate::native_events::project(&page.harness, &page.records),
+            session_id: page.session_id,
+            harness: page.harness,
+            next: page.next,
+            end: page.end,
+        })
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct EventPage {
+    pub session_id: String,
+    pub harness: String,
+    pub events: Vec<crate::native_events::Item>,
+    /// Pass as `after` to continue.
+    pub next: u64,
+    /// The native file's size when read: `next < end` means there is more.
+    pub end: u64,
 }
 
 /// Tells the people in the workspace when an agent's native record grows. The notice has
