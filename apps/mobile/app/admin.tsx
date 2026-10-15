@@ -2,17 +2,18 @@ import { useRouter } from "expo-router";
 import { ChevronRightIcon, UserIcon } from "lucide-react-native";
 import { ScrollView, View } from "react-native";
 import { useCSSVariable } from "uniwind";
-import { activeActors } from "@zerolux/chat";
+import { activeActors, capabilityStatus } from "@zerolux/chat";
 import { Screen } from "@/components/screen";
 import { Row, Section, Unavailable } from "@/components/settings";
 import { WorkspaceSettings } from "@/components/workspace-settings";
 import { Text } from "@/components/ui/text";
+import { cn } from "@/lib/utils";
 import { useSession } from "../src/kernel";
 import { useMe } from "../src/me";
 
 /** The workspace as its owner runs it: its name, people, agents, modules, storage, updates. */
 export default function Administration() {
-  const { workspace, version, renameWorkspace } = useSession();
+  const { workspace, version, capabilities, renameWorkspace } = useSession();
   const { owner } = useMe();
   const router = useRouter();
   const faint = String(useCSSVariable("--color-faint"));
@@ -67,6 +68,34 @@ export default function Administration() {
         <Section title="Storage">
           {/* TODO: kernel: where the workspace's files live and the space they take. */}
           <Unavailable>Not available yet.</Unavailable>
+        </Section>
+        <Section title="Features">
+          {capabilityStatus(capabilities).map((feature, i) => (
+            <View
+              key={feature.id}
+              className={cn(
+                "flex-row items-start gap-3 px-4 py-3",
+                i > 0 && "border-t border-border",
+              )}
+            >
+              <View className="min-w-0 flex-1 gap-0.5">
+                <Text className="text-base">{feature.name}</Text>
+                {feature.description ? (
+                  <Text className="text-sm text-muted-foreground">
+                    {feature.description}
+                  </Text>
+                ) : null}
+              </View>
+              <Text
+                className={cn(
+                  "text-sm",
+                  feature.available ? "text-success" : "text-faint",
+                )}
+              >
+                {feature.available ? "Available" : "Not yet"}
+              </Text>
+            </View>
+          ))}
         </Section>
         <Section title="Updates">
           <View className="px-4 py-3">
