@@ -61,7 +61,12 @@ pub(crate) fn prompt(batch: &[Delivery], inbox: &Value) -> Result<String> {
                 .find(|c| c["id"] == parent_id)
                 .map(|c| label(c["title"].as_str().unwrap_or_default()))
                 .unwrap_or_else(|| "\"?\"".into());
-            format!("thread {title} of {parent}")
+            let closed = if conversation["closed_at"].is_null() {
+                ""
+            } else {
+                " (closed)"
+            };
+            format!("thread {title} of {parent}{closed}")
         }
         None => title,
     };

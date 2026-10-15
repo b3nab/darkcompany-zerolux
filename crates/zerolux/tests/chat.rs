@@ -2416,7 +2416,7 @@ async fn threads_open_or_join_at_a_root_with_the_parents_audience() {
 }
 
 #[tokio::test]
-async fn a_thread_rests_with_its_chat_and_dispatches_nothing_once_closed() {
+async fn a_thread_rests_with_its_chat_and_still_delivers_what_was_written_before_closing() {
     let f = Fixture::new().await;
     let (a, a_id) = f.hire("a", None).await;
     let (b, b_id) = f.hire("b", None).await;
@@ -2496,7 +2496,7 @@ async fn a_thread_rests_with_its_chat_and_dispatches_nothing_once_closed() {
     assert!(!paused(f.store.conversations(&b_id).await.unwrap()));
     assert!(offered(f.store.chat_inbox(&b_id).await.unwrap(), &first));
     f.store.dispatch_chat_delivery(&b_id, &first).await.unwrap();
-    // A delivery stored before Close never starts a turn after it.
+    // Closing stops new messages, not the ones written before it: they are still delivered.
     let second = f
         .store
         .send_chat_message(&a_id, &thread.id, say("two"))
@@ -2504,11 +2504,17 @@ async fn a_thread_rests_with_its_chat_and_dispatches_nothing_once_closed() {
         .unwrap();
     let second = second.message.deliveries[0].id.clone();
     f.store.close_thread(&a_id, &thread.id).await.unwrap();
-    assert!(!offered(f.store.chat_inbox(&b_id).await.unwrap(), &second));
-    assert!(matches!(
-        f.store.dispatch_chat_delivery(&b_id, &second).await,
-        Err(Error::Conflict)
-    ));
+    assert!(
+        f.store
+            .send_chat_message(&a_id, &thread.id, say("three"))
+            .await
+            .is_err()
+    );
+    assert!(offered(f.store.chat_inbox(&b_id).await.unwrap(), &second));
+    f.store
+        .dispatch_chat_delivery(&b_id, &second)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

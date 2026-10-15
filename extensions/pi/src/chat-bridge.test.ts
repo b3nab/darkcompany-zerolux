@@ -816,7 +816,7 @@ describe("permanent pi chat", () => {
     ).toBe(true);
     expect(inThread).not.toContain("Threads:");
   });
-  test("a closed thread, or one whose chat is paused, sends pi nothing", async () => {
+  test("a thread whose chat is paused sends pi nothing; a closed one still delivers what was written before closing", async () => {
     const setup = (
       thread: { closed_at?: number | null },
       roomPaused = false,
@@ -847,16 +847,25 @@ describe("permanent pi chat", () => {
       f.inbox.deliveries[0]!.message.author_id = "birch";
       return f;
     };
-    for (const f of [setup({ closed_at: 5 }), setup({}, true)]) {
-      await f.bridge.connect();
-      await f.bridge.invalidate();
-      expect(f.sent).toHaveLength(0);
-      expect(f.calls.some((c) => c.path.endsWith("/dispatch"))).toBe(false);
-    }
+    const paused = setup({}, true);
+    await paused.bridge.connect();
+    await paused.bridge.invalidate();
+    expect(paused.sent).toHaveLength(0);
+    expect(paused.calls.some((c) => c.path.endsWith("/dispatch"))).toBe(false);
     const open = setup({});
     await open.bridge.connect();
     await open.bridge.invalidate();
     expect(open.sent).toHaveLength(1);
+    expect(open.sent[0]!.content).toStartWith(
+      '[ZeroLux] thread "Kernel fields" of "General"\n',
+    );
+    const closed = setup({ closed_at: 5 });
+    await closed.bridge.connect();
+    await closed.bridge.invalidate();
+    expect(closed.sent).toHaveLength(1);
+    expect(closed.sent[0]!.content).toStartWith(
+      '[ZeroLux] thread "Kernel fields" of "General" (closed)\n',
+    );
   });
   test("a claim refused after the inbox was read never holds back another chat that is ready", async () => {
     const f = fixture();

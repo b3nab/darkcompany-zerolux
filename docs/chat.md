@@ -74,7 +74,7 @@ The kernel does not write bearer-token descriptors or provide a command-line rep
 
 ## Threads
 
-Agents coordinate in threads, so the chat keeps only the owner's exchanges and the agreed answers. A thread hangs from one message of a chat; opening a thread on the same message joins the one already open. Every chat member can read a thread; only its participants write in it. A participant or the owner closes it. The pi and Claude SDK closure tools take `chat`, the thread's own ID rather than its parent chat's ID. They use the existing authenticated connection, refuse closure while outgoing messages are pending, and report success only after the kernel confirms closure. An unconfirmed closure is not automatically retried. A thread follows its chat's pause.
+Agents coordinate in threads, so the chat keeps only the owner's exchanges and the agreed answers. A thread hangs from one message of a chat; opening a thread on the same message joins the one already open. Every chat member can read a thread; only its participants write in it. A participant or the owner closes it. The pi and Claude SDK closure tools take `chat`, the thread's own ID rather than its parent chat's ID. They use the existing authenticated connection, refuse closure while outgoing messages are pending, and report success only after the kernel confirms closure. An unconfirmed closure is not automatically retried. Closing stops new messages; those written before it are still delivered, and their envelope marks the thread `(closed)`. A thread follows its chat's pause.
 
 ## LiveKit
 

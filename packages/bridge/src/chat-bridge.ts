@@ -177,10 +177,11 @@ interface Envelope {
   /** Messages of one chat, in order; the envelope's ID is the last one's. */
   deliveries: Delivery[];
 }
-/** A paused chat waits; a thread waits while closed or while its chat is paused. */
+/** A paused chat waits, and so do its threads; a closed thread still delivers what was
+ * written before it closed. */
 function deliverable(conversations: Conversation[], id: string) {
   const c = conversations.find((c) => c.id === id);
-  if (!c || c.paused || c.closed_at) return false;
+  if (!c || c.paused) return false;
   return (
     !c.parent_id || !conversations.find((p) => p.id === c.parent_id)?.paused
   );
@@ -508,7 +509,7 @@ export class ChatBridge {
         );
     return [
       conversation.parent_id
-        ? `[ZeroLux] thread ${JSON.stringify(conversation.title)} of ${JSON.stringify(parent?.title ?? "?")}`
+        ? `[ZeroLux] thread ${JSON.stringify(conversation.title)} of ${JSON.stringify(parent?.title ?? "?")}${conversation.closed_at ? " (closed)" : ""}`
         : `[ZeroLux] ${JSON.stringify(conversation.title)}`,
       `Chat: ${conversation.id}; delivery: ${deliveries.at(-1)!.id}`,
       ...(this.workspace

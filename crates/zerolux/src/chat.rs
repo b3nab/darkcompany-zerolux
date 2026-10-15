@@ -1945,8 +1945,9 @@ impl Store {
         let id = who.session_id.as_deref().ok_or(Error::Forbidden)?;
         let session = session_in(&tx, id).await?;
         let conversations = conversations_in(&tx, who).await?;
-        // A message waiting in a paused chat, or in a closed thread, is not offered: the
-        // inbox lists what may be dispatched now, so a driver never stalls on a refusal.
+        // A message waiting in a paused chat is not offered: the inbox lists what may be
+        // dispatched now, so a driver never stalls on a refusal. Closing a thread stops new
+        // messages, not the ones written before it: those are still delivered.
         let rows: Vec<ChatDelivery> = fetch_all(
             &tx,
             sql(
@@ -1956,7 +1957,7 @@ impl Store {
                 LEFT JOIN conversations p ON p.id=c.parent_id
                 WHERE d.session_id=$1 AND d.status!='read' AND EXISTS(SELECT 1 FROM conversation_members cm
                 WHERE cm.conversation_id=m.conversation_id AND cm.actor_id=$2 AND cm.session_id=$1)
-                AND NOT (d.status='stored' AND (c.paused OR COALESCE(p.paused,FALSE) OR c.closed_at IS NOT NULL))
+                AND NOT (d.status='stored' AND (c.paused OR COALESCE(p.paused,FALSE)))
                 ORDER BY d.created_at,d.id",
                 [id.into(), (&who.actor_id).into()],
             ),
@@ -1997,7 +1998,8 @@ impl Store {
         owns_delivery(who, &delivery)?;
         let message = message_in(&tx, &delivery.message_id).await?;
         access_in(&tx, who, &message.conversation_id).await?;
-        // Nothing starts in a closed thread, nor in a thread whose chat is paused.
+        // Nothing starts in a paused chat, nor in a thread whose chat is paused. A closed
+        // thread still delivers what was written before it closed.
         let ready: bool = scalar(
             &tx,
             sql(
@@ -2005,7 +2007,7 @@ impl Store {
                 "SELECT EXISTS(SELECT 1 FROM chat_sessions s,conversations c
                 LEFT JOIN conversations p ON p.id=c.parent_id
                 WHERE s.id=$1 AND s.status='connected' AND s.stopped_at IS NULL AND c.id=$2 AND c.paused=FALSE
-                AND c.closed_at IS NULL AND COALESCE(p.paused,FALSE)=FALSE)",
+                AND COALESCE(p.paused,FALSE)=FALSE)",
                 [
                     (&delivery.session_id).into(),
                     (&message.conversation_id).into(),
