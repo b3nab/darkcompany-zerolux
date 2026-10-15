@@ -67,6 +67,8 @@ async fn the_bootstrap_schema_applies_to_postgres_in_a_database_of_its_own() {
         "messages",
         "deliveries",
         "tool_approvals",
+        "console_streams",
+        "console_events",
         "seaql_migrations",
     ] {
         assert!(
@@ -75,14 +77,7 @@ async fn the_bootstrap_schema_applies_to_postgres_in_a_database_of_its_own() {
         );
     }
     assert!(!tables.contains(&"_sqlx_migrations".to_owned()));
-    assert_eq!(
-        ledger,
-        vec![
-            "m0001_bootstrap".to_owned(),
-            "m0002_auth".to_owned(),
-            "m0003_agent_settings".to_owned()
-        ]
-    );
+    assert_eq!(ledger, vec!["m0001_bootstrap".to_owned()]);
 }
 
 #[path = "support/db.rs"]

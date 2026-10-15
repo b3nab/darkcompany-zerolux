@@ -1,0 +1,56 @@
+-- Create "actors" table
+CREATE TABLE "actors" ("id" text NOT NULL, "name" text NOT NULL, "kind" text NOT NULL, "owner_id" text NULL, "harness" text NULL, "archived" boolean NOT NULL DEFAULT false, "name_confirmed" boolean NOT NULL DEFAULT false, "created_at" bigint NOT NULL, "auth_subject" text NULL, "model" text NULL, "effort" text NULL, "permission_mode" text NULL, "approval_policy" text NULL, "sandbox" text NULL, PRIMARY KEY ("id"), CONSTRAINT "actors_owner_id_fkey" FOREIGN KEY ("owner_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, CONSTRAINT "actors_check" CHECK (((kind = 'human'::text) AND (owner_id IS NULL)) OR ((kind = 'agent'::text) AND (owner_id IS NOT NULL))), CONSTRAINT "actors_harness_check" CHECK (harness = ANY (ARRAY['pi'::text, 'claude-code'::text, 'codex'::text])), CONSTRAINT "actors_kind_check" CHECK (kind = ANY (ARRAY['human'::text, 'agent'::text])));
+-- Create index "one_actor_per_subject" to table: "actors"
+CREATE UNIQUE INDEX "one_actor_per_subject" ON "actors" ("auth_subject") WHERE (auth_subject IS NOT NULL);
+-- Create index "one_bootstrap_owner" to table: "actors"
+CREATE UNIQUE INDEX "one_bootstrap_owner" ON "actors" ("kind") WHERE (kind = 'human'::text);
+-- Create "chat_outbox" table
+CREATE TABLE "chat_outbox" ("event_id" text NOT NULL, "payload_json" text NOT NULL, "recipient_actor_ids_json" text NOT NULL, "created_at" bigint NOT NULL, "published_at" bigint NULL, PRIMARY KEY ("event_id"));
+-- Create index "chat_outbox_pending" to table: "chat_outbox"
+CREATE INDEX "chat_outbox_pending" ON "chat_outbox" ("created_at") WHERE (published_at IS NULL);
+-- Create "chat_sessions" table
+CREATE TABLE "chat_sessions" ("id" text NOT NULL, "actor_id" text NOT NULL, "harness" text NOT NULL, "native_session_id" text NOT NULL, "title" text NOT NULL, "workspace" text NOT NULL, "native_locator_json" text NOT NULL, "token_hash" text NOT NULL, "status" text NOT NULL, "attention_reason" text NULL, "created_at" bigint NOT NULL, "stopped_at" bigint NULL, "activity" text NULL, "activity_conversation_id" text NULL, "host_id" text NULL, PRIMARY KEY ("id"), CONSTRAINT "chat_sessions_token_hash_key" UNIQUE ("token_hash"), CONSTRAINT "chat_sessions_activity_check" CHECK (activity = ANY (ARRAY['working'::text, 'idle'::text])), CONSTRAINT "chat_sessions_check" CHECK ((status = 'stopped'::text) = (stopped_at IS NOT NULL)), CONSTRAINT "chat_sessions_harness_check" CHECK (harness = ANY (ARRAY['pi'::text, 'claude-code'::text, 'codex'::text])), CONSTRAINT "chat_sessions_status_check" CHECK (status = ANY (ARRAY['connecting'::text, 'connected'::text, 'attention'::text, 'stopped'::text])));
+-- Create index "one_chat_session" to table: "chat_sessions"
+CREATE UNIQUE INDEX "one_chat_session" ON "chat_sessions" ("harness", "native_session_id") WHERE (stopped_at IS NULL);
+-- Create "console_events" table
+CREATE TABLE "console_events" ("stream_id" text NOT NULL, "seq" bigint NOT NULL, "event_id" text NOT NULL, "part" bigint NOT NULL DEFAULT 0, "parts" bigint NOT NULL DEFAULT 1, "kind" text NOT NULL, "native_at" bigint NULL, "recorded_at" bigint NOT NULL, "payload_json" text NOT NULL, PRIMARY KEY ("stream_id", "seq"), CONSTRAINT "console_events_check" CHECK ((parts > 0) AND (part < parts)), CONSTRAINT "console_events_part_check" CHECK (part >= 0), CONSTRAINT "console_events_seq_check" CHECK (seq > 0));
+-- Create index "idx-console_events-event_part" to table: "console_events"
+CREATE UNIQUE INDEX "idx-console_events-event_part" ON "console_events" ("stream_id", "event_id", "part");
+-- Create "console_streams" table
+CREATE TABLE "console_streams" ("id" text NOT NULL, "actor_id" text NOT NULL, "harness" text NOT NULL, "native_session_id" text NOT NULL, "host_id" text NOT NULL, "next_seq" bigint NOT NULL DEFAULT 1, "created_at" bigint NOT NULL, PRIMARY KEY ("id"), CONSTRAINT "console_streams_next_seq_check" CHECK (next_seq > 0));
+-- Create index "idx-console_streams-native_identity" to table: "console_streams"
+CREATE UNIQUE INDEX "idx-console_streams-native_identity" ON "console_streams" ("actor_id", "harness", "native_session_id", "host_id");
+-- Create "conversation_members" table
+CREATE TABLE "conversation_members" ("conversation_id" text NOT NULL, "actor_id" text NOT NULL, "session_id" text NULL, PRIMARY KEY ("conversation_id", "actor_id"));
+-- Create index "conversation_members_session" to table: "conversation_members"
+CREATE INDEX "conversation_members_session" ON "conversation_members" ("session_id");
+-- Create "conversations" table
+CREATE TABLE "conversations" ("id" text NOT NULL, "kind" text NOT NULL, "title" text NOT NULL, "paused" boolean NOT NULL DEFAULT false, "next_seq" bigint NOT NULL DEFAULT 1, "created_at" bigint NOT NULL, "parent_id" text NULL, "root_message_id" text NULL, "closed_at" bigint NULL, PRIMARY KEY ("id"), CONSTRAINT "conversations_parent_id_fkey" FOREIGN KEY ("parent_id") REFERENCES "conversations" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, CONSTRAINT "conversations_check" CHECK ((kind = 'thread'::text) = ((parent_id IS NOT NULL) AND (root_message_id IS NOT NULL))), CONSTRAINT "conversations_kind_check" CHECK (kind = ANY (ARRAY['dm'::text, 'group'::text, 'thread'::text])));
+-- Create index "one_open_thread_per_root" to table: "conversations"
+CREATE UNIQUE INDEX "one_open_thread_per_root" ON "conversations" ("root_message_id") WHERE (closed_at IS NULL);
+-- Create "deliveries" table
+CREATE TABLE "deliveries" ("id" text NOT NULL, "message_id" text NOT NULL, "actor_id" text NOT NULL, "session_id" text NOT NULL, "status" text NOT NULL, "native_request_id" text NULL, "last_error" text NULL, "created_at" bigint NOT NULL, "updated_at" bigint NOT NULL, PRIMARY KEY ("id"), CONSTRAINT "deliveries_message_id_actor_id_key" UNIQUE ("message_id", "actor_id"), CONSTRAINT "deliveries_status_check" CHECK (status = ANY (ARRAY['stored'::text, 'uncertain'::text, 'notified'::text, 'read'::text])));
+-- Create index "deliveries_session" to table: "deliveries"
+CREATE INDEX "deliveries_session" ON "deliveries" ("session_id", "status", "created_at");
+-- Create "messages" table
+CREATE TABLE "messages" ("id" text NOT NULL, "conversation_id" text NOT NULL, "seq" bigint NOT NULL, "author_id" text NOT NULL, "text" text NOT NULL, "reply_to_delivery_id" text NULL, "created_at" bigint NOT NULL, PRIMARY KEY ("id"), CONSTRAINT "messages_conversation_id_seq_key" UNIQUE ("conversation_id", "seq"), CONSTRAINT "messages_reply_to_delivery_id_key" UNIQUE ("reply_to_delivery_id"));
+-- Create "tool_approvals" table
+CREATE TABLE "tool_approvals" ("id" text NOT NULL, "session_id" text NOT NULL, "delivery_id" text NOT NULL, "native_request_id" text NOT NULL, "summary" text NOT NULL, "details_json" text NOT NULL, "status" text NOT NULL, "decision" text NULL, "last_error" text NULL, "created_at" bigint NOT NULL, "updated_at" bigint NOT NULL, "decision_delivered_at" bigint NULL, PRIMARY KEY ("id"), CONSTRAINT "tool_approvals_session_id_native_request_id_key" UNIQUE ("session_id", "native_request_id"), CONSTRAINT "tool_approvals_check" CHECK ((status <> ALL (ARRAY['decided'::text, 'uncertain'::text, 'delivered'::text])) OR (decision IS NOT NULL)), CONSTRAINT "tool_approvals_decision_check" CHECK (decision = ANY (ARRAY['allow'::text, 'deny'::text])), CONSTRAINT "tool_approvals_status_check" CHECK (status = ANY (ARRAY['pending'::text, 'decided'::text, 'uncertain'::text, 'delivered'::text, 'resolved'::text])));
+-- Create "workspace" table
+CREATE TABLE "workspace" ("id" text NOT NULL, "name" text NOT NULL, "created_at" bigint NOT NULL, "only_one" bigint NOT NULL DEFAULT 1, "auth_secret" text NULL, PRIMARY KEY ("id"), CONSTRAINT "workspace_only_one_key" UNIQUE ("only_one"), CONSTRAINT "workspace_only_one_check" CHECK (only_one = 1));
+-- Modify "chat_sessions" table
+ALTER TABLE "chat_sessions" ADD CONSTRAINT "chat_sessions_activity_conversation_id_fkey" FOREIGN KEY ("activity_conversation_id") REFERENCES "conversations" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "chat_sessions_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
+-- Modify "console_events" table
+ALTER TABLE "console_events" ADD CONSTRAINT "fk-console_events-stream_id" FOREIGN KEY ("stream_id") REFERENCES "console_streams" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
+-- Modify "console_streams" table
+ALTER TABLE "console_streams" ADD CONSTRAINT "fk-console_streams-actor_id" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
+-- Modify "conversation_members" table
+ALTER TABLE "conversation_members" ADD CONSTRAINT "conversation_members_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "conversation_members_conversation_id_fkey" FOREIGN KEY ("conversation_id") REFERENCES "conversations" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "conversation_members_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "chat_sessions" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
+-- Modify "conversations" table
+ALTER TABLE "conversations" ADD CONSTRAINT "conversations_root_message_id_fkey" FOREIGN KEY ("root_message_id") REFERENCES "messages" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
+-- Modify "deliveries" table
+ALTER TABLE "deliveries" ADD CONSTRAINT "deliveries_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "deliveries_message_id_fkey" FOREIGN KEY ("message_id") REFERENCES "messages" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "deliveries_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "chat_sessions" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
+-- Modify "messages" table
+ALTER TABLE "messages" ADD CONSTRAINT "messages_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "messages_conversation_id_fkey" FOREIGN KEY ("conversation_id") REFERENCES "conversations" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "messages_reply_to_delivery_id_fkey" FOREIGN KEY ("reply_to_delivery_id") REFERENCES "deliveries" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
+-- Modify "tool_approvals" table
+ALTER TABLE "tool_approvals" ADD CONSTRAINT "tool_approvals_delivery_id_fkey" FOREIGN KEY ("delivery_id") REFERENCES "deliveries" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "tool_approvals_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "chat_sessions" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;

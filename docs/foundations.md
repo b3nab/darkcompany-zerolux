@@ -30,6 +30,35 @@ in one serialized transaction and keep every identity, date, message, receipt,
 approval, Stop marker and delivery state. A database migrated by a newer kernel
 fails closed, rather than being marked migrated.
 
+### Entity-first migration workflow
+
+- Entities are the authored schema. Migration artifacts must be generated during
+  development, reviewed and versioned with the release, not maintained as a second
+  handwritten schema.
+- A deployed kernel applies the release's pending migrations in order through
+  SeaORM Migration. It does not infer a new migration from the live database or
+  run `SchemaBuilder::sync()` at startup.
+- Applied migrations are immutable history. SQLite and PostgreSQL updates must
+  preserve existing data and domain rules, including partial failures and attempts
+  to open a newer database with an older kernel.
+- `bun run db:generate <name>` exports the SeaORM entities and uses pinned Atlas
+  Community Edition to generate both dialects on disposable development databases.
+  Atlas is a development tool, never a kernel runtime dependency. No account or
+  cloud service is required.
+- CHECKs and partial/composite indexes belong to the relevant entity's SeaQuery
+  definition, alongside its fields and relations. Existing constraints are not
+  silently discarded because a derive attribute cannot express them.
+- The owner-approved pre-release baseline is one generated `0001_bootstrap`,
+  consolidating the four former migrations, with one artifact per dialect. Later
+  changes append new versions. Existing databases carrying the retired history
+  are not silently rebased; they need a separately approved data-preserving
+  alignment before activation. See [the migration workflow](../crates/zerolux/migrations/README.md).
+- SQLite table rebuilds use a private migration connection, check foreign keys
+  before commit, then close it. The separate application pool has FK enforcement
+  enabled. Automatic destructive `down` migrations are refused; recovery requires
+  the matching backup and kernel version. Generation alone is not upgrade-test
+  evidence or permission to activate a release.
+
 SQLite and PostgreSQL have the same domain contract, not necessarily identical
 SQL. Every domain write happens in a `Store::write()` transaction: one writer at
 a time per workspace (SQLite's immediate transaction; a PostgreSQL advisory

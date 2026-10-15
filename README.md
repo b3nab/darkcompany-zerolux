@@ -65,6 +65,16 @@ ZEROLUX_TEST_POSTGRES_URL=postgresql://zerolux_test:fixture-only-password@127.0.
 
 It prepares desktop assets, then runs formatting, Clippy, the Rust workspace tests on SQLite, the kernel tests on PostgreSQL, typechecks, JavaScript tests and the web build. The auth tests also cover both databases. Tests create and clean their own databases/schemas; the PostgreSQL test role needs permission to create databases. `DATABASE_URL` is never a fallback. Tests never call a real model. Stop the disposable container with Ctrl-C when done. Targeted SQLite tests can still run without PostgreSQL.
 
+## Database schema changes
+
+Edit the SeaORM entities in `crates/zerolux/src/entity`, then run
+`bun run db:generate describe_the_change`. The development tool exports the
+schema and uses pinned Atlas Community Edition to generate versioned SQLite and
+PostgreSQL migrations. It needs local Docker for a disposable PostgreSQL database;
+no workspace database or cloud account is used. Review the generated artifacts
+before committing. The kernel applies them with SeaORM, never with runtime schema
+sync. See [migration workflow](crates/zerolux/migrations/README.md).
+
 ## Layout
 
 ```text

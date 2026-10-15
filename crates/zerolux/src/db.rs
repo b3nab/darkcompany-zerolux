@@ -10,18 +10,17 @@
 use std::{path::Path, time::Duration};
 
 use sea_orm::{
-    ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction, DbErr,
-    SqliteTransactionMode, SqlxPostgresConnector, SqlxSqliteConnector, Statement,
-    TransactionOptions, TransactionTrait,
+    ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, SqliteTransactionMode,
+    SqlxPostgresConnector, SqlxSqliteConnector, TransactionOptions, TransactionTrait,
+    sea_query::{Alias, Func, SelectStatement},
 };
 use sea_orm_migration::prelude::*;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
 use crate::store::Error;
 
-/// The bootstrap schema, in the dialect of each database.
-const BOOTSTRAP_SQLITE: &str = include_str!("../schema/0001_bootstrap.sqlite.sql");
-const BOOTSTRAP_POSTGRES: &str = include_str!("../schema/0001_bootstrap.postgres.sql");
+mod migrations;
+
 /// One lock for every kernel migrating the same PostgreSQL database.
 const MIGRATION_LOCK: i64 = 0x5a45_524f_4c55_5831; // "ZEROLUX1"
 
@@ -96,6 +95,18 @@ pub async fn connect(location: &Location) -> Result<DatabaseConnection, Error> {
                 .foreign_keys(true)
                 .journal_mode(SqliteJournalMode::Wal)
                 .busy_timeout(Duration::from_secs(5));
+            // SQLite's table-rebuild migrations need foreign keys disabled before BEGIN.
+            // This private one-connection pool is never used by the store. Validate every
+            // reference before COMMIT, close it, then open the ordinary FK-enabled pool.
+            let migration_pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(options.clone().foreign_keys(false))
+                .await?;
+            let migration_db = SqlxSqliteConnector::from_sqlx_sqlite_pool(migration_pool);
+            let result = migrate::<Migrator>(&migration_db).await;
+            let closed = migration_db.close().await;
+            result?;
+            closed.map_err(schema)?;
             let pool = SqlitePoolOptions::new()
                 .max_connections(5)
                 .connect_with(options)
@@ -110,7 +121,9 @@ pub async fn connect(location: &Location) -> Result<DatabaseConnection, Error> {
             SqlxPostgresConnector::from_sqlx_postgres_pool(pool)
         }
     };
-    migrate::<Migrator>(&db).await?;
+    if location.is_postgres() {
+        migrate::<Migrator>(&db).await?;
+    }
     Ok(db)
 }
 
@@ -127,68 +140,43 @@ async fn migrate<M: MigratorTrait>(db: &DatabaseConnection) -> Result<(), Error>
         .await
         .map_err(schema)?;
     if backend == DatabaseBackend::Postgres {
-        tx.execute_raw(Statement::from_sql_and_values(
-            backend,
-            "SELECT pg_advisory_xact_lock($1)",
-            [MIGRATION_LOCK.into()],
-        ))
+        tx.query_one(
+            SelectStatement::new()
+                .expr(Func::cust(Alias::new("pg_advisory_xact_lock")).arg(MIGRATION_LOCK)),
+        )
         .await
         .map_err(schema)?;
     }
-    refuse_unknown::<M>(&tx).await?;
+    // SeaORM already validates the applied versions without creating or changing tables.
+    // Do not maintain a second ledger reader or backend-specific catalogue queries.
+    M::get_migration_with_status_read_only(&tx)
+        .await
+        .map_err(|error| match error {
+            DbErr::Migration(reason) => Error::Schema(format!(
+                "This workspace database was migrated by a newer ZeroLux or has an incomplete migration history; it is not opened: {reason}"
+            )),
+            other => schema(other),
+        })?;
     M::up(&tx, None).await.map_err(schema)?;
+    if backend == DatabaseBackend::Sqlite {
+        let violation = tx
+            .query_one(
+                SelectStatement::new()
+                    .expr(sea_orm::sea_query::Expr::val(1))
+                    .from(Alias::new("pragma_foreign_key_check"))
+                    .limit(1),
+            )
+            .await
+            .map_err(schema)?;
+        if violation.is_some() {
+            return Err(Error::Schema(
+                "The migration leaves invalid foreign keys; no schema changes were committed"
+                    .into(),
+            ));
+        }
+    }
     tx.commit().await.map_err(schema)?;
     Ok(())
-}
-
-/// A ledger naming a migration this kernel does not have is a database of a newer kernel:
-/// refused before anything is written to it.
-async fn refuse_unknown<M: MigratorTrait>(tx: &DatabaseTransaction) -> Result<(), Error> {
-    let backend = tx.get_database_backend();
-    if !table_exists(tx, "seaql_migrations").await? {
-        return Ok(());
-    }
-    let known: Vec<String> = M::migrations()
-        .iter()
-        .map(|m| m.name().to_owned())
-        .collect();
-    let rows = tx
-        .query_all_raw(Statement::from_string(
-            backend,
-            "SELECT version FROM seaql_migrations ORDER BY version",
-        ))
-        .await
-        .map_err(schema)?;
-    for row in rows {
-        let version: String = row.try_get("", "version").map_err(schema)?;
-        if !known.contains(&version) {
-            return Err(Error::Schema(format!(
-                "This workspace database was migrated by a newer ZeroLux ({version}); it is not opened"
-            )));
-        }
-    }
-    Ok(())
-}
-
-async fn table_exists(tx: &DatabaseTransaction, name: &str) -> Result<bool, Error> {
-    let backend = tx.get_database_backend();
-    let sql = match backend {
-        DatabaseBackend::Sqlite => {
-            "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = $1"
-        }
-        _ => {
-            "SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1"
-        }
-    };
-    let row = tx
-        .query_one_raw(Statement::from_sql_and_values(backend, sql, [name.into()]))
-        .await
-        .map_err(schema)?;
-    let count: i64 = row
-        .ok_or_else(|| Error::Schema("Schema catalogue returned no row".into()))?
-        .try_get("", "n")
-        .map_err(schema)?;
-    Ok(count > 0)
 }
 
 /// Database errors keep their kind (a locked SQLite file stays retryable); what SeaORM
@@ -205,125 +193,14 @@ pub struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![
-            Box::new(Bootstrap),
-            Box::new(Auth),
-            Box::new(AgentRunSettings),
-        ]
-    }
-}
-
-/// The schema every workspace starts from, in the dialect of its database.
-struct Bootstrap;
-
-impl MigrationName for Bootstrap {
-    fn name(&self) -> &str {
-        "m0001_bootstrap"
-    }
-}
-
-#[async_trait::async_trait]
-impl MigrationTrait for Bootstrap {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        let sql = match manager.get_database_backend() {
-            DatabaseBackend::Postgres => BOOTSTRAP_POSTGRES,
-            _ => BOOTSTRAP_SQLITE,
-        };
-        manager.get_connection().execute_unprepared(sql).await?;
-        Ok(())
-    }
-
-    async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
-        Err(DbErr::Migration(
-            "The bootstrap schema is never dropped by a migration".into(),
-        ))
-    }
-}
-
-/// Sign-in and more than one kernel: the human subject bound to the owner, the workspace's
-/// own authentication secret (shared by every kernel serving it), and the host each agent
-/// session lives on.
-struct Auth;
-
-impl MigrationName for Auth {
-    fn name(&self) -> &str {
-        "m0002_auth"
-    }
-}
-
-#[async_trait::async_trait]
-impl MigrationTrait for Auth {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .get_connection()
-            .execute_unprepared(
-                "ALTER TABLE actors ADD COLUMN auth_subject TEXT;
-                CREATE UNIQUE INDEX one_actor_per_subject ON actors(auth_subject) WHERE auth_subject IS NOT NULL;
-                ALTER TABLE workspace ADD COLUMN auth_secret TEXT;
-                ALTER TABLE chat_sessions ADD COLUMN host_id TEXT;",
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .get_connection()
-            .execute_unprepared(
-                "ALTER TABLE chat_sessions DROP COLUMN host_id;
-                ALTER TABLE workspace DROP COLUMN auth_secret;
-                DROP INDEX one_actor_per_subject;
-                ALTER TABLE actors DROP COLUMN auth_subject;",
-            )
-            .await?;
-        Ok(())
-    }
-}
-
-/// What an agent runs with: model and effort for every harness, and the settings of its
-/// own harness (Claude Code's permission mode; Codex's approval policy and sandbox).
-struct AgentRunSettings;
-
-impl MigrationName for AgentRunSettings {
-    fn name(&self) -> &str {
-        "m0003_agent_settings"
-    }
-}
-
-#[async_trait::async_trait]
-impl MigrationTrait for AgentRunSettings {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .get_connection()
-            .execute_unprepared(
-                "ALTER TABLE actors ADD COLUMN model TEXT;
-                ALTER TABLE actors ADD COLUMN effort TEXT;
-                ALTER TABLE actors ADD COLUMN permission_mode TEXT;
-                ALTER TABLE actors ADD COLUMN approval_policy TEXT;
-                ALTER TABLE actors ADD COLUMN sandbox TEXT;",
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .get_connection()
-            .execute_unprepared(
-                "ALTER TABLE actors DROP COLUMN sandbox;
-                ALTER TABLE actors DROP COLUMN approval_policy;
-                ALTER TABLE actors DROP COLUMN permission_mode;
-                ALTER TABLE actors DROP COLUMN effort;
-                ALTER TABLE actors DROP COLUMN model;",
-            )
-            .await?;
-        Ok(())
+        migrations::all()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sea_orm::Statement;
 
     /// The bootstrap, then a migration that fails halfway: nothing of either may remain.
     struct Broken;
@@ -351,12 +228,9 @@ mod tests {
     #[async_trait::async_trait]
     impl MigratorTrait for BrokenMigrator {
         fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-            vec![
-                Box::new(Bootstrap),
-                Box::new(Auth),
-                Box::new(AgentRunSettings),
-                Box::new(Broken),
-            ]
+            let mut migrations = Migrator::migrations();
+            migrations.push(Box::new(Broken));
+            migrations
         }
     }
 

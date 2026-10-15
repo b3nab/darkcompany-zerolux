@@ -136,11 +136,7 @@ async fn the_schema_is_whole_and_the_data_outlives_a_reopen() {
             .fetch_all(&pool)
             .await
             .unwrap(),
-        vec![
-            "m0001_bootstrap".to_owned(),
-            "m0002_auth".to_owned(),
-            "m0003_agent_settings".to_owned()
-        ]
+        vec!["m0001_bootstrap".to_owned()]
     );
     assert!(
         sqlx::query("PRAGMA foreign_key_check")
