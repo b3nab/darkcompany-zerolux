@@ -15,6 +15,7 @@ import {
 } from "@zerolux/chat";
 import type { MemberTone, Place } from "@zerolux/chat";
 import { ActorMark } from "@/components/member";
+import { McpForm, QuestionForm } from "@/components/request-answer";
 import { Eyebrow } from "@/components/meter";
 import { Screen } from "@/components/screen";
 import { Button } from "@/components/ui/button";
@@ -45,9 +46,12 @@ export default function Tonight() {
   const now = new Date();
 
   async function decide(approvalId: string, decision: "allow" | "deny") {
+    await act(() => chat.decide(approvalId, decision));
+  }
+  async function act(operation: () => Promise<void>) {
     setBusy(true);
     try {
-      await chat.decide(approvalId, decision);
+      await operation();
       setError("");
     } catch (e) {
       setError(errorMessage(e));
@@ -141,7 +145,25 @@ export default function Tonight() {
                 <Text className="text-[15px] font-medium leading-5">
                   {need.title}
                 </Text>
-                {need.approvalId ? (
+                {need.approvalKind && need.approvalKind !== "permission" ? (
+                  (() => {
+                    const approval = chat.approvals.find(
+                      (a) => a.id === need.approvalId,
+                    );
+                    if (!approval) return null;
+                    const Form =
+                      approval.kind === "question" ? QuestionForm : McpForm;
+                    return (
+                      <Form
+                        approval={approval}
+                        busy={busy}
+                        answer={(answer) =>
+                          void act(() => chat.answer(approval.id, answer))
+                        }
+                      />
+                    );
+                  })()
+                ) : need.approvalId ? (
                   <View className="flex-row gap-2">
                     <Button
                       className="flex-1"

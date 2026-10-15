@@ -368,6 +368,9 @@ export default function ChatScreen() {
               decide={(decision) =>
                 void act(() => chat.decide(item.approval.id, decision))
               }
+              answer={(answer) =>
+                void act(() => chat.answer(item.approval.id, answer))
+              }
             />
           </View>
         );

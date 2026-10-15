@@ -1,21 +1,24 @@
 import { View } from "react-native";
-import { approvalLabels } from "@zerolux/chat";
-import type { Approval } from "@zerolux/chat";
+import { answerSummary, approvalLabels } from "@zerolux/chat";
+import type { Approval, FormAnswer, QuestionAnswer } from "@zerolux/chat";
 import { ActorMark } from "@/components/member";
+import { McpForm, QuestionForm } from "@/components/request-answer";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 
-/** An agent's permission request, in its chat: only the owner answers it. */
+/** What an agent asks: a permission, a question or an MCP form. Only the owner answers. */
 export function ApprovalCard({
   approval,
   agent,
   busy,
   decide,
+  answer,
 }: {
   approval: Approval;
   agent: string;
   busy: boolean;
   decide: (decision: "allow" | "deny") => void;
+  answer: (answer: QuestionAnswer | FormAnswer) => void;
 }) {
   return (
     <View className="gap-3 rounded-md border border-human/40 bg-human/5 p-4">
@@ -25,10 +28,24 @@ export function ApprovalCard({
           {agent} asks: {approval.summary}
         </Text>
       </View>
-      <Text className="rounded-sm border border-border bg-background p-3 font-mono text-xs">
-        {JSON.stringify(approval.details, null, 2)}
-      </Text>
-      {approval.status === "pending" ? (
+      {approval.kind === "permission" ? (
+        <Text className="rounded-sm border border-border bg-background p-3 font-mono text-xs">
+          {JSON.stringify(approval.details, null, 2)}
+        </Text>
+      ) : null}
+      {approval.kind !== "permission" ? (
+        approval.status === "pending" ? (
+          approval.kind === "question" ? (
+            <QuestionForm approval={approval} busy={busy} answer={answer} />
+          ) : (
+            <McpForm approval={approval} busy={busy} answer={answer} />
+          )
+        ) : (
+          <Text className="text-sm text-muted-foreground">
+            {answerSummary(approval)} · {approvalLabels[approval.status]}
+          </Text>
+        )
+      ) : approval.status === "pending" ? (
         <View className="gap-2">
           <View className="flex-row gap-2">
             <Button disabled={busy} onPress={() => decide("allow")}>
