@@ -12,7 +12,13 @@ Chats, agents, automations and clients reuse this data and these controls throug
 
 The native session record is the only source of truth: pi's session file, Claude Code's transcript and Codex's rollout. The kernel reads it as the harness wrote it and keeps no copy. `GET /chat/sessions/{id}/output?after=<offset>` returns the next complete records, unchanged, each with its byte offset, plus `next` and `end`; pass `next` as `after` to continue. Any workspace identity can read any session, from the kernel host that runs it. While the record grows, people get a `session.output` notice with the session ID and new size, about once a second.
 
-Permission requests reach the owner whatever started the turn: a chat message, several chats, or the session's own work. Each belongs to its session, and to the chat whose message started the turn when there is one (`conversation_id` is null otherwise). `POST /chat/sessions/{id}/interrupt` stops the turn in progress, whoever started it; the session stays linked and keeps its context. It answers `{"interrupted": false}` when no turn is running. Claude Code in a terminal cannot be interrupted from ZeroLux, and an integration without `interrupt-v1` needs an update; both are reported, never retried.
+Requests reach the owner whatever started the turn: a chat message, several chats, or the session's own work. Each belongs to its session, and to the chat whose message started the turn when there is one (`conversation_id` is null otherwise). A request has a `kind`:
+
+- `permission`: allow or deny (`POST /chat/approvals/{id}/decision`).
+- `question`: Claude Code's `AskUserQuestion`, pi's `select`, `input` and `editor`, Codex's `requestUserInput`. `details.questions` lists each question with its options, single or multiple choice, and free text where the harness takes it. The owner answers `{"answers": {<id>: ["…"]}}` or `{"declined": true}`.
+- `form`: an MCP server's elicitation, through Claude Code or Codex: fields from its schema, or a link to open. The owner answers `{"action": "accept", "content": {…}}`, `decline` or `cancel`.
+
+Questions and forms are answered with `POST /chat/approvals/{id}/answer`; the kernel checks the answer against what was asked, and the integration gives it back to the harness in its own format, once. A Codex verification only the user's own device can sign stays in the native session. `POST /chat/sessions/{id}/interrupt` stops the turn in progress, whoever started it; the session stays linked and keeps its context. It answers `{"interrupted": false}` when no turn is running. Claude Code in a terminal cannot be interrupted from ZeroLux, and an integration without `interrupt-v1` needs an update; both are reported, never retried.
 
 ## Linking sessions
 
