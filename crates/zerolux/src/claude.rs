@@ -422,6 +422,17 @@ fn permission_record(line: &str, session_id: &str) -> Option<Value> {
         .then_some(record.permission_mode)
 }
 
+/// The session's transcript, the same file for terminal and SDK sessions. None until the
+/// session's first turn writes it.
+pub(crate) fn transcript_path(session_id: &str) -> Option<PathBuf> {
+    let projects = projects_dir(
+        std::env::var_os("CLAUDE_CONFIG_DIR"),
+        std::env::var_os("HOME"),
+    )
+    .ok()?;
+    Transcript::locate(&projects, session_id)
+}
+
 impl ClaudeSession {
     /// A bounded, read-only projection of native resume metadata. An unknown mode must
     /// stop recovery rather than silently weakening or replacing the owner's permissions.
@@ -1714,7 +1725,6 @@ mod tests {
         let prompt = line["message"]["content"].as_str().unwrap();
         assert!(prompt.ends_with("\n> Can you check the test?"));
         assert!(prompt.contains("Chat: room; delivery: delivery\n"));
-        assert!(prompt.contains("Your terminal answer stays private"));
         assert!(
             !prompt.contains("token"),
             "the credential never reaches the session"

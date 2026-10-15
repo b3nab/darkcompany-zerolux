@@ -761,6 +761,17 @@ impl Store {
         })
     }
 
+    /// A session's row, for reading its native record: every workspace identity may.
+    pub(crate) async fn observed_session(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+    ) -> Result<chat_sessions::Model> {
+        let tx = self.read().await?;
+        identity_in(&tx, who).await?;
+        session_row_in(&tx, id).await
+    }
+
     pub async fn chat_sessions(&self, who: &ChatIdentity) -> Result<Vec<ChatSession>> {
         let tx = self.read().await?;
         identity_in(&tx, who).await?;

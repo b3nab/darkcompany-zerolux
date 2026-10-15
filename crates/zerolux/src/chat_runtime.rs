@@ -119,6 +119,8 @@ pub struct ChatRuntime {
     stop: watch::Sender<bool>,
     agents: Mutex<HashMap<String, AgentTask>>,
     publisher: Mutex<Option<JoinHandle<()>>>,
+    /// Notices of native output growth; see `native_output`.
+    watcher: Mutex<Option<JoinHandle<()>>>,
     settings_gates: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// Installed code at kernel activation, not edits made later in a checkout.
     integration_revisions: HashMap<&'static str, String>,
@@ -169,6 +171,11 @@ impl ChatRuntime {
             livekit.clone(),
             changed.clone(),
             wake.clone(),
+            stopped.clone(),
+        ));
+        let watcher = tokio::spawn(crate::native_output::run_watcher(
+            store.clone(),
+            livekit.clone(),
             stopped,
         ));
         #[cfg(unix)]
@@ -210,6 +217,7 @@ impl ChatRuntime {
             stop,
             agents: Mutex::new(HashMap::new()),
             publisher: Mutex::new(Some(publisher)),
+            watcher: Mutex::new(Some(watcher)),
             settings_gates: Mutex::new(HashMap::new()),
             integration_revisions,
         }))
@@ -1081,6 +1089,14 @@ impl ChatRuntime {
                     });
                 }
             }
+        }
+        if let Some(mut watcher) = self.watcher.lock().await.take()
+            && tokio::time::timeout(Duration::from_secs(5), &mut watcher)
+                .await
+                .is_err()
+        {
+            watcher.abort();
+            let _ = watcher.await;
         }
         error.map_or(Ok(()), Err)
     }

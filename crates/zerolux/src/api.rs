@@ -228,6 +228,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/chat/sessions/{id}/stop", post(stop_session))
         .route("/chat/sessions/{id}/status", post(session_status))
         .route("/chat/sessions/{id}/activity", post(session_activity))
+        .route("/chat/sessions/{id}/output", get(session_output))
         .route(
             "/conversations",
             get(conversations).post(create_conversation),
@@ -740,6 +741,24 @@ async fn session_status(
     Ok(Json(
         json!({ "session": store.set_chat_session_status(&who, &id, input).await? }),
     ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutputQuery {
+    #[serde(default)]
+    after: u64,
+}
+
+/// The agent's native session record, as the harness wrote it.
+async fn session_output(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    query: Result<Query<OutputQuery>, QueryRejection>,
+) -> Result<Json<crate::native_output::Page>, Error> {
+    let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
+    Ok(Json(store.native_output(&who, &id, query.after).await?))
 }
 
 #[derive(Deserialize)]
