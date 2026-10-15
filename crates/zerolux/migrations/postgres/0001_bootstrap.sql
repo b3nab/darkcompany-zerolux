@@ -12,14 +12,6 @@ CREATE INDEX "chat_outbox_pending" ON "chat_outbox" ("created_at") WHERE (publis
 CREATE TABLE "chat_sessions" ("id" text NOT NULL, "actor_id" text NOT NULL, "harness" text NOT NULL, "native_session_id" text NOT NULL, "title" text NOT NULL, "workspace" text NOT NULL, "native_locator_json" text NOT NULL, "token_hash" text NOT NULL, "status" text NOT NULL, "attention_reason" text NULL, "created_at" bigint NOT NULL, "stopped_at" bigint NULL, "activity" text NULL, "activity_conversation_id" text NULL, "host_id" text NULL, PRIMARY KEY ("id"), CONSTRAINT "chat_sessions_token_hash_key" UNIQUE ("token_hash"), CONSTRAINT "chat_sessions_activity_check" CHECK (activity = ANY (ARRAY['working'::text, 'idle'::text])), CONSTRAINT "chat_sessions_check" CHECK ((status = 'stopped'::text) = (stopped_at IS NOT NULL)), CONSTRAINT "chat_sessions_harness_check" CHECK (harness = ANY (ARRAY['pi'::text, 'claude-code'::text, 'codex'::text])), CONSTRAINT "chat_sessions_status_check" CHECK (status = ANY (ARRAY['connecting'::text, 'connected'::text, 'attention'::text, 'stopped'::text])));
 -- Create index "one_chat_session" to table: "chat_sessions"
 CREATE UNIQUE INDEX "one_chat_session" ON "chat_sessions" ("harness", "native_session_id") WHERE (stopped_at IS NULL);
--- Create "console_events" table
-CREATE TABLE "console_events" ("stream_id" text NOT NULL, "seq" bigint NOT NULL, "event_id" text NOT NULL, "part" bigint NOT NULL DEFAULT 0, "parts" bigint NOT NULL DEFAULT 1, "kind" text NOT NULL, "native_at" bigint NULL, "recorded_at" bigint NOT NULL, "payload_json" text NOT NULL, PRIMARY KEY ("stream_id", "seq"), CONSTRAINT "console_events_check" CHECK ((parts > 0) AND (part < parts)), CONSTRAINT "console_events_part_check" CHECK (part >= 0), CONSTRAINT "console_events_seq_check" CHECK (seq > 0));
--- Create index "idx-console_events-event_part" to table: "console_events"
-CREATE UNIQUE INDEX "idx-console_events-event_part" ON "console_events" ("stream_id", "event_id", "part");
--- Create "console_streams" table
-CREATE TABLE "console_streams" ("id" text NOT NULL, "actor_id" text NOT NULL, "harness" text NOT NULL, "native_session_id" text NOT NULL, "host_id" text NOT NULL, "next_seq" bigint NOT NULL DEFAULT 1, "created_at" bigint NOT NULL, PRIMARY KEY ("id"), CONSTRAINT "console_streams_next_seq_check" CHECK (next_seq > 0));
--- Create index "idx-console_streams-native_identity" to table: "console_streams"
-CREATE UNIQUE INDEX "idx-console_streams-native_identity" ON "console_streams" ("actor_id", "harness", "native_session_id", "host_id");
 -- Create "conversation_members" table
 CREATE TABLE "conversation_members" ("conversation_id" text NOT NULL, "actor_id" text NOT NULL, "session_id" text NULL, PRIMARY KEY ("conversation_id", "actor_id"));
 -- Create index "conversation_members_session" to table: "conversation_members"
@@ -40,10 +32,6 @@ CREATE TABLE "tool_approvals" ("id" text NOT NULL, "session_id" text NOT NULL, "
 CREATE TABLE "workspace" ("id" text NOT NULL, "name" text NOT NULL, "created_at" bigint NOT NULL, "only_one" bigint NOT NULL DEFAULT 1, "auth_secret" text NULL, PRIMARY KEY ("id"), CONSTRAINT "workspace_only_one_key" UNIQUE ("only_one"), CONSTRAINT "workspace_only_one_check" CHECK (only_one = 1));
 -- Modify "chat_sessions" table
 ALTER TABLE "chat_sessions" ADD CONSTRAINT "chat_sessions_activity_conversation_id_fkey" FOREIGN KEY ("activity_conversation_id") REFERENCES "conversations" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "chat_sessions_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
--- Modify "console_events" table
-ALTER TABLE "console_events" ADD CONSTRAINT "fk-console_events-stream_id" FOREIGN KEY ("stream_id") REFERENCES "console_streams" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
--- Modify "console_streams" table
-ALTER TABLE "console_streams" ADD CONSTRAINT "fk-console_streams-actor_id" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
 -- Modify "conversation_members" table
 ALTER TABLE "conversation_members" ADD CONSTRAINT "conversation_members_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "conversation_members_conversation_id_fkey" FOREIGN KEY ("conversation_id") REFERENCES "conversations" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "conversation_members_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "chat_sessions" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
 -- Modify "conversations" table

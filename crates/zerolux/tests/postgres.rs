@@ -67,8 +67,6 @@ async fn the_bootstrap_schema_applies_to_postgres_in_a_database_of_its_own() {
         "messages",
         "deliveries",
         "tool_approvals",
-        "console_streams",
-        "console_events",
         "seaql_migrations",
     ] {
         assert!(

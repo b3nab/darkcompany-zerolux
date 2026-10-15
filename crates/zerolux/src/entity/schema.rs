@@ -75,8 +75,6 @@ pub fn sql(backend: DatabaseBackend) -> String {
         deliveries,
         chat_outbox,
         tool_approvals,
-        console_streams,
-        console_events,
     );
     tables.extend(indexes);
     tables.extend(foreign_keys);

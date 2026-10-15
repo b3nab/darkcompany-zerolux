@@ -254,8 +254,6 @@ fn exported_entities_include_state_constraints_for_both_dialects() {
         }
         assert!(sql.contains("CHECK"));
         assert!(sql.contains("FOREIGN KEY"));
-        assert!(sql.contains("console_events"));
-        assert!(sql.contains("console_streams"));
         assert!(!sql.contains("DROP TABLE"));
     }
 }

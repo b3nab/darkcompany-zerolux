@@ -6,8 +6,6 @@ pub mod schema;
 pub mod actors;
 pub mod chat_outbox;
 pub mod chat_sessions;
-pub mod console_events;
-pub mod console_streams;
 pub mod conversation_members;
 pub mod conversations;
 pub mod deliveries;
