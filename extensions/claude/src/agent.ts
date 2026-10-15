@@ -3,6 +3,8 @@ import {
   createSdkMcpServer,
   tool,
   type CanUseTool,
+  type ElicitationResult,
+  type OnElicitation,
   type Options,
   type PermissionResult,
   type Query,
@@ -31,6 +33,22 @@ interface Approval {
   id: string;
   status: string;
   decision: string | null;
+  answer?: unknown;
+}
+
+/** Why a request to the owner has no answer. */
+const UNANSWERED = {
+  unreachable: "ZeroLux is unreachable, so the owner cannot be asked now.",
+  withdrawn: "The request was withdrawn.",
+  used: "The decision was already used.",
+};
+type Unanswered = keyof typeof UNANSWERED;
+
+interface AskedQuestion {
+  question: string;
+  header?: string;
+  options?: { label: string; description?: string; preview?: string }[];
+  multiSelect?: boolean;
 }
 
 /** The session's input: what the runner writes reaches Claude Code in order. */
@@ -124,6 +142,7 @@ export class ClaudeAgent {
           ? { resume: this.session.nativeSessionId }
           : { sessionId: this.session.nativeSessionId }),
         canUseTool: this.canUseTool,
+        onElicitation: this.onElicitation,
         mcpServers: { zerolux: this.tools() },
       },
     });
@@ -360,42 +379,128 @@ export class ClaudeAgent {
     { signal, toolUseID, decisionReason },
   ): Promise<PermissionResult> => {
     if (toolName === "AskUserQuestion")
-      return {
-        behavior: "deny",
-        message:
-          "Ask in the ZeroLux chat with mcp__zerolux__send instead; the answer arrives as a message.",
-      };
-    if (signal.aborted)
-      return { behavior: "deny", message: "The request was withdrawn." };
+      return this.askQuestions(input, toolUseID, signal);
     const details = JSON.stringify(input);
+    const decided = await this.ask(
+      "permission",
+      toolUseID,
+      `Claude Code wants to use ${toolName}`,
+      {
+        tool: toolName,
+        input:
+          details.length > MAX_DETAILS
+            ? `${details.slice(0, MAX_DETAILS)}…`
+            : input,
+        ...(decisionReason ? { reason: decisionReason } : {}),
+      },
+      signal,
+    );
+    if (typeof decided === "string")
+      return { behavior: "deny", message: UNANSWERED[decided] };
+    return decided.decision === "allow"
+      ? { behavior: "allow", updatedInput: input }
+      : { behavior: "deny", message: "The owner denied this in ZeroLux." };
+  };
+
+  /** Claude Code's questions go to the owner as they are; the answers come back as its own. */
+  private async askQuestions(
+    input: Record<string, unknown>,
+    toolUseID: string,
+    signal: AbortSignal,
+  ): Promise<PermissionResult> {
+    const asked = (input.questions ?? []) as AskedQuestion[];
+    const decided = await this.ask(
+      "question",
+      toolUseID,
+      (asked.length === 1 ? asked[0]!.question : "Claude Code asks you").slice(
+        0,
+        1000,
+      ),
+      {
+        questions: asked.map((q) => ({
+          id: q.question,
+          header: q.header ?? null,
+          question: q.question,
+          options: (q.options ?? []).map((o) => ({
+            label: o.label,
+            description: o.description ?? null,
+            preview: o.preview ?? null,
+          })),
+          multiple: q.multiSelect === true,
+          // Claude Code always offers its own free answer besides the options.
+          other: true,
+        })),
+      },
+      signal,
+    );
+    if (typeof decided === "string")
+      return { behavior: "deny", message: UNANSWERED[decided] };
+    const answers = (decided.answer as { answers?: Record<string, string[]> })
+      ?.answers;
+    if (!answers)
+      return { behavior: "deny", message: "The owner declined to answer." };
+    return {
+      behavior: "allow",
+      updatedInput: {
+        ...input,
+        answers: Object.fromEntries(
+          Object.entries(answers).map(([q, values]) => [q, values.join(", ")]),
+        ),
+      },
+    };
+  }
+
+  /** An MCP server's form or link goes to the owner; the reply is the owner's answer. */
+  private onElicitation: OnElicitation = async (
+    request,
+    { signal, requestId },
+  ): Promise<ElicitationResult> => {
+    const decided = await this.ask(
+      "form",
+      `elicitation:${requestId}`,
+      `${request.serverName} asks: ${request.message}`.slice(0, 1000),
+      {
+        server: request.serverName,
+        message: request.message,
+        mode: request.mode ?? "form",
+        ...(request.requestedSchema ? { schema: request.requestedSchema } : {}),
+        ...(request.url ? { url: request.url } : {}),
+      },
+      signal,
+    );
+    if (typeof decided === "string") return { action: "cancel" };
+    return decided.answer as ElicitationResult;
+  };
+
+  /**
+   * One request to the owner: the decided request, dispatched once, or why there is none.
+   * A restarted runner asking again gets the same request back.
+   */
+  private async ask(
+    kind: "permission" | "question" | "form",
+    nativeRequestId: string,
+    summary: string,
+    details: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<Approval | Unanswered> {
+    if (signal.aborted) return "withdrawn";
     const created = await this.request<{ approval: Approval }>(
       "/chat/approvals",
       {
         id: randomUUID(),
         // The chat message that started the turn, if one did.
         delivery_id: this.turnDelivery ?? null,
-        native_request_id: toolUseID,
-        summary: `Claude Code wants to use ${toolName}`,
-        details: {
-          tool: toolName,
-          input:
-            details.length > MAX_DETAILS
-              ? `${details.slice(0, MAX_DETAILS)}…`
-              : input,
-          ...(decisionReason ? { reason: decisionReason } : {}),
-        },
+        native_request_id: nativeRequestId,
+        kind,
+        summary,
+        details,
       },
     ).catch(() => undefined);
-    if (!created)
-      return {
-        behavior: "deny",
-        message: "ZeroLux is unreachable, so the owner cannot be asked now.",
-      };
-    // A restarted runner asking again gets the same approval back.
+    if (!created) return "unreachable";
     const decided = await this.decision(created.approval, signal);
     if (decided.status !== "decided") {
       await this.receipt(created.approval.id, "resolved");
-      return { behavior: "deny", message: "The request was withdrawn." };
+      return "withdrawn";
     }
     try {
       await this.request(
@@ -404,16 +509,13 @@ export class ClaudeAgent {
       );
     } catch (error) {
       // Someone else applied it: never twice.
-      if (error instanceof ChatHttpError && error.status === 409)
-        return { behavior: "deny", message: "The decision was already used." };
+      if (error instanceof ChatHttpError && error.status === 409) return "used";
       throw error;
     }
-    // Returning the decision applies it: Claude Code receives it with this call's result.
+    // Returning it applies it: Claude Code receives it with this call's result.
     void this.receipt(decided.id, "delivered");
-    return decided.decision === "allow"
-      ? { behavior: "allow", updatedInput: input }
-      : { behavior: "deny", message: "The owner denied this in ZeroLux." };
-  };
+    return decided;
+  }
 
   private decision(approval: Approval, signal: AbortSignal) {
     if (approval.status !== "pending") return Promise.resolve(approval);

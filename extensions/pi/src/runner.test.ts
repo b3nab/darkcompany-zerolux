@@ -568,7 +568,7 @@ test("pi's yes/no question in one chat's turn reaches the owner as that delivery
   }
 }, 20_000);
 
-test("a confirmation outside one chat's turn still asks the owner, for the session; a choice or text is reported", async () => {
+test("a dialog outside one chat's turn still asks the owner, for the session; an unknown kind is reported", async () => {
   const f = await fixture("", { extensionControl: true });
   try {
     await f.bind();
@@ -617,7 +617,7 @@ test("a confirmation outside one chat's turn still asks the owner, for the sessi
       title: "?",
     });
     await until(() => f.approvals.length === 3);
-    // A choice or text: not representable yet, reported as such.
+    // A choice in the chat's own turn: a question of that delivery.
     await f.turn(proof);
     await f.ask({
       type: "extension_ui_request",
@@ -625,6 +625,21 @@ test("a confirmation outside one chat's turn still asks the owner, for the sessi
       method: "select",
       title: "Pick",
       options: ["a", "b"],
+    });
+    await until(() => f.approvals.length === 4);
+    expect(f.approvals[3]).toMatchObject({
+      kind: "question",
+      delivery_id: "turn-delivery",
+      details: {
+        questions: [{ id: "pi", question: "Pick", other: false }],
+      },
+    });
+    // A dialog ZeroLux does not know: reported, never answered for the owner.
+    await f.ask({
+      type: "extension_ui_request",
+      id: "u1",
+      method: "pickFile",
+      title: "File",
     });
     await until(() => attention() === 1);
     expect(f.kernelCalls.at(-1)!.body).toMatchObject({ status: "attention" });
@@ -644,7 +659,7 @@ test("a confirmation outside one chat's turn still asks the owner, for the sessi
       method: "confirm",
       title: "?",
     });
-    await until(() => f.approvals.length === 4);
+    await until(() => f.approvals.length === 5);
     // A proof without fingerprint, or a turn whose inputs the host never saw: nothing.
     await f.ask({ type: "agent_settled" });
     await Bun.sleep(150);
@@ -655,7 +670,7 @@ test("a confirmation outside one chat's turn still asks the owner, for the sessi
       method: "confirm",
       title: "?",
     });
-    await until(() => f.approvals.length === 5);
+    await until(() => f.approvals.length === 6);
     await f.turn(proof);
     await f.ask({
       type: "extension_ui_request",
@@ -663,7 +678,7 @@ test("a confirmation outside one chat's turn still asks the owner, for the sessi
       method: "confirm",
       title: "?",
     });
-    await until(() => f.approvals.length === 6);
+    await until(() => f.approvals.length === 7);
     // Fire-and-forget methods are ignored.
     await f.ask({
       type: "extension_ui_request",
@@ -672,10 +687,16 @@ test("a confirmation outside one chat's turn still asks the owner, for the sessi
       message: "hi",
     });
     await Bun.sleep(300);
-    // None of them was a turn one chat of this kernel fed: each belongs to the session.
-    expect(f.approvals.map((a) => a.delivery_id ?? null)).toEqual(
-      Array(6).fill(null),
-    );
+    // Only the choice was asked in a turn one chat of this kernel fed.
+    expect(f.approvals.map((a) => a.delivery_id ?? null)).toEqual([
+      null,
+      null,
+      null,
+      "turn-delivery",
+      null,
+      null,
+      null,
+    ]);
     expect(await f.answers()).toEqual([]);
     expect(attention()).toBe(1);
   } finally {
@@ -865,3 +886,61 @@ test("a question names the chat delivery only for the input pi was on when it as
     await f.close();
   }
 }, 30_000);
+
+test("pi's choices and text reach the owner as questions, and the answer comes back as pi's value", async () => {
+  const f = await fixture("", { extensionControl: true });
+  try {
+    await f.bind();
+    const cases = [
+      { id: "s1", method: "select", title: "Pick", options: ["a", "b"] },
+      { id: "i1", method: "input", title: "Name", placeholder: "name" },
+      { id: "e1", method: "editor", title: "Notes", prefill: "draft" },
+    ];
+    for (const [i, request] of cases.entries()) {
+      await f.ask({ type: "extension_ui_request", ...request });
+      await until(() => f.approvals.length === i + 1);
+    }
+    expect(f.approvals.map((a) => (a.details as any).questions[0])).toEqual([
+      {
+        id: "pi",
+        question: "Pick",
+        options: [{ label: "a" }, { label: "b" }],
+        multiple: false,
+        other: false,
+      },
+      {
+        id: "pi",
+        question: "Name",
+        options: [],
+        multiple: false,
+        other: true,
+        placeholder: "name",
+      },
+      {
+        id: "pi",
+        question: "Notes",
+        options: [],
+        multiple: false,
+        other: true,
+        multiline: true,
+        default: "draft",
+      },
+    ]);
+    const answers = [["b"], ["Ada"], null];
+    for (const [i, value] of answers.entries()) {
+      f.approvals[i]!.status = "decided";
+      f.approvals[i]!.answer = value
+        ? { answers: { pi: value } }
+        : { declined: true };
+    }
+    await until(async () => (await f.answers()).length === 3, 8000);
+    const byId = Object.fromEntries((await f.answers()).map((a) => [a.id, a]));
+    expect(byId).toEqual({
+      s1: { type: "extension_ui_response", id: "s1", value: "b" },
+      i1: { type: "extension_ui_response", id: "i1", value: "Ada" },
+      e1: { type: "extension_ui_response", id: "e1", cancelled: true },
+    });
+  } finally {
+    await f.close();
+  }
+}, 20_000);

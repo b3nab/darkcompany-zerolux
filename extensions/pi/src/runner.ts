@@ -60,6 +60,54 @@ const defaults: PiRunnerDeps = {
 type Child = Bun.Subprocess<"pipe", "pipe", "inherit">;
 
 /** Detached host for ONE stock native pi RPC process. No prompts, no automatic replay/retry. */
+/**
+ * A pi dialog as ZeroLux asks the owner: `confirm` is a permission; `select`, `input` and
+ * `editor` are one question, answered with the text pi expects as its `value`.
+ */
+function piRequest(event: Record<string, any>) {
+  const title = typeof event.title === "string" ? event.title : "";
+  const text = (key: string) =>
+    typeof event[key] === "string" ? (event[key] as string) : null;
+  const question = (fields: Record<string, unknown>) => ({
+    kind: "question",
+    summary: (title || "pi asks you").slice(0, 1000),
+    details: {
+      method: event.method,
+      questions: [
+        {
+          id: "pi",
+          question: title || "pi asks you",
+          options: [],
+          multiple: false,
+          other: true,
+          ...fields,
+        },
+      ],
+    },
+  });
+  switch (event.method) {
+    case "confirm":
+      return {
+        kind: "permission",
+        summary: "pi asks for your confirmation",
+        details: { method: "confirm", title, message: text("message") ?? "" },
+      };
+    case "select":
+      return question({
+        options: (Array.isArray(event.options) ? event.options : [])
+          .filter((o: unknown) => typeof o === "string")
+          .map((label: string) => ({ label })),
+        other: false,
+      });
+    case "input":
+      return question({ placeholder: text("placeholder") });
+    case "editor":
+      return question({ multiline: true, default: text("prefill") });
+    default:
+      return null;
+  }
+}
+
 export class PiRunner {
   private readonly initial: NativeSettingsPatch;
   private lease?: PiExecutionLease;
@@ -602,12 +650,12 @@ export class PiRunner {
   }
 
   /**
-   * A question pi asks its user, who is not at a terminal here. A yes/no question goes to
-   * the owner as an approval of the session, and of the chat delivery when one chat feeds
-   * the turn, through the kernel of the link that bound this host; the answer comes back
-   * as pi's own response, once. Anything else is reported, never answered on the owner's
-   * behalf. A Stop withdraws the question; pi's own timeout ends it, and a decision after
-   * that is not replayed.
+   * A dialog pi opens for its user, who is not at a terminal here: a confirmation, a
+   * choice or text. It goes to the owner as a request of the session, and of the chat
+   * delivery when one chat feeds the turn, through the kernel of the link that bound this
+   * host; the answer comes back as pi's own response, once. A dialog of an unknown kind is
+   * reported, never answered on the owner's behalf. A Stop withdraws the question; pi's
+   * own timeout ends it, and an answer after that is not replayed.
    */
   private async dialog(child: Child, event: Record<string, any>) {
     const id = event.id;
@@ -646,18 +694,13 @@ export class PiRunner {
       }).catch(() => {});
     try {
       if (!this.kernel || this.phase !== "running") return;
-      const delivery =
-        event.method === "confirm"
-          ? await this.turnDelivery(child, input)
-          : null;
-      if (stopped()) return;
-      if (event.method !== "confirm") {
+      const request = piRequest(event);
+      if (!request) {
         await this.kernel(
           `/chat/sessions/${encodeURIComponent(this.identity!.link)}/status`,
           {
             status: "attention",
-            reason:
-              "pi asks for native input this host cannot represent (a choice or text); it waits for its own timeout.",
+            reason: `pi asks with a dialog ZeroLux does not know (${String(event.method)}); it waits for its own timeout.`,
           },
         ).catch(() => {});
         // Unanswered on the owner's behalf; still withdrawn by a Stop until pi's own
@@ -669,18 +712,15 @@ export class PiRunner {
           ).unref();
         return;
       }
+      const delivery = await this.turnDelivery(child, input);
+      if (stopped()) return;
       const approval = randomUUID();
       try {
         await this.kernel("/chat/approvals", {
           id: approval,
           delivery_id: delivery,
           native_request_id: `pi-ui:${id}`,
-          summary: "pi asks for your confirmation",
-          details: {
-            method: "confirm",
-            title: typeof event.title === "string" ? event.title : "",
-            message: typeof event.message === "string" ? event.message : "",
-          },
+          ...request,
         });
       } catch {
         return; // Not recorded: pi's own timeout decides, nothing is answered for the owner.
@@ -702,6 +742,7 @@ export class PiRunner {
             id: string;
             status: string;
             decision?: string | null;
+            answer?: { answers?: Record<string, string[]> } | null;
           }[];
         }>("/chat/inbox").catch(() => undefined);
         const current = inbox?.approvals?.find((a) => a.id === approval);
@@ -717,8 +758,16 @@ export class PiRunner {
           );
           if (!dispatched) continue;
           // Dispatched: the decision is spent either way. Only an open question gets it.
-          if (this.pendingDialogs.delete(id))
-            respond({ confirmed: current.decision === "allow" });
+          if (this.pendingDialogs.delete(id)) {
+            const value = current.answer?.answers?.pi?.[0];
+            respond(
+              event.method === "confirm"
+                ? { confirmed: current.decision === "allow" }
+                : value === undefined
+                  ? { cancelled: true }
+                  : { value },
+            );
+          }
           await resolveApproval(approval);
           return;
         }

@@ -41,8 +41,12 @@ function fixture() {
     conversations: [room("general", "General"), room("side", "Side")],
     deliveries: [],
   };
-  const approvals: { id: string; status: string; decision: string | null }[] =
-    [];
+  const approvals: {
+    id: string;
+    status: string;
+    decision: string | null;
+    answer?: unknown;
+  }[] = [];
   const calls: { path: string; body?: any }[] = [];
   let loseApprovalReceipt = false;
   const request: ChatRequest = async <T>(path: string, body?: unknown) => {
@@ -399,8 +403,6 @@ test("a denied or withdrawn request never runs the tool", async () => {
   f.state("running");
   f.consumed("d1");
   await tick();
-  // A question for the owner belongs in the chat, not in an approval.
-  expect(await ask("AskUserQuestion")).toMatchObject({ behavior: "deny" });
   const denied = ask("Write");
   await tick();
   f.approvals[0]!.status = "decided";
@@ -591,4 +593,112 @@ test("the owner interrupts the turn in progress, whoever started it", async () =
   await tick();
   expect(await f.agent.interrupt()).toBe(true);
   expect(f.interrupts()).toBe(1);
+});
+
+test("Claude Code's questions reach the owner as they are, and the answers come back as its own", async () => {
+  const f = fixture();
+  await f.start();
+  const questions = [
+    {
+      question: "Which library?",
+      header: "Library",
+      options: [
+        { label: "date-fns", description: "Small" },
+        { label: "luxon", description: "Time zones" },
+      ],
+      multiSelect: false,
+    },
+    {
+      question: "Which checks?",
+      header: "Checks",
+      options: [
+        { label: "Rust", description: "cargo" },
+        { label: "Bun", description: "bun test" },
+      ],
+      multiSelect: true,
+    },
+  ];
+  const ask = () =>
+    f.options().canUseTool!(
+      "AskUserQuestion",
+      { questions },
+      {
+        signal: new AbortController().signal,
+        toolUseID: crypto.randomUUID(),
+        requestId: "r",
+      },
+    );
+  const answered = ask();
+  await tick();
+  const body = f.calls.find(
+    (c) => c.path === "/chat/approvals" && c.body,
+  )!.body;
+  expect(body).toMatchObject({
+    kind: "question",
+    summary: "Claude Code asks you",
+  });
+  expect(body.details.questions[1]).toEqual({
+    id: "Which checks?",
+    header: "Checks",
+    question: "Which checks?",
+    options: [
+      { label: "Rust", description: "cargo", preview: null },
+      { label: "Bun", description: "bun test", preview: null },
+    ],
+    multiple: true,
+    other: true,
+  });
+  f.approvals[0]!.status = "decided";
+  f.approvals[0]!.answer = {
+    answers: { "Which library?": ["luxon"], "Which checks?": ["Rust", "Bun"] },
+  };
+  await f.agent.refresh();
+  expect(await answered).toEqual({
+    behavior: "allow",
+    updatedInput: {
+      questions,
+      answers: { "Which library?": "luxon", "Which checks?": "Rust, Bun" },
+    },
+  });
+  // Declined: Claude Code hears that the owner did not answer.
+  const declined = ask();
+  await tick();
+  f.approvals[1]!.status = "decided";
+  f.approvals[1]!.answer = { declined: true };
+  await f.agent.refresh();
+  expect(await declined).toMatchObject({ behavior: "deny" });
+});
+
+test("an MCP server's form goes to the owner, and the reply is the owner's answer", async () => {
+  const f = fixture();
+  await f.start();
+  const replied = f.options().onElicitation!(
+    {
+      serverName: "github",
+      message: "Which repository?",
+      mode: "form",
+      requestedSchema: {
+        type: "object",
+        properties: { repo: { type: "string" } },
+        required: ["repo"],
+      },
+    },
+    { signal: new AbortController().signal, requestId: "e1" },
+  );
+  await tick();
+  const body = f.calls.find(
+    (c) => c.path === "/chat/approvals" && c.body,
+  )!.body;
+  expect(body).toMatchObject({
+    kind: "form",
+    native_request_id: "elicitation:e1",
+    details: { server: "github", message: "Which repository?", mode: "form" },
+  });
+  f.approvals[0]!.status = "decided";
+  f.approvals[0]!.answer = { action: "accept", content: { repo: "zerolux" } };
+  await f.agent.refresh();
+  expect(await replied).toEqual({
+    action: "accept",
+    content: { repo: "zerolux" },
+  });
 });
