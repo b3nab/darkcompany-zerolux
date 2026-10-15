@@ -32,10 +32,12 @@ export function needsYou(chat: Activity): Need[] {
         actorId: a.actor_id,
         kind: "Permission",
         title: a.summary,
-        where: chatTitle(a.conversation_id),
+        where: a.conversation_id ? chatTitle(a.conversation_id) : undefined,
         since: a.created_at,
         approvalId: a.id,
-        place: { chat: a.conversation_id },
+        place: a.conversation_id
+          ? { chat: a.conversation_id }
+          : ({ team: true } as const),
       })),
     ...chat.sessions
       .filter((s) => s.status === "attention")

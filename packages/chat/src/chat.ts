@@ -84,8 +84,9 @@ export interface Approval {
   id: string;
   actor_id: string;
   session_id: string;
-  conversation_id: string;
-  delivery_id: string;
+  /** The chat whose message started the turn; null for the session's own work. */
+  conversation_id: string | null;
+  delivery_id: string | null;
   summary: string;
   details: Record<string, unknown>;
   status: "pending" | "decided" | "uncertain" | "delivered" | "resolved";
@@ -232,8 +233,8 @@ export function waitingChats(
     conversations.find((c) => c.id === id)?.parent_id ?? id;
   const waiting = new Set(
     approvals
-      .filter((a) => a.status === "pending")
-      .map((a) => chatOf(a.conversation_id)),
+      .filter((a) => a.status === "pending" && a.conversation_id)
+      .map((a) => chatOf(a.conversation_id!)),
   );
   for (const c of conversations)
     if (
