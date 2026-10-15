@@ -105,6 +105,11 @@ function fixture(
       state.setup = false;
       return Response.json(identity());
     }
+    if (path === "/api/auth/list-sessions")
+      return Response.json([
+        { id: "session", token: "this-token", userAgent: "Safari" },
+        { id: "other", token: "other-token", userAgent: "Chrome" },
+      ]);
     if (path === "/api/auth/sign-out") {
       state.signed = false;
       return Response.json({ success: true });
@@ -224,6 +229,43 @@ test("native login stores only the signed response header and scopes API request
   expect(new Headers(recent[2]!.init.headers).has("authorization")).toBe(false);
   expect(recent.every((c) => c.init.credentials === "omit")).toBe(true);
   expect(f.calls.every((c) => c.init.redirect === "error")).toBe(true);
+});
+
+test("your account changes its password, lists its devices and signs one out, with its own credential", async () => {
+  const f = fixture();
+  await f.client.restore();
+  await f.client.signIn("owner@example.test", "test password only");
+  await f.client.changePassword(
+    "test password only",
+    "new test password",
+    true,
+  );
+  const { devices, current } = await f.client.devices();
+  await f.client.signOutDevice("other-token");
+  const sent = (path: string) =>
+    f.calls.find((call) => new URL(call.url).pathname === path)!;
+  expect(
+    JSON.parse(String(sent("/api/auth/change-password").init.body)),
+  ).toEqual({
+    currentPassword: "test password only",
+    newPassword: "new test password",
+    revokeOtherSessions: true,
+  });
+  expect(devices.map((device) => device.id)).toEqual(["session", "other"]);
+  expect(current).toBe("session");
+  expect(
+    JSON.parse(String(sent("/api/auth/revoke-session").init.body)),
+  ).toEqual({
+    token: "other-token",
+  });
+  for (const path of [
+    "/api/auth/change-password",
+    "/api/auth/list-sessions",
+    "/api/auth/revoke-session",
+  ])
+    expect(new Headers(sent(path).init.headers).get("authorization")).toBe(
+      "Bearer signed.session",
+    );
 });
 
 test("a missing native token header is an error, never an apparent successful login", async () => {

@@ -13,3 +13,4 @@ export * from "./presence";
 export * from "./tonight";
 export * from "./shift";
 export * from "./drafts";
+export * from "./devices";

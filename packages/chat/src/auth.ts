@@ -11,6 +11,16 @@ export interface AuthIdentity {
   actor_id: string | null;
   setup_required: boolean;
 }
+/** A device signed in as you: a browser, the desktop app or the phone. */
+export interface AuthDevice {
+  id: string;
+  token: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}
 export interface AuthHealth {
   api_version: number;
   capabilities: string[];
@@ -357,6 +367,36 @@ export class AuthConnection {
     await this.remember(null, epoch);
     clearCredential(this.kernel, this.credential);
     this.credential = undefined;
+  }
+
+  /** Changes your password; with `signOutOthers` every other device has to sign in again. */
+  async changePassword(
+    currentPassword: string,
+    newPassword: string,
+    signOutOthers: boolean,
+  ): Promise<void> {
+    await this.exchange("/change-password", "POST", {
+      currentPassword,
+      newPassword,
+      revokeOtherSessions: signOutOthers,
+    });
+  }
+
+  /**
+   * The devices signed in as you, and which one is this. Listing them needs a sign-in from
+   * the last day: an older one is refused with 403 until you sign in again.
+   */
+  async devices(): Promise<{ devices: AuthDevice[]; current: string | null }> {
+    const [devices, current] = await Promise.all([
+      this.exchange<AuthDevice[]>("/list-sessions", "GET"),
+      this.exchange<{ session: { id: string } } | null>("/get-session", "GET"),
+    ]);
+    return { devices, current: current?.session.id ?? null };
+  }
+
+  /** Signs one of your other devices out. */
+  async signOutDevice(token: string): Promise<void> {
+    await this.exchange("/revoke-session", "POST", { token });
   }
 
   onRequired(listener: () => void) {
