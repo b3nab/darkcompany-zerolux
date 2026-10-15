@@ -169,6 +169,7 @@ test("your profile, your settings and the administration are three separate page
         workspace={company}
         busy={false}
         perform={async () => true}
+        kernel={{ version: "0.0.1-dev", capabilities: ["chat-v1"] }}
       />
     </MemoryRouter>,
   );
@@ -178,7 +179,12 @@ test("your profile, your settings and the administration are three separate page
     "Agents",
     "Modules",
     "Storage and updates",
+    "Features",
+    "0.0.1-dev",
   ])
     expect(admin).toContain(part);
+  // Chats are on in this kernel, meetings are not yet.
+  expect(admin).toMatch(/Chats<\/span>(?:(?!<\/li>).)*Available/);
+  expect(admin).toMatch(/Meetings<\/span>(?:(?!<\/li>).)*Not yet/);
   expect(admin).not.toContain("Theme");
 });

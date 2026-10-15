@@ -557,6 +557,7 @@ export function App({
                       workspace={workspace}
                       busy={busy}
                       perform={perform}
+                      kernel={{ version: health?.version, capabilities }}
                     />
                   </Page>
                 }

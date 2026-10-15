@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import {
   ago,
   ApiError,
+  capabilityStatus,
   deviceName,
   errorMessage,
   renameWorkspace,
@@ -426,10 +427,12 @@ export function AdministrationPage({
   workspace,
   busy,
   perform,
+  kernel,
 }: {
   workspace: Workspace;
   busy: boolean;
   perform: Perform;
+  kernel: { version?: string; capabilities: string[] };
 }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -453,6 +456,42 @@ export function AdministrationPage({
             }
           }}
         />
+      </Section>
+      <Section title="Features">
+        <p className="text-sm text-muted-foreground">
+          What this workspace's kernel
+          {kernel.version && (
+            <span className="font-mono"> {kernel.version}</span>
+          )}{" "}
+          can do today.
+        </p>
+        <ul className="divide-y rounded-lg border">
+          {capabilityStatus(kernel.capabilities).map((feature) => (
+            <li
+              key={feature.id}
+              data-available={feature.available || undefined}
+              className="flex items-center gap-3 px-4 py-3"
+            >
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="text-sm font-medium">{feature.name}</span>
+                {feature.description && (
+                  <span className="text-xs text-muted-foreground">
+                    {feature.description}
+                  </span>
+                )}
+              </span>
+              <span
+                className={
+                  feature.available
+                    ? "shrink-0 font-mono text-[11px] text-success"
+                    : "shrink-0 font-mono text-[11px] text-faint"
+                }
+              >
+                {feature.available ? "Available" : "Not yet"}
+              </span>
+            </li>
+          ))}
+        </ul>
       </Section>
       <Section title="People">
         {/* TODO: kernel: invite people, give them roles and say who reports to whom. */}
