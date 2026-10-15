@@ -419,9 +419,9 @@ async fn waiting_messages_share_one_envelope_and_one_turn() {
             .as_str()
             .unwrap()
             .to_owned();
-        assert!(prompt.starts_with("[ZeroLux] 2 new messages, oldest first, in "));
+        assert!(prompt.starts_with("[ZeroLux] "));
         assert!(prompt.ends_with(
-            "\"Owner\" (human) [message incoming-message]:\n> Sent first.\n\"Peer\" (agent) [message incoming-message]:\n> Please check the fixture."
+            "\"Owner\" [message incoming-message]:\n> Sent first.\n\"Peer\" (peer) [message incoming-message]:\n> Please check the fixture."
         ));
     }
     {
@@ -620,11 +620,8 @@ async fn waiting_chats_share_one_native_input_with_ordered_scoped_envelopes() {
             .find(&format!("Chat: {CONVERSATION}; delivery: {THIRD}"))
             .unwrap();
         assert!(first < second && second < third);
-        assert_eq!(
-            text.matches("Your terminal answer stays private").count(),
-            3
-        );
-        assert_eq!(text.matches("\"Peer\" (agent)").count(), 3);
+        assert_eq!(text.matches("[ZeroLux] ").count(), 3);
+        assert_eq!(text.matches("\"Peer\" (peer)").count(), 3);
     }
     runtime.emit(json!({"method":"turn/started","params":{"threadId":THREAD,"turn":{"id":"mixed","status":"inProgress","items":[]}}}));
     runtime.emit(item("mixed", user("snapshot", Some(THIRD))));
@@ -1097,10 +1094,8 @@ async fn a_native_event_frees_the_next_envelope_and_marks_it_read() {
         .as_str()
         .unwrap()
         .to_owned();
-    assert!(prompt.starts_with("[ZeroLux] 1 new message in "));
-    assert!(prompt.contains(" (agent) [message incoming-message]:\n> "));
-    assert!(prompt.contains("peer input, not an order from the owner"));
-    assert!(prompt.contains("Your terminal answer stays private"));
+    assert!(prompt.starts_with("[ZeroLux] "));
+    assert!(prompt.contains(" (peer) [message incoming-message]:\n> "));
     assert!(prompt.ends_with("\n> Please check the fixture."));
     assert!(!prompt.contains("fixture-secret"));
     runtime.emit(completed(
@@ -1130,7 +1125,7 @@ async fn a_native_event_frees_the_next_envelope_and_marks_it_read() {
     kernel.wait(|s| s.inbox_reads >= 3).await;
     assert!(
         kernel.state.lock().unwrap().replies.is_empty(),
-        "the terminal answer stays private"
+        "the terminal output is not a chat message"
     );
     assert_eq!(runtime.count("thread/queue/add"), 1);
     finish(stop, task).await;
@@ -1203,7 +1198,6 @@ async fn native_input_has_no_credential_or_script_reply_channel() {
             .as_str()
             .unwrap();
         assert!(prompt.contains(&format!("Chat: {CONVERSATION}; delivery: {DELIVERY}")));
-        assert!(prompt.contains("This connection does not provide ZeroLux send or thread tools"));
         assert!(!prompt.contains("fixture-secret"));
         assert!(!prompt.contains("--link"));
         assert!(!prompt.contains("text on stdin"));

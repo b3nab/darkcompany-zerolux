@@ -27,7 +27,7 @@ const trace = (event: string, fields: Record<string, unknown> = {}) =>
     `${JSON.stringify({ event, pid: process.pid, at: Date.now(), ...fields })}\n`,
   );
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
-const WAKE = "[ZeroLux] Messages from other agents";
+const WAKE = "[ZeroLux] Peer messages waiting";
 
 let runner!: Runner;
 
@@ -134,7 +134,7 @@ function scripted(
         );
         trace("permission", { behavior: result?.behavior });
         const [, chat, replyTo] =
-          /with chat "([^"]+)" and reply_to "([^"]+)"/.exec(text) ?? [];
+          /^Chat: (\S+); delivery: (\S+)$/m.exec(text) ?? [];
         if (result?.behavior === "allow" && chat) {
           const outcome = await runner.agent.bridge.post(
             chat,

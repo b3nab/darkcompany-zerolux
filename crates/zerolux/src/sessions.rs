@@ -394,7 +394,7 @@ fn claude_candidates(value: &Value) -> Result<Vec<Candidate>> {
 }
 
 /// What a connected Claude Code session can and cannot do, stated up front.
-const CLAUDE_READY: &str = "Claude Code inbox verified. This terminal connection receives messages but has no ZeroLux send or thread tools; terminal output stays private. After the terminal exits, ZeroLux resumes the saved conversation through the SDK. Stop prevents recovery but cannot interrupt a turn in the terminal.";
+const CLAUDE_READY: &str = "Claude Code inbox verified. This terminal connection receives messages but has no ZeroLux send or thread tools. After the terminal exits, ZeroLux resumes the saved conversation through the SDK. Stop prevents recovery but cannot interrupt a turn in the terminal.";
 
 async fn discover_claude() -> Result<Vec<Candidate>> {
     let mut candidates = claude_candidates(&command_json("claude", &["agents", "--json"]).await?)?;

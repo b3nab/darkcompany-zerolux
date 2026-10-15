@@ -123,18 +123,19 @@ const pi = {
     idle = false;
     setTimeout(() => {
       void (async () => {
-        const [_, chat, reply] =
-          /with chat ("[^"]*") and reply_to ("[^"]*")/.exec(content)!;
+        const [_, chat, reply] = /^Chat: (\S+); delivery: (\S+)$/m.exec(
+          content,
+        )!;
         appendFileSync(
           join(root, "native-inputs.jsonl"),
-          JSON.stringify({ reply: JSON.parse(reply!) }) + "\n",
+          JSON.stringify({ reply }) + "\n",
         );
         await emit("agent_start");
         manager.appendMessage({ role: "user", content, timestamp: Date.now() });
         await emit("message_start", { message: { role: "user", content } });
         await tools.get("zerolux_send").execute("fixture", {
-          chat: JSON.parse(chat!),
-          reply_to: JSON.parse(reply!),
+          chat: chat!,
+          reply_to: reply!,
           text: "Fixture pi response; no model",
         });
         idle = true;

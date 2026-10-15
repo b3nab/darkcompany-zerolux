@@ -257,7 +257,6 @@ export default function chatExtension(pi: ExtensionAPI) {
     harness: "pi",
     nativeSessionId: ctx.sessionManager.getSessionId(),
     workspace,
-    tools: { send: "zerolux_send", thread: "zerolux_thread" },
     idle: () => settled && ctx.isIdle() && !ctx.hasPendingMessages(),
     // Everything waiting in one message: pi steers one queued message per step.
     send: (batches) => {
@@ -430,14 +429,13 @@ export default function chatExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "zerolux_send",
     label: "ZeroLux message",
-    description:
-      "Write in a ZeroLux chat or thread you belong to, when you have something useful to say. Everyone in that chat reads it. To answer a message, pass the chat and reply_to from its [ZeroLux] envelope; in a thread, reply_to is not needed. Never use for private terminal work.",
+    description: "Post to a ZeroLux chat or thread.",
     parameters: Type.Object({
-      chat: Type.String({ description: "The chat ID from the envelope" }),
-      text: Type.String({ description: "The message, as the chat shows it" }),
+      chat: Type.String({ description: "Chat ID" }),
+      text: Type.String({ description: "Message" }),
       reply_to: Type.Optional(
         Type.String({
-          description: "The message ID you answer, from the envelope",
+          description: "Delivery ID answered",
         }),
       ),
     }),
@@ -466,18 +464,14 @@ export default function chatExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "zerolux_thread",
     label: "ZeroLux thread",
-    description:
-      "Open the agents' thread on a message of a ZeroLux chat, or join the one open there (one per message), to coordinate without filling the chat. Then write in it with zerolux_send and the thread's chat ID. Answer in the chat itself only when asked or when the thread agreed you would.",
+    description: "Open or join the agents' thread on a chat message.",
     parameters: Type.Object({
-      chat: Type.String({ description: "The chat ID from the envelope" }),
-      on: Type.String({
-        description:
-          "The message the thread is about: reply_to from the envelope",
-      }),
-      title: Type.String({ description: "A short subject" }),
+      chat: Type.String({ description: "Parent chat ID" }),
+      on: Type.String({ description: "Message or delivery ID" }),
+      title: Type.String({ description: "Subject" }),
       with: Type.Optional(
         Type.Array(Type.String(), {
-          description: "Other agents of the chat to take part, by name",
+          description: "Agent names",
         }),
       ),
     }),
@@ -503,12 +497,11 @@ export default function chatExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "zerolux_close_thread",
     label: "Close ZeroLux thread",
-    description:
-      "Close a ZeroLux thread you participate in after its work is finished. Send and confirm any final messages first. Pass the thread's chat ID, not its parent chat.",
+    description: "Close a ZeroLux thread you participate in.",
     executionMode: "sequential",
     parameters: Type.Object({
       chat: Type.String({
-        description: "The thread's chat ID, not its parent chat",
+        description: "Thread chat ID",
       }),
     }),
     async execute(_id, args, signal) {

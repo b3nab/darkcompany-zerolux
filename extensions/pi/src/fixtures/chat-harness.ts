@@ -92,11 +92,12 @@ chatExtension({
           },
         });
         // Answer as a model would: with the chat and message named in the envelope.
-        const [, chat, replyTo] =
-          /with chat ("[^"]*") and reply_to ("[^"]*")/.exec(content)!;
+        const [, chat, replyTo] = /^Chat: (\S+); delivery: (\S+)$/m.exec(
+          content,
+        )!;
         await send.execute("fixture-call", {
-          chat: JSON.parse(chat!),
-          reply_to: JSON.parse(replyTo!),
+          chat: chat!,
+          reply_to: replyTo!,
           text: "Deterministic pi response; no model was called.",
         });
         await emit("agent_before_settle", { outcome: "completed" });

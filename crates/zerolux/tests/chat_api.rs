@@ -828,7 +828,7 @@ async fn live_chat_round_trip_and_stop_use_the_real_runtime() {
     native.emit(json!({ "method": "turn/completed", "params": {
         "threadId": codex_runtime::THREAD, "turn": turn
     }}));
-    // The terminal answer stays private: only an explicit reply reaches the chat.
+    // Terminal output is not a chat message: only an explicit reply reaches the chat.
     kernel
         .post(
             &path,
