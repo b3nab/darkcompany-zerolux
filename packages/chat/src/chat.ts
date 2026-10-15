@@ -80,6 +80,55 @@ export interface MessagePage {
   next_cursor: number;
   has_more: boolean;
 }
+/** One question a session asks; with no options, or with `other`, it takes free text. */
+export interface Question {
+  id: string;
+  header?: string | null;
+  question: string;
+  options: {
+    label: string;
+    description?: string | null;
+    preview?: string | null;
+  }[];
+  multiple?: boolean;
+  other?: boolean;
+  secret?: boolean;
+  multiline?: boolean;
+  placeholder?: string | null;
+  default?: string | null;
+}
+/** A field of an MCP form: text, number, yes/no, or one or several choices. */
+export interface FormField {
+  type: "string" | "number" | "integer" | "boolean" | "array";
+  title?: string;
+  description?: string;
+  default?: unknown;
+  minimum?: number;
+  maximum?: number;
+  enum?: string[];
+  enumNames?: string[];
+  oneOf?: { const: string; title: string }[];
+  items?: { enum?: string[]; anyOf?: { const: string; title: string }[] };
+}
+/** What an MCP server asks through the session: fields to fill in, or a link to open. */
+export interface FormRequest {
+  server: string;
+  message: string;
+  mode: "form" | "url";
+  schema?: {
+    type: "object";
+    properties: Record<string, FormField>;
+    required?: string[];
+  };
+  url?: string;
+}
+export type QuestionAnswer =
+  | { answers: Record<string, string[]> }
+  | { declined: true };
+export type FormAnswer =
+  | { action: "accept"; content?: Record<string, unknown> }
+  | { action: "decline" | "cancel" };
+/** What a session asks the owner: a permission, a question, or an MCP form. */
 export interface Approval {
   id: string;
   actor_id: string;
@@ -87,10 +136,15 @@ export interface Approval {
   /** The chat whose message started the turn; null for the session's own work. */
   conversation_id: string | null;
   delivery_id: string | null;
+  kind: "permission" | "question" | "form";
   summary: string;
+  /** A permission's native details; `{questions}` for a question; a `FormRequest` for a form. */
   details: Record<string, unknown>;
   status: "pending" | "decided" | "uncertain" | "delivered" | "resolved";
+  /** A permission's decision. */
   decision: "allow" | "deny" | null;
+  /** The answer to a question or a form. */
+  answer: QuestionAnswer | FormAnswer | null;
   native_request_id: string;
   created_at: number;
 }

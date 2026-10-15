@@ -16,10 +16,12 @@ import type {
   ChatSession,
   Conversation,
   Discovery,
+  FormAnswer,
   Member,
   Message,
   MessagePage,
   Outgoing,
+  QuestionAnswer,
 } from "./chat";
 import { connectRealtime } from "./realtime";
 import type { RealtimeStatus } from "./realtime";
@@ -393,6 +395,17 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
           api<{ approval: Approval }>(
             `/chat/approvals/${approvalId}/decision`,
             { decision },
+          ),
+        ({ approval }) => setApprovals((as) => replace(as, approval)),
+      );
+    },
+    async answer(approvalId: string, answer: QuestionAnswer | FormAnswer) {
+      await order.run(
+        "approvals",
+        () =>
+          api<{ approval: Approval }>(
+            `/chat/approvals/${approvalId}/answer`,
+            answer,
           ),
         ({ approval }) => setApprovals((as) => replace(as, approval)),
       );

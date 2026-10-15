@@ -1,5 +1,6 @@
 import { harnessLabels } from "./client";
 import type { MemberTone } from "./presence";
+import type { Approval } from "./chat";
 import type { Chat } from "./useChat";
 /** Where a client opens an item: a chat or the agents' sessions. */
 export type Place = { chat: string } | { team: true };
@@ -15,8 +16,10 @@ export interface Need {
   /** The chat it belongs to. */
   where?: string;
   since?: number;
-  /** A permission request: the owner answers it in place. */
+  /** A request of the session: a permission is decided in place; a question or a form is
+   * answered in its card. */
   approvalId?: string;
+  approvalKind?: Approval["kind"];
   place: Place;
 }
 
@@ -30,11 +33,17 @@ export function needsYou(chat: Activity): Need[] {
       .map((a) => ({
         key: a.id,
         actorId: a.actor_id,
-        kind: "Permission",
+        kind:
+          a.kind === "permission"
+            ? "Permission"
+            : a.kind === "question"
+              ? "Question"
+              : "Form",
         title: a.summary,
         where: a.conversation_id ? chatTitle(a.conversation_id) : undefined,
         since: a.created_at,
         approvalId: a.id,
+        approvalKind: a.kind,
         place: a.conversation_id
           ? { chat: a.conversation_id }
           : ({ team: true } as const),
