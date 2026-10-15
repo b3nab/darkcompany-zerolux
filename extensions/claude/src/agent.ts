@@ -226,6 +226,18 @@ export class ClaudeAgent {
   }
 
   /** The inbox tool: other agents' messages in the turn's chat, read as the agent opens them. */
+  /** The owner's own input, typed into this session from ZeroLux: native user input. */
+  say(text: string) {
+    this.input.push({
+      type: "user",
+      uuid: randomUUID() as SDKUserMessage["uuid"],
+      session_id: "",
+      parent_tool_use_id: null,
+      message: { role: "user", content: text },
+      client_composed: true,
+    });
+  }
+
   /** Stops the turn in progress, whoever started it; the session and its context stay. */
   async interrupt() {
     if (this.state === "idle" || !this.query) return false;

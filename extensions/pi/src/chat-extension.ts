@@ -630,6 +630,7 @@ export default function chatExtension(pi: ExtensionAPI) {
         capabilities: [
           "agent-settings-v1",
           "interrupt-v1",
+          "input-v1",
           ...(installedCode ? ["integration-update-v1"] : []),
         ],
         integration_revision: installedCode?.revision,
@@ -708,6 +709,19 @@ export default function chatExtension(pi: ExtensionAPI) {
           cancelUpdate();
           throw error;
         }
+      },
+      input: async (linkId, text) => {
+        if (
+          ![...links.values()].some(
+            (link) => link.bridge.connected && link.bridge.sessionId === linkId,
+          )
+        )
+          throw new Error("Unknown or disconnected link");
+        // The owner's words, as if typed here: a new turn when idle, steering while working.
+        pi.sendUserMessage(
+          text,
+          ctx.isIdle() ? undefined : { deliverAs: "steer" },
+        );
       },
       interrupt: async (linkId) => {
         if (

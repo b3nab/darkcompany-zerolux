@@ -113,6 +113,7 @@ export class Runner {
       capabilities: [
         "agent-settings-v1",
         "interrupt-v1",
+        "input-v1",
         ...(this.config.managed && this.deps.code && this.deps.execution
           ? ["integration-update-v1"]
           : []),
@@ -199,6 +200,14 @@ export class Runner {
                 request.check === true,
               ),
       };
+    }
+    if (method === "input") {
+      if (this.stopRequested || !this.transport.bound)
+        throw new Error("The session is not connected");
+      if (typeof request.text !== "string" || !request.text.trim())
+        throw new Error("Invalid input request");
+      this.agent.say(request.text);
+      return {};
     }
     if (method === "interrupt") {
       if (this.stopRequested || !this.transport.bound)

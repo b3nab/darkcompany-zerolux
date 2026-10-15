@@ -702,3 +702,14 @@ test("an MCP server's form goes to the owner, and the reply is the owner's answe
     content: { repo: "zerolux" },
   });
 });
+
+test("the owner's own input reaches the session as native user input, not a chat message", async () => {
+  const f = fixture();
+  await f.start();
+  const before = f.inputs.length;
+  f.agent.say("look at the logs");
+  await tick();
+  expect(f.inputs.length).toBe(before + 1);
+  expect(f.inputs.at(-1)!.message.content).toBe("look at the logs");
+  expect(f.calls.some((c) => c.path.includes("/chat/deliveries"))).toBe(false);
+});

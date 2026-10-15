@@ -37,7 +37,8 @@ async function fixture() {
   const registry = join(root, "registry");
   const pairs: unknown[] = [],
     stops: string[] = [],
-    interrupts: string[] = [];
+    interrupts: string[] = [],
+    inputs: [string, string][] = [];
   const description = {
     native_session_id: "native",
     workspace: root,
@@ -67,6 +68,9 @@ async function fixture() {
       interrupts.push(id);
       return { interrupted: true };
     },
+    input: async (id, text) => {
+      inputs.push([id, text]);
+    },
   });
   await control.start();
   const path = join(registry, (await readdir(registry))[0]!);
@@ -80,6 +84,7 @@ async function fixture() {
     pairs,
     stops,
     interrupts,
+    inputs,
     description,
     call: (body: unknown) =>
       rpc(descriptor.endpoint, {
@@ -223,6 +228,21 @@ test("the kernel interrupts the turn of a link, and only names a link to do it",
     expect((await f.call({ method: "interrupt" })).ok).toBe(false);
     expect(f.interrupts).toEqual(["link"]);
     expect(f.stops).toHaveLength(0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("the kernel writes the owner's input to a link's session, and only with text", async () => {
+  const f = await fixture();
+  try {
+    expect(
+      (await f.call({ method: "input", link_id: "link", text: "hello" })).ok,
+    ).toBe(true);
+    expect(
+      (await f.call({ method: "input", link_id: "link", text: " " })).ok,
+    ).toBe(false);
+    expect(f.inputs).toEqual([["link", "hello"]]);
   } finally {
     await f.close();
   }
