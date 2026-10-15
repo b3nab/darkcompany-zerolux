@@ -21,6 +21,7 @@ import {
 import { WindowControls } from "@/components/window-controls";
 import { cn } from "cn";
 import type { Actor, Workspace } from "./api";
+import { AdministrationPage, MySettingsPage, ProfilePage } from "./Account";
 import { Approvals } from "./Approvals";
 import { useAuthentication } from "./AuthGate";
 import { ChatHome, ChatList, ChatView, NewConversation } from "./ChatView";
@@ -288,11 +289,7 @@ export function App({
             </Button>
           )}
           {shell ? (
-            <WorkspaceMenu
-              workspace={workspace}
-              busy={busy}
-              perform={perform}
-            />
+            <WorkspaceMenu workspace={workspace} />
           ) : (
             <h1 className="truncate text-sm font-semibold">ZeroLux</h1>
           )}
@@ -535,6 +532,34 @@ export function App({
                     />
                   </Page>,
                 )}
+              />
+              <Route
+                path="/profile"
+                element={
+                  <Page>
+                    <ProfilePage owner={owner} />
+                  </Page>
+                }
+              />
+              <Route
+                path="/settings"
+                element={
+                  <Page>
+                    <MySettingsPage />
+                  </Page>
+                }
+              />
+              <Route
+                path="/admin"
+                element={
+                  <Page>
+                    <AdministrationPage
+                      workspace={workspace}
+                      busy={busy}
+                      perform={perform}
+                    />
+                  </Page>
+                }
               />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

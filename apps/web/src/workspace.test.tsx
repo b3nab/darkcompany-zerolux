@@ -3,7 +3,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import type { Workspace } from "@zerolux/chat";
 import { App } from "./App";
+import { AdministrationPage, MySettingsPage, ProfilePage } from "./Account";
 import {
+  Connection,
   WorkspaceSettings,
   connectionKind,
 } from "./components/workspace-settings";
@@ -104,27 +106,19 @@ test("workspace settings edit only the name and keep creation metadata read-only
   expect(html).toContain("Save name");
 });
 
-test("workspace settings distinguish the shared name from the desktop connection", () => {
+test("the desktop's connection is this device's, apart from the workspace's shared name", () => {
   const html = renderToStaticMarkup(
-    <WorkspaceSettings
-      workspace={company.workspace}
-      busy={false}
-      error=""
-      save={async () => {}}
+    <Connection
       connection={{ address: "https://studio.example", desktop: true }}
     />,
   );
-  expect(html).toContain("Shared with everyone in this workspace");
+  expect(html).not.toContain("Workspace name");
   expect(html).toContain('value="https://studio.example"');
   expect(html).toContain('href="zerolux://workspaces"');
   expect(html).toContain("Manage connections");
   expect(html).not.toContain('name="address"');
   const browser = renderToStaticMarkup(
-    <WorkspaceSettings
-      workspace={company.workspace}
-      busy={false}
-      error=""
-      save={async () => {}}
+    <Connection
       connection={{ address: "https://studio.example", desktop: false }}
     />,
   );
@@ -146,4 +140,45 @@ test("workspace settings expose server errors and disable editing during a save"
   expect(html).toContain("Saving…");
   expect(html).toMatch(/<input\b[^>]*\sdisabled=""/);
   expect(html).toMatch(/<button\b[^>]*\sdisabled=""/);
+});
+
+test("your profile, your settings and the administration are three separate pages", () => {
+  const owner = company.actors.find((actor) => actor.kind === "human")!;
+  const profile = renderToStaticMarkup(
+    <MemoryRouter>
+      <ProfilePage owner={owner} />
+    </MemoryRouter>,
+  );
+  expect(profile).toContain("Your profile");
+  expect(profile).toContain(owner.name);
+  expect(profile).not.toContain("Workspace name");
+
+  const mine = renderToStaticMarkup(
+    <MemoryRouter>
+      <MySettingsPage />
+    </MemoryRouter>,
+  );
+  for (const part of ["Notifications", "This device", "Theme", "Light"])
+    expect(mine).toContain(part);
+  expect(mine).toContain('role="radiogroup"');
+  expect(mine).not.toContain("Workspace name");
+
+  const admin = renderToStaticMarkup(
+    <MemoryRouter>
+      <AdministrationPage
+        workspace={company}
+        busy={false}
+        perform={async () => true}
+      />
+    </MemoryRouter>,
+  );
+  for (const part of [
+    "Workspace name",
+    "People",
+    "Agents",
+    "Modules",
+    "Storage and updates",
+  ])
+    expect(admin).toContain(part);
+  expect(admin).not.toContain("Theme");
 });

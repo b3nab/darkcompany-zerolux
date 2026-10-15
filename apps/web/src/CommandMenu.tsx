@@ -10,8 +10,11 @@ import {
   PhoneIcon,
   PlusIcon,
   RefreshCwIcon,
+  SettingsIcon,
+  SlidersHorizontalIcon,
   StampIcon,
   SunIcon,
+  UserIcon,
   UserPlusIcon,
   UsersIcon,
 } from "lucide-react";
@@ -49,6 +52,25 @@ const pages = () => [
   { to: "/meetings", label: "Meetings", icon: PhoneIcon },
   { to: "/approvals", label: "Approvals", icon: StampIcon },
   { to: "/team", label: "Team", icon: UsersIcon },
+  {
+    to: "/profile",
+    label: "Profile",
+    value: "Profile password",
+    icon: UserIcon,
+  },
+  {
+    to: "/settings",
+    label: "My settings",
+    value: "My settings notifications devices theme light connection",
+    icon: SlidersHorizontalIcon,
+  },
+  {
+    to: "/admin",
+    label: "Administration",
+    value:
+      "Administration workspace name people agents modules storage updates",
+    icon: SettingsIcon,
+  },
 ];
 
 /** ⌘K: go anywhere, open a chat, hire a running session, run an action. */

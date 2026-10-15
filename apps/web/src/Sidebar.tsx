@@ -1,60 +1,47 @@
-import { useState } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router";
 import { cn } from "cn";
 import {
   ChevronsUpDownIcon,
   FolderIcon,
   LayoutDashboardIcon,
+  LogOutIcon,
   MessagesSquareIcon,
-  MonitorIcon,
   MoonIcon,
   NetworkIcon,
-  PaletteIcon,
   PhoneIcon,
   PlusIcon,
   SettingsIcon,
+  SlidersHorizontalIcon,
   StampIcon,
   SunIcon,
+  UserIcon,
   UserPlusIcon,
   UsersIcon,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
   creationDateLabel,
-  errorMessage,
   homeLabel,
   isThread,
-  renameWorkspace,
   workspaceAge,
 } from "@zerolux/chat";
-import type { Chat, Perform } from "@zerolux/chat";
+import type { Chat } from "@zerolux/chat";
 import { activeActors } from "./api";
 import type { Actor, Workspace } from "./api";
 import { agentPresence } from "./presence";
-import { themes } from "@zerolux/theme/themes";
+import { useAuthentication } from "./AuthGate";
 import { useTheme } from "./theme";
-import type { Light } from "./theme";
 import { Mark } from "@/components/brand";
 import { Lamp } from "@/components/lamp";
 import { ActorMark } from "@/components/presence";
 import type { Tone } from "@/components/presence";
 import { Button } from "@/components/ui/button";
-import { WorkspaceSettings } from "@/components/workspace-settings";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -191,116 +178,63 @@ const add =
   "grid size-7 place-items-center rounded-sm text-faint transition-colors hover:bg-accent hover:text-foreground aria-expanded:bg-accent [&>svg]:size-4";
 
 /** The workspace you are in, how old it is and how many work in it. */
-export function WorkspaceMenu({
-  workspace,
-  busy,
-  perform,
-}: {
-  workspace: Workspace;
-  busy: boolean;
-  perform: Perform;
-}) {
+export function WorkspaceMenu({ workspace }: { workspace: Workspace }) {
   const navigate = useNavigate();
   const members = activeActors(workspace.actors).length;
-  const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
   const info = workspace.workspace;
   const { name } = info;
   const line = `${workspaceAge(info)} · ${members} member${members === 1 ? "" : "s"}`;
   return (
-    <>
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <button
-              type="button"
-              title={`${name} · ${line}`}
-              className="flex h-8 min-w-0 items-center gap-2 rounded-md px-1.5 transition-colors hover:bg-accent aria-expanded:bg-accent"
-            />
-          }
-        >
-          <span
-            aria-hidden
-            className="grid size-6 shrink-0 place-items-center rounded-sm border border-input bg-secondary text-xs font-semibold"
-          >
-            {name.slice(0, 1).toUpperCase()}
-          </span>
-          <span className="truncate text-[13.5px] font-semibold">{name}</span>
-          <ChevronsUpDownIcon
-            aria-hidden
-            className="size-3.5 shrink-0 text-faint"
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button
+            type="button"
+            title={`${name} · ${line}`}
+            className="flex h-8 min-w-0 items-center gap-2 rounded-md px-1.5 transition-colors hover:bg-accent aria-expanded:bg-accent"
           />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-60">
-          <DropdownMenuGroup>
-            <DropdownMenuLabel className="flex flex-col gap-0.5">
-              <span className="truncate text-[13.5px] font-semibold text-foreground">
-                {name}
-              </span>
-              <span
-                title={creationDateLabel(info)}
-                className="truncate font-mono text-[11px] font-normal"
-              >
-                {line}
-              </span>
-            </DropdownMenuLabel>
-            <DropdownMenuItem
-              onClick={() => {
-                setError("");
-                setEditing(true);
-              }}
-            >
-              <SettingsIcon />
-              Workspace settings
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => navigate("/team")}>
-              <UsersIcon />
-              Team
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => navigate("/team/hire")}>
-              <UserPlusIcon />
-              Hire an agent
-            </DropdownMenuItem>
-          </DropdownMenuGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <Dialog
-        open={editing}
-        onOpenChange={(open) => {
-          if (!busy && !saving) setEditing(open);
-        }}
+        }
       >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Workspace settings</DialogTitle>
-            <DialogDescription>
-              The shared workspace name and this device's connection.
-            </DialogDescription>
-          </DialogHeader>
-          {editing && (
-            <WorkspaceSettings
-              workspace={info}
-              busy={busy || saving}
-              error={error}
-              save={async (name) => {
-                setSaving(true);
-                setError("");
-                try {
-                  await renameWorkspace(name);
-                  setEditing(false);
-                  await perform(async () => {});
-                } catch (error) {
-                  setError(errorMessage(error));
-                } finally {
-                  setSaving(false);
-                }
-              }}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
-    </>
+        <span
+          aria-hidden
+          className="grid size-6 shrink-0 place-items-center rounded-sm border border-input bg-secondary text-xs font-semibold"
+        >
+          {name.slice(0, 1).toUpperCase()}
+        </span>
+        <span className="truncate text-[13.5px] font-semibold">{name}</span>
+        <ChevronsUpDownIcon
+          aria-hidden
+          className="size-3.5 shrink-0 text-faint"
+        />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-60">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel className="flex flex-col gap-0.5">
+            <span className="truncate text-[13.5px] font-semibold text-foreground">
+              {name}
+            </span>
+            <span
+              title={creationDateLabel(info)}
+              className="truncate font-mono text-[11px] font-normal"
+            >
+              {line}
+            </span>
+          </DropdownMenuLabel>
+          <DropdownMenuItem onClick={() => navigate("/admin")}>
+            <SettingsIcon />
+            Administration
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => navigate("/team")}>
+            <UsersIcon />
+            Team
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => navigate("/team/hire")}>
+            <UserPlusIcon />
+            Hire an agent
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -415,16 +349,17 @@ function ThemeSwitch() {
   );
 }
 
-/** You, the theme and its light, and the team. */
+/** You: your profile, your settings, the workspace's administration, and signing out. */
 function UserMenu({ owner }: { owner: Actor }) {
-  const { theme, light, chooseTheme, chooseLight } = useTheme();
+  const navigate = useNavigate();
+  const authentication = useAuthentication();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
           <button
             type="button"
-            aria-label={`${owner.name}, settings`}
+            aria-label={`${owner.name}, profile and settings`}
             title={owner.name}
             className="mt-1 rounded-full transition-opacity hover:opacity-80"
           />
@@ -440,52 +375,31 @@ function UserMenu({ owner }: { owner: Actor }) {
             </span>
             <span className="text-[11.5px] font-normal">Owner</span>
           </DropdownMenuLabel>
+          <DropdownMenuItem onClick={() => navigate("/profile")}>
+            <UserIcon />
+            Profile
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => navigate("/settings")}>
+            <SlidersHorizontalIcon />
+            My settings
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => navigate("/admin")}>
+            <SettingsIcon />
+            Administration
+          </DropdownMenuItem>
         </DropdownMenuGroup>
-        <DropdownMenuSeparator />
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>Theme</DropdownMenuLabel>
-          <DropdownMenuRadioGroup
-            value={theme}
-            onValueChange={(value) => chooseTheme(value as string)}
-          >
-            {themes.map((t) => (
-              <DropdownMenuRadioItem
-                key={t.id}
-                value={t.id}
-                title={t.description}
-              >
-                <PaletteIcon />
-                {t.name}
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuGroup>
-        <DropdownMenuSeparator />
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>Light</DropdownMenuLabel>
-          <DropdownMenuRadioGroup
-            value={light}
-            onValueChange={(value) => chooseLight(value as Light)}
-          >
-            <DropdownMenuRadioItem value="system">
-              <MonitorIcon />
-              System
-            </DropdownMenuRadioItem>
-            <DropdownMenuRadioItem value="light">
-              <SunIcon />
-              Daylight
-            </DropdownMenuRadioItem>
-            <DropdownMenuRadioItem value="dark">
-              <MoonIcon />
-              Night
-            </DropdownMenuRadioItem>
-          </DropdownMenuRadioGroup>
-        </DropdownMenuGroup>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem render={<Link to="/team" />}>
-          <UsersIcon />
-          Team
-        </DropdownMenuItem>
+        {authentication && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              disabled={authentication.busy}
+              onClick={() => void authentication.signOut()}
+            >
+              <LogOutIcon />
+              Sign out
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

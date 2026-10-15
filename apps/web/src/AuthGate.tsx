@@ -28,6 +28,8 @@ import { Label } from "./components/ui/label";
 
 interface Authentication {
   identity: AuthIdentity;
+  /** The signed-in connection, for the account's own pages: password and devices. */
+  account: AuthConnection;
   busy: boolean;
   error: string;
   signOut(): Promise<void>;
@@ -180,7 +182,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (identity?.actor_id)
     return (
-      <AuthenticationContext value={{ identity, busy, error, signOut, guard }}>
+      <AuthenticationContext
+        value={{ identity, account: client, busy, error, signOut, guard }}
+      >
         {children}
       </AuthenticationContext>
     );
