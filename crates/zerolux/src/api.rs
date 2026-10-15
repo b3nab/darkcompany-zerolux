@@ -248,6 +248,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/chat/deliveries/{id}/receipt", post(delivery_receipt))
         .route("/chat/approvals", get(approvals).post(create_approval))
         .route("/chat/approvals/{id}/decision", post(decide_approval))
+        .route("/chat/approvals/{id}/answer", post(answer_approval))
         .route("/chat/approvals/{id}/dispatch", post(dispatch_approval))
         .route("/chat/approvals/{id}/receipt", post(approval_receipt))
         .route_layer(middleware::from_fn(require_identity));
@@ -1076,6 +1077,18 @@ async fn decide_approval(
 ) -> Result<Json<Value>, Error> {
     Ok(Json(
         json!({ "approval": store.decide_chat_approval(&who, &id, &input.decision).await? }),
+    ))
+}
+
+/// The owner's answer to a question or a form, checked against what was asked.
+async fn answer_approval(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(answer): ChatJson<Value>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(
+        json!({ "approval": store.answer_chat_approval(&who, &id, answer).await? }),
     ))
 }
 

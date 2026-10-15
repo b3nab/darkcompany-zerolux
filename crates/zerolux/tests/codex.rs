@@ -1962,3 +1962,73 @@ async fn the_codex_daemon_is_started_once_only_when_absent() {
     assert!(format!("{error:#}").contains("did not start"), "{error:#}");
     assert_eq!(starts(), 2);
 }
+
+#[tokio::test]
+async fn questions_and_mcp_forms_reach_the_owner_and_come_back_as_codex_expects() {
+    let runtime = Runtime::new().await;
+    let kernel = KernelFixture::new("stored").await;
+    let (changed, stop, task) = run(&runtime, &kernel).await;
+    runtime.wait(|s| s.queue.len() == 1).await;
+    runtime.emit(item("ours", user("input", Some(DELIVERY))));
+    runtime.emit(json!({"id":910,"method":"item/tool/requestUserInput","params":{"threadId":THREAD,"turnId":"ours","itemId":"ask","isBlocking":true,"questions":[
+        {"id":"lib","header":"Library","question":"Which library?","options":[{"label":"date-fns","description":"Small"},{"label":"luxon","description":"Zones"}],"isOther":false,"isSecret":false},
+        {"id":"name","header":"Name","question":"Project name?","options":null,"isOther":false,"isSecret":false}]}}));
+    kernel.wait(|s| s.approvals.len() == 1).await;
+    {
+        let state = kernel.state.lock().unwrap();
+        let asked = &state.approvals[0];
+        assert_eq!(asked["kind"], "question");
+        assert_eq!(asked["delivery_id"], DELIVERY);
+        assert_eq!(
+            asked["details"]["questions"][0]["options"][1]["label"],
+            "luxon"
+        );
+        assert_eq!(asked["details"]["questions"][0]["other"], false);
+        // No options: free text.
+        assert_eq!(asked["details"]["questions"][1]["other"], true);
+    }
+    {
+        let mut state = kernel.state.lock().unwrap();
+        state.approvals[0]["status"] = json!("decided");
+        state.approvals[0]["answer"] = json!({"answers":{"lib":["luxon"],"name":["ZeroLux"]}});
+    }
+    changed.send(()).await.unwrap();
+    runtime
+        .wait(|s| {
+            s.requests.iter().any(|r| {
+                r["id"] == 910
+                    && r["result"]
+                        == json!({"answers":{"lib":{"answers":["luxon"]},"name":{"answers":["ZeroLux"]}}})
+            })
+        })
+        .await;
+    // An MCP server's form, with no turn of its own: the session's.
+    runtime.emit(json!({"id":911,"method":"mcpServer/elicitation/request","params":{"threadId":THREAD,"turnId":null,"serverName":"github","mode":"form","message":"Which repository?","requestedSchema":{"type":"object","properties":{"repo":{"type":"string"}},"required":["repo"]}}}));
+    kernel.wait(|s| s.approvals.len() == 2).await;
+    {
+        let mut state = kernel.state.lock().unwrap();
+        assert_eq!(state.approvals[1]["kind"], "form");
+        assert!(state.approvals[1]["delivery_id"].is_null());
+        assert_eq!(state.approvals[1]["details"]["server"], "github");
+        assert_eq!(
+            state.approvals[1]["summary"],
+            "github asks: Which repository?"
+        );
+        state.approvals[1]["status"] = json!("decided");
+        state.approvals[1]["answer"] = json!({"action":"accept","content":{"repo":"zerolux"}});
+    }
+    changed.send(()).await.unwrap();
+    runtime
+        .wait(|s| {
+            s.requests.iter().any(|r| {
+                r["id"] == 911
+                    && r["result"] == json!({"action":"accept","content":{"repo":"zerolux"}})
+            })
+        })
+        .await;
+    // A verification only the user's device can sign stays native.
+    runtime.emit(json!({"id":912,"method":"mcpServer/elicitation/request","params":{"threadId":THREAD,"serverName":"openai","mode":"openai/userVerification","title":"Verify","description":"Device","challenge":"c"}}));
+    kernel.wait(|s| s.session_status == "attention").await;
+    assert_eq!(kernel.state.lock().unwrap().approvals.len(), 2);
+    finish(stop, task).await;
+}

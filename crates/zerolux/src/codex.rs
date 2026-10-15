@@ -1236,41 +1236,77 @@ impl CodexDriver {
         Ok(())
     }
 
+    /// What Codex asks: a permission, a question, or an MCP server's form. The owner is asked
+    /// for the session, and for the chat delivery that started the turn when one did.
     async fn approval(&mut self, kernel: &Kernel, request: Value) -> Result<()> {
         let params = &request["params"];
         if params["threadId"] != self.thread_id {
             return Ok(());
         }
-        let Some(turn_id) = params["turnId"].as_str() else {
-            return Ok(());
-        };
         let request_id = request.get("id").context("Missing native approval ID")?;
         let native_id = self.rpc.native_request_id(request_id);
         if self.approvals.contains_key(&native_id) {
             return Ok(());
         }
-        let Some(state) = self.turns.get(turn_id) else {
-            return Ok(());
-        };
-        // The chat delivery that started the turn, if one did; otherwise the owner is asked
-        // for the session itself.
-        let delivery = state.delivery(&self.deliveries).map(|d| d.id.clone());
+        let state = params["turnId"]
+            .as_str()
+            .and_then(|turn| self.turns.get(turn));
+        let delivery = state
+            .and_then(|state| state.delivery(&self.deliveries))
+            .map(|d| d.id.clone());
         let method = request["method"].as_str().unwrap_or("");
-        if !matches!(
-            method,
+        let (kind, summary, details) = match method {
             "item/commandExecution/requestApproval"
-                | "item/fileChange/requestApproval"
-                | "item/permissions/requestApproval"
-        ) {
-            kernel.status("attention", Some("Codex is asking for native input this bridge cannot represent. Open the native session to answer.")).await?;
-            return Ok(());
-        }
+            | "item/fileChange/requestApproval"
+            | "item/permissions/requestApproval" => {
+                let Some(state) = state else {
+                    return Ok(());
+                };
+                let item = state
+                    .items
+                    .iter()
+                    .find(|item| item["id"] == params["itemId"]);
+                (
+                    "permission",
+                    "Codex requests your permission".to_owned(),
+                    json!({"method":method,"params":params,"item":item}),
+                )
+            }
+            "item/tool/requestUserInput" => {
+                let questions = codex_questions(params);
+                let summary = match questions.as_slice() {
+                    [one] => one["question"].as_str().unwrap_or_default().to_owned(),
+                    _ => "Codex asks you".to_owned(),
+                };
+                (
+                    "question",
+                    summary,
+                    json!({"method":method,"questions":questions}),
+                )
+            }
+            "mcpServer/elicitation/request" => {
+                let Some(form) = codex_form(params) else {
+                    kernel.status("attention", Some("An MCP server asks for a verification only the native session can give. Open it to answer.")).await?;
+                    return Ok(());
+                };
+                (
+                    "form",
+                    format!(
+                        "{} asks: {}",
+                        form["server"].as_str().unwrap_or_default(),
+                        form["message"].as_str().unwrap_or_default()
+                    ),
+                    form,
+                )
+            }
+            _ => {
+                kernel.status("attention", Some("Codex is asking for native input this bridge cannot represent. Open the native session to answer.")).await?;
+                return Ok(());
+            }
+        };
         let id = Uuid::new_v4().to_string();
-        let item = state
-            .items
-            .iter()
-            .find(|item| item["id"] == params["itemId"]);
-        kernel.post("/chat/approvals", json!({"id":id,"delivery_id":delivery,"native_request_id":native_id,"summary":"Codex requests your permission","details":{"method":method,"params":params,"item":item}})).await?;
+        let summary: String = summary.chars().take(1000).collect();
+        kernel.post("/chat/approvals", json!({"id":id,"delivery_id":delivery,"native_request_id":native_id,"kind":kind,"summary":summary,"details":details})).await?;
         self.approvals.insert(
             native_id,
             Approval {
@@ -1318,7 +1354,12 @@ impl CodexDriver {
             return Ok(());
         }
         ensure!(decision["id"] == approval.id, "Approval identity changed");
-        let result = approval_result(&approval.request, string(decision, "decision")?)?;
+        let result = match decision["kind"].as_str().unwrap_or("permission") {
+            "permission" => approval_result(&approval.request, string(decision, "decision")?)?,
+            "question" => question_result(&decision["answer"]),
+            // The owner's answer is the MCP elicitation result itself.
+            _ => decision["answer"].clone(),
+        };
         if kernel
             .post_conflict(
                 &format!("/chat/approvals/{}/dispatch", approval.id),
@@ -1481,6 +1522,61 @@ fn context_params(settings: &Value) -> Result<Value> {
         params["config"] = json!({"model_reasoning_effort":effort});
     }
     Ok(params)
+}
+
+/// Codex's `requestUserInput` questions in ZeroLux's shape.
+fn codex_questions(params: &Value) -> Vec<Value> {
+    params["questions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|q| {
+            let options = q["options"].as_array().cloned().unwrap_or_default();
+            json!({
+                "id": q["id"],
+                "header": q["header"],
+                "question": q["question"],
+                "options": options,
+                "multiple": false,
+                "other": q["isOther"] == true || options.is_empty(),
+                "secret": q["isSecret"] == true,
+            })
+        })
+        .collect()
+}
+
+/// An MCP elicitation in ZeroLux's shape: fields to fill in, or a link to open. None for a
+/// verification only the user's own device can sign.
+fn codex_form(params: &Value) -> Option<Value> {
+    let base = json!({"server": params["serverName"], "message": params["message"]});
+    match params["mode"].as_str()? {
+        "form" | "openai/form" | "openaiForm"
+            if params["requestedSchema"]["properties"].is_object() =>
+        {
+            let mut form = base;
+            form["mode"] = json!("form");
+            form["schema"] = params["requestedSchema"].clone();
+            Some(form)
+        }
+        "url" => {
+            let mut form = base;
+            form["mode"] = json!("url");
+            form["url"] = params["url"].clone();
+            Some(form)
+        }
+        _ => None,
+    }
+}
+
+/// The owner's answers as Codex expects them; declined, no answers.
+fn question_result(answer: &Value) -> Value {
+    let answers: serde_json::Map<String, Value> = answer["answers"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(id, values)| (id.clone(), json!({ "answers": values })))
+        .collect();
+    json!({ "answers": answers })
 }
 
 fn approval_result(request: &Value, decision: &str) -> Result<Value> {

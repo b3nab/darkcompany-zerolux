@@ -849,6 +849,7 @@ async fn renewing_an_owned_link_keeps_deliveries_approvals_and_permission_mode()
                     id: Uuid::new_v4().to_string(),
                     delivery_id: Some(ids[0].clone()),
                     native_request_id: format!("fixture-{state}"),
+                    kind: "permission".into(),
                     summary: "Fixture permission".into(),
                     details: json!({}),
                 },
@@ -1642,6 +1643,7 @@ async fn a_session_asks_the_owner_without_a_chat() {
                 id: Uuid::new_v4().to_string(),
                 delivery_id: None,
                 native_request_id: "native-unprompted".into(),
+                kind: "permission".into(),
                 summary: "Run a fixture command".into(),
                 details: json!({"command":"true"}),
             },
@@ -1661,6 +1663,7 @@ async fn a_session_asks_the_owner_without_a_chat() {
                     id: Uuid::new_v4().to_string(),
                     delivery_id: None,
                     native_request_id: "owner".into(),
+                    kind: "permission".into(),
                     summary: "Not an agent".into(),
                     details: json!({}),
                 },
@@ -1678,6 +1681,84 @@ async fn a_session_asks_the_owner_without_a_chat() {
         .dispatch_chat_approval(&aspen_id, &approval.id)
         .await
         .unwrap();
+}
+
+/// A question is answered, not decided, and only with what it offers.
+#[tokio::test]
+async fn the_owner_answers_a_question_within_what_it_offers() {
+    let f = Fixture::new().await;
+    let (_aspen, aspen_id) = f.hire("aspen", None).await;
+    let question = f
+        .store
+        .create_chat_approval(
+            &aspen_id,
+            CreateChatApproval {
+                id: Uuid::new_v4().to_string(),
+                delivery_id: None,
+                native_request_id: "native-question".into(),
+                kind: "question".into(),
+                summary: "Which library?".into(),
+                details: json!({"questions":[{"id":"lib","question":"Which library?",
+                    "options":[{"label":"date-fns"},{"label":"luxon"}],"multiple":false,"other":false}]}),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(question.kind, "question");
+    assert!(matches!(
+        f.store
+            .decide_chat_approval(&f.owner, &question.id, "allow")
+            .await,
+        Err(Error::Invalid(_))
+    ));
+    assert!(matches!(
+        f.store
+            .answer_chat_approval(
+                &f.owner,
+                &question.id,
+                json!({"answers":{"lib":["moment"]}})
+            )
+            .await,
+        Err(Error::Invalid(_))
+    ));
+    assert!(matches!(
+        f.store
+            .answer_chat_approval(
+                &aspen_id,
+                &question.id,
+                json!({"answers":{"lib":["luxon"]}})
+            )
+            .await,
+        Err(Error::Forbidden)
+    ));
+    let answer = json!({"answers":{"lib":["luxon"]}});
+    let answered = f
+        .store
+        .answer_chat_approval(&f.owner, &question.id, answer.clone())
+        .await
+        .unwrap();
+    assert_eq!(answered.status, "decided");
+    assert_eq!(answered.answer, Some(answer.clone()));
+    assert!(answered.decision.is_none());
+    // The same answer again changes nothing; another one is a conflict.
+    f.store
+        .answer_chat_approval(&f.owner, &question.id, answer)
+        .await
+        .unwrap();
+    assert!(matches!(
+        f.store
+            .answer_chat_approval(
+                &f.owner,
+                &question.id,
+                json!({"answers":{"lib":["date-fns"]}})
+            )
+            .await,
+        Err(Error::Conflict)
+    ));
+    assert_eq!(
+        f.store.chat_inbox(&aspen_id).await.unwrap().approvals[0].answer,
+        Some(json!({"answers":{"lib":["luxon"]}}))
+    );
 }
 
 #[tokio::test]
@@ -1704,6 +1785,7 @@ async fn approvals_require_owner_decision_and_native_dispatch_is_never_replayed(
                 id: Uuid::new_v4().to_string(),
                 delivery_id: Some(delivery.clone()),
                 native_request_id: "native-approval".into(),
+                kind: "permission".into(),
                 summary: "Read a fixture file".into(),
                 details: json!({"path":"fixture.txt"}),
             },
@@ -1789,6 +1871,7 @@ async fn approvals_require_owner_decision_and_native_dispatch_is_never_replayed(
                 id: Uuid::new_v4().to_string(),
                 delivery_id: Some(delivery.clone()),
                 native_request_id: "native-cancelled".into(),
+                kind: "permission".into(),
                 summary: "Cancelled prompt".into(),
                 details: json!({}),
             },

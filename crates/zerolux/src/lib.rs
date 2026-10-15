@@ -23,6 +23,7 @@ pub mod model;
 pub mod native_output;
 #[cfg(unix)]
 mod pi_runner;
+pub mod requests;
 pub mod server;
 pub mod sessions;
 pub mod store;

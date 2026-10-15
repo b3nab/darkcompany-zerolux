@@ -12,14 +12,22 @@ pub struct Model {
     pub delivery_id: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub native_request_id: String,
+    /// What the session asks: "permission" (allow or deny), "question" or "form".
+    #[sea_orm(column_type = "Text", default_value = "permission")]
+    pub kind: String,
     #[sea_orm(column_type = "Text")]
     pub summary: String,
+    /// The native request; for a question or a form, its questions or fields.
     #[sea_orm(column_type = "Text")]
     pub details_json: String,
     #[sea_orm(column_type = "Text")]
     pub status: String,
+    /// A permission's decision.
     #[sea_orm(column_type = "Text")]
     pub decision: Option<String>,
+    /// The owner's answer to a question or a form.
+    #[sea_orm(column_type = "Text")]
+    pub answer_json: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub last_error: Option<String>,
     pub created_at: i64,
@@ -68,11 +76,22 @@ impl super::schema::Definition for Entity {
             "delivered",
             "resolved",
         ]));
+        table.check(Expr::col(Column::Kind).is_in(["permission", "question", "form"]));
         table.check(Expr::col(Column::Decision).is_in(["allow", "deny"]));
+        // A permission is decided; a question or a form is answered.
+        table.check(
+            Expr::col(Column::Kind)
+                .eq("permission")
+                .and(Expr::col(Column::AnswerJson).is_null())
+                .or(Expr::col(Column::Kind)
+                    .ne("permission")
+                    .and(Expr::col(Column::Decision).is_null())),
+        );
         table.check(
             Expr::col(Column::Status)
                 .is_not_in(["decided", "uncertain", "delivered"])
-                .or(Expr::col(Column::Decision).is_not_null()),
+                .or(Expr::col(Column::Decision).is_not_null())
+                .or(Expr::col(Column::AnswerJson).is_not_null()),
         );
     }
 }

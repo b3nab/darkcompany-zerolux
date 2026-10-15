@@ -484,10 +484,12 @@ struct ApprovalRow {
     conversation_id: Option<String>,
     delivery_id: Option<String>,
     native_request_id: String,
+    kind: String,
     summary: String,
     details_json: String,
     status: String,
     decision: Option<String>,
+    answer_json: Option<String>,
     last_error: Option<String>,
     created_at: i64,
 }
@@ -513,10 +515,12 @@ async fn approval_in<C: ConnectionTrait>(db: &C, id: &str) -> Result<ChatApprova
         conversation_id: row.conversation_id,
         delivery_id: row.delivery_id,
         native_request_id: row.native_request_id,
+        kind: row.kind,
         summary: row.summary,
         details: decode(&row.details_json)?,
         status: row.status,
         decision: row.decision,
+        answer: row.answer_json.as_deref().map(decode).transpose()?,
         last_error: row.last_error,
         created_at: row.created_at,
     })
@@ -2110,11 +2114,7 @@ impl Store {
         uuid(&input.id)?;
         let native_id = text(&input.native_request_id, "Native request ID", 500, true)?;
         let summary = text(&input.summary, "Approval summary", 1_000, true)?;
-        if !input.details.is_object() || input.details.to_string().len() > 64 * 1024 {
-            return Err(Error::Invalid(
-                "Approval details must be a JSON object of at most 64 KiB".into(),
-            ));
-        }
+        crate::requests::check_request(&input.kind, &input.details)?;
         let tx = self.write().await?;
         identity_in(&tx, who).await?;
         // The session asks for itself; a chat delivery, when one started the turn, must be its own.
@@ -2147,6 +2147,7 @@ impl Store {
             if existing.session_id != session_id
                 || existing.delivery_id != input.delivery_id
                 || existing.native_request_id != native_id
+                || existing.kind != input.kind
                 || existing.summary != summary
                 || existing.details != input.details
             {
@@ -2160,10 +2161,12 @@ impl Store {
             session_id: Set(session_id.clone()),
             delivery_id: Set(input.delivery_id),
             native_request_id: Set(native_id),
+            kind: Set(input.kind.clone()),
             summary: Set(summary),
             details_json: Set(input.details.to_string()),
             status: Set("pending".into()),
             decision: Set(None),
+            answer_json: Set(None),
             last_error: Set(None),
             created_at: Set(now),
             updated_at: Set(now),
@@ -2195,6 +2198,9 @@ impl Store {
         let tx = self.write().await?;
         owner_in(&tx, who).await?;
         let existing = approval_in(&tx, id).await?;
+        if existing.kind != "permission" {
+            return Err(Error::Invalid("Answer this request instead".into()));
+        }
         if let Some(previous) = &existing.decision {
             return if previous == decision {
                 Ok(existing)
@@ -2210,6 +2216,49 @@ impl Store {
             .col_expr(
                 tool_approvals::Column::Decision,
                 Expr::value(Some(decision)),
+            )
+            .col_expr(tool_approvals::Column::UpdatedAt, Expr::value(now_ms()))
+            .filter(tool_approvals::Column::Id.eq(id))
+            .exec(&tx)
+            .await?;
+        personal_event(
+            &tx,
+            "approval.changed",
+            &existing.session_id,
+            json!({"approval_id":id}),
+        )
+        .await?;
+        let result = approval_in(&tx, id).await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    /// The owner's answer to a question or a form. The same answer again is no change.
+    pub async fn answer_chat_approval(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+        answer: Value,
+    ) -> Result<ChatApproval> {
+        let tx = self.write().await?;
+        owner_in(&tx, who).await?;
+        let existing = approval_in(&tx, id).await?;
+        crate::requests::check_answer(&existing.kind, &existing.details, &answer)?;
+        if let Some(previous) = &existing.answer {
+            return if previous == &answer {
+                Ok(existing)
+            } else {
+                Err(Error::Conflict)
+            };
+        }
+        if existing.status != "pending" {
+            return Err(Error::Conflict);
+        }
+        tool_approvals::Entity::update_many()
+            .col_expr(tool_approvals::Column::Status, Expr::value("decided"))
+            .col_expr(
+                tool_approvals::Column::AnswerJson,
+                Expr::value(Some(answer.to_string())),
             )
             .col_expr(tool_approvals::Column::UpdatedAt, Expr::value(now_ms()))
             .filter(tool_approvals::Column::Id.eq(id))

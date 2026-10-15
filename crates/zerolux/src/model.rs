@@ -371,8 +371,15 @@ pub struct CreateChatApproval {
     #[serde(default)]
     pub delivery_id: Option<String>,
     pub native_request_id: String,
+    /// "permission", "question" or "form"; see `requests`.
+    #[serde(default = "permission")]
+    pub kind: String,
     pub summary: String,
     pub details: serde_json::Value,
+}
+
+fn permission() -> String {
+    "permission".into()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -383,10 +390,14 @@ pub struct ChatApproval {
     pub conversation_id: Option<String>,
     pub delivery_id: Option<String>,
     pub native_request_id: String,
+    pub kind: String,
     pub summary: String,
     pub details: serde_json::Value,
     pub status: String,
+    /// A permission's decision.
     pub decision: Option<String>,
+    /// The owner's answer to a question or a form.
+    pub answer: Option<serde_json::Value>,
     pub last_error: Option<String>,
     pub created_at: i64,
 }
