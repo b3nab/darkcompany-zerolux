@@ -156,7 +156,14 @@ export function Tonight({
                       {need.title}
                     </span>
                   </Link>
-                  {need.approvalId ? (
+                  {need.approvalKind && need.approvalKind !== "permission" ? (
+                    <Link
+                      to="/approvals"
+                      className={buttonVariants({ size: "sm" })}
+                    >
+                      Answer
+                    </Link>
+                  ) : need.approvalId ? (
                     <div className="flex shrink-0 gap-1.5">
                       {(["deny", "allow"] as const).map((decision) => (
                         <Button

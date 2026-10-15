@@ -1,9 +1,10 @@
 import type { Actor } from "./api";
-import { approvalLabels } from "@zerolux/chat";
+import { answerSummary, approvalLabels } from "@zerolux/chat";
 import type { Approval, Conversation } from "@zerolux/chat";
 import type { Chat, Perform } from "@zerolux/chat";
 import { Button } from "@/components/ui/button";
 import { ActorMark, Eyebrow } from "@/components/presence";
+import { McpForm, QuestionForm } from "./RequestAnswer";
 
 const open = new Set<Approval["status"]>(["pending", "decided", "uncertain"]);
 /** The requests still waiting for a decision or for the agent to receive it. */
@@ -96,10 +97,34 @@ export function ApprovalCard({
           While answering in «{conversation.title}»
         </Button>
       )}
-      <pre className="overflow-x-auto rounded-sm border bg-background p-3 font-mono text-xs">
-        {JSON.stringify(approval.details, null, 2)}
-      </pre>
-      {approval.status === "pending" ? (
+      {approval.kind === "permission" && (
+        <pre className="overflow-x-auto rounded-sm border bg-background p-3 font-mono text-xs">
+          {JSON.stringify(approval.details, null, 2)}
+        </pre>
+      )}
+      {approval.kind !== "permission" ? (
+        approval.status === "pending" ? (
+          approval.kind === "question" ? (
+            <QuestionForm
+              approval={approval}
+              chat={chat}
+              busy={busy}
+              perform={perform}
+            />
+          ) : (
+            <McpForm
+              approval={approval}
+              chat={chat}
+              busy={busy}
+              perform={perform}
+            />
+          )
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            {answerSummary(approval)} · {approvalLabels[approval.status]}
+          </p>
+        )
+      ) : approval.status === "pending" ? (
         <div className="flex flex-wrap items-center gap-2">
           <Button
             disabled={busy}
