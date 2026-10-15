@@ -302,7 +302,7 @@ where
 
 /// Codex answered and refused: the request had no effect. Anything else is uncertain.
 #[derive(Debug)]
-struct Rejected(Value);
+pub(crate) struct Rejected(pub(crate) Value);
 
 impl std::fmt::Display for Rejected {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -322,7 +322,7 @@ fn activity(status: &Value) -> Option<&'static str> {
 }
 
 /// JSON-RPC: the request was not valid for the current state and was not applied.
-const INVALID_REQUEST: i64 = -32600;
+pub(crate) const INVALID_REQUEST: i64 = -32600;
 
 /// Native request ID of a message that joined a running turn, followed by the turn ID.
 const STEERED: &str = "turn:";

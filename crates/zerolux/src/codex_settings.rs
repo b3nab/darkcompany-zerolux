@@ -53,6 +53,47 @@ impl CodexSettings {
         }
     }
 
+    /// The owner's own input, typed into the thread from ZeroLux: it joins the running turn,
+    /// or waits in Codex's queue and starts the next one. An unconfirmed send is never
+    /// repeated.
+    pub async fn input(&self, text: &str) -> Result<()> {
+        let input = json!([{"type": "text", "text": text}]);
+        let running = self.turn.borrow().clone();
+        if let Some(turn) = running {
+            match self
+                .rpc
+                .request(
+                    "turn/steer",
+                    json!({"threadId": self.thread_id, "expectedTurnId": turn,
+                        "clientUserMessageId": uuid::Uuid::new_v4().to_string(), "input": input}),
+                )
+                .await
+            {
+                Ok(_) => return Ok(()),
+                // Only a refusal proves nothing was delivered: the turn ended or cannot be
+                // steered, so the input waits for the next turn.
+                Err(error)
+                    if error
+                        .downcast_ref::<crate::codex::Rejected>()
+                        .is_some_and(|refusal| refusal.0 == crate::codex::INVALID_REQUEST) => {}
+                Err(error) => {
+                    return Err(
+                        error.context("Codex did not confirm the input; it was not sent again")
+                    );
+                }
+            }
+        }
+        self.rpc
+            .request(
+                "thread/queue/add",
+                json!({"threadId": self.thread_id,
+                    "clientUserMessageId": uuid::Uuid::new_v4().to_string(), "input": input}),
+            )
+            .await
+            .context("Codex did not confirm the input; it was not sent again")?;
+        Ok(())
+    }
+
     /// Stops the running turn, whoever started it. No turn running: nothing to stop.
     pub async fn interrupt(&self) -> Result<bool> {
         let Some(turn) = self.turn.borrow().clone() else {

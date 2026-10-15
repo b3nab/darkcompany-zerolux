@@ -719,19 +719,24 @@ impl ClaudeSession {
     /// session queued it: the delivery stays uncertain until the transcript says so, and is
     /// never written twice.
     pub async fn deliver(&self, text: &str) -> Result<()> {
-        let mut line =
-            serde_json::to_vec(&json!({"type":"user","message":{"role":"user","content":text}}))?;
-        line.push(b'\n');
-        let write = async {
-            let mut stream = UnixStream::connect(&self.socket).await?;
-            stream.write_all(&line).await?;
-            stream.shutdown().await
-        };
-        tokio::time::timeout(WRITE_TIMEOUT, write)
-            .await
-            .context("Claude Code did not accept the message in time; outcome may be uncertain")?
-            .context("Cannot reach the Claude Code inbox; outcome may be uncertain")
+        write_inbox(&self.socket, text).await
     }
+}
+
+/// One line into a live session's inbox, as Claude Code shows a message from another session.
+pub(crate) async fn write_inbox(socket: &Path, text: &str) -> Result<()> {
+    let mut line =
+        serde_json::to_vec(&json!({"type":"user","message":{"role":"user","content":text}}))?;
+    line.push(b'\n');
+    let write = async {
+        let mut stream = UnixStream::connect(socket).await?;
+        stream.write_all(&line).await?;
+        stream.shutdown().await
+    };
+    tokio::time::timeout(WRITE_TIMEOUT, write)
+        .await
+        .context("Claude Code did not accept the message in time; outcome may be uncertain")?
+        .context("Cannot reach the Claude Code inbox; outcome may be uncertain")
 }
 
 #[cfg(test)]

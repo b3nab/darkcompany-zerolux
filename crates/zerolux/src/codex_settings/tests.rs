@@ -64,6 +64,8 @@ impl Fixture {
                     }
                     "turn/settings/update" => json!({"status":turn_status}),
                     "turn/interrupt" => json!({}),
+                    "turn/steer" => json!({"turnId":"turn"}),
+                    "thread/queue/add" => json!({"queuedSubmission":{"id":"q"}}),
                     other => panic!("Unexpected native method: {other}"),
                 };
                 if socket
@@ -217,4 +219,22 @@ async fn interrupt_stops_only_the_running_turn() {
         json!({"threadId":"thread","turnId":"turn"})
     );
     assert!(busy.calls("turn/start").is_empty());
+}
+
+#[tokio::test]
+async fn input_joins_the_running_turn_or_waits_for_the_next() {
+    let busy = Fixture::new(true, false, "applied").await;
+    busy.control.input("look").await.unwrap();
+    let steered = busy.calls("turn/steer");
+    assert_eq!(steered.len(), 1);
+    assert_eq!(steered[0]["params"]["expectedTurnId"], "turn");
+    assert_eq!(
+        steered[0]["params"]["input"],
+        json!([{"type":"text","text":"look"}])
+    );
+    assert!(busy.calls("thread/queue/add").is_empty());
+    let idle = Fixture::new(false, false, "applied").await;
+    idle.control.input("start").await.unwrap();
+    assert_eq!(idle.calls("thread/queue/add").len(), 1);
+    assert!(idle.calls("turn/steer").is_empty());
 }

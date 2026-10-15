@@ -231,6 +231,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/chat/sessions/{id}/output", get(session_output))
         .route("/chat/sessions/{id}/events", get(session_events))
         .route("/chat/sessions/{id}/interrupt", post(interrupt_session))
+        .route("/chat/sessions/{id}/input", post(session_input))
         .route(
             "/conversations",
             get(conversations).post(create_conversation),
@@ -786,6 +787,26 @@ async fn interrupt_session(
         .await
         .map_err(runtime_error)?;
     Ok(Json(json!({ "interrupted": interrupted })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InputRequest {
+    text: String,
+}
+
+/// The owner's own input, straight into the native session; not a chat message.
+async fn session_input(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<InputRequest>,
+) -> Result<Json<Value>, ApiFailure> {
+    runtime(&state)?
+        .input(&who, &id, &input.text)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "sent": true })))
 }
 
 #[derive(Deserialize)]

@@ -4,6 +4,7 @@ use super::*;
 use serde_json::json;
 
 const INTERRUPT: &str = "interrupt-v1";
+const INPUT: &str = "input-v1";
 
 impl ChatRuntime {
     /// Stops the native turn in progress, whoever started it. The session stays linked and
@@ -16,6 +17,74 @@ impl ChatRuntime {
                 Ok(error) => error.into(),
                 Err(error) => Error::Invalid(format!("{error:#}")).into(),
             })
+    }
+
+    /// The owner's own input, typed into the session from ZeroLux: native user input, not a
+    /// chat message. It joins a running turn or starts the next one; the native record shows
+    /// it. An unconfirmed send is reported, never repeated.
+    pub async fn input(&self, who: &ChatIdentity, id: &str, text: &str) -> Result<()> {
+        self.input_native(who, id, text)
+            .await
+            .map_err(|error| match error.downcast::<Error>() {
+                Ok(error) => error.into(),
+                Err(error) => Error::Invalid(format!("{error:#}")).into(),
+            })
+    }
+
+    async fn input_native(&self, who: &ChatIdentity, id: &str, text: &str) -> Result<()> {
+        if !who.is_owner() {
+            return Err(Error::Forbidden.into());
+        }
+        if text.trim().is_empty() || text.len() > 64 * 1024 {
+            return Err(Error::Invalid("Write from 1 byte to 64 KiB".into()).into());
+        }
+        let session = self
+            .store
+            .chat_sessions(who)
+            .await?
+            .into_iter()
+            .find(|session| session.id == id)
+            .ok_or(Error::NotFound)?;
+        #[cfg(unix)]
+        if session.harness == "claude-code" && self.owned_mode(who, id).await?.is_none() {
+            ensure!(
+                session.stopped_at.is_none() && session.status == "connected",
+                "The native session is not connected"
+            );
+            ensure!(
+                session.host_id.as_deref() == self.store.host(),
+                "The session belongs to another kernel host"
+            );
+            let locator = self.store.chat_session_locator(who, id).await?;
+            let socket = locator["socket"]
+                .as_str()
+                .context("The Claude Code inbox is unavailable")?;
+            return crate::claude::write_inbox(std::path::Path::new(socket), text).await;
+        }
+        match self.native_control(who, &session, INPUT).await? {
+            Control::Codex(control) => control.input(text).await,
+            Control::Pi(record) => {
+                sessions::control(
+                    &record,
+                    json!({"method":"input","link_id":session.id,"text":text}),
+                )
+                .await?;
+                Ok(())
+            }
+            #[cfg(unix)]
+            Control::Claude(link) => {
+                let actual = link.describe().await?;
+                ensure!(
+                    actual["capabilities"]
+                        .as_array()
+                        .is_some_and(|values| values.iter().any(|value| value == INPUT)),
+                    "The Claude runner needs an update for this control"
+                );
+                link.request(json!({"method":"input","link_id":session.id,"text":text}))
+                    .await?;
+                Ok(())
+            }
+        }
     }
 
     async fn interrupt_native(&self, who: &ChatIdentity, id: &str) -> Result<bool> {
