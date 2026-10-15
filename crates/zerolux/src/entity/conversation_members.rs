@@ -3,14 +3,53 @@ use sea_orm::entity::prelude::*;
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "conversation_members")]
 pub struct Model {
-    #[sea_orm(primary_key, auto_increment = false)]
+    #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub conversation_id: String,
-    #[sea_orm(primary_key, auto_increment = false)]
+    #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub actor_id: String,
+    #[sea_orm(column_type = "Text")]
     pub session_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {}
+pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::conversations::Entity",
+        from = "Column::ConversationId",
+        to = "super::conversations::Column::Id",
+        fk_name = "conversation_members_conversation_id_fkey"
+    )]
+    Conversation,
+    #[sea_orm(
+        belongs_to = "super::actors::Entity",
+        from = "Column::ActorId",
+        to = "super::actors::Column::Id",
+        fk_name = "conversation_members_actor_id_fkey"
+    )]
+    Actor,
+    #[sea_orm(
+        belongs_to = "super::chat_sessions::Entity",
+        from = "Column::SessionId",
+        to = "super::chat_sessions::Column::Id",
+        fk_name = "conversation_members_session_id_fkey"
+    )]
+    Session,
+}
 
 impl ActiveModelBehavior for ActiveModel {}
+
+impl super::schema::Definition for Entity {
+    fn constraints(
+        _: sea_orm::DatabaseBackend,
+        _: &mut sea_orm::sea_query::TableCreateStatement,
+        indexes: &mut Vec<sea_orm::sea_query::IndexCreateStatement>,
+    ) {
+        indexes.push(
+            sea_orm::sea_query::Index::create()
+                .name("conversation_members_session")
+                .table(Entity)
+                .col(Column::SessionId)
+                .take(),
+        );
+    }
+}
