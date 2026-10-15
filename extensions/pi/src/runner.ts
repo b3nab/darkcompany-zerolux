@@ -602,12 +602,12 @@ export class PiRunner {
   }
 
   /**
-   * A question pi asks its user, who is not at a terminal here. A yes/no question in a turn
-   * that one chat feeds goes to the owner as an approval of that chat's delivery, through
-   * the kernel of the link that bound this host; the answer comes back as pi's own
-   * response, once. Anything else is reported, never answered on the owner's behalf. A Stop
-   * withdraws the question; pi's own timeout ends it, and a decision after that is not
-   * replayed.
+   * A question pi asks its user, who is not at a terminal here. A yes/no question goes to
+   * the owner as an approval of the session, and of the chat delivery when one chat feeds
+   * the turn, through the kernel of the link that bound this host; the answer comes back
+   * as pi's own response, once. Anything else is reported, never answered on the owner's
+   * behalf. A Stop withdraws the question; pi's own timeout ends it, and a decision after
+   * that is not replayed.
    */
   private async dialog(child: Child, event: Record<string, any>) {
     const id = event.id;
@@ -651,15 +651,13 @@ export class PiRunner {
           ? await this.turnDelivery(child, input)
           : null;
       if (stopped()) return;
-      if (event.method !== "confirm" || !delivery) {
+      if (event.method !== "confirm") {
         await this.kernel(
           `/chat/sessions/${encodeURIComponent(this.identity!.link)}/status`,
           {
             status: "attention",
             reason:
-              event.method === "confirm"
-                ? "pi asks for a confirmation in a turn that is private or shared between chats; it waits for its own timeout."
-                : "pi asks for native input this host cannot represent (a choice or text); it waits for its own timeout.",
+              "pi asks for native input this host cannot represent (a choice or text); it waits for its own timeout.",
           },
         ).catch(() => {});
         // Unanswered on the owner's behalf; still withdrawn by a Stop until pi's own

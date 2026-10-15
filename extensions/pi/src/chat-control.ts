@@ -37,6 +37,8 @@ export interface ControlHost {
     check: boolean,
   ): Promise<NativeSettingsSnapshot>;
   takeover?(request: TakeoverRequest): Promise<{ accepted: boolean }>;
+  /** Stops the native turn in progress, whoever started it, for the owner of a link. */
+  interrupt?(linkId: string): Promise<{ interrupted: boolean }>;
   /**
    * Whose work the running turn is, across every link of this pi: the delivery of the one
    * chat feeding it and that link's ID, or no delivery. Asked by a host that routes pi's
@@ -82,6 +84,11 @@ export class ChatControl extends LocalControl {
           }
           if (method === "turn")
             return { ...(host.turn?.() ?? { delivery: null }) };
+          if (method === "interrupt" && host.interrupt) {
+            if (typeof request.link_id !== "string" || !request.link_id)
+              throw new Error("Invalid interrupt request");
+            return host.interrupt(request.link_id);
+          }
           if (method === "stop" && typeof request.link_id === "string") {
             await host.stop(request.link_id);
             return {};

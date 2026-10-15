@@ -207,6 +207,13 @@ export class ClaudeAgent {
   }
 
   /** The inbox tool: other agents' messages in the turn's chat, read as the agent opens them. */
+  /** Stops the turn in progress, whoever started it; the session and its context stay. */
+  async interrupt() {
+    if (this.state === "idle" || !this.query) return false;
+    await this.query.interrupt();
+    return true;
+  }
+
   readInbox() {
     const batches = this.peers.filter((p) => p.chat === this.turnChat);
     this.peers = this.peers.filter((p) => p.chat !== this.turnChat);
@@ -344,8 +351,8 @@ export class ClaudeAgent {
   }
 
   /**
-   * Claude Code asks before a tool runs: the owner decides in ZeroLux, in the chat whose
-   * message started the turn. Nothing runs until then; a cancelled call withdraws the request.
+   * Claude Code asks before a tool runs: the owner decides in ZeroLux, whatever started the
+   * turn. Nothing runs until then; a cancelled call withdraws the request.
    */
   private canUseTool: CanUseTool = async (
     toolName,
@@ -360,19 +367,13 @@ export class ClaudeAgent {
       };
     if (signal.aborted)
       return { behavior: "deny", message: "The request was withdrawn." };
-    const delivery = this.turnDelivery;
-    if (!delivery)
-      return {
-        behavior: "deny",
-        message:
-          "No chat message started this turn, so ZeroLux cannot ask the owner. Ask in the chat first.",
-      };
     const details = JSON.stringify(input);
     const created = await this.request<{ approval: Approval }>(
       "/chat/approvals",
       {
         id: randomUUID(),
-        delivery_id: delivery,
+        // The chat message that started the turn, if one did.
+        delivery_id: this.turnDelivery ?? null,
         native_request_id: toolUseID,
         summary: `Claude Code wants to use ${toolName}`,
         details: {

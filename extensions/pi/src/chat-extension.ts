@@ -629,6 +629,7 @@ export default function chatExtension(pi: ExtensionAPI) {
         ...settings.values(),
         capabilities: [
           "agent-settings-v1",
+          "interrupt-v1",
           ...(installedCode ? ["integration-update-v1"] : []),
         ],
         integration_revision: installedCode?.revision,
@@ -707,6 +708,17 @@ export default function chatExtension(pi: ExtensionAPI) {
           cancelUpdate();
           throw error;
         }
+      },
+      interrupt: async (linkId) => {
+        if (
+          ![...links.values()].some(
+            (link) => link.bridge.connected && link.bridge.sessionId === linkId,
+          )
+        )
+          throw new Error("Unknown or disconnected link");
+        if (ctx.isIdle()) return { interrupted: false };
+        ctx.abort();
+        return { interrupted: true };
       },
       // The kernel asks a live pi for the session list: pi's own SDK, in this process.
       sessions: () => listMetadata(process.env.PI_CODING_AGENT_SESSION_DIR),

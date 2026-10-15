@@ -112,6 +112,7 @@ export class Runner {
       permission_mode: this.config.mode,
       capabilities: [
         "agent-settings-v1",
+        "interrupt-v1",
         ...(this.config.managed && this.deps.code && this.deps.execution
           ? ["integration-update-v1"]
           : []),
@@ -198,6 +199,11 @@ export class Runner {
                 request.check === true,
               ),
       };
+    }
+    if (method === "interrupt") {
+      if (this.stopRequested || !this.transport.bound)
+        throw new Error("The session is not connected");
+      return { interrupted: await this.agent.interrupt() };
     }
     if (method === "update") return this.prepareUpdate(request);
     if (method === "update_commit") return this.commitUpdate(request);

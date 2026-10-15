@@ -183,7 +183,7 @@ setInterval(() => {
             const found = (id: string) => approvals.find((a) => a.id === id);
             if (path === "/chat/approvals") {
               const input = body as Record<string, unknown>;
-              if (input.delivery_id !== "turn-delivery")
+              if (![null, "turn-delivery"].includes(input.delivery_id as never))
                 throw new Error("Unknown delivery");
               approvals.push({ ...input, status: "pending", decision: null });
               return {};
@@ -568,7 +568,7 @@ test("pi's yes/no question in one chat's turn reaches the owner as that delivery
   }
 }, 20_000);
 
-test("a question outside one chat's turn, of another link, of an unknown kind, or with no extension to ask is not answered for the owner", async () => {
+test("a confirmation outside one chat's turn still asks the owner, for the session; a choice or text is reported", async () => {
   const f = await fixture("", { extensionControl: true });
   try {
     await f.bind();
@@ -598,8 +598,8 @@ test("a question outside one chat's turn, of another link, of an unknown kind, o
       method: "confirm",
       title: "?",
     });
-    await until(() => attention() === 1);
-    // Another workspace's link owns the turn: not this host's kernel to ask.
+    await until(() => f.approvals.length === 1);
+    // Another workspace's link owns the turn: no chat delivery of this kernel.
     await f.turn({ ok: true, delivery: "other-delivery", link_id: "link-b" });
     await f.ask({
       type: "extension_ui_request",
@@ -607,8 +607,8 @@ test("a question outside one chat's turn, of another link, of an unknown kind, o
       method: "confirm",
       title: "?",
     });
-    await until(() => attention() === 2);
-    // The extension cannot say: fail closed.
+    await until(() => f.approvals.length === 2);
+    // The extension cannot say: no chat delivery.
     await f.turn(null);
     await f.ask({
       type: "extension_ui_request",
@@ -616,8 +616,8 @@ test("a question outside one chat's turn, of another link, of an unknown kind, o
       method: "confirm",
       title: "?",
     });
-    await until(() => attention() === 3);
-    // A choice or text: not representable, reported as such.
+    await until(() => f.approvals.length === 3);
+    // A choice or text: not representable yet, reported as such.
     await f.turn(proof);
     await f.ask({
       type: "extension_ui_request",
@@ -626,7 +626,7 @@ test("a question outside one chat's turn, of another link, of an unknown kind, o
       title: "Pick",
       options: ["a", "b"],
     });
-    await until(() => attention() === 4);
+    await until(() => attention() === 1);
     expect(f.kernelCalls.at(-1)!.body).toMatchObject({ status: "attention" });
     // A proof about an earlier input than the one the host saw the turn take last: stale.
     await f.ask({
@@ -644,7 +644,7 @@ test("a question outside one chat's turn, of another link, of an unknown kind, o
       method: "confirm",
       title: "?",
     });
-    await until(() => attention() === 5);
+    await until(() => f.approvals.length === 4);
     // A proof without fingerprint, or a turn whose inputs the host never saw: nothing.
     await f.ask({ type: "agent_settled" });
     await Bun.sleep(150);
@@ -655,7 +655,7 @@ test("a question outside one chat's turn, of another link, of an unknown kind, o
       method: "confirm",
       title: "?",
     });
-    await until(() => attention() === 6);
+    await until(() => f.approvals.length === 5);
     await f.turn(proof);
     await f.ask({
       type: "extension_ui_request",
@@ -663,7 +663,7 @@ test("a question outside one chat's turn, of another link, of an unknown kind, o
       method: "confirm",
       title: "?",
     });
-    await until(() => attention() === 7);
+    await until(() => f.approvals.length === 6);
     // Fire-and-forget methods are ignored.
     await f.ask({
       type: "extension_ui_request",
@@ -672,15 +672,18 @@ test("a question outside one chat's turn, of another link, of an unknown kind, o
       message: "hi",
     });
     await Bun.sleep(300);
-    expect(f.approvals).toEqual([]);
+    // None of them was a turn one chat of this kernel fed: each belongs to the session.
+    expect(f.approvals.map((a) => a.delivery_id ?? null)).toEqual(
+      Array(6).fill(null),
+    );
     expect(await f.answers()).toEqual([]);
-    expect(attention()).toBe(7);
+    expect(attention()).toBe(1);
   } finally {
     await f.close();
   }
 }, 20_000);
 
-test("without an extension control report nothing is routed; a Stop withdraws a pending question", async () => {
+test("without an extension control report a confirmation asks the owner for the session; a Stop withdraws a pending question", async () => {
   const f = await fixture();
   try {
     await f.bind();
@@ -690,10 +693,8 @@ test("without an extension control report nothing is routed; a Stop withdraws a 
       method: "confirm",
       title: "?",
     });
-    await until(() =>
-      f.kernelCalls.some((c) => c.path === "/chat/sessions/link/status"),
-    );
-    expect(f.approvals).toEqual([]);
+    await until(() => f.approvals.length === 1);
+    expect(f.approvals[0]!.delivery_id ?? null).toBeNull();
   } finally {
     await f.close();
   }
@@ -733,7 +734,7 @@ test("without an extension control report nothing is routed; a Stop withdraws a 
   }
 }, 20_000);
 
-test("a question is routed only for the input pi was on when it asked; a Stop or pi's own timeout ends it; a rebind keeps the decision path", async () => {
+test("a question names the chat delivery only for the input pi was on when it asked; a Stop or pi's own timeout ends it; a rebind keeps the decision path", async () => {
   const f = await fixture("", { extensionControl: true });
   try {
     await f.bind();
@@ -774,8 +775,9 @@ test("a question is routed only for the input pi was on when it asked; a Stop or
         timestamp: 1733234402000,
       },
     });
-    await until(() => attention() === 1);
-    expect(f.approvals).toEqual([]);
+    await until(() => f.approvals.length === 1);
+    expect(f.approvals[0]!.delivery_id ?? null).toBeNull();
+    expect(attention()).toBe(0);
     // Back on the envelope's input: a question with pi's own timeout is routed, and when
     // that timeout passes the approval closes; a decision after it is never replayed.
     await f.slowTurn(0);
@@ -789,10 +791,11 @@ test("a question is routed only for the input pi was on when it asked; a Stop or
       title: "?",
       timeout: 700,
     });
-    await until(() => f.approvals.length === 1);
-    await until(() => f.approvals[0]!.status === "resolved", 3000);
-    f.approvals[0]!.status = "decided";
-    f.approvals[0]!.decision = "allow";
+    await until(() => f.approvals.length === 2);
+    expect(f.approvals[1]!.delivery_id).toBe("turn-delivery");
+    await until(() => f.approvals[1]!.status === "resolved", 3000);
+    f.approvals[1]!.status = "decided";
+    f.approvals[1]!.decision = "allow";
     await Bun.sleep(1200);
     expect(await f.answers()).toEqual([]);
     expect(f.kernelCalls.some((c) => c.path.endsWith("/dispatch"))).toBe(false);
@@ -805,21 +808,21 @@ test("a question is routed only for the input pi was on when it asked; a Stop or
       method: "confirm",
       title: "?",
     });
-    await until(() => f.approvals.length === 2);
+    await until(() => f.approvals.length === 3);
     f.inbox.session.id = "next-link";
     await f.bind("fixture-2");
     const about = async (id: string) =>
       (await f.answers()).filter((a) => a.id === id);
     await until(async () => (await about("r1")).length === 1);
-    // The earlier unroutable question (s1), still open in pi, is withdrawn with it.
+    // The earlier session question (s1), still open in pi, is withdrawn with it.
     expect(await about("s1")).toEqual([
       { type: "extension_ui_response", id: "s1", cancelled: true },
     ]);
     expect(await about("r1")).toEqual([
       { type: "extension_ui_response", id: "r1", cancelled: true },
     ]);
-    f.approvals[1]!.status = "decided";
-    f.approvals[1]!.decision = "deny";
+    f.approvals[2]!.status = "decided";
+    f.approvals[2]!.decision = "deny";
     await Bun.sleep(1200);
     expect(await about("r1")).toHaveLength(1);
     expect(f.kernelCalls.some((c) => c.path.endsWith("/dispatch"))).toBe(false);
@@ -832,15 +835,15 @@ test("a question is routed only for the input pi was on when it asked; a Stop or
       method: "confirm",
       title: "?",
     });
-    await until(() => f.approvals.length === 3);
+    await until(() => f.approvals.length === 4);
     await f.bind("fixture-3");
-    f.approvals[2]!.status = "decided";
-    f.approvals[2]!.decision = "deny";
+    f.approvals[3]!.status = "decided";
+    f.approvals[3]!.decision = "deny";
     await until(async () => (await about("r2")).length === 1);
     expect(await about("r2")).toEqual([
       { type: "extension_ui_response", id: "r2", confirmed: false },
     ]);
-    await until(() => f.approvals[2]!.status === "resolved");
+    await until(() => f.approvals[3]!.status === "resolved");
     // A Stop while the extension is still answering withdraws the question at once.
     await f.slowTurn(2000);
     await f.ask({
@@ -857,7 +860,7 @@ test("a question is routed only for the input pi was on when it asked; a Stop or
       id: "x1",
       cancelled: true,
     });
-    expect(f.approvals).toHaveLength(3);
+    expect(f.approvals).toHaveLength(4);
   } finally {
     await f.close();
   }

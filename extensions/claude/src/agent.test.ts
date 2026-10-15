@@ -364,7 +364,29 @@ test("a permission request goes to the owner in the turn's chat and waits for th
   ]);
 });
 
-test("a denied, withdrawn or unaskable request never runs the tool", async () => {
+test("a request no chat message started still goes to the owner, for the session", async () => {
+  const f = fixture();
+  await f.start();
+  const asked = f.options().canUseTool!(
+    "Bash",
+    {},
+    {
+      signal: new AbortController().signal,
+      toolUseID: crypto.randomUUID(),
+      requestId: "r",
+    },
+  );
+  await tick();
+  expect(
+    f.calls.find((c) => c.path === "/chat/approvals" && c.body)!.body,
+  ).toMatchObject({ delivery_id: null });
+  f.approvals[0]!.status = "decided";
+  f.approvals[0]!.decision = "allow";
+  await f.agent.refresh();
+  expect((await asked)?.behavior).toBe("allow");
+});
+
+test("a denied or withdrawn request never runs the tool", async () => {
   const f = fixture();
   f.message("d1", "owner", "go");
   await f.start();
@@ -374,8 +396,6 @@ test("a denied, withdrawn or unaskable request never runs the tool", async () =>
       {},
       { signal, toolUseID: crypto.randomUUID(), requestId: "r" },
     );
-  // No chat message started this turn: nobody to ask.
-  expect((await ask("Bash"))?.behavior).toBe("deny");
   f.state("running");
   f.consumed("d1");
   await tick();
@@ -561,4 +581,14 @@ test("an approval receipt ZeroLux did not confirm is sent again at the next sync
   ]);
   await f.agent.refresh();
   expect(receipts()).toHaveLength(2); // Confirmed: not sent again.
+});
+
+test("the owner interrupts the turn in progress, whoever started it", async () => {
+  const f = fixture();
+  await f.start();
+  expect(await f.agent.interrupt()).toBe(false);
+  f.state("running");
+  await tick();
+  expect(await f.agent.interrupt()).toBe(true);
+  expect(f.interrupts()).toBe(1);
 });

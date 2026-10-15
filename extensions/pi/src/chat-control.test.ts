@@ -36,7 +36,8 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "zl-control-test-"));
   const registry = join(root, "registry");
   const pairs: unknown[] = [],
-    stops: string[] = [];
+    stops: string[] = [],
+    interrupts: string[] = [];
   const description = {
     native_session_id: "native",
     workspace: root,
@@ -62,6 +63,10 @@ async function fixture() {
     stop: async (id) => {
       stops.push(id);
     },
+    interrupt: async (id) => {
+      interrupts.push(id);
+      return { interrupted: true };
+    },
   });
   await control.start();
   const path = join(registry, (await readdir(registry))[0]!);
@@ -74,6 +79,7 @@ async function fixture() {
     control,
     pairs,
     stops,
+    interrupts,
     description,
     call: (body: unknown) =>
       rpc(descriptor.endpoint, {
@@ -202,6 +208,20 @@ test("a live pi lists the machine's pi sessions for the kernel, only with its cr
     ).toBe(false);
     // Listing never pairs, stops or starts anything.
     expect(f.pairs).toHaveLength(0);
+    expect(f.stops).toHaveLength(0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("the kernel interrupts the turn of a link, and only names a link to do it", async () => {
+  const f = await fixture();
+  try {
+    expect(
+      await f.call({ method: "interrupt", link_id: "link" }),
+    ).toMatchObject({ ok: true, interrupted: true });
+    expect((await f.call({ method: "interrupt" })).ok).toBe(false);
+    expect(f.interrupts).toEqual(["link"]);
     expect(f.stops).toHaveLength(0);
   } finally {
     await f.close();
