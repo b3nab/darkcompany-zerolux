@@ -770,10 +770,10 @@ async fn session_events(
     State(store): State<Store>,
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
-    query: Result<Query<OutputQuery>, QueryRejection>,
+    query: Result<Query<crate::native_output::EventQuery>, QueryRejection>,
 ) -> Result<Json<crate::native_output::EventPage>, Error> {
     let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
-    Ok(Json(store.native_events(&who, &id, query.after).await?))
+    Ok(Json(store.native_events(&who, &id, query).await?))
 }
 
 /// Stops the native turn in progress; the session stays linked.

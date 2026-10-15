@@ -52,7 +52,7 @@ pub enum Event {
     },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Item {
     /// Byte offset of the native record this event comes from.
     pub at: u64,
@@ -209,6 +209,18 @@ fn claude(record: &Value) -> Vec<Event> {
                         output: block["content"].clone(),
                         error: block["is_error"] == true,
                     });
+                    // Other agents' messages reach a managed session through its inbox
+                    // tool: each envelope it returns is input of its chat.
+                    let text = text_of(&block["content"], &["text"]);
+                    for envelope in text
+                        .split("\n\n")
+                        .filter(|part| part.starts_with("[ZeroLux]"))
+                    {
+                        let input = input(envelope.to_owned());
+                        if matches!(&input, Event::Input { chat: Some(_), .. }) {
+                            events.push(input);
+                        }
+                    }
                 }
             }
             events
@@ -322,6 +334,20 @@ fn codex(record: &Value) -> Vec<Event> {
         }],
         _ => Vec::new(),
     }
+}
+
+/// Only the turns a message of `chat` opened. `opened` is the chat of the turn already in
+/// progress before the first event, when known.
+pub fn of_chat(items: Vec<Item>, chat: &str, mut opened: Option<String>) -> Vec<Item> {
+    items
+        .into_iter()
+        .filter(|item| {
+            if let Event::Input { chat, .. } = &item.event {
+                opened = chat.clone();
+            }
+            opened.as_deref() == Some(chat)
+        })
+        .collect()
 }
 
 /// The events of native records, in order.
@@ -438,6 +464,7 @@ mod tests {
                 json!({"type":"attachment","attachment":{"type":"queued_command","prompt":"[ZeroLux] 1 new message in \"Kernel\". Replying is your choice: to answer, call send with chat \"chat-2\" and reply_to \"d-2\""}}),
                 json!({"type":"assistant","message":{"content":[{"type":"thinking","thinking":""},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}),
                 json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"out","is_error":true}]}}),
+                json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"i1","content":[{"type":"text","text":"[ZeroLux] \"Side\"\nChat: side; delivery: d-3\n\"birch\" (peer) [message m]:\n> hi"}]}]}}),
                 json!({"type":"assistant","message":{"content":[{"type":"text","text":"Fine"}]}}),
                 json!({"type":"system","subtype":"turn_duration"}),
                 json!({"type":"permission-mode"}),
@@ -450,6 +477,16 @@ mod tests {
                 },
                 Event::ToolCall { id: "t1".into(), name: "Bash".into(), input: json!({"command":"ls"}) },
                 Event::ToolResult { id: "t1".into(), output: json!("out"), error: true },
+                Event::ToolResult {
+                    id: "i1".into(),
+                    output: json!([{"type":"text","text":"[ZeroLux] \"Side\"\nChat: side; delivery: d-3\n\"birch\" (peer) [message m]:\n> hi"}]),
+                    error: false,
+                },
+                Event::Input {
+                    text: "[ZeroLux] \"Side\"\nChat: side; delivery: d-3\n\"birch\" (peer) [message m]:\n> hi".into(),
+                    chat: Some("side".into()),
+                    delivery: Some("d-3".into()),
+                },
                 Event::Text { text: "Fine".into() },
                 Event::TurnEnded { status: "completed".into() },
             ]
