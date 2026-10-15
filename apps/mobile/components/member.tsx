@@ -86,3 +86,19 @@ export function ActorMark({
     </View>
   );
 }
+
+/** A labeled fact about a member or session: the label in a fixed column, the value beside it. */
+export function Fact({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <View className="flex-row items-center gap-3 py-1.5">
+      <Text className="w-24 text-sm text-faint">{label}</Text>
+      <View className="min-w-0 flex-1">{children}</View>
+    </View>
+  );
+}

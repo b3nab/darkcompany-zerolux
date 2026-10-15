@@ -17,8 +17,8 @@ const badge = (count: number) =>
   ) : null;
 
 /**
- * The system's own tab bar (Liquid Glass on iOS, Material on Android): the home, the chats,
- * the organization, and the rest. What waits for you is counted on them.
+ * The system's own tab bar (Liquid Glass on iOS, Material on Android): the home, the agents'
+ * console, the chats, the organization, and the rest. What waits for you is counted on them.
  */
 function Connected() {
   const { chat } = useSession();
@@ -43,6 +43,13 @@ function Connected() {
           md={night ? "dark_mode" : "light_mode"}
         />
         {badge(pending)}
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="console">
+        <NativeTabs.Trigger.Label>Console</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon
+          sf={{ default: "terminal", selected: "terminal.fill" }}
+          md="terminal"
+        />
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="chats">
         <NativeTabs.Trigger.Label>Chats</NativeTabs.Trigger.Label>

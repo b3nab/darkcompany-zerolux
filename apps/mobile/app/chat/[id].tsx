@@ -39,16 +39,23 @@ import {
   saveDraft,
   threadsOf,
   transcribe,
-  workingIn,
   workingLabel,
+  workingSessions,
 } from "@zerolux/chat";
-import type { Actor, Approval, Conversation, Message } from "@zerolux/chat";
+import type {
+  Actor,
+  Approval,
+  ChatSession,
+  Conversation,
+  Message,
+} from "@zerolux/chat";
 import { ApprovalCard } from "@/components/approval-card";
 import { ChatAbout } from "@/components/chat-about";
 import { ChatMark } from "@/components/chat-mark";
 import { ActorMark } from "@/components/member";
 import { MessageBody } from "@/components/message-body";
 import { Screen } from "@/components/screen";
+import { Interrupt } from "@/components/session";
 import { ChatList, GestureArea } from "@/components/ui/native";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
@@ -66,7 +73,7 @@ type Row =
     }
   | { key: string; kind: "unsent"; text: string }
   | { key: string; kind: "approval"; approval: Approval }
-  | { key: string; kind: "activity"; names: string[] };
+  | { key: string; kind: "activity"; sessions: ChatSession[] };
 
 const marks = { sent: "✓", delivered: "✓✓", read: "✓✓" };
 // Messages from one author a few minutes apart read as one turn.
@@ -166,9 +173,11 @@ export default function ChatScreen() {
     for (const approval of chat.approvals)
       if (approval.conversation_id === id && open.has(approval.status))
         result.push({ key: approval.id, kind: "approval", approval });
-    const working = conversation ? workingIn(conversation, chat.sessions) : [];
+    const working = conversation
+      ? workingSessions(conversation, chat.sessions)
+      : [];
     if (working.length)
-      result.push({ key: "activity", kind: "activity", names: working });
+      result.push({ key: "activity", kind: "activity", sessions: working });
     return result;
   }, [
     chat.messages,
@@ -375,12 +384,20 @@ export default function ChatScreen() {
           </View>
         );
       case "activity":
+        // One line per working agent, each with its own Interrupt.
         return (
-          <View className="mt-3 flex-row items-center gap-2 self-start rounded-full border border-agent/30 bg-agent/10 px-3 py-1.5">
-            <View className="size-1.5 rounded-[1.5px] bg-agent" />
-            <Text className="font-mono text-[12px] text-agent-foreground">
-              {workingLabel(item.names.map(name))}
-            </Text>
+          <View className="mt-3 gap-2">
+            {item.sessions.map((session) => (
+              <View key={session.id} className="flex-row items-center gap-2">
+                <View className="flex-row items-center gap-2 rounded-full border border-agent/30 bg-agent/10 px-3 py-1.5">
+                  <View className="size-1.5 rounded-[1.5px] bg-agent" />
+                  <Text className="font-mono text-[12px] text-agent-foreground">
+                    {workingLabel([name(session.actor_id)])}
+                  </Text>
+                </View>
+                <Interrupt session={session} />
+              </View>
+            ))}
           </View>
         );
       default:

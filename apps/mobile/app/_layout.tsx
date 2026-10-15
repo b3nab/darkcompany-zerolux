@@ -54,6 +54,7 @@ function Navigator() {
         <Stack.Screen name="storage" />
         <Stack.Screen name="settings" />
         <Stack.Screen name="admin" />
+        <Stack.Screen name="session/[id]" />
       </Stack.Protected>
       <Stack.Protected guard={Boolean(url) && !authorized}>
         <Stack.Screen name="auth" />

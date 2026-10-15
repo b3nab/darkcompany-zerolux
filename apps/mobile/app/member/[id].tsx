@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, Pressable, ScrollView, Switch, View } from "react-native";
+import { Pressable, ScrollView, Switch, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import {
   activeActors,
@@ -11,15 +11,14 @@ import {
   useAgentSettings,
   creationDateLabel,
   errorMessage,
-  folderName,
   harnessLabels,
   memberTone,
-  sessionState,
 } from "@zerolux/chat";
 import type { Actor, AgentSettings, ChatSession } from "@zerolux/chat";
-import { ActorMark, Lamp } from "@/components/member";
+import { ActorMark, Fact, Lamp } from "@/components/member";
 import { Eyebrow } from "@/components/meter";
 import { Screen } from "@/components/screen";
+import { SessionCard } from "@/components/session";
 import { SettingSelect } from "@/components/setting-select";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
@@ -147,11 +146,11 @@ function Account({ email }: { email?: string }) {
     <View className="gap-3">
       <Eyebrow>Account</Eyebrow>
       <View className="border-y border-border py-2">
-        <Row label="Email">
+        <Fact label="Email">
           <Text numberOfLines={1} className="text-sm">
             {email}
           </Text>
-        </Row>
+        </Fact>
       </View>
       {changing ? (
         <View className="gap-2">
@@ -227,21 +226,6 @@ function Account({ email }: { email?: string }) {
   );
 }
 
-function Row({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <View className="flex-row items-center gap-3 py-1.5">
-      <Text className="w-24 text-sm text-faint">{label}</Text>
-      <View className="min-w-0 flex-1">{children}</View>
-    </View>
-  );
-}
-
 function Person({
   person,
   agents,
@@ -259,12 +243,12 @@ function Person({
     <>
       <View className="border-y border-border py-2">
         {/* TODO: kernel: people report to people; show who this person reports to. */}
-        <Row label="Reports to">
+        <Fact label="Reports to">
           <Text className="text-sm text-faint">No one</Text>
-        </Row>
-        <Row label="Agents">
+        </Fact>
+        <Fact label="Agents">
           <Text className="font-mono text-sm">{agents.length}</Text>
-        </Row>
+        </Fact>
       </View>
       <View className="gap-1">
         <Eyebrow className="mb-1">Agents · {agents.length}</Eyebrow>
@@ -326,7 +310,7 @@ function Agent({
         </Button>
       )}
       <View className="border-y border-border py-2">
-        <Row label="Owned by">
+        <Fact label="Owned by">
           {owner ? (
             <Pressable
               onPress={() => open(owner)}
@@ -340,8 +324,8 @@ function Agent({
           ) : (
             <Text className="text-sm text-faint">No one</Text>
           )}
-        </Row>
-        <Row label="Working on">
+        </Fact>
+        <Fact label="Working on">
           {answering ? (
             <Pressable onPress={() => router.push(`/chat/${answering.id}`)}>
               <Text numberOfLines={1} className="text-sm">
@@ -351,12 +335,12 @@ function Agent({
           ) : (
             <Text className="text-sm text-faint">Nothing right now</Text>
           )}
-        </Row>
-        <Row label="Waiting">
+        </Fact>
+        <Fact label="Waiting">
           <Text className="font-mono text-xs">
             {waiting} message{waiting === 1 ? "" : "s"}
           </Text>
-        </Row>
+        </Fact>
       </View>
       <AgentSettingsForm key={agent.id} agent={agent} />
       <Sessions
@@ -549,9 +533,8 @@ function AgentSettingsForm({ agent }: { agent: Actor }) {
 }
 
 /**
- * Where the agent runs and how, with Stop, Resume and Take over: its live sessions, or the
- * last one, and the earlier ones on request. Stop asks first: it ends the link and cancels
- * a turn only this chat started.
+ * Where the agent runs and how: its live sessions, or the last one, and the earlier ones on
+ * request.
  */
 function Sessions({
   agent,
@@ -564,128 +547,14 @@ function Sessions({
   older: ChatSession[];
   title: string;
 }) {
-  const { chat } = useSession();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
   const [showOlder, setShowOlder] = useState(false);
   if (current.length === 0) return null;
-  const perform = async (action: () => Promise<unknown>) => {
-    setBusy(true);
-    setError("");
-    try {
-      await action();
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-  const confirmStop = (session: ChatSession) =>
-    Alert.alert(
-      `Stop ${agent.name}?`,
-      "It will no longer reply in ZeroLux or resume this session. Your chats and their history stay.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Stop",
-          style: "destructive",
-          onPress: () => void perform(() => chat.stop(session.id)),
-        },
-      ],
-    );
-  // Sessions ZeroLux runs, and pi ones it can continue from their saved file with a
-  // verified profile: the kernel refuses what it cannot verify, never picks defaults.
-  const resumable = (s: ChatSession) =>
-    (s.harness === "pi" || s.origin === "owned") &&
-    (s.status === "stopped" || s.status === "attention");
-  // A pi hired from a terminal: ZeroLux can take it over while it is idle there.
-  const takeable = (s: ChatSession) =>
-    s.harness === "pi" && s.origin === "attached" && s.status === "connected";
-  const confirmTakeover = (session: ChatSession) =>
-    Alert.alert(
-      `Take over ${agent.name}?`,
-      "The idle terminal closes and the same session continues under ZeroLux: same history, same verified launch profile. Refused if it is working, has queued input or its profile cannot be verified; nothing is killed.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Take over",
-          onPress: () => void perform(() => chat.takeoverPi(session.id)),
-        },
-      ],
-    );
-  const card = (s: ChatSession, facts: boolean) => {
-    const harness = harnessLabels[s.harness] ?? s.harness;
-    return (
-      <View
-        key={s.id}
-        className="gap-2 rounded-lg border border-border bg-card p-3"
-      >
-        <View className="flex-row items-center gap-3">
-          <View className="min-w-0 flex-1">
-            <Text numberOfLines={1} className="text-sm font-medium">
-              {s.title || "Untitled session"}
-            </Text>
-            <Text numberOfLines={1} className="text-xs text-muted-foreground">
-              {facts
-                ? sessionState(s)
-                : `${harness} · ${folderName(s.workspace)}`}
-            </Text>
-          </View>
-          {takeable(s) ? (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onPress={() => confirmTakeover(s)}
-            >
-              <Text>Take over</Text>
-            </Button>
-          ) : null}
-          {s.status !== "stopped" ? (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onPress={() => confirmStop(s)}
-            >
-              <Text>Stop</Text>
-            </Button>
-          ) : null}
-          {resumable(s) ? (
-            <Button
-              size="sm"
-              disabled={busy}
-              onPress={() => void perform(() => chat.resume(s.id))}
-            >
-              <Text>Resume</Text>
-            </Button>
-          ) : null}
-        </View>
-        {facts ? (
-          <View>
-            <Row label="Harness">
-              <Text className="text-sm">{harness}</Text>
-            </Row>
-            <Row label="Folder">
-              <Text className="font-mono text-xs">{s.workspace}</Text>
-            </Row>
-            <Row label="Started by">
-              <Text className="text-sm">
-                {s.origin === "owned" ? "ZeroLux" : "You, then hired"}
-              </Text>
-            </Row>
-          </View>
-        ) : null}
-        {s.attention_reason ? (
-          <Text className="text-xs text-attention">{s.attention_reason}</Text>
-        ) : null}
-      </View>
-    );
-  };
   return (
     <View className="gap-2">
       <Eyebrow>{title}</Eyebrow>
-      {current.map((s) => card(s, true))}
+      {current.map((s) => (
+        <SessionCard key={s.id} session={s} name={agent.name} facts />
+      ))}
       {older.length > 0 && (
         <Pressable
           onPress={() => setShowOlder(!showOlder)}
@@ -698,8 +567,10 @@ function Sessions({
           </Text>
         </Pressable>
       )}
-      {showOlder && older.map((s) => card(s, false))}
-      {error ? <Text className="text-sm text-destructive">{error}</Text> : null}
+      {showOlder &&
+        older.map((s) => (
+          <SessionCard key={s.id} session={s} name={agent.name} />
+        ))}
     </View>
   );
 }
