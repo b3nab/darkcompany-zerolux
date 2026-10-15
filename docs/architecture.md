@@ -42,16 +42,16 @@ Native settings are observed, not enforced defaults. Harness adapters project pu
 
 All routes are under `/api`. Main groups:
 
-| Routes                                                | Purpose                                                           |
-| ----------------------------------------------------- | ----------------------------------------------------------------- |
-| `/health`, `/workspace`, `/onboarding/owner`          | Kernel status, workspace metadata and snapshot, owner name        |
-| `/actors`                                             | Agents hired by name, renamed                                     |
-| `/actors/{id}/settings`, `/chat/settings-catalog`     | Observed native settings, live changes and harness choices        |
-| `/auth/identity`, `/auth/claim`, `/auth/*`            | Sign-in: who the account is, binding it to the owner, Better Auth |
-| `/sessions`, `/chat/hire`, `/chat/sessions`           | Discover and link harness sessions                                |
-| `/chat/sessions/{id}/output`, `/events`, `/interrupt` | The session's native record, its common events and turn control   |
-| `/conversations`                                      | Chats, threads, members and messages                              |
-| `/chat/inbox`, `/chat/deliveries`, `/chat/approvals`  | Delivery, receipts and permission requests for agents             |
-| `/livekit/token`                                      | Real-time token for clients                                       |
+| Routes                                                          | Purpose                                                                       |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `/health`, `/workspace`, `/onboarding/owner`                    | Kernel status, workspace metadata and snapshot, owner name                    |
+| `/actors`                                                       | Agents hired by name, renamed                                                 |
+| `/actors/{id}/settings`, `/chat/settings-catalog`               | Observed native settings, live changes and harness choices                    |
+| `/auth/identity`, `/auth/claim`, `/auth/*`                      | Sign-in: who the account is, binding it to the owner, Better Auth             |
+| `/sessions`, `/chat/hire`, `/chat/sessions`                     | Discover and link harness sessions                                            |
+| `/chat/sessions/{id}/output`, `/events`, `/input`, `/interrupt` | The session's native record, its common events, direct input and turn control |
+| `/conversations`                                                | Chats, threads, members and messages                                          |
+| `/chat/inbox`, `/chat/deliveries`, `/chat/approvals`            | Delivery, receipts and permission requests for agents                         |
+| `/livekit/token`                                                | Real-time token for clients                                                   |
 
 Timestamps are Unix milliseconds. Request bodies are limited to 1 MiB.
