@@ -12,6 +12,8 @@ Chats, agents, automations and clients reuse this data and these controls throug
 
 The native session record is the only source of truth: pi's session file, Claude Code's transcript and Codex's rollout. The kernel reads it as the harness wrote it and keeps no copy. `GET /chat/sessions/{id}/output?after=<offset>` returns the next complete records, unchanged, each with its byte offset, plus `next` and `end`; pass `next` as `after` to continue. Any workspace identity can read any session, from the kernel host that runs it. While the record grows, people get a `session.output` notice with the session ID and new size, about once a second.
 
+`GET /chat/sessions/{id}/events?after=<offset>` reads the same records in one model for every harness: `input` (with the `chat` and `delivery` its envelope names, so a turn belongs to the chat whose message opened it), `text`, `thinking`, `tool_call` and `tool_result` (paired by `id`), `turn_started`, `turn_ended` (`completed`, `interrupted` or `error`), `error` and `compacted`. Each event carries the byte offset (`at`) and the timestamp of its native record; `next` and `end` page as in `/output`. Bookkeeping records project to no event; `/output` still serves every record.
+
 Requests reach the owner whatever started the turn: a chat message, several chats, or the session's own work. Each belongs to its session, and to the chat whose message started the turn when there is one (`conversation_id` is null otherwise). A request has a `kind`:
 
 - `permission`: allow or deny (`POST /chat/approvals/{id}/decision`).
