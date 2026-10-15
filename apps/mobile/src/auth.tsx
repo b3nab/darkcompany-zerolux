@@ -14,6 +14,7 @@ import {
   credentialStorageKey,
   errorMessage,
   type AuthHealth,
+  type AuthDevice,
   type AuthIdentity,
   type AuthStorage,
 } from "@zerolux/chat";
@@ -44,6 +45,14 @@ interface Authentication {
   claim(): Promise<boolean>;
   signOut(): Promise<boolean>;
   guard(canLeave: () => boolean): () => void;
+  /** Your account, straight from the kernel: callers show their own errors. */
+  changePassword(
+    currentPassword: string,
+    newPassword: string,
+    signOutOthers: boolean,
+  ): Promise<void>;
+  devices(): Promise<{ devices: AuthDevice[]; current: string | null }>;
+  signOutDevice(token: string): Promise<void>;
 }
 const Context = createContext<Authentication | null>(null);
 export const useAuthentication = () => use(Context);
@@ -186,6 +195,10 @@ export function AuthenticationProvider({
             await client.signOut();
             return null;
           }, true),
+        changePassword: (current, next, others) =>
+          client.changePassword(current, next, others),
+        devices: () => client.devices(),
+        signOutDevice: (token) => client.signOutDevice(token),
       }}
     >
       {children}

@@ -52,6 +52,8 @@ function Navigator() {
         <Stack.Screen name="member/[id]" />
         <Stack.Screen name="meetings" />
         <Stack.Screen name="storage" />
+        <Stack.Screen name="settings" />
+        <Stack.Screen name="admin" />
       </Stack.Protected>
       <Stack.Protected guard={Boolean(url) && !authorized}>
         <Stack.Screen name="auth" />

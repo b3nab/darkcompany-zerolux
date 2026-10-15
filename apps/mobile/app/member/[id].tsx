@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, Pressable, ScrollView, View } from "react-native";
+import { Alert, Pressable, ScrollView, Switch, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import {
   activeActors,
@@ -24,7 +24,10 @@ import { SettingSelect } from "@/components/setting-select";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
+import { useAuthentication } from "@/src/auth";
 import { useSession } from "@/src/kernel";
+import { useMe } from "@/src/me";
 
 const role = (actor: Actor) =>
   actor.kind === "human"
@@ -37,6 +40,7 @@ const role = (actor: Actor) =>
 export default function Member() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { workspace, chat } = useSession();
+  const { me, email } = useMe();
   const router = useRouter();
   const member = workspace?.actors.find((a) => a.id === id);
   if (!workspace || !member)
@@ -86,6 +90,7 @@ export default function Member() {
             </Text>
           </View>
         </View>
+        {member.id === me?.id ? <Account email={email} /> : null}
         {member.kind === "human" ? (
           <Person
             person={member}
@@ -102,6 +107,123 @@ export default function Member() {
         )}
       </ScrollView>
     </Screen>
+  );
+}
+
+/** Your own account on your profile: the email you sign in with, and your password. */
+function Account({ email }: { email?: string }) {
+  const auth = useAuthentication();
+  const [changing, setChanging] = useState(false);
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [again, setAgain] = useState("");
+  const [others, setOthers] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+  async function save() {
+    if (!auth) return;
+    if (next !== again) {
+      setError("The new passwords do not match.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await auth.changePassword(current, next, others);
+      setChanging(false);
+      setCurrent("");
+      setNext("");
+      setAgain("");
+      setDone(true);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (!auth?.identity) return null;
+  return (
+    <View className="gap-3">
+      <Eyebrow>Account</Eyebrow>
+      <View className="border-y border-border py-2">
+        <Row label="Email">
+          <Text numberOfLines={1} className="text-sm">
+            {email}
+          </Text>
+        </Row>
+      </View>
+      {changing ? (
+        <View className="gap-2">
+          <Input
+            value={current}
+            onChangeText={setCurrent}
+            placeholder="Current password"
+            secureTextEntry
+            autoCapitalize="none"
+            autoComplete="current-password"
+          />
+          <Input
+            value={next}
+            onChangeText={setNext}
+            placeholder="New password"
+            secureTextEntry
+            autoCapitalize="none"
+            autoComplete="new-password"
+          />
+          <Input
+            value={again}
+            onChangeText={setAgain}
+            placeholder="New password again"
+            secureTextEntry
+            autoCapitalize="none"
+            autoComplete="new-password"
+          />
+          <View className="flex-row items-center gap-3 py-1">
+            <Text className="flex-1 text-sm">Sign out my other devices</Text>
+            <Switch value={others} onValueChange={setOthers} />
+          </View>
+          <View className="flex-row gap-2">
+            <Button
+              disabled={busy || !current || !next || !again}
+              onPress={() => void save()}
+            >
+              <Text>{busy ? "Saving…" : "Change password"}</Text>
+            </Button>
+            <Button
+              variant="outline"
+              disabled={busy}
+              onPress={() => {
+                setChanging(false);
+                setError("");
+              }}
+            >
+              <Text>Cancel</Text>
+            </Button>
+          </View>
+        </View>
+      ) : (
+        <Button
+          variant="outline"
+          onPress={() => {
+            setChanging(true);
+            setDone(false);
+          }}
+        >
+          <Text>Change password</Text>
+        </Button>
+      )}
+      {done ? (
+        <Text className="text-sm text-muted-foreground">
+          Your password is changed.
+        </Text>
+      ) : null}
+      {error ? <Text className="text-sm text-destructive">{error}</Text> : null}
+      {/* TODO: kernel: change your own name, photo and email; the kernel renames only agents today. */}
+      <Text className="text-xs text-muted-foreground">
+        Changing your name, photo or email: not available yet.
+      </Text>
+    </View>
   );
 }
 
