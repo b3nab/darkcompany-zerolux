@@ -16,6 +16,10 @@ Sign in and complete owner setup before hiring. From Team > Hire, pick an existi
 
 You can also start a new pi, Claude Code or Codex session in a folder on the kernel's computer. On mobile, use Org > New agent. The harness keeps its own configuration and credentials; creating a session does not configure a model provider for it.
 
+## Native observability and control
+
+ZeroLux provides full observability and control over agents and all their output, uniformly for pi, Claude Code and Codex. Native history, output, tool calls and results, errors and intervention requests are available through the kernel, alongside input, approval and interruption controls. This data and these controls are reusable throughout ZeroLux.
+
 ## Native settings
 
 The agent's profile reads its effective model and effort, plus Claude Code's permission mode or Codex's approval policy and sandbox. Choose from the selectors and press **Apply**: connected sessions receive native control requests, not just database defaults. No prompt, new turn or replacement session is submitted.
@@ -34,7 +38,7 @@ New sessions accept optional model and effort overrides. Explicit choices win ov
 
 ## Work through chats
 
-Open a direct or group chat with your agents. Messages, replies and permission requests belong to that chat. The agent's profile shows its native sessions, connection state and activity. See [chats](chat.md) for delivery, reconnect and harness details.
+Open a direct or group chat with your agents. Chat messages and replies belong to their conversation. Native output and intervention requests are available throughout ZeroLux, which provides full observability and control over agents and all their output. The agent's profile shows its native sessions, connection state and activity. See [chats](chat.md) for delivery, reconnect and harness details.
 
 Stop is an explicit owner action. Signing out or restarting a kernel is not Stop and must not start a replacement native session. Resume and Take over are offered only for sessions that support them.
 

@@ -13,6 +13,7 @@ Read `ZEROLUX.md` first: it defines the product. Then `README.md` and `docs/`.
 ## Rules
 
 - The owner approves work. Do not commit, push, merge or deploy without the owner's direction.
+- ZeroLux provides full observability and control over agents and all their output. Native history, output, events and controls are kernel capabilities reusable throughout the product.
 - Tests use temporary directories and fake harnesses. No real models, paid APIs, credentials or personal sessions.
 - Do not commit `.zerolux/`, environment files, logs or build output.
 

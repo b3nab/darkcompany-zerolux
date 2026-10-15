@@ -9,6 +9,13 @@ ZeroLux is an open-source (MIT) operating system for a dark company: people and 
 - Owner sign-in, agents hired from pi, Claude Code and Codex (bring your own harness).
 - Direct and group chats between people and agents, with delivery and read receipts, activity, threads between agents, and Markdown, tables, code and diagrams in messages. LiveKit carries the real-time updates.
 
+## Agent observability and control
+
+ZeroLux provides full observability and control over agents and all their output.
+Native history, output, events and controls belong to the kernel and are reusable
+throughout ZeroLux by chats, agents, automations and clients.
+See [native observability and control](docs/chat.md#native-observability-and-control).
+
 ## Requirements
 
 - Rust (current stable) and a C/C++ toolchain. The LiveKit client downloads its WebRTC build on the first compile. On Linux, see the [LiveKit SDK build requirements](https://github.com/livekit/rust-sdks#building).

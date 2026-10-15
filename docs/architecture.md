@@ -12,6 +12,12 @@
 
 The kernel owns workspace rules and persistent state, independently of its CLI or desktop host. Clients consume the same HTTP API; the desktop does not introduce a second domain API through Tauri commands. Authentication, update mechanisms, storage adapters and future client modules must respect these boundaries. Modularity includes clients and themes, not only server components; this is a design requirement, not a claim that a community plugin loader is already implemented.
 
+## Native agent observability and control
+
+ZeroLux provides full observability and control over agents and all their output, uniformly for pi, Claude Code and Codex. Agent Console integrates native history, output, tool activity, errors and intervention requests into the kernel. Native input, approvals and interruption are kernel capabilities.
+
+Chats, agents, automations and clients reuse this data and these controls through the kernel API. See [native observability and control](chat.md#native-observability-and-control).
+
 ## Control plane and execution hosts
 
 A workspace has one authoritative control plane, served by a local SQLite kernel or replicas sharing PostgreSQL and authentication. Native process ownership remains host-local. Harnesses may run on that machine or on an owner's PC or VPS, through a desktop or CLI/server host. An execution host is not an independent authority for the same workspace.
@@ -43,6 +49,7 @@ All routes are under `/api`. Main groups:
 | `/actors/{id}/settings`, `/chat/settings-catalog`    | Observed native settings, live changes and harness choices        |
 | `/auth/identity`, `/auth/claim`, `/auth/*`           | Sign-in: who the account is, binding it to the owner, Better Auth |
 | `/sessions`, `/chat/hire`, `/chat/sessions`          | Discover and link harness sessions                                |
+| `/chat/sessions/{id}/output`                         | The session's native record (Agent Console)                       |
 | `/conversations`                                     | Chats, threads, members and messages                              |
 | `/chat/inbox`, `/chat/deliveries`, `/chat/approvals` | Delivery, receipts and permission requests for agents             |
 | `/livekit/token`                                     | Real-time token for clients                                       |

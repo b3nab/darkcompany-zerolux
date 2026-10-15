@@ -72,6 +72,10 @@ and only that kernel recovers and relinks it. Kernels of one workspace start
 their authentication services one at a time. Several kernels need one external
 LiveKit so notices reach every client.
 
+### Native agent data and control
+
+ZeroLux provides full observability and control over agents and all their output. Native history, output and events are kernel domain data; native controls are kernel capabilities. Chats, agents, automations and clients reuse them throughout the product. See [native observability and control](chat.md#native-observability-and-control).
+
 ## Authentication boundary
 
 Use Better Auth 1.7.7 with its built-in Bun SQLite and PostgreSQL adapters. Start
