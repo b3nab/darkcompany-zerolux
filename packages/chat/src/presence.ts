@@ -19,6 +19,27 @@ export const sessionTone = (session: ChatSession): Tone =>
     ? "working"
     : session.status;
 
+// Working first, then ready, then what needs you, then what is still starting.
+const consoleOrder: Record<Tone, number> = {
+  working: 0,
+  connected: 1,
+  attention: 2,
+  connecting: 3,
+  stopped: 4,
+};
+/** The Agent Console's sessions: the live ones, working first, and the stopped ones apart. */
+export function consoleSessions(sessions: ChatSession[]) {
+  const listed = listedSessions(sessions);
+  return {
+    live: listed
+      .filter((s) => s.status !== "stopped")
+      .sort(
+        (a, b) => consoleOrder[sessionTone(a)] - consoleOrder[sessionTone(b)],
+      ),
+    stopped: listed.filter((s) => s.status === "stopped"),
+  };
+}
+
 /**
  * What an agent is doing, as the owner reads it everywhere: its best chat session.
  * A connected session wins over one that needs attention or is still connecting,

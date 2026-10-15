@@ -159,6 +159,7 @@ export type ChatEvent = { event_id: string } & (
   | { type: "session.changed"; session_id: string }
   | { type: "delivery.changed"; conversation_id: string; message_id: string }
   | { type: "approval.changed"; approval_id: string }
+  | { type: "session.output"; session_id: string; end: number }
 );
 
 export const sessionLabels: Record<ChatSession["status"], string> = {
@@ -230,21 +231,24 @@ export function presenceLine(
     ? notes.join(" · ")
     : conversation.members.map((m) => name(m.actor_id)).join(", ");
 }
+/** The connected sessions working on this chat now: their turn came from it alone. */
+export const workingSessions = (
+  conversation: Conversation,
+  sessions: ChatSession[],
+) =>
+  conversation.members.flatMap((m) => {
+    const s = sessions.find((s) => s.id === m.session_id);
+    return s?.status === "connected" &&
+      s.activity === "working" &&
+      s.activity_conversation_id === conversation.id
+      ? [s]
+      : [];
+  });
 /** The connected agents working on this chat now, for the bubble under the last message. */
 export const workingIn = (
   conversation: Conversation,
   sessions: ChatSession[],
-) =>
-  conversation.members
-    .filter((m) => {
-      const s = sessions.find((s) => s.id === m.session_id);
-      return (
-        s?.status === "connected" &&
-        s.activity === "working" &&
-        s.activity_conversation_id === conversation.id
-      );
-    })
-    .map((m) => m.actor_id);
+) => workingSessions(conversation, sessions).map((s) => s.actor_id);
 /** Who is working, the same words in the bubble and in the list of chats. */
 export const workingLabel = (names: string[]) =>
   `${names.join(", ")} ${names.length === 1 ? "is" : "are"} working`;
@@ -377,10 +381,14 @@ const eventTypes = new Set<string>([
   "session.changed",
   "delivery.changed",
   "approval.changed",
+  "session.output",
 ]);
 export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
   try {
     const event = JSON.parse(new TextDecoder().decode(payload)) as ChatEvent;
+    // A session's output notice names where its native record ends: that is its identity.
+    if (event.type === "session.output" && typeof event.event_id !== "string")
+      event.event_id = `session.output:${event.session_id}:${event.end}`;
     if (typeof event.event_id === "string" && eventTypes.has(event.type))
       return event;
   } catch {

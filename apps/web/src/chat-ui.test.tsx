@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup as render } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { Approvals } from "./Approvals";
+import { ConsoleList, SessionView } from "./Console";
 import {
   AddAgent,
   ChatHome,
@@ -177,6 +178,7 @@ function fakeChat(overrides: Partial<Chat> = {}): Chat {
       session("s-aspen-dm", ASPEN),
       session("s-birch", BIRCH),
     ],
+    outputs: {},
     approvals: [],
     openId: undefined,
     messages: [],
@@ -199,6 +201,7 @@ function fakeChat(overrides: Partial<Chat> = {}): Chat {
     takeoverPi: nothing,
     resume: nothing,
     stop: nothing,
+    interrupt: async () => true,
     decide: nothing,
     answer: nothing,
     addMember: nothing,
@@ -961,7 +964,7 @@ test("a bubble under the last message shows who is working on this chat", () => 
     },
   ]);
   expect(html).toMatch(
-    /<li data-activity="true"[^>]*>[\s\S]*aspen is working<\/li>/,
+    /<li data-activity="true"[^>]*>[\s\S]*aspen is working<button[^>]*>Interrupt<\/button><\/li>/,
   );
   // The bubble comes after the last message.
   expect(html.indexOf("data-activity")).toBeGreaterThan(
@@ -1387,4 +1390,55 @@ test("beside a chat: members and shared files, without task controls", () => {
   expect(html).toContain("2 KB");
   expect(html).not.toContain("elsewhere.md");
   noUuids(html);
+});
+
+test("the console's column lists live sessions, working first, and keeps the stopped apart", () => {
+  const working = {
+    ...session("s-birch", BIRCH),
+    activity: "working" as const,
+  };
+  const idle = { ...session("s-aspen", ASPEN), activity: "idle" as const };
+  const html = renderToStaticMarkup(
+    <ConsoleList
+      chat={fakeChat({ sessions: [idle, working] })}
+      actors={actors}
+    />,
+  );
+  expect(html).toMatch(/Live<span[^>]*>2</);
+  expect(html.indexOf('href="/console/s-birch"')).toBeLessThan(
+    html.indexOf('href="/console/s-aspen"'),
+  );
+  expect(html).toContain("Working…");
+});
+
+test("a session in the console: its work in the middle, and Interrupt in the box while it works", () => {
+  const working = {
+    ...session("s-birch", BIRCH),
+    activity: "working" as const,
+  };
+  const html = renderToStaticMarkup(
+    <SessionView
+      session={working}
+      chat={fakeChat({ sessions: [working] })}
+      actors={actors}
+      busy={false}
+      perform={perform}
+    />,
+  );
+  expect(html).toContain("birch");
+  expect(html).toContain("About this session");
+  expect(html).toContain("Interrupt");
+  expect(html).not.toMatch(/>Send</);
+  expect(html).toContain("Writing straight to a session is not available yet.");
+  const idle = renderToStaticMarkup(
+    <SessionView
+      session={session("s-aspen", ASPEN)}
+      chat={fakeChat()}
+      actors={actors}
+      busy={false}
+      perform={perform}
+    />,
+  );
+  expect(idle).toContain("Send");
+  expect(idle).not.toContain(">Interrupt");
 });

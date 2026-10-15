@@ -43,8 +43,8 @@ import {
   transcribe,
   unreadIn,
   waitingChats,
-  workingIn,
   workingLabel,
+  workingSessions,
 } from "@zerolux/chat";
 import type {
   Chat,
@@ -276,7 +276,8 @@ export function ChatView({
     (m) => m.conversation_id === conversation.id,
   );
   // Who is working on this chat now: shown as a bubble under the last message.
-  const busyHere = workingIn(conversation, chat.sessions);
+  const turnsHere = workingSessions(conversation, chat.sessions);
+  const busyHere = turnsHere.map((s) => s.actor_id);
   const asks = openApprovals(chat.approvals).filter(
     (a) => a.conversation_id === conversation.id,
   );
@@ -559,6 +560,20 @@ export function ChatView({
                     ))}
                   </span>
                   {workingLabel(busyHere.map(name))}
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className="ml-1 rounded-full px-1.5 underline-offset-4 hover:underline disabled:opacity-50"
+                    onClick={() =>
+                      void perform(async () => {
+                        await Promise.all(
+                          turnsHere.map((s) => chat.interrupt(s.id)),
+                        );
+                      })
+                    }
+                  >
+                    Interrupt
+                  </button>
                 </li>
               )}
               {chat.messages.length === 0 && conversation.last_seq === 0 && (

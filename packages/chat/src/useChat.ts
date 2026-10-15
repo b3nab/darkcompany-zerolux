@@ -39,6 +39,10 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [seen, setSeen] = useState<Record<string, number>>({});
   const [realtime, setRealtime] = useState<RealtimeStatus>("connecting");
+  // When each session's native output last grew, as the kernel noticed it.
+  const [outputs, setOutputs] = useState<
+    Record<string, { end: number; at: number }>
+  >({});
   const [error, setError] = useState("");
   const open = useRef<string>(undefined);
   const loaded = useRef<Message[]>([]);
@@ -191,6 +195,11 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
         return void background(listConversations());
       case "approval.changed":
         return void background(listApprovals());
+      case "session.output":
+        return setOutputs((all) => ({
+          ...all,
+          [event.session_id]: { end: event.end, at: Date.now() },
+        }));
     }
   }
 
@@ -249,6 +258,7 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
   return {
     conversations,
     sessions,
+    outputs,
     approvals,
     openId,
     messages,
@@ -379,6 +389,21 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     async resume(sessionId: string) {
       await api(`/chat/sessions/${sessionId}/resume`, {});
       await listSessions();
+    },
+    /**
+     * Stops the turn a session is working on, not the session. True when the harness stopped
+     * it; an error says what this harness or integration cannot do.
+     */
+    async interrupt(sessionId: string) {
+      try {
+        const { interrupted } = await api<{ interrupted: boolean }>(
+          `/chat/sessions/${sessionId}/interrupt`,
+          {},
+        );
+        return interrupted;
+      } finally {
+        await listSessions().catch(() => {});
+      }
     },
     async stop(sessionId: string) {
       await order.run(

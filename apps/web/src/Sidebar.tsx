@@ -12,6 +12,7 @@ import {
   PlusIcon,
   SettingsIcon,
   SlidersHorizontalIcon,
+  SquareTerminalIcon,
   StampIcon,
   SunIcon,
   UserIcon,
@@ -87,6 +88,7 @@ export function Sidebar({
         <Mark className="size-6" />
       </Link>
       <Item to="/" end icon={LayoutDashboardIcon} label={homeLabel()} />
+      <Item to="/console" icon={SquareTerminalIcon} label="Console" />
       <Item
         to="/chats"
         icon={MessagesSquareIcon}

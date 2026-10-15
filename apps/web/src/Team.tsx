@@ -635,11 +635,11 @@ export function AgentPage({
 }
 
 /** Sessions ZeroLux runs, and pi ones it can continue from their saved file. */
-const resumable = (s: ChatSession) =>
+export const resumable = (s: ChatSession) =>
   (s.harness === "pi" || s.origin === "owned") &&
   (s.status === "stopped" || s.status === "attention");
 /** A pi hired from a terminal: ZeroLux can take it over while it is idle there. */
-const takeable = (s: ChatSession) =>
+export const takeable = (s: ChatSession) =>
   s.harness === "pi" && s.origin === "attached" && s.status === "connected";
 
 /** An agent's profile: who it is, what it does now, where it runs, and its chats. */
@@ -681,6 +681,9 @@ export function AgentProfile({
       facts={facts}
       busy={busy}
       stop={() => perform(() => chat.stop(session.id))}
+      interrupt={() =>
+        perform(async () => void (await chat.interrupt(session.id)))
+      }
       resume={
         resumable(session)
           ? () => perform(() => chat.resume(session.id))
@@ -1083,12 +1086,14 @@ export function HireForm({
 }
 
 /** One session of an agent: where and how it runs, its state, and stop, resume or take over. */
-function SessionCard({
+/** One session of an agent: where it runs, its state, and what can be done with it. */
+export function SessionCard({
   session,
   name,
   facts,
   busy,
   stop,
+  interrupt,
   resume,
   takeover,
 }: {
@@ -1098,6 +1103,8 @@ function SessionCard({
   facts: boolean;
   busy: boolean;
   stop: () => Promise<boolean>;
+  /** Stops the turn it is working on; the session stays. */
+  interrupt?: () => Promise<boolean>;
   /** A session ZeroLux runs, stopped or needing attention: start it again. */
   resume?: () => Promise<boolean>;
   takeover?: () => Promise<boolean>;
@@ -1142,6 +1149,18 @@ function SessionCard({
       )}
       {!confirming && (takeover || resume || session.status !== "stopped") && (
         <div className="flex flex-wrap gap-2">
+          {interrupt &&
+            session.status === "connected" &&
+            session.activity === "working" && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => void interrupt()}
+              >
+                Interrupt
+              </Button>
+            )}
           {takeover && (
             <Button
               variant="outline"

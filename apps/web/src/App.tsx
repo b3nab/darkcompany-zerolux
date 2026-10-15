@@ -26,6 +26,7 @@ import { Approvals } from "./Approvals";
 import { useAuthentication } from "./AuthGate";
 import { ChatHome, ChatList, ChatView, NewConversation } from "./ChatView";
 import { CommandMenu } from "./CommandMenu";
+import { ConsoleHome, ConsoleList, SessionView } from "./Console";
 import { MD, useMedia } from "./media";
 import { Meetings } from "./Meetings";
 import { OwnerOnboarding } from "./OwnerOnboarding";
@@ -78,6 +79,7 @@ export function App({
   const { pathname } = useLocation();
   const chatId = useMatch("/chats/:id")?.params.id;
   const agentId = useMatch("/team/:id")?.params.id;
+  const consoleId = useMatch("/console/:id")?.params.id;
   const requestId = useRef(0);
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const id = ++requestId.current;
@@ -230,6 +232,16 @@ export function App({
   );
   const agentList = workspace && owner && (
     <AgentList workspace={workspace} chat={chat} owner={owner} />
+  );
+  // A session that is not (or no longer) listed shows the whole console.
+  const consoleSession = chat.sessions.find((s) => s.id === consoleId);
+  const consoleList = <ConsoleList chat={chat} actors={actors} />;
+  const consoleHome = section(
+    consoleList,
+    false,
+    <Page>
+      <ConsoleHome chat={chat} />
+    </Page>,
   );
   // An agent that is not (or no longer) on the team shows the team.
   const agent = actors.find((a) => a.id === agentId && a.kind === "agent");
@@ -532,6 +544,26 @@ export function App({
                     />
                   </Page>,
                 )}
+              />
+              <Route path="/console" element={consoleHome} />
+              <Route
+                path="/console/:id"
+                element={
+                  consoleSession
+                    ? section(
+                        consoleList,
+                        true,
+                        <SessionView
+                          key={consoleSession.id}
+                          session={consoleSession}
+                          chat={chat}
+                          actors={workspace.actors}
+                          busy={busy}
+                          perform={perform}
+                        />,
+                      )
+                    : consoleHome
+                }
               />
               <Route
                 path="/profile"

@@ -619,3 +619,19 @@ test("a new chat offers agents with a live session and reuses a direct chat", ()
   expect(directChat([group, dm], "owner", "aspen")?.id).toBe("d");
   expect(directChat([group, dm], "owner", "birch")).toBeUndefined();
 });
+
+test("a session's output notice is an event even without an ID, and repeats of it are one", () => {
+  const notice = (end: number) =>
+    new TextEncoder().encode(
+      JSON.stringify({ type: "session.output", session_id: "s-aspen", end }),
+    );
+  const first = parseEvent(notice(120));
+  expect(first).toEqual({
+    type: "session.output",
+    session_id: "s-aspen",
+    end: 120,
+    event_id: "session.output:s-aspen:120",
+  });
+  expect(parseEvent(notice(120))?.event_id).toBe(first?.event_id);
+  expect(parseEvent(notice(240))?.event_id).not.toBe(first?.event_id);
+});
