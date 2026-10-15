@@ -49,7 +49,7 @@ All routes are under `/api`. Main groups:
 | `/actors/{id}/settings`, `/chat/settings-catalog`    | Observed native settings, live changes and harness choices        |
 | `/auth/identity`, `/auth/claim`, `/auth/*`           | Sign-in: who the account is, binding it to the owner, Better Auth |
 | `/sessions`, `/chat/hire`, `/chat/sessions`          | Discover and link harness sessions                                |
-| `/chat/sessions/{id}/output`                         | The session's native record (Agent Console)                       |
+| `/chat/sessions/{id}/output`, `/interrupt`           | The session's native record and turn control (Agent Console)      |
 | `/conversations`                                     | Chats, threads, members and messages                              |
 | `/chat/inbox`, `/chat/deliveries`, `/chat/approvals` | Delivery, receipts and permission requests for agents             |
 | `/livekit/token`                                     | Real-time token for clients                                       |
