@@ -18,7 +18,9 @@ pub struct AgentSettingsView {
     pub sessions: Vec<SessionSettings>,
 }
 
-enum Control {
+const SETTINGS: &str = "agent-settings-v1";
+
+pub(super) enum Control {
     Codex(crate::codex_settings::CodexSettings),
     Pi(sessions::PiDescriptor),
     #[cfg(unix)]
@@ -211,7 +213,14 @@ impl ChatRuntime {
             .clone()
     }
 
-    async fn settings_control(&self, who: &ChatIdentity, session: &ChatSession) -> Result<Control> {
+    /// The native control of a connected session on this host. A pi integration must offer
+    /// `capability`.
+    pub(super) async fn native_control(
+        &self,
+        who: &ChatIdentity,
+        session: &ChatSession,
+        capability: &str,
+    ) -> Result<Control> {
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
         ensure!(
             session.stopped_at.is_none() && session.status == "connected",
@@ -251,10 +260,8 @@ impl ChatRuntime {
                     && actual["workspace"] == session.workspace
                     && actual["capabilities"]
                         .as_array()
-                        .is_some_and(|values| values
-                            .iter()
-                            .any(|value| value == "agent-settings-v1")),
-                "The pi integration needs an update before its settings can be controlled"
+                        .is_some_and(|values| values.iter().any(|value| value == capability)),
+                "The pi integration needs an update for this control"
             );
             return Ok(Control::Pi(record));
         }
@@ -267,7 +274,7 @@ impl ChatRuntime {
                 .context("The Claude runner is unavailable")?;
             return Ok(Control::Claude(link));
         }
-        bail!("This native terminal does not expose a settings control")
+        bail!("This native terminal does not expose this control")
     }
 
     /// Choices from an installed, connected harness, not a kernel-maintained model list.
@@ -292,7 +299,7 @@ impl ChatRuntime {
                     && session.host_id.as_deref() == self.store.host()
             })
         {
-            if let Ok(control) = self.settings_control(who, &session).await
+            if let Ok(control) = self.native_control(who, &session, SETTINGS).await
                 && let Ok(snapshot) = control.call(&session, None, false).await
             {
                 return Ok(snapshot.models);
@@ -325,7 +332,7 @@ impl ChatRuntime {
         let mut snapshots = Vec::new();
         for session in &linked {
             let result = async {
-                let control = self.settings_control(who, session).await?;
+                let control = self.native_control(who, session, SETTINGS).await?;
                 let snapshot = control.call(session, None, false).await?;
                 self.store
                     .observe_native_settings(
@@ -413,7 +420,7 @@ impl ChatRuntime {
         let mut controls = Vec::new();
         // All sessions must support the entire request before any of them is changed.
         for session in &linked {
-            let control = self.settings_control(who, session).await?;
+            let control = self.native_control(who, session, SETTINGS).await?;
             control.call(session, Some(&patch), true).await?;
             controls.push(control);
         }
@@ -464,7 +471,7 @@ impl ChatRuntime {
             let Ok(_guard) = gate.try_lock() else {
                 continue;
             };
-            let Ok(control) = self.settings_control(&who, &session).await else {
+            let Ok(control) = self.native_control(&who, &session, SETTINGS).await else {
                 continue;
             };
             let result = match &control {

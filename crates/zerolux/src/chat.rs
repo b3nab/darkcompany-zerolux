@@ -481,8 +481,8 @@ struct ApprovalRow {
     id: String,
     actor_id: String,
     session_id: String,
-    conversation_id: String,
-    delivery_id: String,
+    conversation_id: Option<String>,
+    delivery_id: Option<String>,
     native_request_id: String,
     summary: String,
     details_json: String,
@@ -497,8 +497,10 @@ async fn approval_in<C: ConnectionTrait>(db: &C, id: &str) -> Result<ChatApprova
         db,
         sql(
             db,
-            "SELECT a.*,d.actor_id,m.conversation_id FROM tool_approvals a
-            JOIN deliveries d ON d.id=a.delivery_id JOIN messages m ON m.id=d.message_id WHERE a.id=$1",
+            "SELECT a.*,s.actor_id,m.conversation_id FROM tool_approvals a
+            JOIN chat_sessions s ON s.id=a.session_id
+            LEFT JOIN deliveries d ON d.id=a.delivery_id LEFT JOIN messages m ON m.id=d.message_id
+            WHERE a.id=$1",
             [id.into()],
         ),
     )
@@ -2115,10 +2117,14 @@ impl Store {
         }
         let tx = self.write().await?;
         identity_in(&tx, who).await?;
-        let delivery = delivery_in(&tx, &input.delivery_id).await?;
-        owns_delivery(who, &delivery)?;
-        if delivery.status == "stored" {
-            return Err(Error::Conflict);
+        // The session asks for itself; a chat delivery, when one started the turn, must be its own.
+        let session_id = who.session_id.clone().ok_or(Error::Forbidden)?;
+        if let Some(delivery_id) = &input.delivery_id {
+            let delivery = delivery_in(&tx, delivery_id).await?;
+            owns_delivery(who, &delivery)?;
+            if delivery.status == "stored" {
+                return Err(Error::Conflict);
+            }
         }
         let existing_id = ids(
             &tx,
@@ -2128,7 +2134,7 @@ impl Store {
                 ORDER BY CASE WHEN id=$1 THEN 0 ELSE 1 END LIMIT 1",
                 [
                     (&input.id).into(),
-                    (&delivery.session_id).into(),
+                    (&session_id).into(),
                     (&native_id).into(),
                 ],
             ),
@@ -2138,7 +2144,7 @@ impl Store {
         .next();
         if let Some(id) = existing_id {
             let existing = approval_in(&tx, &id).await?;
-            if existing.session_id != delivery.session_id
+            if existing.session_id != session_id
                 || existing.delivery_id != input.delivery_id
                 || existing.native_request_id != native_id
                 || existing.summary != summary
@@ -2151,7 +2157,7 @@ impl Store {
         let now = now_ms();
         tool_approvals::ActiveModel {
             id: Set(input.id.clone()),
-            session_id: Set(delivery.session_id.clone()),
+            session_id: Set(session_id.clone()),
             delivery_id: Set(input.delivery_id),
             native_request_id: Set(native_id),
             summary: Set(summary),
@@ -2168,7 +2174,7 @@ impl Store {
         personal_event(
             &tx,
             "approval.changed",
-            &delivery.session_id,
+            &session_id,
             json!({"approval_id":input.id}),
         )
         .await?;

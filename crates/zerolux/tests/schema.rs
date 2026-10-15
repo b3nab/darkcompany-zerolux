@@ -129,7 +129,7 @@ async fn single_bootstrap_preserves_identity_history_settings_and_stops_on_reope
     let approval = tool_approvals::ActiveModel {
         id: Set("approval".into()),
         session_id: Set(session.id.clone()),
-        delivery_id: Set(delivery.id.clone()),
+        delivery_id: Set(Some(delivery.id.clone())),
         native_request_id: Set("approval-request".into()),
         summary: Set("Fixture".into()),
         details_json: Set("{}".into()),

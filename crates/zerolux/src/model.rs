@@ -367,7 +367,9 @@ pub struct ChatInbox {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateChatApproval {
     pub id: String,
-    pub delivery_id: String,
+    /// The chat delivery whose turn asks; none for work no chat message started.
+    #[serde(default)]
+    pub delivery_id: Option<String>,
     pub native_request_id: String,
     pub summary: String,
     pub details: serde_json::Value,
@@ -378,8 +380,8 @@ pub struct ChatApproval {
     pub id: String,
     pub actor_id: String,
     pub session_id: String,
-    pub conversation_id: String,
-    pub delivery_id: String,
+    pub conversation_id: Option<String>,
+    pub delivery_id: Option<String>,
     pub native_request_id: String,
     pub summary: String,
     pub details: serde_json::Value,

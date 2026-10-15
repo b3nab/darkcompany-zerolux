@@ -1252,17 +1252,9 @@ impl CodexDriver {
         let Some(state) = self.turns.get(turn_id) else {
             return Ok(());
         };
-        let Some(delivery) = state.delivery(&self.deliveries) else {
-            if state.items.iter().any(|item| {
-                item["type"] == "userMessage"
-                    && item["clientId"]
-                        .as_str()
-                        .is_some_and(|id| self.deliveries.contains_key(id))
-            }) {
-                kernel.status("attention", Some("Codex requests native input in a turn with private input or several chats. Open the native session to answer; its details were not shared.")).await?;
-            }
-            return Ok(());
-        };
+        // The chat delivery that started the turn, if one did; otherwise the owner is asked
+        // for the session itself.
+        let delivery = state.delivery(&self.deliveries).map(|d| d.id.clone());
         let method = request["method"].as_str().unwrap_or("");
         if !matches!(
             method,
@@ -1278,7 +1270,7 @@ impl CodexDriver {
             .items
             .iter()
             .find(|item| item["id"] == params["itemId"]);
-        kernel.post("/chat/approvals", json!({"id":id,"delivery_id":delivery.id,"native_request_id":native_id,"summary":"Codex requests your permission","details":{"method":method,"params":params,"item":item}})).await?;
+        kernel.post("/chat/approvals", json!({"id":id,"delivery_id":delivery,"native_request_id":native_id,"summary":"Codex requests your permission","details":{"method":method,"params":params,"item":item}})).await?;
         self.approvals.insert(
             native_id,
             Approval {

@@ -7,8 +7,9 @@ pub struct Model {
     pub id: String,
     #[sea_orm(column_type = "Text")]
     pub session_id: String,
+    /// The chat delivery whose turn asked, if a chat message started it.
     #[sea_orm(column_type = "Text")]
-    pub delivery_id: String,
+    pub delivery_id: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub native_request_id: String,
     #[sea_orm(column_type = "Text")]

@@ -633,20 +633,16 @@ async fn waiting_chats_share_one_native_input_with_ordered_scoped_envelopes() {
         "the anchor chat is not the whole envelope"
     );
     runtime.emit(json!({"id":930,"method":"item/commandExecution/requestApproval","params":{"threadId":THREAD,"turnId":"mixed","itemId":"tool","command":"PRIVATE_REQUEST_DETAILS","availableDecisions":["accept","decline"]}}));
-    kernel.wait(|s| s.session_status == "attention").await;
-    assert!(
-        kernel.state.lock().unwrap().approvals.is_empty(),
-        "a mixed-chat request stays native"
-    );
-    assert!(
-        !kernel
-            .state
-            .lock()
-            .unwrap()
-            .calls
-            .iter()
-            .any(|(_, value)| value.to_string().contains("PRIVATE_REQUEST_DETAILS"))
-    );
+    // A turn several chats feed still asks the owner, for the session, with every detail.
+    kernel.wait(|s| s.approvals.len() == 1).await;
+    {
+        let state = kernel.state.lock().unwrap();
+        assert!(state.approvals[0]["delivery_id"].is_null());
+        assert_eq!(
+            state.approvals[0]["details"]["params"]["command"],
+            "PRIVATE_REQUEST_DETAILS"
+        );
+    }
     finish(stop, task).await;
     assert_eq!(runtime.count("thread/queue/add"), 1);
 }
@@ -761,17 +757,15 @@ async fn a_mixed_chat_native_input_recovers_read_and_activity_without_replay() {
         .await;
     assert!(kernel.state.lock().unwrap().activity_conversation.is_none());
     runtime.emit(json!({"id":950,"method":"item/commandExecution/requestApproval","params":{"threadId":THREAD,"turnId":"recovered","itemId":"tool","command":"PRIVATE_RECOVERED_DETAILS","availableDecisions":["accept","decline"]}}));
-    kernel.wait(|s| s.session_status == "attention").await;
-    assert!(kernel.state.lock().unwrap().approvals.is_empty());
-    assert!(
-        !kernel
-            .state
-            .lock()
-            .unwrap()
-            .calls
-            .iter()
-            .any(|(_, body)| body.to_string().contains("PRIVATE_RECOVERED_DETAILS"))
-    );
+    kernel.wait(|s| s.approvals.len() == 1).await;
+    {
+        let state = kernel.state.lock().unwrap();
+        assert!(state.approvals[0]["delivery_id"].is_null());
+        assert_eq!(
+            state.approvals[0]["details"]["params"]["command"],
+            "PRIVATE_RECOVERED_DETAILS"
+        );
+    }
     finish(stop, task).await;
     assert_eq!(runtime.count("turn/steer"), 0);
     assert_eq!(runtime.count("thread/queue/add"), 0);

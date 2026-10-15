@@ -229,6 +229,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/chat/sessions/{id}/status", post(session_status))
         .route("/chat/sessions/{id}/activity", post(session_activity))
         .route("/chat/sessions/{id}/output", get(session_output))
+        .route("/chat/sessions/{id}/interrupt", post(interrupt_session))
         .route(
             "/conversations",
             get(conversations).post(create_conversation),
@@ -759,6 +760,19 @@ async fn session_output(
 ) -> Result<Json<crate::native_output::Page>, Error> {
     let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
     Ok(Json(store.native_output(&who, &id, query.after).await?))
+}
+
+/// Stops the native turn in progress; the session stays linked.
+async fn interrupt_session(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let interrupted = runtime(&state)?
+        .interrupt(&who, &id)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "interrupted": interrupted })))
 }
 
 #[derive(Deserialize)]

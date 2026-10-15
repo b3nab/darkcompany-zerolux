@@ -1102,6 +1102,7 @@ impl ChatRuntime {
     }
 }
 
+mod control;
 #[cfg(unix)]
 mod owned;
 mod settings;

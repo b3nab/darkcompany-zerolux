@@ -53,6 +53,21 @@ impl CodexSettings {
         }
     }
 
+    /// Stops the running turn, whoever started it. No turn running: nothing to stop.
+    pub async fn interrupt(&self) -> Result<bool> {
+        let Some(turn) = self.turn.borrow().clone() else {
+            return Ok(false);
+        };
+        self.rpc
+            .request(
+                "turn/interrupt",
+                json!({"threadId": self.thread_id, "turnId": turn}),
+            )
+            .await
+            .context("Codex did not confirm the interruption")?;
+        Ok(true)
+    }
+
     pub async fn read(&self) -> Result<NativeSettings> {
         let models = models(&self.rpc).await?;
         let mut editable = Vec::new();

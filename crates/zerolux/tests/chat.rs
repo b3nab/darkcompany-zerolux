@@ -847,7 +847,7 @@ async fn renewing_an_owned_link_keeps_deliveries_approvals_and_permission_mode()
                 &old_identity,
                 CreateChatApproval {
                     id: Uuid::new_v4().to_string(),
-                    delivery_id: ids[0].clone(),
+                    delivery_id: Some(ids[0].clone()),
                     native_request_id: format!("fixture-{state}"),
                     summary: "Fixture permission".into(),
                     details: json!({}),
@@ -1628,6 +1628,58 @@ async fn explicit_reply_and_final_fallback_share_one_message_and_only_the_recipi
     assert_eq!(delivery_for(&page.messages[0], &birch).status, "stored");
 }
 
+/// Work no chat message started still asks the owner: the request belongs to the session.
+#[tokio::test]
+async fn a_session_asks_the_owner_without_a_chat() {
+    let f = Fixture::new().await;
+    let (_aspen, aspen_id) = f.hire("aspen", None).await;
+    let (_birch, birch_id) = f.hire("birch", None).await;
+    let approval = f
+        .store
+        .create_chat_approval(
+            &aspen_id,
+            CreateChatApproval {
+                id: Uuid::new_v4().to_string(),
+                delivery_id: None,
+                native_request_id: "native-unprompted".into(),
+                summary: "Run a fixture command".into(),
+                details: json!({"command":"true"}),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(approval.status, "pending");
+    assert!(approval.conversation_id.is_none() && approval.delivery_id.is_none());
+    assert_eq!(approval.session_id, aspen_id.session_id.clone().unwrap());
+    assert!(f.store.chat_approvals(&birch_id).await.unwrap().is_empty());
+    // Only an agent session asks, and only for itself.
+    assert!(matches!(
+        f.store
+            .create_chat_approval(
+                &f.owner,
+                CreateChatApproval {
+                    id: Uuid::new_v4().to_string(),
+                    delivery_id: None,
+                    native_request_id: "owner".into(),
+                    summary: "Not an agent".into(),
+                    details: json!({}),
+                },
+            )
+            .await,
+        Err(Error::Forbidden)
+    ));
+    let decided = f
+        .store
+        .decide_chat_approval(&f.owner, &approval.id, "allow")
+        .await
+        .unwrap();
+    assert_eq!(decided.decision.as_deref(), Some("allow"));
+    f.store
+        .dispatch_chat_approval(&aspen_id, &approval.id)
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn approvals_require_owner_decision_and_native_dispatch_is_never_replayed() {
     let f = Fixture::new().await;
@@ -1650,7 +1702,7 @@ async fn approvals_require_owner_decision_and_native_dispatch_is_never_replayed(
             &aspen_id,
             CreateChatApproval {
                 id: Uuid::new_v4().to_string(),
-                delivery_id: delivery.clone(),
+                delivery_id: Some(delivery.clone()),
                 native_request_id: "native-approval".into(),
                 summary: "Read a fixture file".into(),
                 details: json!({"path":"fixture.txt"}),
@@ -1735,7 +1787,7 @@ async fn approvals_require_owner_decision_and_native_dispatch_is_never_replayed(
             &aspen_id,
             CreateChatApproval {
                 id: Uuid::new_v4().to_string(),
-                delivery_id: delivery.clone(),
+                delivery_id: Some(delivery.clone()),
                 native_request_id: "native-cancelled".into(),
                 summary: "Cancelled prompt".into(),
                 details: json!({}),

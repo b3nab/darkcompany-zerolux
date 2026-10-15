@@ -63,6 +63,7 @@ impl Fixture {
                         json!({})
                     }
                     "turn/settings/update" => json!({"status":turn_status}),
+                    "turn/interrupt" => json!({}),
                     other => panic!("Unexpected native method: {other}"),
                 };
                 if socket
@@ -200,4 +201,20 @@ async fn an_acknowledgement_or_unrelated_notice_is_not_confirmation_and_is_never
     assert!(error.to_string().contains("not confirmed"));
     assert_eq!(f.calls("thread/settings/update").len(), 1);
     assert_eq!(f.control.values().model.as_deref(), Some("one"));
+}
+
+#[tokio::test]
+async fn interrupt_stops_only_the_running_turn() {
+    let idle = Fixture::new(false, false, "applied").await;
+    assert!(!idle.control.interrupt().await.unwrap());
+    assert!(idle.calls("turn/interrupt").is_empty());
+    let busy = Fixture::new(true, false, "applied").await;
+    assert!(busy.control.interrupt().await.unwrap());
+    let calls = busy.calls("turn/interrupt");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0]["params"],
+        json!({"threadId":"thread","turnId":"turn"})
+    );
+    assert!(busy.calls("turn/start").is_empty());
 }
