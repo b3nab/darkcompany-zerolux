@@ -72,6 +72,8 @@ function Connected({ url, children }: { url: string; children: ReactNode }) {
   const enabled = Boolean(auth?.identity?.actor_id);
   const [workspace, setWorkspace] = useState<Workspace>();
   const workspaceVersion = useRef(0);
+  // The last workspace read, as text: a read that finds nothing new changes nothing on screen.
+  const workspaceRead = useRef("");
   const [health, setHealth] = useState<{
     version: string;
     capabilities: string[];
@@ -96,6 +98,7 @@ function Connected({ url, children }: { url: string; children: ReactNode }) {
   }, [enabled]);
   useEffect(() => {
     if (!enabled) {
+      workspaceRead.current = "";
       setWorkspace(undefined);
       return;
     }
@@ -103,8 +106,13 @@ function Connected({ url, children }: { url: string; children: ReactNode }) {
     const read = () => {
       const version = workspaceVersion.current;
       return api<Workspace>("/workspace").then(
-        (next) =>
-          current && version === workspaceVersion.current && setWorkspace(next),
+        (next) => {
+          if (!current || version !== workspaceVersion.current) return;
+          const text = JSON.stringify(next);
+          if (text === workspaceRead.current) return;
+          workspaceRead.current = text;
+          setWorkspace(next);
+        },
         () => undefined,
       );
     };
