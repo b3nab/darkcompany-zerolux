@@ -39,23 +39,24 @@ import {
   saveDraft,
   threadsOf,
   transcribe,
-  workingLabel,
+  useChatWork,
   workingSessions,
 } from "@zerolux/chat";
 import type {
   Actor,
   Approval,
   ChatSession,
+  ChatTurn,
   Conversation,
   Message,
 } from "@zerolux/chat";
 import { ApprovalCard } from "@/components/approval-card";
 import { ChatAbout } from "@/components/chat-about";
 import { ChatMark } from "@/components/chat-mark";
+import { LiveWork, WorkLine } from "@/components/chat-work";
 import { ActorMark } from "@/components/member";
 import { MessageBody } from "@/components/message-body";
 import { Screen } from "@/components/screen";
-import { Interrupt } from "@/components/session";
 import { ChatList, GestureArea } from "@/components/ui/native";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
@@ -73,7 +74,9 @@ type Row =
     }
   | { key: string; kind: "unsent"; text: string }
   | { key: string; kind: "approval"; approval: Approval }
-  | { key: string; kind: "activity"; sessions: ChatSession[] };
+  | { key: string; kind: "work"; actorId: string; turn: ChatTurn }
+  | { key: string; kind: "activity"; sessions: ChatSession[] }
+  | { key: string; kind: "note"; text: string };
 
 const marks = { sent: "✓", delivered: "✓✓", read: "✓✓" };
 // Messages from one author a few minutes apart read as one turn.
@@ -116,6 +119,52 @@ export default function ChatScreen() {
     [conversation, chat.conversations],
   );
   const openThreads = threads.filter((t) => !t.closed_at);
+  // What each agent did for this chat, read back as far as the messages shown.
+  const sessionIds = useMemo(
+    () =>
+      conversation?.members.flatMap((m) =>
+        m.session_id ? [m.session_id] : [],
+      ) ?? [],
+    [conversation],
+  );
+  const work = useChatWork(
+    id,
+    sessionIds,
+    chat.outputs,
+    chat.messages[0]?.created_at,
+  );
+  const working = useMemo(
+    () => (conversation ? workingSessions(conversation, chat.sessions) : []),
+    [conversation, chat.sessions],
+  );
+  // A turn still running rides the working bubble; every other one sits under the message
+  // that opened it.
+  const { live, finished } = useMemo(() => {
+    const live = new Map<string, ChatTurn>();
+    const finished = new Map<string, { actorId: string; turn: ChatTurn }[]>();
+    for (const { sessionId, turns } of work) {
+      const actorId = chat.sessions.find((s) => s.id === sessionId)?.actor_id;
+      const last = turns.at(-1);
+      if (last && !last.ended && working.some((s) => s.id === sessionId))
+        live.set(sessionId, last);
+      for (const turn of turns)
+        if (actorId && turn !== live.get(sessionId))
+          finished.set(turn.delivery, [
+            ...(finished.get(turn.delivery) ?? []),
+            { actorId, turn },
+          ]);
+    }
+    return { live, finished };
+  }, [work, chat.sessions, working]);
+  const workError = work.find((w) => w.error)?.error;
+  // Opened work stays open as a running turn ends and moves under its message.
+  const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
+  const toggle = (key: string) =>
+    setOpened((keys) => {
+      const next = new Set(keys);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
   const transcription = capabilities.includes("transcription-v1");
 
   // The chat on screen is the open one: a thread pushed over its chat takes over, and the
@@ -164,6 +213,14 @@ export default function ChatScreen() {
           message.created_at - previous.created_at < TURN,
         thread: threads.find((t) => t.root_message_id === message.id),
       });
+      for (const delivery of message.deliveries)
+        for (const { actorId, turn } of finished.get(delivery.id) ?? [])
+          result.push({
+            key: `work-${actorId}:${turn.delivery}`,
+            kind: "work",
+            actorId,
+            turn,
+          });
       day = label;
       previous = message;
     }
@@ -173,18 +230,22 @@ export default function ChatScreen() {
     for (const approval of chat.approvals)
       if (approval.conversation_id === id && open.has(approval.status))
         result.push({ key: approval.id, kind: "approval", approval });
-    const working = conversation
-      ? workingSessions(conversation, chat.sessions)
-      : [];
     if (working.length)
       result.push({ key: "activity", kind: "activity", sessions: working });
+    if (workError)
+      result.push({
+        key: "work-error",
+        kind: "note",
+        text: `Agents' work: ${workError}`,
+      });
     return result;
   }, [
     chat.messages,
     chat.unsent,
     chat.approvals,
-    chat.sessions,
-    conversation,
+    working,
+    finished,
+    workError,
     threads,
     id,
   ]);
@@ -383,22 +444,42 @@ export default function ChatScreen() {
             />
           </View>
         );
-      case "activity":
-        // One line per working agent, each with its own Interrupt.
+      case "work": {
+        const key = `${item.actorId}:${item.turn.delivery}`;
         return (
-          <View className="mt-3 gap-2">
-            {item.sessions.map((session) => (
-              <View key={session.id} className="flex-row items-center gap-2">
-                <View className="flex-row items-center gap-2 rounded-full border border-agent/30 bg-agent/10 px-3 py-1.5">
-                  <View className="size-1.5 rounded-[1.5px] bg-agent" />
-                  <Text className="font-mono text-[12px] text-agent-foreground">
-                    {workingLabel([name(session.actor_id)])}
-                  </Text>
-                </View>
-                <Interrupt session={session} />
-              </View>
-            ))}
+          <WorkLine
+            name={name(item.actorId)}
+            turn={item.turn}
+            open={opened.has(key)}
+            toggle={() => toggle(key)}
+          />
+        );
+      }
+      case "activity":
+        // One bubble per working agent: its step now, its turn so far, its Interrupt.
+        return (
+          <View className="mt-3 gap-1.5">
+            {item.sessions.map((session) => {
+              const turn = live.get(session.id);
+              const key = `${session.actor_id}:${turn?.delivery}`;
+              return (
+                <LiveWork
+                  key={session.id}
+                  session={session}
+                  name={name(session.actor_id)}
+                  turn={turn}
+                  open={opened.has(key)}
+                  toggle={() => toggle(key)}
+                />
+              );
+            })}
           </View>
+        );
+      case "note":
+        return (
+          <Text className="mt-2 font-mono text-[11px] text-faint">
+            {item.text}
+          </Text>
         );
       default:
         return message(item.message, item.continued, item.thread);
