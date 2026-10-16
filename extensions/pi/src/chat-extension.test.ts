@@ -964,6 +964,41 @@ while IFS= read -r line; do :; done
       ).toBe(true);
       expect(aborts).toBe(0);
       expect((await control({ method: "describe" })).paired).toBe(true);
+      // The owner's direct input: always steered, accepted once seen entering the context.
+      const asked = control({
+        method: "input",
+        link_id: "link-b",
+        text: "look at the logs",
+      });
+      for (
+        let i = 0;
+        i < 100 && sent.at(-1)?.content !== "look at the logs";
+        i++
+      )
+        await Bun.sleep(20);
+      expect(sent.at(-1)).toEqual({
+        content: "look at the logs",
+        options: { deliverAs: "steer" },
+      });
+      await handlers.get("message_start")!(
+        {
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "look at the logs" }],
+          },
+        },
+        ctx,
+      );
+      expect((await asked).ok).toBe(true);
+      // Neither seen nor queued: reported to the kernel, never sent again.
+      const lost = await control({
+        method: "input",
+        link_id: "link-b",
+        text: "dropped",
+      });
+      expect(lost.ok).toBe(false);
+      expect(lost.error).toContain("did not accept");
+      expect(sent.filter((s) => s.content === "dropped")).toHaveLength(1);
     } finally {
       await command?.handler("off", ctx);
       await handlers.get("session_shutdown")?.({}, ctx);
@@ -973,7 +1008,7 @@ while IFS= read -r line; do :; done
       await rm(root, { recursive: true, force: true });
     }
   },
-  15000,
+  25000,
 );
 
 unixTest(

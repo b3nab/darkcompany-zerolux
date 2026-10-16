@@ -553,6 +553,13 @@ export class PiRunner {
               void this.dialog(child, event);
               continue;
             }
+            // pi reports what an extension's call failed with only here: never drop it.
+            if (event.type === "extension_error") {
+              console.error(
+                `[zerolux] pi extension error (${String(event.event)}): ${String(event.error)}`,
+              );
+              continue;
+            }
             // Which input the turn runs on, as this host sees it: pi's own events, no content.
             if (
               ["agent_start", "agent_end", "agent_settled"].includes(event.type)

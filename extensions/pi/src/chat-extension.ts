@@ -115,6 +115,8 @@ export default function chatExtension(pi: ExtensionAPI) {
   /** By workspace ID. Each link has its own kernel, token, deliveries and replies. */
   const links = new Map<string, Link>();
   const queuedInputs = new Map<string, string[]>();
+  /** The owner's direct inputs waiting to be seen entering pi's context. */
+  const ownerInputs = new Set<{ text: string; seen: () => void }>();
   const bridges = () => [...links.values()].map((link) => link.bridge);
   let pairing = false;
   let takingOver = false;
@@ -721,10 +723,26 @@ export default function chatExtension(pi: ExtensionAPI) {
         )
           throw new Error("Unknown or disconnected link");
         // The owner's words, as if typed here: a new turn when idle, steering while working.
-        pi.sendUserMessage(
-          text,
-          ctx.isIdle() ? undefined : { deliverAs: "steer" },
-        );
+        // Always "steer": pi applies it only while a run is active. Choosing from isIdle()
+        // first races with a run that starts or ends meanwhile, and pi then drops the input
+        // with an error no one sees. Accepted means seen entering the context, or queued
+        // for the running turn; anything else is reported, never sent again.
+        let seen = false;
+        const waiter = { text, seen: () => (seen = true) };
+        ownerInputs.add(waiter);
+        try {
+          pi.sendUserMessage(text, { deliverAs: "steer" });
+          for (let waited = 0; waited < 3000 && !seen; waited += 50) {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            if (!seen && !ctx.isIdle() && ctx.hasPendingMessages()) return;
+          }
+          if (!seen)
+            throw new Error(
+              "pi did not accept the input; it was not sent again",
+            );
+        } finally {
+          ownerInputs.delete(waiter);
+        }
       },
       interrupt: async (linkId) => {
         if (
@@ -844,10 +862,23 @@ export default function chatExtension(pi: ExtensionAPI) {
       for (const bridge of bridges()) bridge.privateInput();
   });
   // Receipts go out in the background: pi's turn never waits on ZeroLux.
-  pi.on(
-    "message_start",
-    (event) => void messageStarted(bridges(), event.message, queuedInputs),
-  );
+  pi.on("message_start", (event) => {
+    const message = event.message as {
+      role?: string;
+      content?: string | { type: string; text?: string }[];
+    };
+    if (message?.role === "user") {
+      const text =
+        typeof message.content === "string"
+          ? message.content
+          : (message.content ?? [])
+              .filter((part) => part.type === "text")
+              .map((part) => part.text ?? "")
+              .join("\n");
+      for (const waiter of ownerInputs) if (waiter.text === text) waiter.seen();
+    }
+    void messageStarted(bridges(), event.message, queuedInputs);
+  });
   pi.on("agent_settled", async () => {
     settled = true;
     dialogShared = false;
