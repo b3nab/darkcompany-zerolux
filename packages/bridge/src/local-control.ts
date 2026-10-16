@@ -123,9 +123,12 @@ export class LocalControl {
       const reply = this.handle(buffer.slice(0, end))
         .then(
           (result) => ({ ok: true, ...result }),
-          () => ({
+          // The real reason, for the kernel's diagnostics: a generic one hides the cause.
+          (error: unknown) => ({
             ok: false,
-            error: `The ${this.label} link request failed; the session may be busy, changed, or unavailable`,
+            error: `The ${this.label} link request failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`.slice(0, 1000),
           }),
         )
         .then(
