@@ -85,7 +85,10 @@ export function App({
     const id = ++requestId.current;
     const data = await api<Workspace>("/workspace", undefined, signal);
     if (!signal?.aborted && id === requestId.current) {
-      setWorkspace(data);
+      // Polled every two seconds: the page redraws only when something changed.
+      setWorkspace((shown) =>
+        shown && JSON.stringify(shown) === JSON.stringify(data) ? shown : data,
+      );
       setConnectionError("");
     }
   }, []);
