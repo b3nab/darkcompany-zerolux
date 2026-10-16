@@ -45,10 +45,12 @@ import {
   waitingChats,
   workingLabel,
   workingSessions,
+  useChatWork,
 } from "@zerolux/chat";
 import type {
   Chat,
   ChatFilter,
+  ChatTurn,
   Conversation,
   Message,
   Perform,
@@ -57,7 +59,9 @@ import type {
 } from "@zerolux/chat";
 import { ApprovalCard, openApprovals } from "./Approvals";
 import { canRecord, useRecorder } from "./recorder";
+import { useOwner } from "./AuthGate";
 import { ChatAbout } from "@/components/chat-about";
+import { LiveWork, WorkLine } from "@/components/chat-work";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -278,6 +282,41 @@ export function ChatView({
   // Who is working on this chat now: shown as a bubble under the last message.
   const turnsHere = workingSessions(conversation, chat.sessions);
   const busyHere = turnsHere.map((s) => s.actor_id);
+  // What each agent did for this chat, read back as far as the messages shown.
+  const work = useChatWork(
+    conversation.id,
+    conversation.members.flatMap((m) => (m.session_id ? [m.session_id] : [])),
+    chat.outputs,
+    chat.messages[0]?.created_at,
+  );
+  const workError = work.find((w) => w.error)?.error;
+  // A turn still running rides the working bubble; each other one sits under the message
+  // that opened it.
+  const liveTurn = (sessionId: string) => {
+    const turn = work.find((w) => w.sessionId === sessionId)?.turns.at(-1);
+    return turn && !turn.ended ? turn : undefined;
+  };
+  const finished = new Map<string, { actorId: string; turn: ChatTurn }[]>();
+  for (const { sessionId, turns } of work) {
+    const actorId = chat.sessions.find((s) => s.id === sessionId)?.actor_id;
+    const live = turnsHere.some((s) => s.id === sessionId)
+      ? liveTurn(sessionId)
+      : undefined;
+    for (const turn of turns)
+      if (actorId && turn !== live)
+        finished.set(turn.delivery, [
+          ...(finished.get(turn.delivery) ?? []),
+          { actorId, turn },
+        ]);
+  }
+  // Opened work stays open as a running turn finishes and moves under its message.
+  const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
+  const toggle = (key: string) =>
+    setOpened((keys) => {
+      const next = new Set(keys);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
   const asks = openApprovals(chat.approvals).filter(
     (a) => a.conversation_id === conversation.id,
   );
@@ -306,6 +345,9 @@ export function ChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const owner = useOwner(actors);
+  const chatTitle = (id: string | null) =>
+    chat.conversations.find((c) => c.id === id)?.title;
   const agents = agentMembers(conversation, actors);
   const actor = (id: string) => actors.find((a) => a.id === id);
   const name = (id: string) => actor(id)?.name ?? "Former member";
@@ -512,6 +554,21 @@ export function ChatView({
                         <ThreadLink thread={threadOn(m.id)!} name={name} />
                       )}
                     </MessageRow>
+                    {m.deliveries.flatMap((d) =>
+                      (finished.get(d.id) ?? []).map(({ actorId, turn }) => {
+                        const key = `${actorId}:${turn.delivery}`;
+                        return (
+                          <WorkLine
+                            key={key}
+                            name={name(actorId)}
+                            chatTitle={chatTitle}
+                            turn={turn}
+                            open={opened.has(key)}
+                            toggle={() => toggle(key)}
+                          />
+                        );
+                      }),
+                    )}
                   </Fragment>
                 );
               })}
@@ -544,36 +601,44 @@ export function ChatView({
                   />
                 </li>
               ))}
-              {busyHere.length > 0 && (
+              {turnsHere.length > 0 && (
                 <li
                   data-activity
-                  aria-live="polite"
-                  className="mt-2 flex items-center gap-2 self-start rounded-full border border-agent/30 bg-agent/10 px-3 py-1.5 font-mono text-[11.5px] text-agent-foreground"
+                  // Holds its hidden status: positioned against the page, it would make the
+                  // whole page as tall as the chat, and the window would scroll with it.
+                  className="relative mt-2 flex flex-col gap-1.5"
                 >
-                  <span aria-hidden className="flex gap-1">
-                    {[0, 300, 600].map((delay) => (
-                      <span
-                        key={delay}
-                        style={{ animationDelay: `${delay}ms` }}
-                        className="size-1.5 animate-pulse rounded-[1.5px] bg-agent motion-reduce:animate-none"
-                      />
-                    ))}
+                  <span role="status" className="sr-only">
+                    {workingLabel(busyHere.map(name))}
                   </span>
-                  {workingLabel(busyHere.map(name))}
-                  <button
-                    type="button"
-                    disabled={busy}
-                    className="ml-1 rounded-full px-1.5 underline-offset-4 hover:underline disabled:opacity-50"
-                    onClick={() =>
-                      void perform(async () => {
-                        await Promise.all(
-                          turnsHere.map((s) => chat.interrupt(s.id)),
-                        );
-                      })
-                    }
-                  >
-                    Interrupt
-                  </button>
+                  {turnsHere.map((s) => {
+                    const turn = liveTurn(s.id);
+                    const key = `${s.actor_id}:${turn?.delivery}`;
+                    return (
+                      <LiveWork
+                        key={s.id}
+                        name={name(s.actor_id)}
+                        chatTitle={chatTitle}
+                        turn={turn}
+                        open={opened.has(key)}
+                        toggle={() => toggle(key)}
+                        busy={busy}
+                        interrupt={
+                          owner
+                            ? () =>
+                                void perform(async () => {
+                                  await chat.interrupt(s.id);
+                                })
+                            : undefined
+                        }
+                      />
+                    );
+                  })}
+                </li>
+              )}
+              {workError && (
+                <li className="mt-2 font-mono text-[11px] text-faint">
+                  Agents' work: {workError}
                 </li>
               )}
               {chat.messages.length === 0 && conversation.last_seq === 0 && (

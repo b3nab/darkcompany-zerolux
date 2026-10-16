@@ -17,6 +17,8 @@ import { Organization } from "./Org";
 import { Storage } from "./Storage";
 import { Tonight } from "./Tonight";
 import { ChatAbout } from "./components/chat-about";
+import { LiveWork, WorkLine } from "./components/chat-work";
+import { ToolCall } from "./components/tool-call";
 import { agentPresence } from "./presence";
 import {
   AgentProfile,
@@ -30,6 +32,8 @@ import type { Actor, Workspace } from "./api";
 import type {
   Approval,
   ChatSession,
+  ChatTurn,
+  ToolBlock,
   Conversation,
   Discovery,
   Message,
@@ -202,6 +206,7 @@ function fakeChat(overrides: Partial<Chat> = {}): Chat {
     resume: nothing,
     stop: nothing,
     interrupt: async () => true,
+    input: nothing,
     decide: nothing,
     answer: nothing,
     addMember: nothing,
@@ -963,9 +968,8 @@ test("a bubble under the last message shows who is working on this chat", () => 
       activity_conversation_id: dm.id,
     },
   ]);
-  expect(html).toMatch(
-    /<li data-activity="true"[^>]*>[\s\S]*aspen is working<button[^>]*>Interrupt<\/button><\/li>/,
-  );
+  expect(html).toMatch(/<li data-activity="true"[^>]*>[\s\S]*aspen is working/);
+  expect(html).toContain('title="Interrupt aspen"');
   // The bubble comes after the last message.
   expect(html.indexOf("data-activity")).toBeGreaterThan(
     html.indexOf("Done: all green."),
@@ -1429,7 +1433,9 @@ test("a session in the console: its work in the middle, and Interrupt in the box
   expect(html).toContain("About this session");
   expect(html).toContain("Interrupt");
   expect(html).not.toMatch(/>Send</);
-  expect(html).toContain("Writing straight to a session is not available yet.");
+  // Written while it works, the words join the turn; with nothing written, the box interrupts.
+  expect(html).toContain("Add to birch&#x27;s turn");
+  expect(html).toContain("Joins the turn in progress · Esc interrupts");
   const idle = renderToStaticMarkup(
     <SessionView
       session={session("s-aspen", ASPEN)}
@@ -1441,4 +1447,183 @@ test("a session in the console: its work in the middle, and Interrupt in the box
   );
   expect(idle).toContain("Send");
   expect(idle).not.toContain(">Interrupt");
+  expect(idle).toContain("Straight into the session, not into a chat");
+  // Unsent words wait in their session's box.
+  saveDraft("s-aspen", "Check the logs");
+  expect(
+    renderToStaticMarkup(
+      <SessionView
+        session={session("s-aspen", ASPEN)}
+        chat={fakeChat()}
+        actors={actors}
+        busy={false}
+        perform={perform}
+      />,
+    ),
+  ).toContain(">Check the logs</textarea>");
+  saveDraft("s-aspen", "");
+  // A stopped session takes no input.
+  const stopped = renderToStaticMarkup(
+    <SessionView
+      session={session("s-aspen", ASPEN, "stopped")}
+      chat={fakeChat()}
+      actors={actors}
+      busy={false}
+      perform={perform}
+    />,
+  );
+  expect(stopped).toMatch(/<textarea[^>]*disabled/);
+});
+
+test("an agent's work sits under the message that asked, and its step rides the working bubble", () => {
+  const turn: ChatTurn = {
+    delivery: "d1",
+    time: "2026-01-01T10:00:00Z",
+    ended: true,
+    events: [
+      {
+        type: "tool_call",
+        id: "t1",
+        name: "Bash",
+        input: { command: "bun test" },
+        at: 10,
+        time: "2026-01-01T10:00:30Z",
+      },
+      {
+        type: "tool_result",
+        id: "t1",
+        output: "12 pass",
+        error: false,
+        at: 20,
+        time: "2026-01-01T10:01:00Z",
+      },
+      {
+        type: "turn_ended",
+        status: "completed",
+        at: 30,
+        time: "2026-01-01T10:02:00Z",
+      },
+    ],
+  };
+  const line = (open: boolean) =>
+    render(<WorkLine name="aspen" turn={turn} open={open} toggle={() => {}} />);
+  expect(line(false)).toContain("worked for 2m · 1 tool");
+  expect(line(false)).toContain('aria-expanded="false"');
+  expect(line(false)).not.toContain("12 pass");
+  // Opened, the whole turn, each tool on its row; its end is already in the line.
+  expect(line(true)).toContain(">bun test<");
+  expect(line(true)).not.toContain("Turn completed");
+  // A tool's output is in the page only once that tool is opened.
+  expect(line(true)).not.toContain("12 pass");
+  const live = render(
+    <LiveWork
+      name="aspen"
+      turn={{ ...turn, ended: false, events: turn.events.slice(0, 1) }}
+      open={false}
+      toggle={() => {}}
+      busy={false}
+      interrupt={() => {}}
+    />,
+  );
+  expect(live).toContain("aspen<span");
+  expect(live).toContain(" · Running bun test");
+  expect(live).toContain(">Interrupt</button>");
+  // Interrupting is the owner's: anyone else sees the work and no control.
+  expect(
+    render(
+      <LiveWork name="aspen" open={false} toggle={() => {}} busy={false} />,
+    ),
+  ).not.toContain("Interrupt");
+  // Before its turn is read, the bubble says only that the agent works.
+  const unread = render(
+    <LiveWork
+      name="aspen"
+      open={false}
+      toggle={() => {}}
+      busy={false}
+      interrupt={() => {}}
+    />,
+  );
+  expect(unread).toContain(" is working");
+  expect(unread).toMatch(/<button[^>]*aria-expanded="false"[^>]*disabled/);
+});
+
+test("each tool reads as its own kind: a command, a file, a ZeroLux message, an MCP tool", () => {
+  const tool = (
+    name: string,
+    input: unknown,
+    more: Partial<ToolBlock> = {},
+  ): ToolBlock => ({
+    key: "1.0",
+    time: null,
+    kind: "tool",
+    id: "t1",
+    name,
+    input,
+    result: { output: "ok", error: false, time: null },
+    ...more,
+  });
+  const row = (block: ToolBlock) =>
+    renderToStaticMarkup(
+      <ToolCall
+        tool={block}
+        chatTitle={(id) => (id === group.id ? "General" : undefined)}
+      />,
+    );
+  const ran = row(tool("Bash", { command: "bun test" }));
+  expect(ran).toContain(">Ran<");
+  expect(ran).toContain(">bun test<");
+  // While it runs the verb is in the present, lit by a moving light.
+  const running = row(
+    tool("Bash", { command: "bun test" }, { result: undefined }),
+  );
+  expect(running).toMatch(/class="[^"]*sweep[^"]*">Running</);
+  // A turn that ended first leaves the tool stopped, not running forever.
+  expect(
+    row(
+      tool(
+        "Bash",
+        { command: "sleep 9" },
+        { result: undefined, stopped: true },
+      ),
+    ),
+  ).toContain('aria-label="Stopped before it finished"');
+  const edited = row(
+    tool("Edit", {
+      file_path: "src/a.ts",
+      old_string: "a\nb",
+      new_string: "c",
+    }),
+  );
+  expect(edited).toContain(">Edited<");
+  expect(edited).toContain(">a.ts<");
+  expect(edited).toContain("+1");
+  expect(edited).toContain("−2");
+  expect(
+    row(
+      tool("mcp__zerolux__send", { chat: group.id, text: "Done: all green." }),
+    ),
+  ).toContain("Wrote in General");
+  const mcp = row(tool("mcp__docs__search_pages", { query: "tokens" }));
+  expect(mcp).toContain(">search pages<");
+  expect(mcp).toContain(">docs<");
+  // Closed, a row keeps what came back out of the page.
+  expect(ran).not.toContain(">ok<");
+  // A call the person or a check refused reads as declined, not as done or failed.
+  const declined = row(
+    tool(
+      "Bash",
+      { command: "rm -rf build" },
+      {
+        result: {
+          output:
+            "The user doesn't want to proceed with this tool use. The tool use was rejected.",
+          error: true,
+          time: null,
+        },
+      },
+    ),
+  );
+  expect(declined).toContain(">Declined<");
+  expect(declined).toContain('aria-label="Declined"');
 });

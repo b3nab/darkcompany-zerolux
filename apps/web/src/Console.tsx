@@ -1,32 +1,29 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, NavLink } from "react-router";
-import {
-  ChevronLeftIcon,
-  CircleAlertIcon,
-  CircleCheckIcon,
-  LoaderIcon,
-  SendIcon,
-  SquareIcon,
-} from "lucide-react";
+import { ChevronLeftIcon, SendIcon, SquareIcon } from "lucide-react";
 import {
   ago,
   consoleSessions,
+  draftOf,
   folderName,
   harnessLabels,
+  saveDraft,
   sessionBlocks,
   sessionState,
-  toolLine,
-  toolText,
   useSessionEvents,
 } from "@zerolux/chat";
-import type { Chat, ChatSession, Perform, SessionBlock } from "@zerolux/chat";
+import type { Chat, ChatSession, Perform } from "@zerolux/chat";
 import type { Actor } from "./api";
 import { sessionTone } from "./presence";
 import { Presence } from "@/components/presence";
 import { Mark } from "@/components/profile";
-import { MessageText } from "@/components/message-text";
+import { SessionBlocks } from "@/components/session-blocks";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { SessionCard, resumable, takeable } from "./Team";
+import { sendsOnEnter } from "./ChatView";
+import { useOwner } from "./AuthGate";
+
+const MAX_TEXT = 64 * 1024;
 
 /** When a session's native output last grew, if the kernel noticed it since this page opened. */
 const outputLine = (chat: Chat, session: ChatSession) => {
@@ -151,22 +148,33 @@ export function SessionView({
   const agent = actors.find((a) => a.id === session.actor_id);
   const tone = sessionTone(session);
   const working = tone === "working";
+  const owner = useOwner(actors);
   const [about, setAbout] = useState(false);
-  const { events, error } = useSessionEvents(
+  const { events, error, more, earlier } = useSessionEvents(
     session.id,
     chat.outputs[session.id]?.end,
   );
   const blocks = sessionBlocks(events);
-  const end = useRef<HTMLDivElement>(null);
-  // New work follows at the bottom, as in a chat.
-  // Braces matter: a newer browser's scrollIntoView returns a promise, never a cleanup.
-  useEffect(() => {
-    end.current?.scrollIntoView({ block: "end" });
+  const scroller = useRef<HTMLDivElement>(null);
+  // New work follows at the bottom, as in a chat, while you are there.
+  const following = useRef(true);
+  // Earlier work comes in above: the distance from the bottom keeps your place.
+  const fromBottom = useRef<number>(undefined);
+  const top = useRef<number>(undefined);
+  useLayoutEffect(() => {
+    const view = scroller.current;
+    if (!view) return;
+    const earlierCame = events[0]?.at !== top.current;
+    top.current = events[0]?.at;
+    if (earlierCame && fromBottom.current !== undefined) {
+      view.scrollTop = view.scrollHeight - fromBottom.current;
+      fromBottom.current = undefined;
+    } else if (following.current) view.scrollTop = view.scrollHeight;
   }, [events]);
   const interrupt = () =>
     void perform(async () => void (await chat.interrupt(session.id)));
   useEffect(() => {
-    if (!working) return;
+    if (!working || !owner) return;
     // Esc stops the turn, as in the harness itself, unless a dialog or menu takes it.
     const stop = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
@@ -178,7 +186,7 @@ export function SessionView({
     return () => window.removeEventListener("keydown", stop);
     // The session and its working state decide; interrupt reads them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id, working]);
+  }, [session.id, working, owner]);
   const chatTitle = (id: string | null) =>
     chat.conversations.find((c) => c.id === id)?.title;
   return (
@@ -227,7 +235,15 @@ export function SessionView({
           About this session
         </Button>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 md:px-6">
+      <div
+        ref={scroller}
+        className="min-h-0 flex-1 overflow-y-auto px-3 py-4 md:px-6"
+        onScroll={(event) => {
+          const view = event.currentTarget;
+          following.current =
+            view.scrollHeight - view.scrollTop - view.clientHeight < 80;
+        }}
+      >
         <div className="mx-auto flex max-w-3xl flex-col gap-3">
           {about && (
             <SessionCard
@@ -248,9 +264,22 @@ export function SessionView({
               }
             />
           )}
-          {blocks.map((block, i) => (
-            <Block key={i} block={block} chatTitle={chatTitle} />
-          ))}
+          {more && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="self-center"
+              onClick={() => {
+                const view = scroller.current;
+                if (view)
+                  fromBottom.current = view.scrollHeight - view.scrollTop;
+                earlier();
+              }}
+            >
+              Show earlier work
+            </Button>
+          )}
+          <SessionBlocks blocks={blocks} chatTitle={chatTitle} />
           {!blocks.length && !error && (
             <p className="text-sm text-faint">Nothing recorded yet.</p>
           )}
@@ -259,152 +288,133 @@ export function SessionView({
               {error}
             </p>
           )}
-          <div ref={end} />
         </div>
       </div>
-      <form
-        className="flex flex-col gap-1.5 border-t px-3 pt-3 pb-2 md:px-5"
-        onSubmit={(event) => event.preventDefault()}
-      >
-        <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
-          <textarea
-            aria-label={`Write to ${name}`}
-            rows={1}
-            disabled
-            placeholder={`Write to ${name}`}
-            className="max-h-40 min-h-10.5 flex-1 resize-none rounded-md border border-input bg-background px-3 py-2.5 text-sm outline-none placeholder:text-faint disabled:opacity-60"
-          />
-          {working ? (
-            <Button
-              type="button"
-              variant="outline"
-              className="h-10.5"
-              disabled={busy}
-              title="Interrupt (Esc)"
-              onClick={interrupt}
-            >
-              <SquareIcon data-icon="inline-start" />
-              Interrupt
-            </Button>
-          ) : (
-            <Button type="submit" disabled className="h-10.5">
-              Send
-              <SendIcon data-icon="inline-end" />
-            </Button>
-          )}
-        </div>
-        {/* TODO: kernel: input written straight to a session, outside any chat. */}
-        <p className="mx-auto w-full max-w-3xl text-xs text-faint">
-          Writing straight to a session is not available yet.
-        </p>
-      </form>
+      <SessionInput
+        key={session.id}
+        session={session}
+        name={name}
+        owner={owner}
+        working={working}
+        busy={busy}
+        perform={perform}
+        send={(text) => chat.input(session.id, text)}
+        interrupt={interrupt}
+      />
     </section>
   );
 }
 
-function Block({
-  block,
-  chatTitle,
+/**
+ * The owner's own words, straight into the session: a new turn when idle, joining the running
+ * one otherwise. While it works and nothing is written, the button interrupts instead.
+ */
+function SessionInput({
+  session,
+  name,
+  owner,
+  working,
+  busy,
+  perform,
+  send,
+  interrupt,
 }: {
-  block: SessionBlock;
-  chatTitle: (id: string | null) => string | undefined;
+  session: ChatSession;
+  name: string;
+  owner: boolean;
+  working: boolean;
+  busy: boolean;
+  perform: Perform;
+  send: (text: string) => Promise<void>;
+  interrupt: () => void;
 }) {
-  switch (block.kind) {
-    case "input":
-      return (
-        <div className="max-w-[min(40rem,85%)] self-end rounded-md rounded-br-xs border border-human/25 bg-human/10 px-3.5 py-2">
-          {block.chat && (
-            <p className="mb-1 font-mono text-[11px] text-faint">
-              From {chatTitle(block.chat) ?? "a chat"}
-            </p>
-          )}
-          <p className="text-sm whitespace-pre-wrap break-words">
-            {block.text}
-          </p>
-        </div>
-      );
-    case "text":
-      return <MessageText text={block.text} />;
-    case "thinking":
-      return (
-        <details className="group text-sm text-muted-foreground">
-          <summary className="cursor-pointer list-none font-mono text-[12px] text-faint [&::-webkit-details-marker]:hidden">
-            Thinking
-          </summary>
-          <p className="mt-1 border-l pl-3 whitespace-pre-wrap">{block.text}</p>
-        </details>
-      );
-    case "tool": {
-      const state = !block.result
-        ? "running"
-        : block.result.error
-          ? "error"
-          : "done";
-      return (
-        <details
-          data-state={state}
-          className="group rounded-md border bg-card text-sm"
-        >
-          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 [&::-webkit-details-marker]:hidden">
-            {state === "running" ? (
-              <LoaderIcon
-                aria-label="Running"
-                className="size-3.5 animate-spin text-agent motion-reduce:animate-none"
-              />
-            ) : state === "error" ? (
-              <CircleAlertIcon
-                aria-label="Failed"
-                className="size-3.5 text-destructive"
-              />
-            ) : (
-              <CircleCheckIcon
-                aria-label="Done"
-                className="size-3.5 text-faint"
-              />
-            )}
-            <span className="font-mono text-[12.5px] font-medium">
-              {block.name}
-            </span>
-            <span className="truncate font-mono text-[12px] text-muted-foreground">
-              {toolLine(block.input)}
-            </span>
-          </summary>
-          <div className="flex flex-col gap-2 border-t px-3 py-2">
-            <pre className="max-h-64 overflow-auto font-mono text-[12px] whitespace-pre-wrap text-muted-foreground">
-              {toolText(block.input)}
-            </pre>
-            {block.result && (
-              <pre
-                data-error={block.result.error || undefined}
-                className="max-h-64 overflow-auto border-t pt-2 font-mono text-[12px] whitespace-pre-wrap data-error:text-destructive"
-              >
-                {toolText(block.result.output)}
-              </pre>
-            )}
-          </div>
-        </details>
-      );
-    }
-    case "turn":
-      return (
-        <p className="my-1 flex items-center gap-3 font-mono text-[11px] text-faint before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">
-          Turn {block.status}
-        </p>
-      );
-    case "error":
-      return <p className="text-sm text-destructive">{block.message}</p>;
-    case "compacted":
-      return (
-        <details className="text-sm">
-          <summary className="my-1 flex cursor-pointer list-none items-center gap-3 font-mono text-[11px] text-faint before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border [&::-webkit-details-marker]:hidden">
-            Context compacted
-          </summary>
-          {block.summary && (
-            <p className="mt-1 whitespace-pre-wrap text-muted-foreground">
-              {block.summary}
-            </p>
-          )}
-        </details>
-      );
+  // Unsent words stay with their session, as a chat keeps its draft.
+  const [text, setText] = useState(() => draftOf(session.id));
+  const write = (next: string) => {
+    setText(next);
+    saveDraft(session.id, next);
+  };
+  const box = useRef<HTMLTextAreaElement>(null);
+  const open = owner && session.status === "connected";
+  const tooLong = new TextEncoder().encode(text).length > MAX_TEXT;
+  const stops = owner && working && !text.trim();
+  async function submit() {
+    if (!open || !text.trim() || tooLong) return;
+    const sent = text;
+    if (!(await perform(() => send(sent.trim())))) return;
+    // What was typed meanwhile stays.
+    if (draftOf(session.id) === sent) write("");
+    if (box.current) box.current.style.height = "auto";
   }
+  return (
+    <form
+      className="flex flex-col gap-1.5 border-t px-3 pt-3 pb-2 md:px-5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void submit();
+      }}
+    >
+      <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
+        <textarea
+          ref={box}
+          aria-label={`Write to ${name}`}
+          rows={1}
+          value={text}
+          disabled={!open}
+          placeholder={
+            !owner
+              ? "Only the workspace's owner writes to a session"
+              : open
+                ? working
+                  ? `Add to ${name}'s turn`
+                  : `Write to ${name}`
+                : sessionState(session)
+          }
+          onChange={(event) => {
+            // Grows with the text, up to a few lines; then it scrolls.
+            event.target.style.height = "auto";
+            event.target.style.height = `${event.target.scrollHeight}px`;
+            write(event.target.value);
+          }}
+          onKeyDown={(event) => {
+            if (!sendsOnEnter(event.nativeEvent)) return;
+            event.preventDefault();
+            void submit();
+          }}
+          className="max-h-40 min-h-10.5 flex-1 resize-none rounded-md border border-input bg-background px-3 py-2.5 text-sm transition-[border-color,box-shadow] outline-none placeholder:text-faint focus:border-ring focus:ring-3 focus:ring-ring/20 disabled:opacity-60"
+        />
+        {stops ? (
+          <Button
+            type="button"
+            variant="outline"
+            className="h-10.5"
+            disabled={busy}
+            title="Interrupt (Esc)"
+            onClick={interrupt}
+          >
+            <SquareIcon data-icon="inline-start" />
+            Interrupt
+          </Button>
+        ) : (
+          <Button
+            type="submit"
+            disabled={busy || !open || !text.trim() || tooLong}
+            className="h-10.5"
+          >
+            Send
+            <SendIcon data-icon="inline-end" />
+          </Button>
+        )}
+      </div>
+      <p className="mx-auto w-full max-w-3xl font-mono text-[11px] text-faint">
+        {tooLong
+          ? "Too long: up to 64 KB."
+          : !owner
+            ? "Its work is open to everyone in the workspace"
+            : working
+              ? "Joins the turn in progress · Esc interrupts"
+              : "Straight into the session, not into a chat"}
+      </p>
+    </form>
+  );
 }

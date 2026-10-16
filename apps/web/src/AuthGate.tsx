@@ -8,9 +8,11 @@ import {
   type ReactNode,
 } from "react";
 import {
+  activeActors,
   AuthConnection,
   errorMessage,
   requiresSignIn,
+  type Actor,
   type AuthHealth,
   type AuthIdentity,
 } from "@zerolux/chat";
@@ -37,6 +39,16 @@ interface Authentication {
 }
 const AuthenticationContext = createContext<Authentication | null>(null);
 export const useAuthentication = () => useContext(AuthenticationContext);
+
+/**
+ * Whether you own the workspace: its first person. A kernel without sign-in has only its owner.
+ * Writing into a session and interrupting it are the owner's.
+ */
+export function useOwner(actors: Actor[]) {
+  const authentication = useAuthentication();
+  const owner = activeActors(actors).find((a) => a.kind === "human");
+  return !authentication || authentication.identity.actor_id === owner?.id;
+}
 
 /** Domain UI is mounted only for a verified, bound human identity. */
 export function AuthGate({ children }: { children: ReactNode }) {

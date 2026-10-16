@@ -75,6 +75,11 @@
     scrollbar-width: thin;
     scrollbar-color: var(--color-input) transparent;
   }
+  /* An app, not a page: a scroll that runs past a list's end never moves the window. */
+  html,
+  body {
+    overscroll-behavior: none;
+  }
   body {
     @apply bg-background font-sans text-sm text-foreground antialiased;
     background-image: var(--background-image);
@@ -90,5 +95,35 @@
   }
   ::selection {
     @apply bg-human/30;
+  }
+}
+
+/* Work in progress: a light runs across the words; still where motion is reduced. */
+@utility sweep {
+  --sweep-rest: color-mix(in oklab, var(--color-foreground) 62%, transparent);
+  background-image: linear-gradient(
+    90deg,
+    var(--sweep-rest) 35%,
+    var(--color-foreground) 50%,
+    var(--sweep-rest) 65%
+  );
+  background-size: 250% 100%;
+  background-clip: text;
+  color: transparent;
+  /* A sweep a second long every four, after a short wait: present, never busy. */
+  animation: sweep 4s ease-in-out 0.6s infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    background: none;
+    color: var(--sweep-rest);
+  }
+}
+@keyframes sweep {
+  0% {
+    background-position: 100% 0;
+  }
+  25%,
+  100% {
+    background-position: 0 0;
   }
 }
