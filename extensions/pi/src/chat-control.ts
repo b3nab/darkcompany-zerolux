@@ -8,6 +8,8 @@ export interface LiveDescription {
   paired: boolean;
   /** This pi accepts a link per workspace; a kernel may hire it while another holds a link. */
   multi_workspace?: boolean;
+  /** The ZeroLux sessions whose links this pi holds now: a kernel relinks only a lost one. */
+  links?: string[];
 }
 export interface PairRequest {
   base_url: string;

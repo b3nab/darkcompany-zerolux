@@ -644,6 +644,9 @@ export default function chatExtension(pi: ExtensionAPI) {
           !ctx.isIdle() ||
           ctx.hasPendingMessages(),
         paired: active(),
+        links: [...links.values()]
+          .filter((link) => link.bridge.connected && link.bridge.sessionId)
+          .map((link) => link.bridge.sessionId!),
         // Several workspaces may link this session, each with its own kernel.
         multi_workspace: true,
         takeover: !managed && ctx.mode === "tui" ? 1 : undefined,
