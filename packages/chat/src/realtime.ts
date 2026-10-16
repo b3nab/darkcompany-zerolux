@@ -6,6 +6,21 @@ import type { ChatEvent } from "./chat";
 export type RealtimeStatus = "connecting" | "live" | "offline";
 
 /**
+ * The chat room carries data only. LiveKit opens and resumes an audio context on every
+ * connection, for playback; in a WebKit window, resuming one waits on the system's audio and
+ * can freeze the page outright. This context plays nothing and never opens the system's audio,
+ * and the room subscribes to no media, so nothing ever plays through it.
+ */
+const SILENT = {
+  state: "running",
+  resume: async () => {},
+  suspend: async () => {},
+  close: async () => {},
+  addEventListener: () => {},
+  removeEventListener: () => {},
+} as unknown as AudioContext;
+
+/**
  * Joins the kernel's LiveKit room and reports chat events. `sync` runs after
  * every (re)connection so callers refetch what packets cannot replay.
  * Returns a function that disconnects for good.
@@ -34,6 +49,7 @@ export function connectRealtime(handlers: {
     // keys are gone, and rejoining with a fresh token is what recovers.
     const current = new Room({
       reconnectPolicy: new DefaultReconnectPolicy([0, 300, 1200, 2700]),
+      webAudioMix: { audioContext: SILENT },
     });
     room = current;
     current.on(RoomEvent.DataReceived, (payload, participant, _, topic) => {
@@ -60,7 +76,7 @@ export function connectRealtime(handlers: {
         "/livekit/token",
       );
       if (stopped) return;
-      await current.connect(url, token);
+      await current.connect(url, token, { autoSubscribe: false });
       if (stopped) return void current.disconnect();
       attempt = 0;
       handlers.status("live");

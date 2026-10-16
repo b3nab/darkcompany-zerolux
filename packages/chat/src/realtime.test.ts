@@ -6,7 +6,10 @@ class FakeRoom {
   handlers = new Map<string, Handler>();
   connected: string[] = [];
   disconnected = false;
-  constructor() {
+  options: Record<string, unknown>;
+  connectOptions: unknown;
+  constructor(options: Record<string, unknown>) {
+    this.options = options;
     rooms.push(this);
   }
   on(event: string, handler: Handler) {
@@ -16,8 +19,9 @@ class FakeRoom {
   emit(event: string, ...args: unknown[]) {
     this.handlers.get(event)?.(...args);
   }
-  async connect(url: string, token: string) {
+  async connect(url: string, token: string, options?: unknown) {
     this.connected.push(`${url} ${token}`);
+    this.connectOptions = options;
   }
   async disconnect() {
     this.disconnected = true;
@@ -149,4 +153,19 @@ test("stopping during a join never leaves a connection or a retry behind", async
   jest.advanceTimersByTime(60_000);
   await flush();
   expect(rooms).toHaveLength(1);
+});
+
+test("the chat room never opens the system's audio: a silent context, no media", async () => {
+  const stop = connectRealtime({
+    event: () => {},
+    sync: () => {},
+    status: () => {},
+  });
+  await flush();
+  const room = rooms[0]!;
+  const mix = room.options.webAudioMix as { audioContext: AudioContext };
+  // LiveKit takes the context it is given instead of creating and resuming its own.
+  expect(mix.audioContext.state).toBe("running");
+  expect(room.connectOptions).toEqual({ autoSubscribe: false });
+  stop();
 });
