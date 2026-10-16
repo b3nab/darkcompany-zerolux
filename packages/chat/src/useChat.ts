@@ -405,6 +405,13 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
         await listSessions().catch(() => {});
       }
     },
+    /**
+     * Writes the owner's own words into a session as native input, not as a chat message: a
+     * new turn when idle, joining the running turn otherwise. The session's events show it.
+     */
+    async input(sessionId: string, text: string) {
+      await api(`/chat/sessions/${sessionId}/input`, { text });
+    },
     async stop(sessionId: string) {
       await order.run(
         "sessions",

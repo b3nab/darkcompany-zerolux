@@ -17,3 +17,4 @@ export * from "./devices";
 export * from "./requests";
 export * from "./capabilities";
 export * from "./session-events";
+export * from "./tool-view";
