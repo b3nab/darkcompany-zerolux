@@ -5,11 +5,12 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub id: String,
-    #[sea_orm(column_type = "Text")]
+    /// One row per native session of an agent: a relink replaces only its token.
+    #[sea_orm(column_type = "Text", unique_key = "native_session")]
     pub actor_id: String,
-    #[sea_orm(column_type = "Text")]
+    #[sea_orm(column_type = "Text", unique_key = "native_session")]
     pub harness: String,
-    #[sea_orm(column_type = "Text")]
+    #[sea_orm(column_type = "Text", unique_key = "native_session")]
     pub native_session_id: String,
     #[sea_orm(column_type = "Text")]
     pub title: String,

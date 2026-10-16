@@ -122,6 +122,8 @@ pub struct ChatRuntime {
     /// Notices of native output growth; see `native_output`.
     watcher: Mutex<Option<JoinHandle<()>>>,
     settings_gates: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Relinks that failed, by session: failures so far and when to try again.
+    retries: std::sync::Mutex<HashMap<String, (u32, std::time::Instant)>>,
     /// Installed code at kernel activation, not edits made later in a checkout.
     integration_revisions: HashMap<&'static str, String>,
 }
@@ -219,6 +221,7 @@ impl ChatRuntime {
             publisher: Mutex::new(Some(publisher)),
             watcher: Mutex::new(Some(watcher)),
             settings_gates: Mutex::new(HashMap::new()),
+            retries: std::sync::Mutex::new(HashMap::new()),
             integration_revisions,
         }))
     }
@@ -399,7 +402,7 @@ impl ChatRuntime {
             // was lost. Revoke the issued token; never retry native handoff.
             if self
                 .store
-                .stop_chat_session_marked(who, &issued.session.id, crate::chat::LINK_FAILED)
+                .fail_chat_link(who, &issued.session.id, crate::chat::LINK_FAILED)
                 .await?
             {
                 // The owner pressed Stop while pairing was pending: their decision stands.
@@ -546,14 +549,6 @@ impl ChatRuntime {
         let live = sessions::resolve_linked("pi", &session.native_session_id).await;
         let target = self.pi_target(who, &session, live).await?;
         let reconnect = session.stopped_at.is_none();
-        if reconnect
-            && self
-                .store
-                .stop_chat_session_marked(who, id, crate::chat::RELINKING)
-                .await?
-        {
-            return Err(Error::StoppedByOwner.into());
-        }
         if let Some(previous) = self.agents.lock().await.remove(id) {
             previous.release().await;
         }
@@ -666,6 +661,15 @@ impl ChatRuntime {
     /// when their processes ended. Tokens are reissued; no startup prompt or attempted input
     /// is resent. Sessions explicitly stopped by their owner remain stopped.
     pub async fn reconnect(&self) -> Result<()> {
+        self.relink(false).await
+    }
+
+    /// The periodic relink: a session whose relinks keep failing waits longer each time.
+    pub async fn reconnect_due(&self) -> Result<()> {
+        self.relink(true).await
+    }
+
+    async fn relink(&self, backoff: bool) -> Result<()> {
         let owner = self.store.chat_identity(None).await?;
         let linked = self.store.chat_sessions(&owner).await?;
         // This host's sessions only: their native processes are here.
@@ -674,14 +678,24 @@ impl ChatRuntime {
                 && s.status == "attention"
                 && s.host_id.as_deref() == self.store.host()
         }) {
+            // A notice on a live link is for the owner: relinking would replace the link
+            // and erase it. Only a lost link is relinked, and a failing one less often.
+            if self.link_alive(&owner, &session).await || (backoff && !self.retry_due(&session.id))
+            {
+                continue;
+            }
             #[cfg(unix)]
             if let Some(mode) = self.owned_mode(&owner, &session.id).await? {
-                if let Err(error) = self.reconnect_owned(&owner, &session, mode).await {
-                    tracing::warn!(
-                        session_id = session.id,
-                        error = format!("{error:#}"),
-                        "Owned runner was not rebound"
-                    );
+                match self.reconnect_owned(&owner, &session, mode).await {
+                    Ok(()) => self.retried(&session.id, true),
+                    Err(error) => {
+                        self.retried(&session.id, false);
+                        tracing::warn!(
+                            session_id = session.id,
+                            error = format!("{error:#}"),
+                            "Owned runner was not rebound"
+                        );
+                    }
                 }
                 continue;
             }
@@ -696,6 +710,7 @@ impl ChatRuntime {
                     match self.pi_target(&owner, &session, target).await {
                         Ok(target) => target,
                         Err(error) => {
+                            self.retried(&session.id, false);
                             tracing::warn!(session_id=session.id, error=%error, "Pi continuity metadata unavailable; no native process started");
                             continue;
                         }
@@ -704,7 +719,9 @@ impl ChatRuntime {
                 Some(target) => target,
                 #[cfg(unix)]
                 None if session.harness == "claude-code" => {
-                    if let Err(error) = self.restore_claude_terminal(&owner, &session).await {
+                    let restored = self.restore_claude_terminal(&owner, &session).await;
+                    self.retried(&session.id, restored.is_ok());
+                    if let Err(error) = restored {
                         tracing::warn!(
                             session_id = session.id,
                             error = format!("{error:#}"),
@@ -719,6 +736,7 @@ impl ChatRuntime {
                     let endpoint = match sessions::ensure_codex_daemon().await {
                         Ok(endpoint) => endpoint,
                         Err(error) => {
+                            self.retried(&session.id, false);
                             tracing::warn!(
                                 session_id = session.id,
                                 error = format!("{error:#}"),
@@ -740,23 +758,18 @@ impl ChatRuntime {
             if let Some(lost) = self.agents.lock().await.remove(&session.id) {
                 lost.release().await;
             }
-            if self
-                .store
-                .stop_chat_session_marked(&owner, &session.id, crate::chat::RELINKING)
-                .await?
-            {
-                continue;
-            }
             match self
                 .link(&owner, target, "", Some(session.actor_id), true)
                 .await
             {
                 // The owner stopped the relinking session while it was pairing: torn down.
                 Ok((_, relinked)) if relinked.stopped_at.is_some() => {
+                    self.retried(&session.id, true);
                     let _ = self.stop_session(&relinked.id).await;
                 }
-                Ok(_) => {}
+                Ok(_) => self.retried(&session.id, true),
                 Err(error) => {
+                    self.retried(&session.id, false);
                     if error.downcast_ref::<StoppedByOwner>().is_some() {
                         tracing::info!(
                             session_id = session.id,
@@ -769,13 +782,12 @@ impl ChatRuntime {
                         error = format!("{error:#}"),
                         "Session was not relinked; retrying"
                     );
-                    // A busy or restarting harness is not a reason to lose the agent: the next
-                    // pass tries again from whichever session of that context is the latest.
+                    // A busy or restarting harness is not a reason to lose the agent: the
+                    // session waits for attention and the next pass tries again.
                     self.store
-                        .revive_chat_session(
+                        .fail_chat_link(
                             &owner,
-                            &session.harness,
-                            &session.native_session_id,
+                            &session.id,
                             &format!("The link could not be restored ({error}); retrying."),
                         )
                         .await?;
@@ -784,6 +796,58 @@ impl ChatRuntime {
             }
         }
         Ok(())
+    }
+
+    /// Whether the session's link is still up: its kernel-side adapter runs and, for pi, the
+    /// extension still holds this link. An older pi extension does not say: as before, its
+    /// session is relinked.
+    async fn link_alive(&self, owner: &ChatIdentity, session: &ChatSession) -> bool {
+        let running = self
+            .agents
+            .lock()
+            .await
+            .get(&session.id)
+            .is_some_and(|agent| !agent.task.is_finished());
+        if !running || session.harness != "pi" {
+            return running;
+        }
+        let Ok(locator) = self.store.chat_session_locator(owner, &session.id).await else {
+            return false;
+        };
+        let Some(path) = locator["descriptor"].as_str() else {
+            return false;
+        };
+        let Ok(record) = sessions::descriptor(std::path::Path::new(path)).await else {
+            return false;
+        };
+        sessions::control(&record, serde_json::json!({"method":"describe"}))
+            .await
+            .is_ok_and(|actual| {
+                actual["links"]
+                    .as_array()
+                    .is_some_and(|links| links.iter().any(|link| link == session.id.as_str()))
+            })
+    }
+
+    /// A failing relink is retried after 10 s, then less and less often, up to 5 minutes.
+    fn retry_due(&self, id: &str) -> bool {
+        self.retries
+            .lock()
+            .unwrap()
+            .get(id)
+            .is_none_or(|(_, next)| std::time::Instant::now() >= *next)
+    }
+
+    fn retried(&self, id: &str, succeeded: bool) {
+        let mut retries = self.retries.lock().unwrap();
+        if succeeded {
+            retries.remove(id);
+            return;
+        }
+        let failures = retries.get(id).map_or(0, |(failures, _)| *failures) + 1;
+        let wait =
+            Duration::from_secs(10 * 2u64.pow(failures.min(5))).min(Duration::from_secs(300));
+        retries.insert(id.to_owned(), (failures, std::time::Instant::now() + wait));
     }
 
     /// Called only after discovery verified the target and the owner hired it.

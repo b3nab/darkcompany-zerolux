@@ -321,9 +321,10 @@ async fn entrusted_terminal_is_resumed_after_exit_without_changing_context() {
         "Leave a stale native inbox, as a terminal crash can"
     );
     // No Resume call, manual relink or kernel restart: the production reconnect loop acts.
+    // The same session continues, now through the owned runner.
     let sessions = wait(&client, &base, "/chat/sessions", |v| {
         v["sessions"].as_array().unwrap().iter().any(|s| {
-            s["native_session_id"] == native && s["id"] != original && s["status"] == "connected"
+            s["native_session_id"] == native && s["origin"] == "owned" && s["status"] == "connected"
         })
     })
     .await;
@@ -334,6 +335,7 @@ async fn entrusted_terminal_is_resumed_after_exit_without_changing_context() {
         .find(|s| s["status"] == "connected")
         .unwrap();
     let id = resumed["id"].as_str().unwrap();
+    assert_eq!(id, original, "one session per native context");
     assert_eq!(resumed["native_session_id"], native);
     assert_eq!(resumed["actor_id"], actor);
     assert_eq!(resumed["workspace"], workspace.to_str().unwrap());

@@ -566,7 +566,10 @@ async fn managed_claude_bootstrap_lifecycle() {
         .await;
     assert_eq!(resumed["session"]["native_session_id"], native);
     assert_eq!(resumed["actor"]["id"], actor);
-    assert_ne!(resumed["session"]["id"], session);
+    assert_eq!(
+        resumed["session"]["id"], session,
+        "Resume continues the same session"
+    );
     let trace = fixture.wait_trace(|rows| count(rows, "start") == 2).await;
     let last = trace.iter().rev().find(|v| v["event"] == "start").unwrap();
     assert_eq!(last["mode"], "plan");
@@ -575,14 +578,6 @@ async fn managed_claude_bootstrap_lifecycle() {
         count(&trace, "input"),
         2,
         "Resume does not replay consumed input"
-    );
-    kernel
-        .api(&format!("/chat/sessions/{session}/stop"), Some(json!({})))
-        .await;
-    assert_eq!(
-        count(&fixture.trace(), "close"),
-        1,
-        "Repeating Stop on the predecessor does not stop its successor"
     );
     let next = resumed["session"]["id"].as_str().unwrap();
     // Crash the fixture host AND its child, then resume their saved native identity.
@@ -618,7 +613,10 @@ async fn managed_claude_bootstrap_lifecycle() {
         .find(|s| s["native_session_id"] == native && s["status"] == "connected")
         .unwrap();
     assert_eq!(restored["actor_id"], actor);
-    assert_ne!(restored["id"], next);
+    assert_eq!(
+        restored["id"], next,
+        "a restored crash continues the same session"
+    );
     let restored = restored["id"].as_str().unwrap();
     let trace = fixture.wait_trace(|rows| count(rows, "start") == 3).await;
     let start = trace.iter().rev().find(|v| v["event"] == "start").unwrap();

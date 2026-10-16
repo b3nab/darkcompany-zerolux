@@ -190,7 +190,7 @@ impl Server {
                 let mut interval = tokio::time::interval(Duration::from_secs(10));
                 loop {
                     interval.tick().await;
-                    if let Err(error) = relink.reconnect().await {
+                    if let Err(error) = relink.reconnect_due().await {
                         tracing::error!(error = format!("{error:#}"), "Relinking sessions failed");
                     }
                 }

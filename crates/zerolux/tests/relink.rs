@@ -224,9 +224,9 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
     .await;
     let sessions = store.chat_sessions(&owner).await.unwrap();
     let revived = sessions.iter().find(|s| s.stopped_at.is_none()).unwrap();
-    assert_ne!(
+    assert_eq!(
         revived.id, first.id,
-        "the relink's own session is the one revived"
+        "the same session waits for the next relink"
     );
     assert!(
         revived
@@ -275,8 +275,8 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
             .all(|s| s.stopped_at.is_some())
     );
 
-    // Scenario 3: the owner's Stop lands on the session the runtime had just stopped for the
-    // relink, while pairing is pending. Their decision is recorded there: no revival either.
+    // Scenario 3: the owner's Stop lands on the session while its relink is pairing. Their
+    // decision is recorded there: no retry either.
     // The owner's Stop reached pi: its link is gone, so it can be hired again.
     pi.paired.store(false, std::sync::atomic::Ordering::SeqCst);
     let relinked = runtime.hire(&owner, &candidate.id, "", Some(actor.id.clone()));
@@ -301,11 +301,11 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
         })
         .await
         .expect("pairing started");
-        let (old, already) = store
+        let (old, _) = store
             .stop_chat_session_with_state(&owner, &live.id)
             .await
             .unwrap();
-        assert!(already && old.stopped_at.is_some());
+        assert!(old.stopped_at.is_some());
         pi.release.notify_one();
     };
     let (result, _) = tokio::join!(reconnect, stop_old);

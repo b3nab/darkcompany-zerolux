@@ -128,7 +128,6 @@ async fn access_in<C: ConnectionTrait>(
 
 /// A session with the number of messages that are stored for it and not yet attempted.
 /// Stop notes the runtime sets on its own account; an owner's Stop replaces them.
-pub const RELINKING: &str = "Relinking after a lost link; the kernel retries on its own.";
 pub const LINK_FAILED: &str = "The native link could not be confirmed and its token was revoked. Check the harness before explicitly pairing again; native cancellation was not confirmed.";
 
 const SESSIONS: &str = "SELECT s.*,(SELECT count(*) FROM deliveries d WHERE d.session_id=s.id AND d.status='stored') AS waiting FROM chat_sessions s";
@@ -430,20 +429,26 @@ async fn stop_in<C: ConnectionTrait>(db: &C, id: &str, note: Option<&str>) -> Re
         .filter(chat_sessions::Column::Id.eq(id))
         .exec(db)
         .await?;
+    resolve_approvals_in(db, id, "Agent stopped").await?;
+    personal_event(db, "session.changed", id, json!({"session_id":id})).await?;
+    Ok(())
+}
+
+/// Every open request of the session ends: its link no longer answers them.
+async fn resolve_approvals_in<C: ConnectionTrait>(db: &C, id: &str, reason: &str) -> Result<()> {
     let approvals = ids(
         db,
         sql(
             db,
-            "UPDATE tool_approvals SET status='resolved',last_error='Agent stopped',updated_at=$1
+            "UPDATE tool_approvals SET status='resolved',last_error=$3,updated_at=$1
             WHERE session_id=$2 AND status!='resolved' RETURNING id",
-            [now_ms().into(), id.into()],
+            [now_ms().into(), id.into(), reason.into()],
         ),
     )
     .await?;
     for approval in approvals {
         personal_event(db, "approval.changed", id, json!({"approval_id":approval})).await?;
     }
-    personal_event(db, "session.changed", id, json!({"session_id":id})).await?;
     Ok(())
 }
 
@@ -613,20 +618,6 @@ impl Store {
         }
         let tx = self.write().await?;
         owner_in(&tx, who).await?;
-        let live = chat_sessions::Entity::find()
-            .filter(chat_sessions::Column::Harness.eq(input.harness.id()))
-            .filter(chat_sessions::Column::NativeSessionId.eq(&native_id))
-            .filter(chat_sessions::Column::StoppedAt.is_null())
-            .one(&tx)
-            .await?;
-        if live.is_some() {
-            return Err(Error::Conflict);
-        }
-        // An automatic relink continues only from a session the runtime stopped for it and the
-        // owner has not stopped since: checked here, where the successor is created.
-        if input.resume && !relink_wanted_in(&tx, input.harness.id(), &native_id).await? {
-            return Err(Error::StoppedByOwner);
-        }
         let actor = match hireable_in(
             &tx,
             who,
@@ -658,105 +649,79 @@ impl Store {
                 .await?
             }
         };
-        let id = Uuid::new_v4().to_string();
+        // One row per native session of an agent: a relink, a recovery or the owner's new
+        // decision continues it, with a new token; the previous one stops working at once.
+        let existing = chat_sessions::Entity::find()
+            .filter(chat_sessions::Column::ActorId.eq(&actor.id))
+            .filter(chat_sessions::Column::Harness.eq(input.harness.id()))
+            .filter(chat_sessions::Column::NativeSessionId.eq(&native_id))
+            .one(&tx)
+            .await?;
+        let live_elsewhere = chat_sessions::Entity::find()
+            .filter(chat_sessions::Column::Harness.eq(input.harness.id()))
+            .filter(chat_sessions::Column::NativeSessionId.eq(&native_id))
+            .filter(chat_sessions::Column::StoppedAt.is_null())
+            .filter(chat_sessions::Column::ActorId.ne(&actor.id))
+            .one(&tx)
+            .await?;
+        if live_elsewhere.is_some() {
+            return Err(Error::Conflict);
+        }
         let token = random_token();
-        chat_sessions::ActiveModel {
-            id: Set(id.clone()),
-            actor_id: Set(actor.id.clone()),
-            harness: Set(input.harness.id().to_owned()),
-            native_session_id: Set(native_id.clone()),
-            title: Set(title),
-            workspace: Set(workspace),
-            native_locator_json: Set(input.native_locator.to_string()),
-            token_hash: Set(token_hash(&token)),
-            status: Set("connecting".into()),
-            attention_reason: Set(None),
-            created_at: Set(now_ms()),
-            stopped_at: Set(None),
-            activity: Set(None),
-            activity_conversation_id: Set(None),
-            host_id: Set(self.host.clone()),
-        }
-        .insert(&tx)
-        .await?;
-        // Reattaching the exact same native context restores its existing conversations.
-        // After an owner's Stop, attempted deliveries stay with the old link. After a kernel
-        // restart they follow the session, so a message received before it can be answered
-        // after it. Only never-attempted deliveries are dispatched: nothing is sent twice.
-        let moved = if input.resume {
-            "status!='read'"
-        } else {
-            "status='stored'"
+        let id = match existing {
+            Some(row) => {
+                // An automatic relink continues only a session the owner has not stopped; an
+                // explicit hire of a session that is still linked is a conflict.
+                match (input.resume, row.stopped_at.is_some()) {
+                    (true, true) => return Err(Error::StoppedByOwner),
+                    (false, false) => return Err(Error::Conflict),
+                    _ => {}
+                }
+                chat_sessions::ActiveModel {
+                    id: Set(row.id.clone()),
+                    title: Set(title),
+                    workspace: Set(workspace),
+                    native_locator_json: Set(input.native_locator.to_string()),
+                    token_hash: Set(token_hash(&token)),
+                    status: Set("connecting".into()),
+                    attention_reason: Set(None),
+                    stopped_at: Set(None),
+                    activity: Set(None),
+                    activity_conversation_id: Set(None),
+                    host_id: Set(self.host.clone()),
+                    ..Default::default()
+                }
+                .update(&tx)
+                .await?;
+                // Questions of the previous link's native process are no longer its to answer.
+                resolve_approvals_in(&tx, &row.id, "Link replaced").await?;
+                row.id
+            }
+            None if input.resume => return Err(Error::StoppedByOwner),
+            None => {
+                let id = Uuid::new_v4().to_string();
+                chat_sessions::ActiveModel {
+                    id: Set(id.clone()),
+                    actor_id: Set(actor.id.clone()),
+                    harness: Set(input.harness.id().to_owned()),
+                    native_session_id: Set(native_id.clone()),
+                    title: Set(title),
+                    workspace: Set(workspace),
+                    native_locator_json: Set(input.native_locator.to_string()),
+                    token_hash: Set(token_hash(&token)),
+                    status: Set("connecting".into()),
+                    attention_reason: Set(None),
+                    created_at: Set(now_ms()),
+                    stopped_at: Set(None),
+                    activity: Set(None),
+                    activity_conversation_id: Set(None),
+                    host_id: Set(self.host.clone()),
+                }
+                .insert(&tx)
+                .await?;
+                id
+            }
         };
-        let context = [
-            actor.id.clone().into(),
-            input.harness.id().into(),
-            native_id.clone().into(),
-        ];
-        #[derive(FromQueryResult)]
-        struct Moved {
-            conversation_id: String,
-        }
-        let conversations: Vec<Moved> = fetch_all(
-            &tx,
-            sql(
-                &tx,
-                "UPDATE conversation_members SET session_id=$4
-                WHERE actor_id=$1 AND session_id IN (SELECT id FROM chat_sessions
-                    WHERE actor_id=$1 AND harness=$2 AND native_session_id=$3 AND stopped_at IS NOT NULL)
-                RETURNING conversation_id",
-                context.iter().cloned().chain([id.clone().into()]),
-            ),
-        )
-        .await?;
-        let waiting = ids(
-            &tx,
-            sql(
-                &tx,
-                format!(
-                    "SELECT d.id FROM deliveries d
-                    JOIN messages m ON m.id=d.message_id JOIN conversation_members cm
-                    ON cm.conversation_id=m.conversation_id AND cm.actor_id=d.actor_id
-                    WHERE d.actor_id=$1 AND d.{moved} AND cm.session_id=$4 AND d.session_id IN (
-                        SELECT id FROM chat_sessions WHERE actor_id=$1 AND harness=$2 AND native_session_id=$3 AND stopped_at IS NOT NULL)
-                    ORDER BY d.created_at,d.id"
-                ),
-                context.iter().cloned().chain([id.clone().into()]),
-            ),
-        )
-        .await?;
-        for delivery_id in waiting {
-            let delivery: ChatDelivery = fetch_one(
-                &tx,
-                sql(
-                    &tx,
-                    format!(
-                        "UPDATE deliveries SET session_id=$1,updated_at=$2
-                        WHERE id=$3 AND {moved} RETURNING *"
-                    ),
-                    [id.clone().into(), now_ms().into(), delivery_id.into()],
-                ),
-            )
-            .await?
-            .ok_or(Error::Conflict)?;
-            let message = message_in(&tx, &delivery.message_id).await?;
-            conversation_event(
-                &tx,
-                "delivery.changed",
-                &message.conversation_id,
-                json!({"message_id":message.id}),
-            )
-            .await?;
-        }
-        for moved in conversations {
-            conversation_event(
-                &tx,
-                "conversation.changed",
-                &moved.conversation_id,
-                json!({}),
-            )
-            .await?;
-        }
         personal_event(&tx, "session.changed", &id, json!({"session_id":id})).await?;
         let session = session_in(&tx, &id).await?;
         tx.commit().await?;
@@ -909,9 +874,8 @@ impl Store {
         Ok(self.stop_chat_session_with_state(who, id).await?.0)
     }
 
-    /// The owner's Stop. Returns whether the link was already stopped, atomically with
-    /// revocation. A session the runtime had stopped on its own account loses that mark: the
-    /// owner's decision is recorded and no relink revives it.
+    /// The owner's Stop. Returns whether the session was already stopped, atomically with
+    /// revocation. Only the owner stops a session: no relink or recovery continues it.
     pub async fn stop_chat_session_with_state(
         &self,
         who: &ChatIdentity,
@@ -923,80 +887,49 @@ impl Store {
         let was_already_stopped = existing.stopped_at.is_some();
         if !was_already_stopped {
             stop_in(&tx, id, None).await?;
-        } else if existing
-            .attention_reason
-            .as_deref()
-            .is_some_and(|reason| reason == RELINKING || reason == LINK_FAILED)
-        {
-            // A decision about the native context: no session of it is revived, and the
-            // relink in progress ends here.
-            let context = ids(
-                &tx,
-                sql(
-                    &tx,
-                    "UPDATE chat_sessions SET attention_reason=NULL
-                    WHERE harness=$1 AND native_session_id=$2 AND stopped_at IS NOT NULL AND attention_reason IN ($3,$4)
-                    RETURNING id",
-                    [
-                        (&existing.harness).into(),
-                        (&existing.native_session_id).into(),
-                        RELINKING.into(),
-                        LINK_FAILED.into(),
-                    ],
-                ),
-            )
-            .await?;
-            for cleared in context {
-                personal_event(
-                    &tx,
-                    "session.changed",
-                    &cleared,
-                    json!({"session_id":cleared}),
-                )
-                .await?;
-            }
-            let pending = chat_sessions::Entity::find()
-                .filter(chat_sessions::Column::Harness.eq(&existing.harness))
-                .filter(chat_sessions::Column::NativeSessionId.eq(&existing.native_session_id))
-                .filter(chat_sessions::Column::StoppedAt.is_null())
-                .one(&tx)
-                .await?;
-            if let Some(pending) = pending {
-                stop_in(&tx, &pending.id, None).await?;
-            }
         }
         let session = session_in(&tx, id).await?;
         tx.commit().await?;
         Ok((session, was_already_stopped))
     }
 
-    /// A stop on the runtime's own account, marked with `note` in the same transaction: before
-    /// a relink, or after a pairing that failed. Returns true when the session was already
-    /// stopped, by the owner or otherwise: then nothing is marked and nothing is relinked.
-    pub async fn stop_chat_session_marked(
-        &self,
-        who: &ChatIdentity,
-        id: &str,
-        note: &str,
-    ) -> Result<bool> {
-        debug_assert!(note == RELINKING || note == LINK_FAILED);
+    /// A link that could not be confirmed: its token is revoked and the session waits for
+    /// attention with `reason`, so the runtime tries again. Returns true when the owner had
+    /// stopped it: then nothing changes and nothing is retried.
+    pub async fn fail_chat_link(&self, who: &ChatIdentity, id: &str, reason: &str) -> Result<bool> {
+        let reason = text(reason, "Attention reason", 2_000, true)?;
         let tx = self.write().await?;
         owner_in(&tx, who).await?;
-        let existing = session_in(&tx, id).await?;
-        if existing.stopped_at.is_some() {
+        if session_in(&tx, id).await?.stopped_at.is_some() {
             return Ok(true);
         }
-        stop_in(&tx, id, Some(note)).await?;
+        chat_sessions::ActiveModel {
+            id: Set(id.to_owned()),
+            token_hash: Set(token_hash(&random_token())),
+            status: Set("attention".into()),
+            attention_reason: Set(Some(reason)),
+            activity: Set(None),
+            activity_conversation_id: Set(None),
+            ..Default::default()
+        }
+        .update(&tx)
+        .await?;
+        personal_event(&tx, "session.changed", id, json!({"session_id":id})).await?;
         tx.commit().await?;
         Ok(false)
     }
 
-    /// Whether an automatic relink of this native context is still wanted: its latest session
-    /// is the one the runtime stopped for it, and the owner has not stopped it since. Checked
-    /// before any native call that would start work, as `hire_chat_session` checks it again
-    /// before the successor exists.
+    /// Whether the native context may still be relinked: a session of it the owner has
+    /// not stopped. Checked before any native call that would start work, as
+    /// `hire_chat_session` checks it again when it issues the new token.
     pub async fn relink_wanted(&self, harness: &str, native_session_id: &str) -> Result<bool> {
-        relink_wanted_in(&self.db, harness, native_session_id).await
+        Ok(chat_sessions::Entity::find()
+            .filter(chat_sessions::Column::Harness.eq(harness))
+            .filter(chat_sessions::Column::NativeSessionId.eq(native_session_id))
+            .filter(chat_sessions::Column::StoppedAt.is_null())
+            .one(&self.db)
+            .await?
+            .is_some())
     }
 
     /// One session of the owner's, as it is now.
@@ -1004,58 +937,6 @@ impl Store {
         let tx = self.read().await?;
         owner_in(&tx, who).await?;
         session_in(&tx, id).await
-    }
-
-    /// A relink that failed leaves the agent without a live session, so its latest session of
-    /// that native context waits for attention again and the next relink retries, unless the
-    /// owner stopped it meanwhile. The token of the stopped session stays revoked: a fresh one
-    /// is issued when the link succeeds.
-    pub async fn revive_chat_session(
-        &self,
-        who: &ChatIdentity,
-        harness: &str,
-        native_session_id: &str,
-        reason: &str,
-    ) -> Result<Option<ChatSession>> {
-        let reason = text(reason, "Attention reason", 2_000, true)?;
-        let tx = self.write().await?;
-        owner_in(&tx, who).await?;
-        let live = chat_sessions::Entity::find()
-            .filter(chat_sessions::Column::Harness.eq(harness))
-            .filter(chat_sessions::Column::NativeSessionId.eq(native_session_id))
-            .filter(chat_sessions::Column::StoppedAt.is_null())
-            .one(&tx)
-            .await?;
-        if live.is_some() {
-            return Ok(None);
-        }
-        // Only a session the runtime stopped on its own account: an owner's Stop cleared the mark.
-        let revived = ids(
-            &tx,
-            sql(
-                &tx,
-                "UPDATE chat_sessions SET status='attention',stopped_at=NULL,attention_reason=$1,token_hash=$2
-                WHERE id=(SELECT id FROM chat_sessions WHERE harness=$3 AND native_session_id=$4 ORDER BY created_at DESC LIMIT 1)
-                AND attention_reason IN ($5,$6)
-                RETURNING id",
-                [
-                    reason.into(),
-                    token_hash(&random_token()).into(),
-                    harness.into(),
-                    native_session_id.into(),
-                    RELINKING.into(),
-                    LINK_FAILED.into(),
-                ],
-            ),
-        )
-        .await?;
-        let Some(id) = revived.into_iter().next() else {
-            return Ok(None);
-        };
-        personal_event(&tx, "session.changed", &id, json!({"session_id":id})).await?;
-        let session = session_in(&tx, &id).await?;
-        tx.commit().await?;
-        Ok(Some(session))
     }
 
     /// Persist a public, credential-free stop outcome supplied by the runtime.
@@ -2409,19 +2290,4 @@ impl Store {
         tx.commit().await?;
         Ok(())
     }
-}
-
-/// The latest session of a native context is the one the runtime stopped for a relink.
-async fn relink_wanted_in<C: ConnectionTrait>(
-    db: &C,
-    harness: &str,
-    native_session_id: &str,
-) -> Result<bool> {
-    let predecessor = chat_sessions::Entity::find()
-        .filter(chat_sessions::Column::Harness.eq(harness))
-        .filter(chat_sessions::Column::NativeSessionId.eq(native_session_id))
-        .order_by_desc(chat_sessions::Column::CreatedAt)
-        .one(db)
-        .await?;
-    Ok(predecessor.and_then(|s| s.attention_reason).as_deref() == Some(RELINKING))
 }

@@ -83,7 +83,6 @@ mod db;
 
 use serde_json::json;
 use zerolux::{
-    chat::RELINKING,
     harness::Harness,
     model::{ChatIdentity, CreateConversation, HireChatSession, SetOwnerName},
     store::{Error, Store},
@@ -129,7 +128,7 @@ async fn concurrent_first_opens_on_postgres_create_one_workspace() {
 
 /// The owner's Stop and an automatic relink of the same context, interleaved: the relink
 /// starts while the Stop's transaction is open, and must see its outcome, not the state
-/// before it. Without one writer at a time it would read "relinking" and hire a successor.
+/// before it. Without one writer at a time it would read a live session and continue it.
 #[tokio::test]
 async fn a_relink_started_during_a_stop_sees_the_stop() {
     if std::env::var("ZEROLUX_TEST_POSTGRES_URL").is_err() {
@@ -144,18 +143,12 @@ async fn a_relink_started_during_a_stop_sees_the_stop() {
         .await
         .unwrap();
     assert!(
-        !store
-            .stop_chat_session_marked(&owner, &issued.session.id, RELINKING)
-            .await
-            .unwrap()
-    );
-    assert!(
         store
             .relink_wanted("claude-code", "native-1")
             .await
             .unwrap()
     );
-    // The Stop: a write transaction that clears the relink mark, open for a while.
+    // The Stop: a write transaction that stops the session, open for a while.
     let stop = store.write().await.unwrap();
     let relink = {
         let store = store.clone();
@@ -171,7 +164,7 @@ async fn a_relink_started_during_a_stop_sees_the_stop() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     stop.execute_raw(zerolux::store::sql(
         &stop,
-        "UPDATE chat_sessions SET attention_reason=NULL WHERE id=$1",
+        "UPDATE chat_sessions SET status='stopped',stopped_at=1 WHERE id=$1",
         [issued.session.id.clone().into()],
     ))
     .await

@@ -1122,8 +1122,10 @@ async fn a_rehired_context_keeps_memberships_and_can_join_another_chat() {
     }
 }
 
+/// A relink continues the same session: same row, a new token. Every delivery keeps its
+/// state; attempted ones are never dispatched again but can still be answered.
 #[tokio::test]
-async fn exact_rehire_restores_membership_and_transfers_unread_deliveries() {
+async fn a_relink_keeps_the_session_its_deliveries_and_their_states() {
     let f = Fixture::new().await;
     let (aspen, old_identity) = f.hire("aspen", None).await;
     let room = f.room(&[&aspen]).await;
@@ -1151,11 +1153,6 @@ async fn exact_rehire_restores_membership_and_transfers_unread_deliveries() {
         deliveries.push(id);
     }
     deliveries.rotate_left(1);
-    // As the runtime does before an automatic relink.
-    f.store
-        .stop_chat_session_marked(&f.owner, &aspen.session.id, zerolux::chat::RELINKING)
-        .await
-        .unwrap();
     f.clear_outbox().await;
     let new = f
         .store
@@ -1174,6 +1171,15 @@ async fn exact_rehire_restores_membership_and_transfers_unread_deliveries() {
         )
         .await
         .unwrap();
+    assert_eq!(
+        new.session.id, aspen.session.id,
+        "the same session continues"
+    );
+    assert_eq!(new.session.title, "Reattached");
+    assert!(matches!(
+        f.store.chat_identity(Some(&aspen.token)).await,
+        Err(Error::Unauthorized)
+    ));
     let identity = f.store.chat_identity(Some(&new.token)).await.unwrap();
     let inbox = f.store.chat_inbox(&identity).await.unwrap();
     assert_eq!(inbox.conversations[0].id, room.id);
@@ -1191,36 +1197,12 @@ async fn exact_rehire_restores_membership_and_transfers_unread_deliveries() {
             (deliveries[2].clone(), "notified"),
         ]
     );
-    let page = f
-        .store
-        .chat_messages(&f.owner, &room.id, 0, 100)
-        .await
-        .unwrap();
-    for (index, message) in page.messages.iter().enumerate() {
-        assert_eq!(
-            message.deliveries[0].session_id,
-            if index > 0 {
-                &new.session.id
-            } else {
-                &aspen.session.id
-            }
-            .as_str()
-        );
-    }
+    // Nothing moved: no delivery or membership changed hands.
     let events = f.store.pending_chat_events(100).await.unwrap();
-    assert_eq!(
+    assert!(
         events
             .iter()
-            .filter(|e| e.payload["type"] == "conversation.changed")
-            .count(),
-        1
-    );
-    assert_eq!(
-        events
-            .iter()
-            .filter(|e| e.payload["type"] == "delivery.changed")
-            .count(),
-        3
+            .all(|e| e.payload["type"] == "session.changed")
     );
     f.store
         .set_chat_session_status(
@@ -1237,38 +1219,24 @@ async fn exact_rehire_restores_membership_and_transfers_unread_deliveries() {
         .dispatch_chat_delivery(&identity, &deliveries[0])
         .await
         .unwrap();
-    assert!(matches!(
-        f.store
-            .dispatch_chat_delivery(&identity, &deliveries[0])
-            .await,
-        Err(Error::Conflict)
-    ));
-    // Attempted deliveries are never dispatched twice, but can be answered from the new link.
-    for id in &deliveries[1..3] {
+    // Never dispatched twice, whatever its state.
+    for id in &deliveries {
         assert!(matches!(
             f.store.dispatch_chat_delivery(&identity, id).await,
             Err(Error::Conflict)
         ));
     }
-    assert!(matches!(
+    for (index, text) in [
+        (2, "answered after the restart"),
+        (3, "answered after reading"),
+    ] {
+        let mut reply = message(text);
+        reply.reply_to_delivery_id = Some(deliveries[index].clone());
         f.store
-            .dispatch_chat_delivery(&identity, &deliveries[3])
-            .await,
-        Err(Error::Forbidden)
-    ));
-    let mut reply = message("answered after the restart");
-    reply.reply_to_delivery_id = Some(deliveries[2].clone());
-    f.store
-        .send_chat_message(&identity, &room.id, reply)
-        .await
-        .unwrap();
-    // Read before the restart: it stays with the old link and can still be answered.
-    let mut late = message("answered after reading and restarting");
-    late.reply_to_delivery_id = Some(deliveries[3].clone());
-    f.store
-        .send_chat_message(&identity, &room.id, late)
-        .await
-        .unwrap();
+            .send_chat_message(&identity, &room.id, reply)
+            .await
+            .unwrap();
+    }
     let (other, other_id) = f.hire("other", None).await;
     let mut foreign = message("not my delivery");
     foreign.reply_to_delivery_id = Some(deliveries[1].clone());
@@ -1279,10 +1247,6 @@ async fn exact_rehire_restores_membership_and_transfers_unread_deliveries() {
         Err(Error::Forbidden)
     ));
     drop(other);
-    assert!(matches!(
-        f.store.chat_identity(Some(&aspen.token)).await,
-        Err(Error::Unauthorized)
-    ));
     let next = f
         .store
         .send_chat_message(&f.owner, &room.id, message("new work"))
@@ -1296,10 +1260,6 @@ async fn simultaneous_rehire_by_different_actors_cannot_duplicate_one_native_ses
     let f = Fixture::new().await;
     let (aspen, _) = f.hire("aspen", None).await;
     let (birch, _) = f.hire("birch", None).await;
-    f.store
-        .stop_chat_session_marked(&f.owner, &aspen.session.id, zerolux::chat::RELINKING)
-        .await
-        .unwrap();
     let input = |actor: &str| HireChatSession {
         name: "reattach".into(),
         actor_id: Some(actor.into()),
@@ -1925,159 +1885,133 @@ async fn outbox_rechecks_membership_before_notifying_a_removed_member() {
     assert_eq!(events[0].actor_ids, vec![f.owner.actor_id.clone()]);
 }
 
-/// A relink that fails must not lose the agent: its latest session of that native context
-/// waits for attention again, with the revoked token still refused. An owner's Stop on any
-/// session the runtime stopped for the relink ends that: nothing of the context is revived.
+/// One row per native session of an agent: every relink keeps its ID and replaces only the
+/// token, so the owner lists each native session once.
 #[tokio::test]
-async fn a_failed_relink_revives_the_latest_session_unless_the_owner_stopped_it() {
+async fn relinks_keep_one_session_per_native_context() {
     let f = Fixture::new().await;
     let (cedar, _) = f.hire("cedar", None).await;
-    let native = cedar.session.native_session_id.clone();
-    assert!(
-        !f.store
-            .stop_chat_session_marked(&f.owner, &cedar.session.id, zerolux::chat::RELINKING)
-            .await
-            .unwrap()
-    );
-    // The relink's own session, stopped when pairing failed: the one to revive.
-    let relink = |resume: bool| {
-        f.store.hire_chat_session(
+    let (birch, _) = f.hire("birch", None).await;
+    let mut token = cedar.token.clone();
+    for _ in 0..3 {
+        let next = relink(&f, &cedar, true).await.unwrap();
+        assert_eq!(next.session.id, cedar.session.id);
+        assert!(matches!(
+            f.store.chat_identity(Some(&token)).await,
+            Err(Error::Unauthorized)
+        ));
+        token = next.token;
+    }
+    f.store.chat_identity(Some(&token)).await.unwrap();
+    let listed: Vec<String> = f
+        .store
+        .chat_sessions(&f.owner)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(listed, [cedar.session.id.clone(), birch.session.id.clone()]);
+}
+
+async fn relink(
+    f: &Fixture,
+    session: &IssuedChatSession,
+    resume: bool,
+) -> Result<IssuedChatSession, Error> {
+    f.store
+        .hire_chat_session(
             &f.owner,
             HireChatSession {
                 name: "".into(),
-                actor_id: Some(cedar.actor.id.clone()),
+                actor_id: Some(session.actor.id.clone()),
                 harness: Harness::ClaudeCode,
-                native_session_id: native.clone(),
+                native_session_id: session.session.native_session_id.clone(),
                 title: "cedar session".into(),
-                workspace: cedar.session.workspace.clone(),
+                workspace: session.session.workspace.clone(),
                 native_locator: json!({"fixture":"x"}),
                 resume,
             },
         )
-    };
-    let again = relink(true).await.unwrap();
+        .await
+}
+
+/// A link that cannot be confirmed loses its token and waits for attention, never stopped:
+/// the next relink continues the same session. Only the owner's Stop ends it, and then no
+/// relink continues it until the owner decides again.
+#[tokio::test]
+async fn a_failed_link_waits_for_a_relink_unless_the_owner_stopped_the_session() {
+    let f = Fixture::new().await;
+    let (cedar, _) = f.hire("cedar", None).await;
+    let issued = relink(&f, &cedar, true).await.unwrap();
     assert!(
         !f.store
-            .stop_chat_session_marked(&f.owner, &again.session.id, zerolux::chat::LINK_FAILED)
+            .fail_chat_link(&f.owner, &cedar.session.id, zerolux::chat::LINK_FAILED)
             .await
             .unwrap()
     );
-    assert_eq!(
-        f.store
-            .chat_session(&f.owner, &again.session.id)
-            .await
-            .unwrap()
-            .attention_reason
-            .as_deref(),
-        Some(zerolux::chat::LINK_FAILED),
-        "stop and mark are one transaction"
-    );
-    let revived = f
+    let session = f
         .store
-        .revive_chat_session(&f.owner, "claude-code", &native, "Pi was busy; retrying.")
+        .chat_session(&f.owner, &cedar.session.id)
         .await
-        .unwrap()
-        .expect("revived");
-    assert_eq!(revived.id, again.session.id);
-    assert_eq!(revived.status, "attention");
-    assert!(revived.stopped_at.is_none());
+        .unwrap();
+    assert_eq!(session.status, "attention");
+    assert!(session.stopped_at.is_none());
     assert_eq!(
-        revived.attention_reason.as_deref(),
-        Some("Pi was busy; retrying.")
+        session.attention_reason.as_deref(),
+        Some(zerolux::chat::LINK_FAILED)
     );
     assert!(matches!(
-        f.store.chat_identity(Some(&again.token)).await,
+        f.store.chat_identity(Some(&issued.token)).await,
         Err(Error::Unauthorized)
     ));
-    // Live already: nothing to revive.
     assert!(
         f.store
-            .revive_chat_session(&f.owner, "claude-code", &native, "again")
+            .relink_wanted("claude-code", &cedar.session.native_session_id)
             .await
             .unwrap()
-            .is_none()
     );
+    let again = relink(&f, &cedar, true).await.unwrap();
+    assert_eq!(again.session.id, cedar.session.id);
+    assert_eq!(again.session.status, "connecting");
+    assert!(again.session.attention_reason.is_none());
 
-    // The owner's Stop on the session stopped for the relink, while the new one is pairing.
-    assert!(
-        !f.store
-            .stop_chat_session_marked(&f.owner, &revived.id, zerolux::chat::RELINKING)
-            .await
-            .unwrap()
-    );
-    let pending = relink(true).await.unwrap();
-    let (_, already) = f
-        .store
-        .stop_chat_session_with_state(&f.owner, &revived.id)
+    // The owner's Stop wins: a failed link changes nothing, no relink continues it.
+    f.store
+        .stop_chat_session(&f.owner, &cedar.session.id)
         .await
         .unwrap();
-    assert!(already, "the runtime had stopped it");
-    let sessions = f.store.chat_sessions(&f.owner).await.unwrap();
-    let pending = sessions
-        .iter()
-        .find(|s| s.id == pending.session.id)
-        .unwrap();
-    assert!(pending.stopped_at.is_some(), "the relink in progress ends");
-    assert!(
-        sessions.iter().all(|s| s.attention_reason.is_none()),
-        "no runtime mark survives the owner's decision"
-    );
     assert!(
         f.store
-            .revive_chat_session(&f.owner, "claude-code", &native, "retry")
+            .fail_chat_link(&f.owner, &cedar.session.id, "retry")
             .await
             .unwrap()
-            .is_none()
     );
-    // An owner's Stop on a session the owner stopped changes nothing.
+    assert!(
+        !f.store
+            .relink_wanted("claude-code", &cedar.session.native_session_id)
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        relink(&f, &cedar, true).await,
+        Err(Error::StoppedByOwner)
+    ));
     let (_, already) = f
         .store
         .stop_chat_session_with_state(&f.owner, &cedar.session.id)
         .await
         .unwrap();
     assert!(already);
-}
-
-/// Between the runtime's stop and the creation of its successor, the owner's Stop wins: the
-/// successor of an automatic relink is refused where it would be created. An explicit Hire
-/// by the owner is a new decision and still works.
-#[tokio::test]
-async fn an_owner_stop_before_the_successor_exists_refuses_the_automatic_relink() {
-    let f = Fixture::new().await;
-    let (cedar, _) = f.hire("cedar", None).await;
-    let relink = |resume: bool| {
-        f.store.hire_chat_session(
-            &f.owner,
-            HireChatSession {
-                name: "cedar".into(),
-                actor_id: Some(cedar.actor.id.clone()),
-                harness: Harness::ClaudeCode,
-                native_session_id: cedar.session.native_session_id.clone(),
-                title: "cedar session".into(),
-                workspace: cedar.session.workspace.clone(),
-                native_locator: json!({"fixture":"x"}),
-                resume,
-            },
-        )
-    };
-    f.store
-        .stop_chat_session_marked(&f.owner, &cedar.session.id, zerolux::chat::RELINKING)
-        .await
-        .unwrap();
-    f.store
-        .stop_chat_session(&f.owner, &cedar.session.id)
-        .await
-        .unwrap();
-    assert!(matches!(relink(true).await, Err(Error::StoppedByOwner)));
-    assert!(
-        f.store
-            .chat_sessions(&f.owner)
-            .await
-            .unwrap()
-            .iter()
-            .all(|s| s.stopped_at.is_some())
-    );
-    relink(false).await.unwrap();
+    // An explicit hire is the owner's new decision: the same session continues.
+    let resumed = relink(&f, &cedar, false).await.unwrap();
+    assert_eq!(resumed.session.id, cedar.session.id);
+    assert!(resumed.session.stopped_at.is_none());
+    // A live session is not hired again.
+    assert!(matches!(
+        relink(&f, &cedar, false).await,
+        Err(Error::Conflict)
+    ));
 }
 
 /// While working, a session may say which chat its turn is about: one of its own chats,

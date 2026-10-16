@@ -3,7 +3,6 @@
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
 use zerolux::{
-    chat::RELINKING,
     codex::CodexDriver,
     harness::Harness,
     model::{HireChatSession, SetOwnerName},
@@ -45,12 +44,7 @@ async fn owner_stop_during_native_read_prevents_cold_resume() {
         )
         .await
         .unwrap();
-    assert!(
-        !store
-            .stop_chat_session_marked(&owner, &issued.session.id, RELINKING)
-            .await
-            .unwrap()
-    );
+    // A live session the runtime relinks: wanted until the owner stops it.
     assert!(store.relink_wanted("codex", native::THREAD).await.unwrap());
 
     let native = native::Runtime::new_in(dir.path()).await;
@@ -73,8 +67,8 @@ async fn owner_stop_during_native_read_prevents_cold_resume() {
         .await;
     assert_eq!(native.count("thread/resume"), 0);
 
-    // The runtime marked this row RELINKING, then the owner stopped it while the native
-    // read was blocked. The real Store transition must cancel the runtime's intent.
+    // The owner stopped the session while the native read was blocked. The real Store
+    // transition must cancel the runtime's intent.
     store
         .stop_chat_session(&owner, &issued.session.id)
         .await
@@ -96,10 +90,10 @@ async fn owner_stop_during_native_read_prevents_cold_resume() {
     assert!(native.state.lock().unwrap().unloaded);
     assert!(
         store
-            .revive_chat_session(&owner, "codex", native::THREAD, "fixture retry")
+            .fail_chat_link(&owner, &issued.session.id, "fixture retry")
             .await
-            .unwrap()
-            .is_none()
+            .unwrap(),
+        "the owner's Stop stands"
     );
     let sessions = store.chat_sessions(&owner).await.unwrap();
     assert_eq!(sessions.len(), 1);

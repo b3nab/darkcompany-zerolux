@@ -12,6 +12,8 @@ CREATE UNIQUE INDEX `workspace_only_one` ON `workspace` (`only_one`);
 CREATE TABLE `chat_sessions` (`id` text NOT NULL, `actor_id` text NOT NULL, `harness` text NOT NULL, `native_session_id` text NOT NULL, `title` text NOT NULL, `workspace` text NOT NULL, `native_locator_json` text NOT NULL, `token_hash` text NOT NULL, `status` text NOT NULL, `attention_reason` text NULL, `created_at` integer NOT NULL, `stopped_at` integer NULL, `activity` text NULL, `activity_conversation_id` text NULL, `host_id` text NULL, PRIMARY KEY (`id`), CONSTRAINT `0` FOREIGN KEY (`activity_conversation_id`) REFERENCES `conversations` (`id`) ON UPDATE NO ACTION ON DELETE NO ACTION, CONSTRAINT `1` FOREIGN KEY (`actor_id`) REFERENCES `actors` (`id`) ON UPDATE NO ACTION ON DELETE NO ACTION, CHECK ("harness" IN ('pi', 'claude-code', 'codex')), CHECK ("status" IN ('connecting', 'connected', 'attention', 'stopped')), CHECK ("activity" IN ('working', 'idle')), CHECK (("status" = 'stopped') = ("stopped_at" IS NOT NULL)));
 -- Create index "chat_sessions_token_hash" to table: "chat_sessions"
 CREATE UNIQUE INDEX `chat_sessions_token_hash` ON `chat_sessions` (`token_hash`);
+-- Create index "idx-chat_sessions-native_session" to table: "chat_sessions"
+CREATE UNIQUE INDEX `idx-chat_sessions-native_session` ON `chat_sessions` (`actor_id`, `harness`, `native_session_id`);
 -- Create index "one_chat_session" to table: "chat_sessions"
 CREATE UNIQUE INDEX `one_chat_session` ON `chat_sessions` (`harness`, `native_session_id`) WHERE "stopped_at" IS NULL;
 -- Create "conversations" table

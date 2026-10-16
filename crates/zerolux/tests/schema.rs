@@ -219,18 +219,11 @@ async fn single_bootstrap_preserves_identity_history_settings_and_stops_on_reope
             .is_err()
         );
     }
-    // Historical Stop rows do not prevent a new link to the same native identity;
-    // two simultaneously active links still cannot exist.
-    let mut resumed = session.clone().into_active_model();
-    resumed.id = Set("resumed".into());
-    resumed.token_hash = Set("resumed-fixture-not-a-token".into());
-    resumed.status = Set("connecting".into());
-    resumed.stopped_at = Set(None);
-    let resumed = resumed.insert(&upgraded).await.unwrap();
-    let mut duplicate = resumed.into_active_model();
-    duplicate.id = Set("duplicate".into());
-    duplicate.token_hash = Set("duplicate-fixture-not-a-token".into());
-    assert!(duplicate.insert(&upgraded).await.is_err());
+    // One row per native session of an agent: a second one is refused, live or not.
+    let mut second = session.clone().into_active_model();
+    second.id = Set("second".into());
+    second.token_hash = Set("second-fixture-not-a-token".into());
+    assert!(second.insert(&upgraded).await.is_err());
     unchanged!(chat_sessions, session);
     upgraded.close().await.unwrap();
 }

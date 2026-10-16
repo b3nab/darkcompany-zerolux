@@ -10,6 +10,8 @@ CREATE TABLE "chat_outbox" ("event_id" text NOT NULL, "payload_json" text NOT NU
 CREATE INDEX "chat_outbox_pending" ON "chat_outbox" ("created_at") WHERE (published_at IS NULL);
 -- Create "chat_sessions" table
 CREATE TABLE "chat_sessions" ("id" text NOT NULL, "actor_id" text NOT NULL, "harness" text NOT NULL, "native_session_id" text NOT NULL, "title" text NOT NULL, "workspace" text NOT NULL, "native_locator_json" text NOT NULL, "token_hash" text NOT NULL, "status" text NOT NULL, "attention_reason" text NULL, "created_at" bigint NOT NULL, "stopped_at" bigint NULL, "activity" text NULL, "activity_conversation_id" text NULL, "host_id" text NULL, PRIMARY KEY ("id"), CONSTRAINT "chat_sessions_token_hash_key" UNIQUE ("token_hash"), CONSTRAINT "chat_sessions_activity_check" CHECK (activity = ANY (ARRAY['working'::text, 'idle'::text])), CONSTRAINT "chat_sessions_check" CHECK ((status = 'stopped'::text) = (stopped_at IS NOT NULL)), CONSTRAINT "chat_sessions_harness_check" CHECK (harness = ANY (ARRAY['pi'::text, 'claude-code'::text, 'codex'::text])), CONSTRAINT "chat_sessions_status_check" CHECK (status = ANY (ARRAY['connecting'::text, 'connected'::text, 'attention'::text, 'stopped'::text])));
+-- Create index "idx-chat_sessions-native_session" to table: "chat_sessions"
+CREATE UNIQUE INDEX "idx-chat_sessions-native_session" ON "chat_sessions" ("actor_id", "harness", "native_session_id");
 -- Create index "one_chat_session" to table: "chat_sessions"
 CREATE UNIQUE INDEX "one_chat_session" ON "chat_sessions" ("harness", "native_session_id") WHERE (stopped_at IS NULL);
 -- Create "conversation_members" table

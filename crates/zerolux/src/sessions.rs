@@ -236,7 +236,10 @@ pub(crate) async fn control(record: &PiDescriptor, mut request: Value) -> Result
             serde_json::from_slice(&bytes).context("Invalid pi control response")?;
         ensure!(
             response["ok"] == true,
-            "Pi is busy, changed, or unavailable; refresh the session list"
+            "{}",
+            response["error"]
+                .as_str()
+                .unwrap_or("Pi is busy, changed, or unavailable; refresh the session list")
         );
         Ok(response)
     };

@@ -332,15 +332,8 @@ impl ChatRuntime {
     ) -> Result<()> {
         let mut agents = self.agents.lock().await;
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
-        // Dead callbacks are settled; attempted deliveries retain their state. Stop wins
-        // both here and in the transaction that issues the successor link.
-        if self
-            .store
-            .stop_chat_session_marked(who, &session.id, crate::chat::RELINKING)
-            .await?
-        {
-            return Ok(());
-        }
+        // Attempted deliveries retain their state. The owner's Stop wins in the transaction
+        // that issues the new token.
         if let Some(previous) = agents.remove(&session.id) {
             previous.release().await;
         }
@@ -363,7 +356,10 @@ impl ChatRuntime {
             )
             .await;
         if let Err(error) = &result {
-            self.store.revive_chat_session(who, &session.harness, &session.native_session_id,
+            if matches!(error.downcast_ref::<Error>(), Some(Error::StoppedByOwner)) {
+                return Ok(());
+            }
+            self.store.fail_chat_link(who, &session.id,
                 &format!("The native session could not be restored ({error}); no attempted input was resent.")).await?;
             self.changed();
         }
