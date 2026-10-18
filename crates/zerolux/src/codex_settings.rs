@@ -164,6 +164,64 @@ impl CodexSettings {
             .collect())
     }
 
+    /// What waits in Codex's queue for this thread, oldest first.
+    pub async fn queue(&self) -> Result<Vec<crate::live::Queued>> {
+        let listed = self
+            .rpc
+            .request(
+                "thread/queue/list",
+                json!({"threadId": self.thread_id, "limit": 50}),
+            )
+            .await
+            .context("Codex did not list its queue")?;
+        Ok(listed["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|queued| {
+                let text = queued["input"]
+                    .as_array()?
+                    .iter()
+                    .map(|part| match part["type"].as_str() {
+                        Some("text") => part["text"].as_str().unwrap_or_default().to_owned(),
+                        Some(kind) => format!("[{kind}]"),
+                        None => String::new(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                Some(crate::live::Queued {
+                    id: queued["id"].as_str()?.to_owned(),
+                    text,
+                })
+            })
+            .collect())
+    }
+
+    /// Takes a waiting input out of Codex's queue.
+    pub async fn unqueue(&self, item: &str) -> Result<()> {
+        self.rpc
+            .request(
+                "thread/queue/delete",
+                json!({"threadId": self.thread_id, "queuedSubmissionId": item}),
+            )
+            .await
+            .context("Codex did not take the input out of its queue")?;
+        Ok(())
+    }
+
+    /// Rewrites a waiting input in Codex's queue.
+    pub async fn requeue(&self, item: &str, text: &str) -> Result<()> {
+        self.rpc
+            .request(
+                "thread/queue/update",
+                json!({"threadId": self.thread_id, "queuedSubmissionId": item,
+                    "input": [{"type": "text", "text": text}]}),
+            )
+            .await
+            .context("Codex did not change the waiting input")?;
+        Ok(())
+    }
+
     /// Stops the running turn, whoever started it. No turn running: nothing to stop.
     pub async fn interrupt(&self) -> Result<bool> {
         let Some(turn) = self.turn.borrow().clone() else {

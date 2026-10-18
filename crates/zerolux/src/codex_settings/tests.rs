@@ -68,6 +68,10 @@ impl Fixture {
                     "thread/compact/start" => json!({}),
                     "turn/steer" => json!({"turnId":"turn"}),
                     "thread/queue/add" => json!({"queuedSubmission":{"id":"q"}}),
+                    "thread/queue/list" => json!({"data":[
+                        {"id":"q1","clientUserMessageId":"c1","input":[{"type":"text","text":"then the docs"}]},
+                        {"id":"q2","clientUserMessageId":"c2","input":[{"type":"text","text":"and this"},{"type":"localImage","path":"/p.png"}]}],"nextCursor":null}),
+                    "thread/queue/delete" | "thread/queue/update" => json!({}),
                     "skills/list" => json!({"data":[{"cwd":"/fixture","errors":[],"skills":[
                         {"name":"review","description":"Review the change in depth","enabled":true,"path":"/fixture/.codex/skills/review/SKILL.md","scope":"repo",
                          "interface":{"shortDescription":"Review the change"}},
@@ -341,5 +345,33 @@ async fn images_go_with_the_input_as_local_files() {
     assert_eq!(
         queued[1]["params"]["input"],
         json!([{"type":"text","text":"what is this?"},{"type":"localImage","path":"/data/b.jpg"}])
+    );
+}
+
+#[tokio::test]
+async fn the_queue_is_read_taken_back_and_rewritten_in_codex() {
+    let idle = Fixture::new(false, false, "applied").await;
+    assert_eq!(
+        idle.control.queue().await.unwrap(),
+        vec![
+            crate::live::Queued {
+                id: "q1".into(),
+                text: "then the docs".into()
+            },
+            crate::live::Queued {
+                id: "q2".into(),
+                text: "and this [localImage]".into()
+            },
+        ]
+    );
+    idle.control.unqueue("q1").await.unwrap();
+    assert_eq!(
+        idle.calls("thread/queue/delete")[0]["params"],
+        json!({"threadId":"thread","queuedSubmissionId":"q1"})
+    );
+    idle.control.requeue("q2", "only this").await.unwrap();
+    assert_eq!(
+        idle.calls("thread/queue/update")[0]["params"]["input"],
+        json!([{"type":"text","text":"only this"}])
     );
 }

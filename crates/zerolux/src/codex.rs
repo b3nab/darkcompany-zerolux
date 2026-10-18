@@ -734,6 +734,7 @@ impl CodexDriver {
         let result = async {
             if *stop.borrow() { return Ok(()); }
             kernel.status("connected", None).await?;
+            self.report_queue(&kernel).await;
             if !self.refresh(&kernel, true, true).await? { return Ok(()); }
             loop {
                 tokio::select! {
@@ -747,6 +748,11 @@ impl CodexDriver {
                         Ok(event) if event["method"] == CLOSED => bail!("Codex connection closed; pending prompts will not be resent"),
                         Ok(event) => {
                             self.native_settings.observe(&event);
+                            if event["method"] == "thread/queue/changed"
+                                && event["params"]["threadId"] == self.thread_id
+                            {
+                                self.report_queue(&kernel).await;
+                            }
                             if event["params"]["threadId"] == self.thread_id
                                 && let Some(change) = live_change(&event)
                             {
@@ -819,6 +825,17 @@ impl CodexDriver {
         }
         cancellation?;
         if *stop.borrow() { Ok(()) } else { result }
+    }
+
+    /// What waits in Codex's queue for this thread, to the kernel, whole.
+    async fn report_queue(&mut self, kernel: &Kernel) {
+        match self.native_settings.queue().await {
+            Ok(items) => {
+                self.live.push(crate::live::Change::Queue { items });
+                self.report_live(kernel).await;
+            }
+            Err(error) => tracing::debug!(error = format!("{error:#}"), "Codex queue not read"),
+        }
     }
 
     /// Streamed output, to the kernel. It is shown while it streams and never stored: a lost

@@ -2053,11 +2053,15 @@ async fn streamed_output_reaches_the_kernel_while_the_turn_runs() {
     runtime.emit(delta("item/agentMessage/delta", "m", "green"));
     // Another thread's output is not this session's.
     runtime.emit(json!({"method":"item/agentMessage/delta","params":{"threadId":"other","turnId":"t","itemId":"x","delta":"no"}}));
-    kernel.wait(|s| s.live.len() == 5).await;
+    // What waits in Codex's queue is reported too, at the start: nothing here.
+    let streamed = |s: &KernelState| s.live.iter().filter(|c| c["type"] != "queue").count();
+    kernel.wait(|s| streamed(s) == 5).await;
     runtime.emit(item("work", assistant("m", "All green", "final_answer")));
     runtime.emit(completed("work", vec![]));
-    kernel.wait(|s| s.live.len() == 7).await;
-    let live = kernel.state.lock().unwrap().live.clone();
+    kernel.wait(|s| streamed(s) == 7).await;
+    let all = kernel.state.lock().unwrap().live.clone();
+    assert_eq!(all[0], json!({"type":"queue","items":[]}));
+    let live: Vec<Value> = all.into_iter().filter(|c| c["type"] != "queue").collect();
     assert_eq!(
         live[0],
         json!({"type":"append","item":"r","kind":"thinking","text":"Checking "})
@@ -2069,5 +2073,28 @@ async fn streamed_output_reaches_the_kernel_while_the_turn_runs() {
     );
     assert_eq!(live[5], json!({"type":"done","item":"m"}));
     assert_eq!(live[6], json!({"type":"clear"}));
+    finish(stop, task).await;
+}
+
+#[tokio::test]
+async fn what_waits_in_codex_queue_reaches_the_kernel_when_it_changes() {
+    let runtime = Runtime::new().await;
+    let kernel = KernelFixture::new("read").await;
+    let (_changed, stop, task) = run(&runtime, &kernel).await;
+    kernel.wait(|s| s.activity.as_deref() == Some("idle")).await;
+    runtime
+        .state
+        .lock()
+        .unwrap()
+        .queue
+        .push(json!({"id":"queue-9","clientUserMessageId":"c",
+        "input":[{"type":"text","text":"then the docs"}]}));
+    runtime.emit(json!({"method":"thread/queue/changed","params":{"threadId":THREAD}}));
+    kernel
+        .wait(|s| {
+            s.live.last()
+                == Some(&json!({"type":"queue","items":[{"id":"queue-9","text":"then the docs"}]}))
+        })
+        .await;
     finish(stop, task).await;
 }
