@@ -8,6 +8,7 @@ pub mod chat_outbox;
 pub mod conversation_members;
 pub mod conversations;
 pub mod deliveries;
+pub mod hosts;
 pub mod invites;
 pub mod messages;
 pub mod schedules;

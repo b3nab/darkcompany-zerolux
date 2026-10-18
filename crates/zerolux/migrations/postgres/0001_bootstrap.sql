@@ -20,6 +20,8 @@ CREATE UNIQUE INDEX "one_open_thread_per_root" ON "conversations" ("root_message
 CREATE TABLE "deliveries" ("id" text NOT NULL, "message_id" text NOT NULL, "actor_id" text NOT NULL, "session_id" text NOT NULL, "status" text NOT NULL, "native_request_id" text NULL, "last_error" text NULL, "created_at" bigint NOT NULL, "updated_at" bigint NOT NULL, PRIMARY KEY ("id"), CONSTRAINT "deliveries_message_id_actor_id_key" UNIQUE ("message_id", "actor_id"), CONSTRAINT "deliveries_status_check" CHECK (status = ANY (ARRAY['stored'::text, 'uncertain'::text, 'notified'::text, 'read'::text])));
 -- Create index "deliveries_session" to table: "deliveries"
 CREATE INDEX "deliveries_session" ON "deliveries" ("session_id", "status", "created_at");
+-- Create "hosts" table
+CREATE TABLE "hosts" ("id" text NOT NULL, "name" text NOT NULL, "person_id" text NOT NULL, "open" boolean NOT NULL, "created_at" bigint NOT NULL, "seen_at" bigint NOT NULL, PRIMARY KEY ("id"));
 -- Create "invites" table
 CREATE TABLE "invites" ("id" text NOT NULL, "token_hash" text NOT NULL, "created_by" text NOT NULL, "created_at" bigint NOT NULL, "expires_at" bigint NOT NULL, "accepted_by" text NULL, "accepted_at" bigint NULL, PRIMARY KEY ("id"), CONSTRAINT "invites_token_hash_key" UNIQUE ("token_hash"));
 -- Create "messages" table
@@ -44,6 +46,8 @@ ALTER TABLE "conversation_members" ADD CONSTRAINT "conversation_members_actor_id
 ALTER TABLE "conversations" ADD CONSTRAINT "conversations_root_message_id_fkey" FOREIGN KEY ("root_message_id") REFERENCES "messages" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
 -- Modify "deliveries" table
 ALTER TABLE "deliveries" ADD CONSTRAINT "deliveries_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "deliveries_message_id_fkey" FOREIGN KEY ("message_id") REFERENCES "messages" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "deliveries_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "sessions" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
+-- Modify "hosts" table
+ALTER TABLE "hosts" ADD CONSTRAINT "hosts_person_id_fkey" FOREIGN KEY ("person_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
 -- Modify "invites" table
 ALTER TABLE "invites" ADD CONSTRAINT "invites_accepted_by_fkey" FOREIGN KEY ("accepted_by") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "invites_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
 -- Modify "messages" table

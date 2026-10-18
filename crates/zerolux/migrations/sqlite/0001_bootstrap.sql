@@ -52,3 +52,5 @@ CREATE TABLE `invites` (`id` text NOT NULL, `token_hash` text NOT NULL, `created
 CREATE UNIQUE INDEX `invites_token_hash` ON `invites` (`token_hash`);
 -- Create "triggers" table
 CREATE TABLE `triggers` (`id` text NOT NULL, `session_id` text NOT NULL, `event` text NOT NULL, `failures_only` boolean NOT NULL, `prompt` text NOT NULL, `enabled` boolean NOT NULL, `last_seen` text NULL, `last_run_at` integer NULL, `last_error` text NULL, `created_at` integer NOT NULL, PRIMARY KEY (`id`), CONSTRAINT `0` FOREIGN KEY (`session_id`) REFERENCES `sessions` (`id`) ON UPDATE NO ACTION ON DELETE NO ACTION, CHECK ("event" IN ('ci')));
+-- Create "hosts" table
+CREATE TABLE `hosts` (`id` text NOT NULL, `name` text NOT NULL, `person_id` text NOT NULL, `open` boolean NOT NULL, `created_at` integer NOT NULL, `seen_at` integer NOT NULL, PRIMARY KEY (`id`), CONSTRAINT `0` FOREIGN KEY (`person_id`) REFERENCES `actors` (`id`) ON UPDATE NO ACTION ON DELETE NO ACTION);
