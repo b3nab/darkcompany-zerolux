@@ -84,12 +84,13 @@ impl Links {
 
     /// Serves one host's connection until it closes: what the kernel asks goes out, answers
     /// come back to whoever asked, and notices go to `notices`.
+    /// Returns true when the computer is gone, rather than connected again on another channel.
     pub async fn serve(
         self: Arc<Self>,
         host: String,
         socket: axum::extract::ws::WebSocket,
         notices: mpsc::UnboundedSender<(String, Value)>,
-    ) {
+    ) -> bool {
         use axum::extract::ws::Message;
         use futures_util::{SinkExt, StreamExt};
         let (mut sink, mut stream) = socket.split();
@@ -142,7 +143,9 @@ impl Links {
             .is_some_and(|link| link.generation == generation)
         {
             links.remove(&host);
+            return true;
         }
+        false
     }
 }
 

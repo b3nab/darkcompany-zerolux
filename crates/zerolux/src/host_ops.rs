@@ -131,6 +131,12 @@ pub async fn folder(op: &str, folder: &Path, params: &Value) -> Result<Value> {
         )
         .await?}),
         "pr" => json!({"pull_request": git::pull_request(folder).await?}),
+        "ci" => match crate::triggers::ci(folder).await? {
+            Some(ended) => {
+                json!({"seen": ended.seen, "failed": ended.failed, "report": ended.report})
+            }
+            None => Value::Null,
+        },
         "stage" => {
             git::stage(folder, &param::<Vec<String>>(params, "paths")?).await?;
             json!(git::status(folder).await?)

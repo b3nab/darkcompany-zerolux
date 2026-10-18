@@ -559,13 +559,29 @@ impl ChatRuntime {
             let Ok(session) = self.store.chat_session(&owner, &trigger.session_id).await else {
                 continue;
             };
-            if session.host_id.as_deref() != self.store.host()
-                || session.stopped_at.is_some()
-                || session.status != "connected"
-            {
+            if session.stopped_at.is_some() || session.status != "connected" {
                 continue;
             }
-            let ended = match crate::triggers::ci(std::path::Path::new(&session.workspace)).await {
+            // Asked where the session's folder is: here, or on its joined computer.
+            let ci = match self.remote_host(&session) {
+                None => crate::triggers::ci(std::path::Path::new(&session.workspace)).await,
+                Some(host) => self
+                    .hosts
+                    .call(
+                        &host,
+                        "folder",
+                        serde_json::json!({"op": "ci", "folder": session.workspace, "params": {}}),
+                    )
+                    .await
+                    .map(|ended| {
+                        (!ended.is_null()).then(|| crate::triggers::Ended {
+                            seen: ended["seen"].as_str().unwrap_or_default().to_owned(),
+                            failed: ended["failed"] == true,
+                            report: ended["report"].as_str().unwrap_or_default().to_owned(),
+                        })
+                    }),
+            };
+            let ended = match ci {
                 Ok(Some(ended)) if trigger.last_seen.as_ref() != Some(&ended.seen) => ended,
                 Ok(_) => continue,
                 Err(error) => {

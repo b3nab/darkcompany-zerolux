@@ -2715,10 +2715,13 @@ async fn host_channel(
                 }
             })
         };
-        links
-            .serve(host, socket, runtime.host_notices.clone())
+        let gone = links
+            .serve(host.clone(), socket, runtime.host_notices.clone())
             .await;
         relink.abort();
+        if gone {
+            runtime.host_gone(&host).await;
+        }
     }))
 }
 

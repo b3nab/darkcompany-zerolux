@@ -507,6 +507,38 @@ impl ChatRuntime {
         Ok(())
     }
 
+    /// A joined computer went offline: the Codex sessions whose adapters ran there wait for it.
+    pub async fn host_gone(&self, host: &str) {
+        let Ok(sessions) = self.store.all_sessions().await else {
+            return;
+        };
+        for session in sessions {
+            if session.host_id.as_deref() != Some(host)
+                || session.stopped_at.is_some()
+                || session.harness != "codex"
+                || session.status != "connected"
+            {
+                continue;
+            }
+            let owner = ChatIdentity::person(&session.owner_id);
+            let _ = self
+                .store
+                .set_chat_session_status(
+                    &owner,
+                    &session.id,
+                    ChatSessionStatus {
+                        status: "attention".into(),
+                        reason: Some(
+                            "Its computer is offline; the session continues when it connects again"
+                                .into(),
+                        ),
+                    },
+                )
+                .await;
+        }
+        self.changed();
+    }
+
     /// The Codex sessions of a joined computer that has just connected, continued there with a
     /// new token each: the kernel or the computer may have restarted meanwhile.
     pub async fn relink_host(&self, host: &str) -> Result<()> {

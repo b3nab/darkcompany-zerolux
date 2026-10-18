@@ -2331,12 +2331,23 @@ async fn a_codex_session_runs_on_a_joined_computer() {
     );
     // Idle, it waits in Codex's own queue and starts the next turn there.
     assert_eq!(native.count("thread/queue/add"), 1);
-    let stopped = kernel
-        .post(&format!("/sessions/{id}/stop"), None, json!({}))
-        .await;
-    assert_eq!(stopped.status(), StatusCode::OK);
+    // Its computer goes offline: the session waits for it.
     stop.send_replace(true);
     connected.await.unwrap().unwrap();
+    for _ in 0..100 {
+        session = kernel
+            .get(&format!("/sessions/{id}"), None)
+            .await
+            .json::<Value>()
+            .await
+            .unwrap()["session"]
+            .clone();
+        if session["status"] == "attention" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(session["status"], "attention", "{session}");
     runtime.shutdown().await.unwrap();
     livekit.shutdown().await.unwrap();
 }

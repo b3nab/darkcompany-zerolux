@@ -248,6 +248,11 @@ impl CodexRpc {
         result
             .context("Codex request timed out; outcome may be uncertain")?
             .context("Codex connection closed")?
+            // A refusal names what was refused; it stays a refusal for whoever checks.
+            .map_err(|error| match error.downcast_ref::<Rejected>() {
+                Some(_) => error.context(format!("Codex refused `{method}`")),
+                None => error,
+            })
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Value> {
