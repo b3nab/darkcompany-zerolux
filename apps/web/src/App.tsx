@@ -29,6 +29,7 @@ import { CommandMenu } from "./CommandMenu";
 import { ConsoleHome, ConsoleList, SessionView } from "./Console";
 import { MD, useMedia } from "./media";
 import { Meetings } from "./Meetings";
+import { useSessionNotices } from "./notices";
 import { OwnerOnboarding } from "./OwnerOnboarding";
 import { Organization } from "./Org";
 import { AgentList, Sidebar, WorkspaceMenu } from "./Sidebar";
@@ -153,6 +154,9 @@ export function App({
     // chat.select only uses refs and state setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation, chat.openId]);
+  useSessionNotices(chat, actors, consoleId, (id) =>
+    navigate(`/console/${id}`),
+  );
   const hire = () => navigate("/team/hire");
   const showChat = (c: Conversation) => navigate(`/chats/${c.id}`);
   const kernel: Kernel = {
@@ -238,7 +242,9 @@ export function App({
   );
   // A session that is not (or no longer) listed shows the whole console.
   const consoleSession = chat.sessions.find((s) => s.id === consoleId);
-  const consoleList = <ConsoleList chat={chat} actors={actors} />;
+  const consoleList = (
+    <ConsoleList chat={chat} actors={actors} busy={busy} perform={perform} />
+  );
   const consoleHome = section(
     consoleList,
     false,
