@@ -526,7 +526,7 @@ async fn livekit_tickets_are_scoped_to_the_authenticated_actor_and_restart_requi
         .unwrap();
     assert_eq!(
         state,
-        json!({"seq":2,"items":[{"id":"m","kind":"text","text":"Working"}],"queue":[],"usage":null})
+        json!({"seq":2,"items":[{"id":"m","kind":"text","text":"Working"}],"queue":[],"usage":null,"goal":null})
     );
     // At its budget, the session's work stops for the owner; a higher budget lets it go on.
     let session_path = format!("{url}/api/sessions/{}", agent.session.id);
@@ -1114,6 +1114,51 @@ async fn live_chat_round_trip_and_stop_use_the_real_runtime() {
             .contains("Codex compacts without instructions")
     );
     assert_eq!(native.count("thread/compact/start"), 1);
+
+    // A Codex session works toward a goal its person sets: Codex keeps it.
+    let goal = format!("/sessions/{}/goal", agent.session.id);
+    let read = kernel.get(&goal, None).await.json::<Value>().await.unwrap();
+    assert_eq!(read, json!({ "goal": null }));
+    let set = kernel
+        .request(Method::PUT, &goal, None)
+        .json(&json!({ "objective": " Ship the release ", "token_budget": 50000 }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(set["goal"]["objective"], "Ship the release");
+    assert_eq!(set["goal"]["status"], "active");
+    assert_eq!(set["goal"]["token_budget"], 50000);
+    let refused = kernel
+        .request(Method::PUT, &goal, None)
+        .json(&json!({ "status": "budget_limited" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        kernel
+            .request(Method::PUT, &goal, Some(&agent.token))
+            .json(&json!({ "objective": "Mine" }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    kernel
+        .request(Method::DELETE, &goal, None)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert_eq!(native.count("thread/goal/set"), 1);
+    assert_eq!(native.count("thread/goal/clear"), 1);
 
     kernel
         .post(

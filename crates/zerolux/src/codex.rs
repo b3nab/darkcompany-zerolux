@@ -426,6 +426,10 @@ fn live_change(event: &Value) -> Option<crate::live::Change> {
             item: params["item"]["id"].as_str()?.to_owned(),
         }),
         "turn/completed" => Some(Change::Clear),
+        "thread/goal/updated" => Some(Change::Goal {
+            goal: Some(crate::live::Goal::from_codex(&params["goal"])?),
+        }),
+        "thread/goal/cleared" => Some(Change::Goal { goal: None }),
         "thread/tokenUsage/updated" => {
             let usage = &params["tokenUsage"];
             Some(Change::Usage(crate::live::Usage {

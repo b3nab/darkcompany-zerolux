@@ -223,6 +223,55 @@ impl CodexSettings {
         Ok(())
     }
 
+    /// The goal the thread works toward, as Codex keeps it.
+    pub async fn goal(&self) -> Result<Option<crate::live::Goal>> {
+        let reply = self
+            .rpc
+            .request("thread/goal/get", json!({"threadId": self.thread_id}))
+            .await
+            .context("Codex did not say the thread's goal")?;
+        Ok(crate::live::Goal::from_codex(&reply["goal"]))
+    }
+
+    /// Sets the thread's goal, or changes what is given of it: Codex then works toward it
+    /// across turns, within the token budget when there is one.
+    pub async fn set_goal(
+        &self,
+        objective: Option<&str>,
+        status: Option<&str>,
+        token_budget: Option<i64>,
+    ) -> Result<crate::live::Goal> {
+        let mut params = json!({"threadId": self.thread_id});
+        if let Some(objective) = objective {
+            params["objective"] = json!(objective);
+        }
+        if let Some(status) = status {
+            params["status"] = json!(match status {
+                "usage_limited" => "usageLimited",
+                "budget_limited" => "budgetLimited",
+                status => status,
+            });
+        }
+        if let Some(budget) = token_budget {
+            params["tokenBudget"] = json!(budget);
+        }
+        let reply = self
+            .rpc
+            .request("thread/goal/set", params)
+            .await
+            .context("Codex did not set the goal")?;
+        crate::live::Goal::from_codex(&reply["goal"]).context("Codex did not return the goal")
+    }
+
+    /// The thread no longer has a goal.
+    pub async fn clear_goal(&self) -> Result<()> {
+        self.rpc
+            .request("thread/goal/clear", json!({"threadId": self.thread_id}))
+            .await
+            .context("Codex did not clear the goal")?;
+        Ok(())
+    }
+
     /// Stops the running turn, whoever started it. No turn running: nothing to stop.
     pub async fn interrupt(&self) -> Result<bool> {
         let Some(turn) = self.turn.borrow().clone() else {

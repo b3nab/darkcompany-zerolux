@@ -167,6 +167,70 @@ impl ChatRuntime {
         })
     }
 
+    /// The goal a session works toward on its own across turns: Codex's. With a change, it is
+    /// set; with `clear`, the session no longer has one.
+    pub async fn goal(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+        change: Option<crate::model::GoalChange>,
+        clear: bool,
+    ) -> Result<Option<crate::live::Goal>> {
+        async {
+            if !who.is_person() {
+                return Err(Error::Forbidden.into());
+            }
+            if let Some(change) = &change {
+                if change.objective.is_none()
+                    && change.status.is_none()
+                    && change.token_budget.is_none()
+                {
+                    return Err(Error::Invalid("Nothing to change".into()).into());
+                }
+                if change
+                    .objective
+                    .as_ref()
+                    .is_some_and(|text| text.trim().is_empty() || text.len() > 64 * 1024)
+                {
+                    return Err(Error::Invalid("Write the goal in 1 byte to 64 KiB".into()).into());
+                }
+                if change
+                    .status
+                    .as_deref()
+                    .is_some_and(|status| !matches!(status, "active" | "paused" | "complete"))
+                {
+                    return Err(
+                        Error::Invalid("A goal is made active, paused or complete".into()).into(),
+                    );
+                }
+                if change.token_budget.is_some_and(|budget| budget <= 0) {
+                    return Err(Error::Invalid("A token budget is above 0".into()).into());
+                }
+            }
+            let session = self.store.chat_session(who, id).await?;
+            match self.native_control(who, &session, INPUT).await? {
+                Control::Codex(control) => match (change, clear) {
+                    (_, true) => control.clear_goal().await.map(|()| None),
+                    (Some(change), _) => control
+                        .set_goal(
+                            change.objective.as_deref().map(str::trim),
+                            change.status.as_deref(),
+                            change.token_budget,
+                        )
+                        .await
+                        .map(Some),
+                    (None, _) => control.goal().await,
+                },
+                _ => bail!("Goals belong to Codex sessions"),
+            }
+        }
+        .await
+        .map_err(|error: anyhow::Error| match error.downcast::<Error>() {
+            Ok(error) => error.into(),
+            Err(error) => Error::Invalid(format!("{error:#}")).into(),
+        })
+    }
+
     /// The commands and skills the session's harness offers, as they are typed.
     pub async fn commands(&self, who: &ChatIdentity, id: &str) -> Result<Vec<SessionCommand>> {
         self.commands_native(who, id)

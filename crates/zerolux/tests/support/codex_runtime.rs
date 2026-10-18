@@ -280,6 +280,12 @@ fn native_response(state: &mut NativeState, request: &Value) -> Option<Value> {
         },
         "turn/interrupt" => json!({}),
         "thread/compact/start" => json!({}),
+        "thread/goal/get" => json!({"goal":null}),
+        "thread/goal/set" => json!({"goal":{"threadId":request["params"]["threadId"],
+            "objective":request["params"]["objective"],"status":"active",
+            "tokenBudget":request["params"]["tokenBudget"],"tokensUsed":0,"timeUsedSeconds":0,
+            "createdAt":1,"updatedAt":1}}),
+        "thread/goal/clear" => json!({"cleared":true}),
         other => panic!("unexpected native method: {other}"),
     })
 }

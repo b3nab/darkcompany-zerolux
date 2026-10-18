@@ -349,6 +349,17 @@ pub struct SessionChange {
     pub shared: Option<Option<String>>,
 }
 
+/// What is set of a session's goal; what is omitted stays.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalChange {
+    pub objective: Option<String>,
+    /// `active`, `paused` or `complete`.
+    pub status: Option<String>,
+    /// The tokens it may use toward the goal.
+    pub token_budget: Option<i64>,
+}
+
 /// A field that is present, even as `null`, as opposed to one left out.
 fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where

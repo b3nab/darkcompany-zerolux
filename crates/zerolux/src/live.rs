@@ -62,6 +62,39 @@ pub enum Change {
     Queue { items: Vec<Queued> },
     /// How full the context is and what the session has used, as the harness counts them.
     Usage(Usage),
+    /// The goal the session works toward on its own, as its harness keeps it; none when cleared.
+    Goal { goal: Option<Goal> },
+}
+
+/// What a session works toward across turns until it is done, and what that has used so far.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Goal {
+    pub objective: String,
+    /// `active`, `paused`, `blocked`, `usage_limited`, `budget_limited` or `complete`.
+    pub status: String,
+    #[serde(default)]
+    pub token_budget: Option<i64>,
+    #[serde(default)]
+    pub tokens_used: i64,
+    #[serde(default)]
+    pub time_used_seconds: i64,
+}
+
+impl Goal {
+    /// Codex's own goal, as it reports it.
+    pub fn from_codex(goal: &serde_json::Value) -> Option<Self> {
+        Some(Self {
+            objective: goal["objective"].as_str()?.to_owned(),
+            status: match goal["status"].as_str()? {
+                "usageLimited" => "usage_limited".into(),
+                "budgetLimited" => "budget_limited".into(),
+                status => status.to_owned(),
+            },
+            token_budget: goal["tokenBudget"].as_i64(),
+            tokens_used: goal["tokensUsed"].as_i64().unwrap_or_default(),
+            time_used_seconds: goal["timeUsedSeconds"].as_i64().unwrap_or_default(),
+        })
+    }
 }
 
 /// How full a session's context is, and what it has used so far; unknown when absent.
@@ -94,6 +127,7 @@ pub struct State {
     pub items: Vec<Item>,
     pub queue: Vec<Queued>,
     pub usage: Option<Usage>,
+    pub goal: Option<Goal>,
 }
 
 /// Changes as they were applied, numbered from `first`.
@@ -133,6 +167,9 @@ impl Live {
                 Change::Queue { items } => {
                     items.len() > QUEUED || items.iter().any(|queued| queued.id.len() > 200)
                 }
+                Change::Goal { goal } => goal
+                    .as_ref()
+                    .is_some_and(|goal| goal.objective.len() > APPEND_BYTES),
             })
         {
             return Err(Error::Invalid("Invalid live changes".into()));
@@ -173,6 +210,7 @@ impl Live {
                 Change::Clear => state.items.clear(),
                 Change::Queue { items } => state.queue.clone_from(items),
                 Change::Usage(usage) => state.usage = Some(usage.clone()),
+                Change::Goal { goal } => state.goal.clone_from(goal),
             }
             state.seq += 1;
         }
