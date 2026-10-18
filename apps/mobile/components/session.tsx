@@ -38,8 +38,8 @@ export function useOrganize(session: ChatSession) {
 /**
  * One session as the Console's inbox lists it, like a chat in the list of chats: its agent
  * (or its title, without one) and harness, when it last wrote, then what it asks of you,
- * what it does while it works, else its latest in a line; a dot while it has written what you
- * have not seen. Held, it is pinned, archived or renamed: the system's menu on iOS.
+ * what it does while it works, why it stopped, else its latest in a line; a dot while it has
+ * written what you have not seen. Held, it is pinned, archived or renamed: the system's menu on iOS.
  */
 export function SessionRow({
   session,
@@ -56,6 +56,11 @@ export function SessionRow({
   const organize = useOrganize(session);
   const faint = String(useCSSVariable("--color-faint"));
   const unseen = attention === "unseen";
+  // Why it stopped and waits for you, as the kernel says: a budget reached, a lost link.
+  const stopped =
+    session.status === "attention" && session.attention_reason
+      ? session.attention_reason
+      : undefined;
   const title = session.title || "Untitled session";
   const rename = () =>
     Alert.prompt(
@@ -125,7 +130,7 @@ export function SessionRow({
                 className={cn(
                   "flex-1 text-[13px] text-muted-foreground",
                   attention === "working" && "text-agent-foreground",
-                  asks && "text-attention",
+                  (asks || stopped) && "text-attention",
                   unseen && "font-medium text-foreground",
                 )}
               >
@@ -133,8 +138,10 @@ export function SessionRow({
                   ? sessionState(session)
                   : asks
                     ? `Asks: ${asks.summary}`
-                    : session.summary ||
-                      (agent ? title : sessionState(session))}
+                    : stopped
+                      ? session.attention_reason
+                      : session.summary ||
+                        (agent ? title : sessionState(session))}
               </Text>
             </View>
           </View>
