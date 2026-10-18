@@ -12,6 +12,7 @@ import {
   needsYou,
   runningNow,
   useMeetings,
+  sessionName,
 } from "@zerolux/chat";
 import type { MemberTone, Place } from "@zerolux/chat";
 import { ActorMark } from "@/components/member";
@@ -25,7 +26,9 @@ import { useSession } from "@/src/kernel";
 
 /** The chat address of an item, when it belongs to a chat. */
 const href = (place: Place) =>
-  "chat" in place ? (`/chat/${place.chat}` as const) : undefined;
+  "chat" in place
+    ? (`/chat/${place.chat}` as const)
+    : (`/session/${place.session}` as const);
 
 /** The home: what waits for the owner, what runs now, who is in. */
 export default function Tonight() {
@@ -36,7 +39,16 @@ export default function Tonight() {
   const [error, setError] = useState("");
   if (!workspace) return <Screen title={homeLabel()}>{null}</Screen>;
   const actors = activeActors(workspace.actors);
-  const actor = (id: string) => workspace.actors.find((a) => a.id === id);
+  const actor = (id: string | null) =>
+    workspace.actors.find((a) => a.id === id);
+  // Who a session works for, or the session itself by its title when it has no agent.
+  const who = (actorId: string | null, sessionId: string) => {
+    const session = chat.sessions.find((s) => s.id === sessionId);
+    return (
+      actor(actorId)?.name ??
+      (session ? sessionName(session, workspace.actors) : "?")
+    );
+  };
   const owner = actors.find((a) => a.kind === "human");
   const needs = needsYou(chat);
   const running = runningNow(chat);
@@ -121,7 +133,7 @@ export default function Tonight() {
             </Text>
           )}
           {needs.map((need) => {
-            const who = actor(need.actorId);
+            const by = actor(need.actorId);
             const to = href(need.place);
             return (
               <Pressable
@@ -132,8 +144,8 @@ export default function Tonight() {
               >
                 <View className="flex-row items-center gap-2.5">
                   <ActorMark
-                    kind={who?.kind ?? "agent"}
-                    name={who?.name ?? "?"}
+                    kind={by?.kind ?? "agent"}
+                    name={who(need.actorId, need.sessionId)}
                     size="sm"
                   />
                   <Text className="flex-1 text-xs text-faint" numberOfLines={1}>
@@ -212,13 +224,13 @@ export default function Tonight() {
                 >
                   <ActorMark
                     kind="agent"
-                    name={actor(run.actorId)?.name ?? "?"}
+                    name={who(run.actorId, run.sessionId)}
                     tone="working"
                     size="sm"
                   />
                   <View className="flex-1">
                     <Text className="font-mono text-sm text-agent-foreground">
-                      {actor(run.actorId)?.name ?? "unknown"}
+                      {who(run.actorId, run.sessionId)}
                     </Text>
                     <Text
                       className="text-sm text-muted-foreground"
