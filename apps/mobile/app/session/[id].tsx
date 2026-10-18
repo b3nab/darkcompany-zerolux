@@ -12,6 +12,7 @@ import {
   PanelRightIcon,
   SendIcon,
   SquareIcon,
+  SquareTerminalIcon,
   XIcon,
 } from "lucide-react-native";
 import {
@@ -118,6 +119,8 @@ export default function SessionPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { workspace, chat } = useSession();
   const [about, setAbout] = useState(false);
+  const router = useRouter();
+  const { owner } = useMe();
   const muted = String(useCSSVariable("--color-muted-foreground"));
   const insets = useSafeAreaInsets();
   const session = chat.sessions.find((s) => s.id === id);
@@ -219,15 +222,28 @@ export default function SessionPage() {
         />
       }
       action={
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="About this session"
-          onPress={() => setAbout(true)}
-          hitSlop={6}
-          className="size-10 items-center justify-center rounded-sm active:bg-accent"
-        >
-          <PanelRightIcon color={muted} size={20} strokeWidth={1.5} />
-        </Pressable>
+        <View className="flex-row">
+          {owner ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Terminal"
+              onPress={() => router.push(`/terminal/${id}`)}
+              hitSlop={6}
+              className="size-10 items-center justify-center rounded-sm active:bg-accent"
+            >
+              <SquareTerminalIcon color={muted} size={20} strokeWidth={1.5} />
+            </Pressable>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="About this session"
+            onPress={() => setAbout(true)}
+            hitSlop={6}
+            className="size-10 items-center justify-center rounded-sm active:bg-accent"
+          >
+            <PanelRightIcon color={muted} size={20} strokeWidth={1.5} />
+          </Pressable>
+        </View>
       }
     >
       <ChatList

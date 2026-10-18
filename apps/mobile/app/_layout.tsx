@@ -63,6 +63,7 @@ function Navigator() {
         <Stack.Screen name="admin" />
         <Stack.Screen name="session/new" />
         <Stack.Screen name="session/[id]" />
+        <Stack.Screen name="terminal/[id]" />
       </Stack.Protected>
       <Stack.Protected guard={Boolean(url) && !authorized}>
         <Stack.Screen name="auth" />
