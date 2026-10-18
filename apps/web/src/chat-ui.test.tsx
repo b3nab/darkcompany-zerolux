@@ -1184,7 +1184,7 @@ test("starting an agent asks for a harness, an agent, a folder and how it asks p
   );
   expect(own).toMatch(/value="none"[^>]*selected="">No agent/);
   expect(own).not.toContain('id="start-name"');
-  // On one's own joined computer, only what it runs so far, and no worktree.
+  // On one's own joined computer, the harnesses it runs, and no worktree.
   const studio = {
     id: "h-studio",
     name: "Studio",
@@ -1213,9 +1213,8 @@ test("starting an agent asks for a harness, an agent, a folder and how it asks p
   expect(away).toContain('id="start-where"');
   expect(away).toMatch(/value="h-studio"[^>]*selected="">Studio</);
   expect(away).not.toContain("The workspace&#x27;s computer");
-  expect(away).toContain(">Codex</option>");
-  expect(away).toContain(">pi</option>");
-  expect(away).not.toContain(">Claude Code</option>");
+  for (const harness of ["Claude Code", "Codex", "pi"])
+    expect(away).toContain(`>${harness}</option>`);
   expect(away).not.toContain("git worktree");
   // A session there says so, and leaves on it what stays on it.
   const there: ChatSession = {
