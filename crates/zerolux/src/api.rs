@@ -227,7 +227,11 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/sessions/{id}/live", get(session_live))
         .route("/sessions/{id}/events", get(session_events))
         .route("/sessions/{id}/interrupt", post(interrupt_session))
-        .route("/sessions/{id}/input", post(session_input))
+        .route(
+            "/sessions/{id}/input",
+            // With images: 15 MiB of them, in base64.
+            post(session_input).layer(DefaultBodyLimit::max(21 * 1024 * 1024)),
+        )
         .route("/sessions/{id}/commands", get(session_commands))
         .route("/sessions/{id}/compact", post(compact_session))
         .route("/actors/{id}/name", post(rename_agent))
@@ -922,9 +926,12 @@ async fn compact_session(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InputRequest {
+    #[serde(default)]
     text: String,
     #[serde(default)]
     mode: InputMode,
+    #[serde(default)]
+    images: Vec<InputImage>,
 }
 
 /// The owner's own input, straight into the native session; not a chat message.
@@ -935,7 +942,7 @@ async fn session_input(
     ChatJson(input): ChatJson<InputRequest>,
 ) -> Result<Json<Value>, ApiFailure> {
     runtime(&state)?
-        .input(&who, &id, &input.text, input.mode)
+        .input(&who, &id, &input.text, input.mode, &input.images)
         .await
         .map_err(runtime_error)?;
     Ok(Json(json!({ "sent": true })))
