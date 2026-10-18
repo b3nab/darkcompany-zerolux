@@ -22,6 +22,10 @@ CREATE TABLE "deliveries" ("id" text NOT NULL, "message_id" text NOT NULL, "acto
 CREATE INDEX "deliveries_session" ON "deliveries" ("session_id", "status", "created_at");
 -- Create "messages" table
 CREATE TABLE "messages" ("id" text NOT NULL, "conversation_id" text NOT NULL, "seq" bigint NOT NULL, "author_id" text NOT NULL, "text" text NOT NULL, "reply_to_delivery_id" text NULL, "created_at" bigint NOT NULL, PRIMARY KEY ("id"), CONSTRAINT "messages_conversation_id_seq_key" UNIQUE ("conversation_id", "seq"), CONSTRAINT "messages_reply_to_delivery_id_key" UNIQUE ("reply_to_delivery_id"));
+-- Create "schedules" table
+CREATE TABLE "schedules" ("id" text NOT NULL, "session_id" text NOT NULL, "cron" text NOT NULL, "prompt" text NOT NULL, "enabled" boolean NOT NULL, "next_run_at" bigint NULL, "last_run_at" bigint NULL, "last_error" text NULL, "created_at" bigint NOT NULL, PRIMARY KEY ("id"));
+-- Create index "schedules_due" to table: "schedules"
+CREATE INDEX "schedules_due" ON "schedules" ("next_run_at") WHERE (enabled = true);
 -- Create "sessions" table
 CREATE TABLE "sessions" ("id" text NOT NULL, "actor_id" text NULL, "harness" text NOT NULL, "native_session_id" text NOT NULL, "title" text NOT NULL, "workspace" text NOT NULL, "native_locator_json" text NOT NULL, "token_hash" text NOT NULL, "status" text NOT NULL, "attention_reason" text NULL, "created_at" bigint NOT NULL, "stopped_at" bigint NULL, "activity" text NULL, "activity_conversation_id" text NULL, "host_id" text NULL, "pinned_at" bigint NULL, "archived_at" bigint NULL, "budget_cents" bigint NULL, PRIMARY KEY ("id"), CONSTRAINT "sessions_token_hash_key" UNIQUE ("token_hash"), CONSTRAINT "sessions_activity_check" CHECK (activity = ANY (ARRAY['working'::text, 'idle'::text])), CONSTRAINT "sessions_check" CHECK ((status = 'stopped'::text) = (stopped_at IS NOT NULL)), CONSTRAINT "sessions_harness_check" CHECK (harness = ANY (ARRAY['pi'::text, 'claude-code'::text, 'codex'::text])), CONSTRAINT "sessions_status_check" CHECK (status = ANY (ARRAY['connecting'::text, 'connected'::text, 'attention'::text, 'stopped'::text])));
 -- Create index "idx-sessions-native_session" to table: "sessions"
@@ -38,6 +42,8 @@ ALTER TABLE "conversations" ADD CONSTRAINT "conversations_root_message_id_fkey" 
 ALTER TABLE "deliveries" ADD CONSTRAINT "deliveries_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "deliveries_message_id_fkey" FOREIGN KEY ("message_id") REFERENCES "messages" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "deliveries_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "sessions" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
 -- Modify "messages" table
 ALTER TABLE "messages" ADD CONSTRAINT "messages_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "messages_conversation_id_fkey" FOREIGN KEY ("conversation_id") REFERENCES "conversations" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "messages_reply_to_delivery_id_fkey" FOREIGN KEY ("reply_to_delivery_id") REFERENCES "deliveries" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
+-- Modify "schedules" table
+ALTER TABLE "schedules" ADD CONSTRAINT "schedules_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "sessions" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
 -- Modify "sessions" table
 ALTER TABLE "sessions" ADD CONSTRAINT "sessions_activity_conversation_id_fkey" FOREIGN KEY ("activity_conversation_id") REFERENCES "conversations" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "sessions_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
 -- Modify "tool_approvals" table

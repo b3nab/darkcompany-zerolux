@@ -9,6 +9,7 @@ pub mod conversation_members;
 pub mod conversations;
 pub mod deliveries;
 pub mod messages;
+pub mod schedules;
 pub mod sessions;
 pub mod tool_approvals;
 pub mod workspace;
