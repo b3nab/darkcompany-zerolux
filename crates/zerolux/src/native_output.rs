@@ -21,7 +21,7 @@ use tokio::{
 };
 
 use crate::{
-    entity::{actors, chat_sessions},
+    entity::{actors, sessions},
     livekit::LiveKit,
     model::ChatIdentity,
     native_events::{Event, Item, of_chat, project},
@@ -55,7 +55,7 @@ pub struct Page {
 static FOUND: LazyLock<Mutex<HashMap<String, PathBuf>>> = LazyLock::new(Default::default);
 
 /// Where the session's native record is. None until the harness has written it.
-pub fn locate(session: &chat_sessions::Model) -> Option<PathBuf> {
+pub fn locate(session: &sessions::Model) -> Option<PathBuf> {
     if session.harness == "pi" {
         let locator: Value = serde_json::from_str(&session.native_locator_json).ok()?;
         return locator["session_file"].as_str().map(PathBuf::from);
@@ -186,7 +186,7 @@ impl Store {
         &self,
         who: &ChatIdentity,
         id: &str,
-    ) -> Result<(chat_sessions::Model, Option<PathBuf>)> {
+    ) -> Result<(sessions::Model, Option<PathBuf>)> {
         let session = self.observed_session(who, id).await?;
         if session.host_id.as_deref() != self.host() {
             return Err(Error::Invalid(
@@ -391,8 +391,8 @@ async fn watch_once(
 ) -> anyhow::Result<()> {
     let (sessions, people) = {
         let tx = store.read().await?;
-        let sessions = chat_sessions::Entity::find()
-            .filter(chat_sessions::Column::StoppedAt.is_null())
+        let sessions = sessions::Entity::find()
+            .filter(sessions::Column::StoppedAt.is_null())
             .all(&tx)
             .await?;
         let people: Vec<String> = actors::Entity::find()

@@ -107,7 +107,7 @@ async fn native_backlog_and_later_messages_arrive_when_livekit_is_unavailable() 
                         kind: "group".into(),
                         title: title.into(),
                         members: vec![ConversationMemberInput {
-                            actor_id: issued.actor.id.clone(),
+                            actor_id: issued.actor.as_ref().unwrap().id.clone(),
                             session_id: Some(issued.session.id.clone()),
                         }],
                     },
@@ -152,7 +152,7 @@ async fn native_backlog_and_later_messages_arrive_when_livekit_is_unavailable() 
     harness.emit(json!({"method":"turn/started","params":{"threadId":native::THREAD,"turn":{"id":"fixture-turn"}}}));
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
-            let sessions = store.chat_sessions(&owner).await.unwrap();
+            let sessions = store.sessions(&owner).await.unwrap();
             if sessions
                 .iter()
                 .any(|s| s.id == issued.session.id && s.activity.as_deref() == Some("working"))

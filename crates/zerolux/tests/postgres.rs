@@ -62,7 +62,7 @@ async fn the_bootstrap_schema_applies_to_postgres_in_a_database_of_its_own() {
     for table in [
         "actors",
         "workspace",
-        "chat_sessions",
+        "sessions",
         "conversations",
         "messages",
         "deliveries",
@@ -164,14 +164,14 @@ async fn a_relink_started_during_a_stop_sees_the_stop() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     stop.execute_raw(zerolux::store::sql(
         &stop,
-        "UPDATE chat_sessions SET status='stopped',stopped_at=1 WHERE id=$1",
+        "UPDATE sessions SET status='stopped',stopped_at=1 WHERE id=$1",
         [issued.session.id.clone().into()],
     ))
     .await
     .unwrap();
     stop.commit().await.unwrap();
     assert!(matches!(relink.await.unwrap(), Err(Error::StoppedByOwner)));
-    assert_eq!(store.chat_sessions(&owner).await.unwrap().len(), 1);
+    assert_eq!(store.sessions(&owner).await.unwrap().len(), 1);
 }
 
 /// A read transaction is one snapshot: what commits meanwhile is not seen until the next.
@@ -209,7 +209,7 @@ async fn a_read_transaction_is_one_snapshot() {
                 kind: "dm".into(),
                 title: "Snapshot".into(),
                 members: vec![zerolux::model::ConversationMemberInput {
-                    actor_id: issued.actor.id.clone(),
+                    actor_id: issued.actor.as_ref().unwrap().id.clone(),
                     session_id: Some(issued.session.id.clone()),
                 }],
             },

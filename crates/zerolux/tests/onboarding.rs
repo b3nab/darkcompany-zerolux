@@ -362,7 +362,7 @@ async fn only_the_owner_renames_the_workspace_and_names_are_bytes_bounded() {
     let pool = migrated_database(&path).await;
     let token = "agent-token";
     let hash = format!("{:x}", sha2::Sha256::digest(token.as_bytes()));
-    sqlx::query("INSERT INTO chat_sessions (id, actor_id, harness, native_session_id, title, workspace, native_locator_json, token_hash, status, created_at)
+    sqlx::query("INSERT INTO sessions (id, actor_id, harness, native_session_id, title, workspace, native_locator_json, token_hash, status, created_at)
         VALUES ('s1', ?, 'pi', 'native', 'pi', '/w', '{}', ?, 'connected', 1)")
         .bind(&agent.id)
         .bind(&hash)

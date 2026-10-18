@@ -385,7 +385,7 @@ async fn two_kernels_of_one_workspace_share_sign_in_and_keep_their_own_sessions(
     }
     a.server.shutdown().await.unwrap();
     let a = Kernel::start(dir_a.path(), database.location().clone()).await;
-    let sessions = store_a.chat_sessions(&owner).await.unwrap();
+    let sessions = store_a.sessions(&owner).await.unwrap();
     let status = |id: &str| sessions.iter().find(|s| s.id == id).unwrap().status.clone();
     assert_eq!(status(&on_a.session.id), "attention");
     assert_eq!(status(&on_b.session.id), "connected");

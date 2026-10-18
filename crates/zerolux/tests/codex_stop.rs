@@ -95,7 +95,7 @@ async fn owner_stop_during_native_read_prevents_cold_resume() {
             .unwrap(),
         "the owner's Stop stands"
     );
-    let sessions = store.chat_sessions(&owner).await.unwrap();
+    let sessions = store.sessions(&owner).await.unwrap();
     assert_eq!(sessions.len(), 1);
     assert!(sessions[0].stopped_at.is_some());
 }

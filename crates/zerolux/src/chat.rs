@@ -15,8 +15,8 @@ use uuid::Uuid;
 
 use crate::{
     entity::{
-        actors, chat_outbox, chat_sessions, conversation_members, conversations, deliveries,
-        messages, tool_approvals, workspace,
+        actors, chat_outbox, conversation_members, conversations, deliveries, messages, sessions,
+        tool_approvals, workspace,
     },
     harness::Harness,
     model::*,
@@ -45,14 +45,15 @@ async fn identity_in<C: ConnectionTrait>(db: &C, who: &ChatIdentity) -> Result<(
             db,
             sql(
                 db,
-                "SELECT EXISTS(SELECT 1 FROM chat_sessions s JOIN actors a ON a.id=s.actor_id
-                WHERE s.id=$1 AND s.actor_id=$2 AND s.stopped_at IS NULL AND a.archived=FALSE)",
-                [session.into(), (&who.actor_id).into()],
+                "SELECT EXISTS(SELECT 1 FROM sessions s LEFT JOIN actors a ON a.id=s.actor_id
+                WHERE s.id=$1 AND COALESCE(s.actor_id,'')=COALESCE($2,'') AND s.stopped_at IS NULL
+                AND COALESCE(a.archived,FALSE)=FALSE)",
+                [session.into(), who.actor_id.clone().into()],
             ),
         )
         .await?
     } else {
-        actors::Entity::find_by_id(&who.actor_id)
+        actors::Entity::find_by_id(who.actor()?)
             .filter(actors::Column::Kind.eq("human"))
             .one(db)
             .await?
@@ -65,8 +66,9 @@ async fn identity_in<C: ConnectionTrait>(db: &C, who: &ChatIdentity) -> Result<(
     }
 }
 
-/// The existing agent the owner hires for `harness`, or `None` when a new one is to be named
-/// (its name validated here). An agent of another harness or owner is forbidden.
+/// The existing agent the owner hires for `harness`, or `None` for a new one named `name`
+/// (validated here) or, without a name, for a session without an agent. An agent of another
+/// harness or owner is forbidden.
 async fn hireable_in<C: ConnectionTrait>(
     db: &C,
     who: &ChatIdentity,
@@ -76,7 +78,7 @@ async fn hireable_in<C: ConnectionTrait>(
 ) -> Result<Option<Actor>> {
     match actor_id {
         Some(id) => actors::Entity::find_by_id(id)
-            .filter(actors::Column::OwnerId.eq(&who.actor_id))
+            .filter(actors::Column::OwnerId.eq(who.actor()?))
             .filter(actors::Column::Kind.eq("agent"))
             .filter(actors::Column::Archived.eq(false))
             .filter(actors::Column::Harness.eq(harness.id()))
@@ -84,6 +86,7 @@ async fn hireable_in<C: ConnectionTrait>(
             .await?
             .ok_or(Error::Forbidden)
             .map(Some),
+        None if name.trim().is_empty() => Ok(None),
         None => text(name, "Agent name", 200, true).map(|_| None),
     }
 }
@@ -113,7 +116,7 @@ async fn access_in<C: ConnectionTrait>(
             AND m.actor_id=$2 AND ($3 IS NULL OR m.session_id=$3))",
             [
                 conversation.into(),
-                (&who.actor_id).into(),
+                who.actor_id.clone().into(),
                 who.session_id.clone().into(),
             ],
         ),
@@ -130,7 +133,7 @@ async fn access_in<C: ConnectionTrait>(
 /// Stop notes the runtime sets on its own account; an owner's Stop replaces them.
 pub const LINK_FAILED: &str = "The native link could not be confirmed and its token was revoked. Check the harness before explicitly pairing again; native cancellation was not confirmed.";
 
-const SESSIONS: &str = "SELECT s.*,(SELECT count(*) FROM deliveries d WHERE d.session_id=s.id AND d.status='stored') AS waiting FROM chat_sessions s";
+const SESSIONS: &str = "SELECT s.*,(SELECT count(*) FROM deliveries d WHERE d.session_id=s.id AND d.status='stored') AS waiting FROM sessions s";
 
 async fn session_in<C: ConnectionTrait>(db: &C, id: &str) -> Result<ChatSession> {
     fetch_one(
@@ -142,8 +145,8 @@ async fn session_in<C: ConnectionTrait>(db: &C, id: &str) -> Result<ChatSession>
 }
 
 /// The row behind a session, for what the API never shows (locator, token hash).
-async fn session_row_in<C: ConnectionTrait>(db: &C, id: &str) -> Result<chat_sessions::Model> {
-    chat_sessions::Entity::find_by_id(id)
+async fn session_row_in<C: ConnectionTrait>(db: &C, id: &str) -> Result<sessions::Model> {
+    sessions::Entity::find_by_id(id)
         .one(db)
         .await?
         .ok_or(Error::NotFound)
@@ -254,7 +257,7 @@ async fn conversations_in<C: ConnectionTrait>(
             ON m.conversation_id IN (c.id, c.parent_id)
             WHERE m.actor_id=$1 AND ($2 IS NULL OR m.session_id=$2)
             GROUP BY c.id, c.created_at ORDER BY c.created_at,c.id",
-            [(&who.actor_id).into(), who.session_id.clone().into()],
+            [who.actor_id.clone().into(), who.session_id.clone().into()],
         ),
     )
     .await?;
@@ -318,8 +321,10 @@ async fn personal_event<C: ConnectionTrait>(
         db,
         sql(
             db,
-            "SELECT s.actor_id FROM chat_sessions s WHERE s.id=$1
-            UNION SELECT a.owner_id AS actor_id FROM actors a JOIN chat_sessions s ON s.actor_id=a.id WHERE s.id=$1",
+            "SELECT COALESCE(s.actor_id,s.id) AS actor_id FROM sessions s WHERE s.id=$1
+            UNION SELECT a.owner_id AS actor_id FROM actors a JOIN sessions s ON s.actor_id=a.id WHERE s.id=$1
+            UNION SELECT h.id AS actor_id FROM actors h JOIN sessions s ON s.actor_id IS NULL
+            WHERE s.id=$1 AND h.kind='human'",
             [session_id.into()],
         ),
     )
@@ -369,9 +374,9 @@ async fn agent_session_in<C: ConnectionTrait>(
         db,
         sql(
             db,
-            "SELECT EXISTS(SELECT 1 FROM chat_sessions s JOIN actors a ON a.id=s.actor_id
+            "SELECT EXISTS(SELECT 1 FROM sessions s JOIN actors a ON a.id=s.actor_id
             WHERE s.id=$1 AND s.actor_id=$2 AND s.stopped_at IS NULL AND a.archived=FALSE AND a.owner_id=$3)",
-            [session_id.into(), actor_id.into(), (&who.actor_id).into()],
+            [session_id.into(), actor_id.into(), who.actor()?.into()],
         ),
     )
     .await?;
@@ -414,19 +419,16 @@ async fn read_earlier_in<C: ConnectionTrait>(db: &C, delivery_id: &str) -> Resul
 
 /// Revokes a live session and settles its approvals. `note` is the runtime's own stop note.
 async fn stop_in<C: ConnectionTrait>(db: &C, id: &str, note: Option<&str>) -> Result<()> {
-    chat_sessions::Entity::update_many()
-        .col_expr(chat_sessions::Column::Status, Expr::value("stopped"))
+    sessions::Entity::update_many()
+        .col_expr(sessions::Column::Status, Expr::value("stopped"))
+        .col_expr(sessions::Column::StoppedAt, Expr::value(Some(now_ms())))
+        .col_expr(sessions::Column::AttentionReason, Expr::value(note))
+        .col_expr(sessions::Column::Activity, Expr::value(None::<String>))
         .col_expr(
-            chat_sessions::Column::StoppedAt,
-            Expr::value(Some(now_ms())),
-        )
-        .col_expr(chat_sessions::Column::AttentionReason, Expr::value(note))
-        .col_expr(chat_sessions::Column::Activity, Expr::value(None::<String>))
-        .col_expr(
-            chat_sessions::Column::ActivityConversationId,
+            sessions::Column::ActivityConversationId,
             Expr::value(None::<String>),
         )
-        .filter(chat_sessions::Column::Id.eq(id))
+        .filter(sessions::Column::Id.eq(id))
         .exec(db)
         .await?;
     resolve_approvals_in(db, id, "Agent stopped").await?;
@@ -473,7 +475,8 @@ async fn ensure_member<C: ConnectionTrait>(
 }
 
 fn owns_delivery(who: &ChatIdentity, delivery: &ChatDelivery) -> Result<()> {
-    if who.session_id.as_deref() == Some(&delivery.session_id) && who.actor_id == delivery.actor_id
+    if who.session_id.as_deref() == Some(&delivery.session_id)
+        && who.actor_id.as_deref() == Some(delivery.actor_id.as_str())
     {
         Ok(())
     } else {
@@ -484,7 +487,7 @@ fn owns_delivery(who: &ChatIdentity, delivery: &ChatDelivery) -> Result<()> {
 #[derive(FromQueryResult)]
 struct ApprovalRow {
     id: String,
-    actor_id: String,
+    actor_id: Option<String>,
     session_id: String,
     conversation_id: Option<String>,
     delivery_id: Option<String>,
@@ -505,7 +508,7 @@ async fn approval_in<C: ConnectionTrait>(db: &C, id: &str) -> Result<ChatApprova
         sql(
             db,
             "SELECT a.*,s.actor_id,m.conversation_id FROM tool_approvals a
-            JOIN chat_sessions s ON s.id=a.session_id
+            JOIN sessions s ON s.id=a.session_id
             LEFT JOIN deliveries d ON d.id=a.delivery_id LEFT JOIN messages m ON m.id=d.message_id
             WHERE a.id=$1",
             [id.into()],
@@ -560,12 +563,12 @@ fn owns_approval(who: &ChatIdentity, approval: &ChatApproval) -> Result<()> {
 impl Store {
     pub async fn chat_identity(&self, token: Option<&str>) -> Result<ChatIdentity> {
         if let Some(token) = token {
-            let session: Option<chat_sessions::Model> = fetch_one(
+            let session: Option<sessions::Model> = fetch_one(
                 &self.db,
                 sql(
                     &self.db,
-                    "SELECT s.* FROM chat_sessions s
-                    JOIN actors a ON a.id=s.actor_id WHERE s.token_hash=$1 AND s.stopped_at IS NULL AND a.archived=FALSE",
+                    "SELECT s.* FROM sessions s LEFT JOIN actors a ON a.id=s.actor_id
+                    WHERE s.token_hash=$1 AND s.stopped_at IS NULL AND COALESCE(a.archived,FALSE)=FALSE",
                     [token_hash(token).into()],
                 ),
             )
@@ -582,7 +585,7 @@ impl Store {
                 .await?
                 .ok_or(Error::NotFound)?;
             Ok(ChatIdentity {
-                actor_id: owner.id,
+                actor_id: Some(owner.id),
                 session_id: None,
             })
         }
@@ -627,13 +630,14 @@ impl Store {
         )
         .await?
         {
-            Some(actor) => actor,
-            None => {
+            Some(actor) => Some(actor),
+            None if input.name.trim().is_empty() => None,
+            None => Some(
                 actors::ActiveModel {
                     id: Set(Uuid::new_v4().to_string()),
                     name: Set(input.name.trim().to_owned()),
                     kind: Set("agent".into()),
-                    owner_id: Set(Some(who.actor_id.clone())),
+                    owner_id: Set(Some(who.actor()?.to_owned())),
                     harness: Set(Some(input.harness.id().to_owned())),
                     archived: Set(false),
                     name_confirmed: Set(false),
@@ -646,27 +650,17 @@ impl Store {
                     sandbox: Set(None),
                 }
                 .insert(&tx)
-                .await?
-            }
+                .await?,
+            ),
         };
-        // One row per native session of an agent: a relink, a recovery or the owner's new
-        // decision continues it, with a new token; the previous one stops working at once.
-        let existing = chat_sessions::Entity::find()
-            .filter(chat_sessions::Column::ActorId.eq(&actor.id))
-            .filter(chat_sessions::Column::Harness.eq(input.harness.id()))
-            .filter(chat_sessions::Column::NativeSessionId.eq(&native_id))
+        let actor_id = actor.as_ref().map(|actor| actor.id.clone());
+        // One row per native session: a relink, a recovery or the owner's new decision
+        // continues it, with a new token; the previous one stops working at once.
+        let existing = sessions::Entity::find()
+            .filter(sessions::Column::Harness.eq(input.harness.id()))
+            .filter(sessions::Column::NativeSessionId.eq(&native_id))
             .one(&tx)
             .await?;
-        let live_elsewhere = chat_sessions::Entity::find()
-            .filter(chat_sessions::Column::Harness.eq(input.harness.id()))
-            .filter(chat_sessions::Column::NativeSessionId.eq(&native_id))
-            .filter(chat_sessions::Column::StoppedAt.is_null())
-            .filter(chat_sessions::Column::ActorId.ne(&actor.id))
-            .one(&tx)
-            .await?;
-        if live_elsewhere.is_some() {
-            return Err(Error::Conflict);
-        }
         let token = random_token();
         let id = match existing {
             Some(row) => {
@@ -677,9 +671,18 @@ impl Store {
                     (false, false) => return Err(Error::Conflict),
                     _ => {}
                 }
-                chat_sessions::ActiveModel {
+                // A session works for one agent; one without may be given to an agent.
+                if row.actor_id.is_some() && row.actor_id != actor_id {
+                    return Err(Error::Conflict);
+                }
+                sessions::ActiveModel {
                     id: Set(row.id.clone()),
-                    title: Set(title),
+                    // The owner's decision names the agent; a relink keeps the session's.
+                    actor_id: if input.resume {
+                        sea_orm::ActiveValue::NotSet
+                    } else {
+                        Set(actor_id.clone())
+                    },
                     workspace: Set(workspace),
                     native_locator_json: Set(input.native_locator.to_string()),
                     token_hash: Set(token_hash(&token)),
@@ -700,9 +703,9 @@ impl Store {
             None if input.resume => return Err(Error::StoppedByOwner),
             None => {
                 let id = Uuid::new_v4().to_string();
-                chat_sessions::ActiveModel {
+                sessions::ActiveModel {
                     id: Set(id.clone()),
-                    actor_id: Set(actor.id.clone()),
+                    actor_id: Set(actor_id.clone()),
                     harness: Set(input.harness.id().to_owned()),
                     native_session_id: Set(native_id.clone()),
                     title: Set(title),
@@ -716,6 +719,8 @@ impl Store {
                     activity: Set(None),
                     activity_conversation_id: Set(None),
                     host_id: Set(self.host.clone()),
+                    pinned_at: Set(None),
+                    archived_at: Set(None),
                 }
                 .insert(&tx)
                 .await?;
@@ -732,18 +737,30 @@ impl Store {
         })
     }
 
+    /// The people in the workspace: whom notices about every session reach.
+    pub(crate) async fn people(&self) -> Result<Vec<String>> {
+        Ok(actors::Entity::find()
+            .filter(actors::Column::Kind.eq("human"))
+            .filter(actors::Column::Archived.eq(false))
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(|actor| actor.id)
+            .collect())
+    }
+
     /// A session's row, for reading its native record: every workspace identity may.
     pub(crate) async fn observed_session(
         &self,
         who: &ChatIdentity,
         id: &str,
-    ) -> Result<chat_sessions::Model> {
+    ) -> Result<sessions::Model> {
         let tx = self.read().await?;
         identity_in(&tx, who).await?;
         session_row_in(&tx, id).await
     }
 
-    pub async fn chat_sessions(&self, who: &ChatIdentity) -> Result<Vec<ChatSession>> {
+    pub async fn sessions(&self, who: &ChatIdentity) -> Result<Vec<ChatSession>> {
         let tx = self.read().await?;
         identity_in(&tx, who).await?;
         fetch_all(
@@ -760,14 +777,14 @@ impl Store {
     /// Called once when the kernel runtime starts, not on every database open, for the
     /// sessions of this host only: another kernel's are its own to recover. Persisted
     /// presence is not evidence that an adapter is still attached after restart.
-    pub async fn recover_chat_sessions(&self) -> Result<()> {
+    pub async fn recover_sessions(&self) -> Result<()> {
         let reason = "The kernel restarted. Reconnect this session before sending more work.";
         let tx = self.write().await?;
         let ids = ids(
             &tx,
             sql(
                 &tx,
-                "UPDATE chat_sessions SET status='attention',attention_reason=$1,activity=NULL,activity_conversation_id=NULL
+                "UPDATE sessions SET status='attention',attention_reason=$1,activity=NULL,activity_conversation_id=NULL
                 WHERE stopped_at IS NULL AND (status!='attention' OR attention_reason IS NULL OR attention_reason!=$1)
                 AND (($2 IS NULL AND host_id IS NULL) OR host_id=$2)
                 RETURNING id",
@@ -799,15 +816,15 @@ impl Store {
             return Err(Error::Invalid("Invalid pi locator".into()));
         }
         let tx = self.write().await?;
-        let changed = chat_sessions::Entity::update_many()
+        let changed = sessions::Entity::update_many()
             .col_expr(
-                chat_sessions::Column::NativeLocatorJson,
+                sessions::Column::NativeLocatorJson,
                 Expr::value(locator.to_string()),
             )
-            .filter(chat_sessions::Column::Id.eq(id))
-            .filter(chat_sessions::Column::Harness.eq("pi"))
-            .filter(chat_sessions::Column::NativeSessionId.eq(native))
-            .filter(chat_sessions::Column::StoppedAt.is_null())
+            .filter(sessions::Column::Id.eq(id))
+            .filter(sessions::Column::Harness.eq("pi"))
+            .filter(sessions::Column::NativeSessionId.eq(native))
+            .filter(sessions::Column::StoppedAt.is_null())
             .exec(&tx)
             .await?
             .rows_affected;
@@ -839,25 +856,27 @@ impl Store {
                 "Only an owned Claude runner can renew this link".into(),
             ));
         }
-        let actor = actors::Entity::find_by_id(&session.actor_id)
-            .filter(actors::Column::OwnerId.eq(&who.actor_id))
-            .filter(actors::Column::Kind.eq("agent"))
-            .filter(actors::Column::Archived.eq(false))
-            .one(&tx)
-            .await?
-            .ok_or(Error::Forbidden)?;
+        let actor = match &session.actor_id {
+            Some(actor) => Some(
+                actors::Entity::find_by_id(actor)
+                    .filter(actors::Column::OwnerId.eq(who.actor()?))
+                    .filter(actors::Column::Kind.eq("agent"))
+                    .filter(actors::Column::Archived.eq(false))
+                    .one(&tx)
+                    .await?
+                    .ok_or(Error::Forbidden)?,
+            ),
+            None => None,
+        };
         let token = random_token();
-        chat_sessions::Entity::update_many()
+        sessions::Entity::update_many()
+            .col_expr(sessions::Column::TokenHash, Expr::value(token_hash(&token)))
+            .col_expr(sessions::Column::Status, Expr::value("connecting"))
             .col_expr(
-                chat_sessions::Column::TokenHash,
-                Expr::value(token_hash(&token)),
-            )
-            .col_expr(chat_sessions::Column::Status, Expr::value("connecting"))
-            .col_expr(
-                chat_sessions::Column::AttentionReason,
+                sessions::Column::AttentionReason,
                 Expr::value(None::<String>),
             )
-            .filter(chat_sessions::Column::Id.eq(id))
+            .filter(sessions::Column::Id.eq(id))
             .exec(&tx)
             .await?;
         personal_event(&tx, "session.changed", id, json!({"session_id":id})).await?;
@@ -903,7 +922,7 @@ impl Store {
         if session_in(&tx, id).await?.stopped_at.is_some() {
             return Ok(true);
         }
-        chat_sessions::ActiveModel {
+        sessions::ActiveModel {
             id: Set(id.to_owned()),
             token_hash: Set(token_hash(&random_token())),
             status: Set("attention".into()),
@@ -923,10 +942,10 @@ impl Store {
     /// not stopped. Checked before any native call that would start work, as
     /// `hire_chat_session` checks it again when it issues the new token.
     pub async fn relink_wanted(&self, harness: &str, native_session_id: &str) -> Result<bool> {
-        Ok(chat_sessions::Entity::find()
-            .filter(chat_sessions::Column::Harness.eq(harness))
-            .filter(chat_sessions::Column::NativeSessionId.eq(native_session_id))
-            .filter(chat_sessions::Column::StoppedAt.is_null())
+        Ok(sessions::Entity::find()
+            .filter(sessions::Column::Harness.eq(harness))
+            .filter(sessions::Column::NativeSessionId.eq(native_session_id))
+            .filter(sessions::Column::StoppedAt.is_null())
             .one(&self.db)
             .await?
             .is_some())
@@ -937,6 +956,43 @@ impl Store {
         let tx = self.read().await?;
         owner_in(&tx, who).await?;
         session_in(&tx, id).await
+    }
+
+    /// The owner names, pins or archives a session.
+    pub async fn change_session(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+        input: SessionChange,
+    ) -> Result<ChatSession> {
+        let title = input
+            .title
+            .map(|title| text(&title, "Session title", 500, true))
+            .transpose()?;
+        if title.is_none() && input.pinned.is_none() && input.archived.is_none() {
+            return Err(Error::Invalid("Nothing to change".into()));
+        }
+        let tx = self.write().await?;
+        owner_in(&tx, who).await?;
+        let existing = session_in(&tx, id).await?;
+        let now = now_ms();
+        let mut update = sessions::Entity::update_many().filter(sessions::Column::Id.eq(id));
+        if let Some(title) = title {
+            update = update.col_expr(sessions::Column::Title, Expr::value(title));
+        }
+        if let Some(pinned) = input.pinned {
+            let at = pinned.then(|| existing.pinned_at.unwrap_or(now));
+            update = update.col_expr(sessions::Column::PinnedAt, Expr::value(at));
+        }
+        if let Some(archived) = input.archived {
+            let at = archived.then(|| existing.archived_at.unwrap_or(now));
+            update = update.col_expr(sessions::Column::ArchivedAt, Expr::value(at));
+        }
+        update.exec(&tx).await?;
+        personal_event(&tx, "session.changed", id, json!({"session_id":id})).await?;
+        let session = session_in(&tx, id).await?;
+        tx.commit().await?;
+        Ok(session)
     }
 
     /// Persist a public, credential-free stop outcome supplied by the runtime.
@@ -955,12 +1011,9 @@ impl Store {
             return Err(Error::Conflict);
         }
         if existing.attention_reason.as_deref() != Some(reason.as_str()) {
-            chat_sessions::Entity::update_many()
-                .col_expr(
-                    chat_sessions::Column::AttentionReason,
-                    Expr::value(Some(reason)),
-                )
-                .filter(chat_sessions::Column::Id.eq(id))
+            sessions::Entity::update_many()
+                .col_expr(sessions::Column::AttentionReason, Expr::value(Some(reason)))
+                .filter(sessions::Column::Id.eq(id))
                 .exec(&tx)
                 .await?;
             personal_event(&tx, "session.changed", id, json!({"session_id":id})).await?;
@@ -989,10 +1042,10 @@ impl Store {
             return Err(Error::Conflict);
         }
         if existing.status != input.status || existing.attention_reason != reason {
-            chat_sessions::Entity::update_many()
-                .col_expr(chat_sessions::Column::Status, Expr::value(input.status))
-                .col_expr(chat_sessions::Column::AttentionReason, Expr::value(reason))
-                .filter(chat_sessions::Column::Id.eq(id))
+            sessions::Entity::update_many()
+                .col_expr(sessions::Column::Status, Expr::value(input.status))
+                .col_expr(sessions::Column::AttentionReason, Expr::value(reason))
+                .filter(sessions::Column::Id.eq(id))
                 .exec(&tx)
                 .await?;
             personal_event(&tx, "session.changed", id, json!({"session_id":id})).await?;
@@ -1026,16 +1079,17 @@ impl Store {
         }
         if let Some(conversation) = &conversation {
             // Its own conversations only: a session cannot claim work on a chat it is not in.
-            ensure_member(&tx, conversation, &existing.actor_id, id).await?;
+            let actor = existing.actor_id.as_deref().ok_or(Error::Forbidden)?;
+            ensure_member(&tx, conversation, actor, id).await?;
         }
         if existing.activity != activity || existing.activity_conversation_id != conversation {
-            chat_sessions::Entity::update_many()
-                .col_expr(chat_sessions::Column::Activity, Expr::value(activity))
+            sessions::Entity::update_many()
+                .col_expr(sessions::Column::Activity, Expr::value(activity))
                 .col_expr(
-                    chat_sessions::Column::ActivityConversationId,
+                    sessions::Column::ActivityConversationId,
                     Expr::value(conversation),
                 )
-                .filter(chat_sessions::Column::Id.eq(id))
+                .filter(sessions::Column::Id.eq(id))
                 .exec(&tx)
                 .await?;
             personal_event(&tx, "session.changed", id, json!({"session_id":id})).await?;
@@ -1065,9 +1119,10 @@ impl Store {
         }
         let tx = self.write().await?;
         owner_in(&tx, who).await?;
-        if !input.members.iter().any(|m| m.actor_id == who.actor_id) {
+        let me = who.actor()?.to_owned();
+        if !input.members.iter().any(|m| m.actor_id == me) {
             input.members.push(ConversationMemberInput {
-                actor_id: who.actor_id.clone(),
+                actor_id: me.clone(),
                 session_id: None,
             });
         }
@@ -1084,7 +1139,7 @@ impl Store {
             ));
         }
         for member in &input.members {
-            if member.actor_id == who.actor_id {
+            if member.actor_id == me {
                 if member.session_id.is_some() {
                     return Err(Error::Invalid(
                         "Human members do not have agent sessions".into(),
@@ -1150,7 +1205,7 @@ impl Store {
         let actor = actors::Entity::update_many()
             .col_expr(actors::Column::Name, Expr::value(name))
             .filter(actors::Column::Id.eq(id))
-            .filter(actors::Column::OwnerId.eq(&who.actor_id))
+            .filter(actors::Column::OwnerId.eq(who.actor()?))
             .filter(actors::Column::Kind.eq("agent"))
             .filter(actors::Column::Archived.eq(false))
             .exec_with_returning(&tx)
@@ -1178,7 +1233,7 @@ impl Store {
         let tx = self.read().await?;
         owner_in(&tx, who).await?;
         let actor = actors::Entity::find_by_id(id)
-            .filter(actors::Column::OwnerId.eq(&who.actor_id))
+            .filter(actors::Column::OwnerId.eq(who.actor()?))
             .filter(actors::Column::Kind.eq("agent"))
             .filter(actors::Column::Archived.eq(false))
             .one(&tx)
@@ -1188,8 +1243,8 @@ impl Store {
         Ok(actor)
     }
 
-    /// Record a confirmed native snapshot on that session. The agent shows a value only
-    /// when all its active sessions agree. A late reply cannot change a stopped session.
+    /// Record a confirmed native snapshot on that session, for its relaunch. A late reply
+    /// cannot change a stopped session.
     pub(crate) async fn observe_native_settings(
         &self,
         session_id: &str,
@@ -1197,9 +1252,9 @@ impl Store {
         values: &AgentSettings,
     ) -> Result<()> {
         let tx = self.write().await?;
-        let session = chat_sessions::Entity::find_by_id(session_id)
-            .filter(chat_sessions::Column::NativeSessionId.eq(native_id))
-            .filter(chat_sessions::Column::StoppedAt.is_null())
+        let session = sessions::Entity::find_by_id(session_id)
+            .filter(sessions::Column::NativeSessionId.eq(native_id))
+            .filter(sessions::Column::StoppedAt.is_null())
             .one(&tx)
             .await?
             .ok_or(Error::StoppedByOwner)?;
@@ -1211,55 +1266,21 @@ impl Store {
             .map_err(|e| Error::Database(DbErr::Json(e.to_string())))?;
         if locator["settings"] != value {
             locator["settings"] = value;
-            chat_sessions::Entity::update_many()
-                .filter(chat_sessions::Column::Id.eq(session_id))
+            sessions::Entity::update_many()
+                .filter(sessions::Column::Id.eq(session_id))
                 .col_expr(
-                    chat_sessions::Column::NativeLocatorJson,
+                    sessions::Column::NativeLocatorJson,
                     Expr::value(locator.to_string()),
                 )
                 .exec(&tx)
                 .await?;
         }
-        let linked = chat_sessions::Entity::find()
-            .filter(chat_sessions::Column::ActorId.eq(&session.actor_id))
-            .filter(chat_sessions::Column::StoppedAt.is_null())
-            .all(&tx)
-            .await?;
-        let snapshots = linked
-            .iter()
-            .map(|session| {
-                decode::<Value>(&session.native_locator_json)
-                    .map(|locator| locator["settings"].clone())
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let common = |field: &str| -> Option<String> {
-            let first = snapshots.first()?[field].as_str()?;
-            snapshots
-                .iter()
-                .all(|snapshot| snapshot[field].as_str() == Some(first))
-                .then(|| first.to_owned())
-        };
-        actors::Entity::update_many()
-            .filter(actors::Column::Id.eq(&session.actor_id))
-            .col_expr(actors::Column::Model, Expr::value(common("model")))
-            .col_expr(actors::Column::Effort, Expr::value(common("effort")))
-            .col_expr(
-                actors::Column::PermissionMode,
-                Expr::value(common("permission_mode")),
-            )
-            .col_expr(
-                actors::Column::ApprovalPolicy,
-                Expr::value(common("approval_policy")),
-            )
-            .col_expr(actors::Column::Sandbox, Expr::value(common("sandbox")))
-            .exec(&tx)
-            .await?;
         tx.commit().await?;
         Ok(())
     }
 
-    /// What an agent runs with, set by the owner. The harness's own settings go only to
-    /// that harness; names are the harnesses' own values.
+    /// What an agent's new sessions start with, set by the owner. The harness's own settings
+    /// go only to that harness; names are the harnesses' own values.
     pub async fn set_agent_settings(
         &self,
         who: &ChatIdentity,
@@ -1269,7 +1290,7 @@ impl Store {
         let tx = self.write().await?;
         owner_in(&tx, who).await?;
         let actor = actors::Entity::find_by_id(id)
-            .filter(actors::Column::OwnerId.eq(&who.actor_id))
+            .filter(actors::Column::OwnerId.eq(who.actor()?))
             .filter(actors::Column::Kind.eq("agent"))
             .filter(actors::Column::Archived.eq(false))
             .one(&tx)
@@ -1353,30 +1374,6 @@ impl Store {
         Ok(actor)
     }
 
-    /// What the harness reported for a linked session: the agent's model and effort, as
-    /// they are now. Nothing the owner set is overwritten with nothing.
-    pub async fn observe_agent_settings(
-        &self,
-        actor_id: &str,
-        model: Option<&str>,
-        effort: Option<&str>,
-    ) -> Result<()> {
-        if model.is_none() && effort.is_none() {
-            return Ok(());
-        }
-        let tx = self.write().await?;
-        let mut update = actors::Entity::update_many().filter(actors::Column::Id.eq(actor_id));
-        if let Some(model) = model.filter(|m| !m.is_empty()) {
-            update = update.col_expr(actors::Column::Model, Expr::value(Some(model.to_owned())));
-        }
-        if let Some(effort) = effort.filter(|e| !e.is_empty()) {
-            update = update.col_expr(actors::Column::Effort, Expr::value(Some(effort.to_owned())));
-        }
-        update.exec(&tx).await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
     /// Opens a thread under `parent` rooted at a message, or joins the open one rooted there:
     /// one transaction, so two callers meet in the same thread with both rosters merged. The
     /// caller and every participant must be agents of the parent; anything else refuses the
@@ -1413,7 +1410,7 @@ impl Store {
         .ok_or_else(|| Error::Invalid("The root must be a message of this chat".into()))?;
         let parent_members = members_in(&tx, parent).await?;
         let mut roster: Vec<String> = input.participants;
-        roster.push(who.actor_id.clone());
+        roster.push(who.actor()?.to_owned());
         roster.sort();
         roster.dedup();
         for actor in &roster {
@@ -1492,9 +1489,9 @@ impl Store {
         revision: &str,
     ) -> Result<bool> {
         let tx = self.write().await?;
-        let session = chat_sessions::Entity::find_by_id(session_id)
-            .filter(chat_sessions::Column::NativeSessionId.eq(native_id))
-            .filter(chat_sessions::Column::StoppedAt.is_null())
+        let session = sessions::Entity::find_by_id(session_id)
+            .filter(sessions::Column::NativeSessionId.eq(native_id))
+            .filter(sessions::Column::StoppedAt.is_null())
             .one(&tx)
             .await?
             .ok_or(Error::StoppedByOwner)?;
@@ -1507,10 +1504,10 @@ impl Store {
             return Ok(false);
         }
         locator["integration_update"] = intent;
-        chat_sessions::Entity::update_many()
-            .filter(chat_sessions::Column::Id.eq(session_id))
+        sessions::Entity::update_many()
+            .filter(sessions::Column::Id.eq(session_id))
             .col_expr(
-                chat_sessions::Column::NativeLocatorJson,
+                sessions::Column::NativeLocatorJson,
                 Expr::value(locator.to_string()),
             )
             .exec(&tx)
@@ -1527,7 +1524,7 @@ impl Store {
             return Err(Error::Invalid("Only a thread can be closed".into()));
         }
         let participant = existing.members.iter().any(|m| {
-            m.actor_id == who.actor_id
+            who.actor_id.as_deref() == Some(m.actor_id.as_str())
                 && (who.session_id.is_none() || m.session_id == who.session_id)
         });
         if !participant && !who.is_owner() {
@@ -1677,7 +1674,7 @@ impl Store {
         access_in(&tx, who, id).await?;
         let members = members_in(&tx, id).await?;
         if !members.iter().any(|m| {
-            m.actor_id == who.actor_id
+            who.actor_id.as_deref() == Some(m.actor_id.as_str())
                 && (who.session_id.is_none() || m.session_id == who.session_id)
         }) {
             // The audience of a thread reads it; only its participants write in it.
@@ -1699,7 +1696,7 @@ impl Store {
         if let Some(existing_id) = existing_id {
             let message = message_in(&tx, &existing_id).await?;
             if message.conversation_id != id
-                || message.author_id != who.actor_id
+                || who.actor_id.as_deref() != Some(message.author_id.as_str())
                 || message.text != input.text
                 || message.reply_to_delivery_id != input.reply_to_delivery_id
             {
@@ -1726,19 +1723,19 @@ impl Store {
                 &tx,
                 sql(
                     &tx,
-                    "SELECT EXISTS(SELECT 1 FROM chat_sessions old JOIN chat_sessions new
+                    "SELECT EXISTS(SELECT 1 FROM sessions old JOIN sessions new
                     ON new.actor_id=old.actor_id AND new.harness=old.harness
                     AND new.native_session_id=old.native_session_id
                     WHERE old.id=$1 AND new.id=$2 AND old.actor_id=$3)",
                     [
                         (&delivery.session_id).into(),
                         who.session_id.clone().into(),
-                        (&who.actor_id).into(),
+                        who.actor()?.into(),
                     ],
                 ),
             )
             .await?;
-            if !same_context || delivery.actor_id != who.actor_id {
+            if !same_context || who.actor_id.as_deref() != Some(delivery.actor_id.as_str()) {
                 return Err(Error::Forbidden);
             }
             let original = message_in(&tx, &delivery.message_id).await?;
@@ -1760,7 +1757,7 @@ impl Store {
             id: Set(input.id.clone()),
             conversation_id: Set(id.to_owned()),
             seq: Set(seq),
-            author_id: Set(who.actor_id.clone()),
+            author_id: Set(who.actor()?.to_owned()),
             text: Set(input.text.clone()),
             reply_to_delivery_id: Set(input.reply_to_delivery_id.clone()),
             created_at: Set(now),
@@ -1768,7 +1765,10 @@ impl Store {
         .insert(&tx)
         .await?;
         // Every message reaches every other agent member; each agent decides whether to reply.
-        for member in members.iter().filter(|m| m.actor_id != who.actor_id) {
+        for member in members
+            .iter()
+            .filter(|m| who.actor_id.as_deref() != Some(m.actor_id.as_str()))
+        {
             let Some(session) = &member.session_id else {
                 continue;
             };
@@ -1840,7 +1840,7 @@ impl Store {
                 WHERE cm.conversation_id=m.conversation_id AND cm.actor_id=$2 AND cm.session_id=$1)
                 AND NOT (d.status='stored' AND (c.paused OR COALESCE(p.paused,FALSE)))
                 ORDER BY d.created_at,d.id",
-                [id.into(), (&who.actor_id).into()],
+                [id.into(), who.actor_id.clone().into()],
             ),
         )
         .await?;
@@ -1885,7 +1885,7 @@ impl Store {
             &tx,
             sql(
                 &tx,
-                "SELECT EXISTS(SELECT 1 FROM chat_sessions s,conversations c
+                "SELECT EXISTS(SELECT 1 FROM sessions s,conversations c
                 LEFT JOIN conversations p ON p.id=c.parent_id
                 WHERE s.id=$1 AND s.status='connected' AND s.stopped_at IS NULL AND c.id=$2 AND c.paused=FALSE
                 AND COALESCE(p.paused,FALSE)=FALSE)",

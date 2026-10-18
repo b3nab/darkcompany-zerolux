@@ -48,15 +48,31 @@ pub struct Workspace {
     pub onboarding_required: bool,
 }
 
+/// The owner, or a session through its token. A session may belong to an agent.
 #[derive(Debug, Clone)]
 pub struct ChatIdentity {
-    pub actor_id: String,
+    pub actor_id: Option<String>,
     pub session_id: Option<String>,
 }
 
 impl ChatIdentity {
     pub fn is_owner(&self) -> bool {
         self.session_id.is_none()
+    }
+
+    /// Who takes part in chats: the owner, or an agent through its session.
+    pub fn actor(&self) -> Result<&str, crate::store::Error> {
+        self.actor_id
+            .as_deref()
+            .ok_or(crate::store::Error::Forbidden)
+    }
+
+    /// Whom notices reach: the actor, or a session without an agent.
+    pub fn addressee(&self) -> &str {
+        self.actor_id
+            .as_deref()
+            .or(self.session_id.as_deref())
+            .unwrap_or_default()
     }
 }
 
@@ -82,9 +98,14 @@ impl ClaudePermissionMode {
 
 #[derive(Deserialize)]
 pub struct CreateClaudeSession {
+    #[serde(default)]
     pub name: String,
     pub actor_id: Option<String>,
     pub workspace: String,
+    /// Work in a new git worktree of the folder's repository, on this branch (empty: one
+    /// named by ZeroLux).
+    #[serde(default)]
+    pub worktree: Option<String>,
     #[serde(default)]
     pub permission_mode: Option<ClaudePermissionMode>,
     #[serde(default)]
@@ -97,9 +118,14 @@ pub struct CreateClaudeSession {
 /// user's own Codex configuration: ZeroLux names no policy, sandbox or model of its own.
 #[derive(Deserialize)]
 pub struct CreateCodexSession {
+    #[serde(default)]
     pub name: String,
     pub actor_id: Option<String>,
     pub workspace: String,
+    /// Work in a new git worktree of the folder's repository, on this branch (empty: one
+    /// named by ZeroLux).
+    #[serde(default)]
+    pub worktree: Option<String>,
     #[serde(default)]
     pub approval_policy: Option<CodexApprovalPolicy>,
     #[serde(default)]
@@ -114,9 +140,14 @@ pub struct CreateCodexSession {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreatePiSession {
+    #[serde(default)]
     pub name: String,
     pub actor_id: Option<String>,
     pub workspace: String,
+    /// Work in a new git worktree of the folder's repository, on this branch (empty: one
+    /// named by ZeroLux).
+    #[serde(default)]
+    pub worktree: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -143,6 +174,7 @@ pub enum CodexSandbox {
 
 // Internal input, populated from verified discovery rather than the HTTP body.
 pub struct HireChatSession {
+    /// A new agent's name; with neither a name nor `actor_id` the session has no agent.
     pub name: String,
     pub actor_id: Option<String>,
     pub harness: crate::harness::Harness,
@@ -156,7 +188,7 @@ pub struct HireChatSession {
 
 // Deliberately not Serialize or Debug: only the adapter receives the token.
 pub struct IssuedChatSession {
-    pub actor: Actor,
+    pub actor: Option<Actor>,
     pub session: ChatSession,
     pub token: String,
 }
@@ -186,7 +218,8 @@ impl TryFrom<String> for ChatSessionOrigin {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatSession {
     pub id: String,
-    pub actor_id: String,
+    /// The agent this session works for; none for a session of the owner's own.
+    pub actor_id: Option<String>,
     pub harness: String,
     #[serde(default)]
     pub origin: ChatSessionOrigin,
@@ -204,9 +237,12 @@ pub struct ChatSession {
     pub waiting: i64,
     /// The kernel host whose native process this is; only that kernel links and relinks it.
     pub host_id: Option<String>,
+    pub created_at: i64,
+    pub pinned_at: Option<i64>,
+    pub archived_at: Option<i64>,
 }
 
-/// A `chat_sessions` row with its `waiting` count; the locator is read only for its origin
+/// A `sessions` row with its `waiting` count; the locator is read only for its origin
 /// and the token hash never leaves the database.
 impl FromQueryResult for ChatSession {
     fn from_query_result(
@@ -231,8 +267,20 @@ impl FromQueryResult for ChatSession {
             activity_conversation_id: row.try_get(pre, "activity_conversation_id")?,
             waiting: row.try_get(pre, "waiting")?,
             host_id: row.try_get(pre, "host_id")?,
+            created_at: row.try_get(pre, "created_at")?,
+            pinned_at: row.try_get(pre, "pinned_at")?,
+            archived_at: row.try_get(pre, "archived_at")?,
         })
     }
+}
+
+/// What the owner changes about a session; what is omitted stays.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionChange {
+    pub title: Option<String>,
+    pub pinned: Option<bool>,
+    pub archived: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -385,7 +433,7 @@ fn permission() -> String {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChatApproval {
     pub id: String,
-    pub actor_id: String,
+    pub actor_id: Option<String>,
     pub session_id: String,
     pub conversation_id: Option<String>,
     pub delivery_id: Option<String>,

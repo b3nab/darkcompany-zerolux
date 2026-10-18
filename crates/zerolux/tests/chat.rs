@@ -77,7 +77,7 @@ impl Fixture {
                     members: agents
                         .iter()
                         .map(|a| ConversationMemberInput {
-                            actor_id: a.actor.id.clone(),
+                            actor_id: a.actor.as_ref().unwrap().id.clone(),
                             session_id: Some(a.session.id.clone()),
                         })
                         .collect(),
@@ -123,7 +123,7 @@ fn delivery_for<'a>(message: &'a ChatMessage, agent: &IssuedChatSession) -> &'a 
     message
         .deliveries
         .iter()
-        .find(|d| d.actor_id == agent.actor.id)
+        .find(|d| d.actor_id == agent.actor.as_ref().unwrap().id)
         .unwrap()
 }
 
@@ -155,7 +155,7 @@ async fn identities_are_scoped_tokens_are_not_exposed_and_stop_revokes_cached_id
         f.store.chat_identity(Some("invalid")).await,
         Err(Error::Unauthorized)
     ));
-    let sessions = f.store.chat_sessions(&aspen_id).await.unwrap();
+    let sessions = f.store.sessions(&aspen_id).await.unwrap();
     assert_eq!(sessions.len(), 1);
     let public = serde_json::to_string(&sessions).unwrap();
     assert!(!public.contains(&aspen.token));
@@ -174,7 +174,7 @@ async fn identities_are_scoped_tokens_are_not_exposed_and_stop_revokes_cached_id
             .unwrap()
             .is_object()
     );
-    let stored = entity::chat_sessions::Entity::find_by_id(&aspen.session.id)
+    let stored = entity::sessions::Entity::find_by_id(&aspen.session.id)
         .one(f.store.db())
         .await
         .unwrap()
@@ -349,7 +349,7 @@ async fn one_context_serves_direct_and_overlapping_groups_with_scoped_deliveries
         group
             .members
             .iter()
-            .any(|m| m.actor_id == f.owner.actor_id && m.kind == "human")
+            .any(|m| Some(&m.actor_id) == f.owner.actor_id.as_ref() && m.kind == "human")
     );
     let chats = [
         (&group, vec![&aspen, &birch, &cedar]),
@@ -372,7 +372,7 @@ async fn one_context_serves_direct_and_overlapping_groups_with_scoped_deliveries
             .collect();
         let mut expected: Vec<_> = agents
             .iter()
-            .map(|a| (&a.actor.id, &a.session.id))
+            .map(|a| (&a.actor.as_ref().unwrap().id, &a.session.id))
             .collect();
         actual.sort();
         expected.sort();
@@ -428,9 +428,17 @@ async fn one_context_serves_direct_and_overlapping_groups_with_scoped_deliveries
             .await,
         Err(Error::Forbidden)
     ));
-    let (private_aspen, private_id) = f.hire("private aspen", Some(aspen.actor.id.clone())).await;
+    let (private_aspen, private_id) = f
+        .hire(
+            "private aspen",
+            Some(aspen.actor.as_ref().unwrap().id.clone()),
+        )
+        .await;
     let dm = f.room(&[&private_aspen]).await;
-    assert_eq!(private_aspen.actor.id, aspen.actor.id);
+    assert_eq!(
+        private_aspen.actor.as_ref().unwrap().id,
+        aspen.actor.as_ref().unwrap().id
+    );
     assert!(matches!(
         f.store.chat_messages(&aspen_id, &dm.id, 0, 100).await,
         Err(Error::Forbidden)
@@ -484,7 +492,7 @@ async fn expanding_one_of_two_equal_groups_keeps_the_other_membership_unchanged(
             &f.owner,
             &team.id,
             ConversationMemberInput {
-                actor_id: gamma.actor.id.clone(),
+                actor_id: gamma.actor.as_ref().unwrap().id.clone(),
                 session_id: Some(gamma.session.id.clone()),
             },
         )
@@ -492,7 +500,8 @@ async fn expanding_one_of_two_equal_groups_keeps_the_other_membership_unchanged(
         .unwrap();
     assert_eq!(expanded.members.len(), 4);
     assert!(expanded.members.iter().any(|m| {
-        m.actor_id == gamma.actor.id && m.session_id.as_deref() == Some(&gamma.session.id)
+        m.actor_id == gamma.actor.as_ref().unwrap().id
+            && m.session_id.as_deref() == Some(&gamma.session.id)
     }));
     let inbox = f.store.chat_inbox(&alpha_id).await.unwrap();
     let unchanged = inbox
@@ -505,7 +514,7 @@ async fn expanding_one_of_two_equal_groups_keeps_the_other_membership_unchanged(
         unchanged
             .members
             .iter()
-            .all(|m| m.actor_id != gamma.actor.id)
+            .all(|m| m.actor_id != gamma.actor.as_ref().unwrap().id)
     );
     assert!(
         f.store
@@ -555,7 +564,7 @@ async fn a_group_accepts_sessions_from_other_chats_without_retroactive_deliverie
         .await
         .unwrap();
     let member = |agent: &IssuedChatSession| ConversationMemberInput {
-        actor_id: agent.actor.id.clone(),
+        actor_id: agent.actor.as_ref().unwrap().id.clone(),
         session_id: Some(agent.session.id.clone()),
     };
     assert!(matches!(
@@ -627,25 +636,25 @@ async fn the_owner_renames_an_agent_and_names_stay_distinct() {
     f.clear_outbox().await;
     assert!(matches!(
         f.store
-            .rename_agent(&birch_id, &birch.actor.id, "bridge")
+            .rename_agent(&birch_id, &birch.actor.as_ref().unwrap().id, "bridge")
             .await,
         Err(Error::Forbidden)
     ));
     assert!(matches!(
         f.store
-            .rename_agent(&f.owner, &birch.actor.id, "Aspen")
+            .rename_agent(&f.owner, &birch.actor.as_ref().unwrap().id, "Aspen")
             .await,
         Err(Error::Invalid(_))
     ));
     assert!(matches!(
         f.store
-            .rename_agent(&f.owner, &f.owner.actor_id, "bridge")
+            .rename_agent(&f.owner, f.owner.actor().unwrap(), "bridge")
             .await,
         Err(Error::NotFound)
     ));
     let renamed = f
         .store
-        .rename_agent(&f.owner, &birch.actor.id, "bridge")
+        .rename_agent(&f.owner, &birch.actor.as_ref().unwrap().id, "bridge")
         .await
         .unwrap();
     assert_eq!(renamed.name, "bridge");
@@ -885,7 +894,10 @@ async fn renewing_an_owned_link_keeps_deliveries_approvals_and_permission_mode()
         .await
         .unwrap();
     assert_eq!(renewed.session.id, owned.session.id);
-    assert_eq!(renewed.actor.id, owned.actor.id);
+    assert_eq!(
+        renewed.actor.as_ref().unwrap().id,
+        owned.actor.as_ref().unwrap().id
+    );
     assert_eq!(
         renewed.session.native_session_id,
         owned.session.native_session_id
@@ -928,7 +940,7 @@ async fn renewing_an_owned_link_keeps_deliveries_approvals_and_permission_mode()
         ),
         "an uncertain permission decision is not repeated after rotation"
     );
-    assert_eq!(f.store.chat_sessions(&f.owner).await.unwrap().len(), 1);
+    assert_eq!(f.store.sessions(&f.owner).await.unwrap().len(), 1);
     // A consumed delivery still belongs to this identity, including for a delayed reply.
     let mut reply = message("After the kernel returned");
     reply.reply_to_delivery_id = Some(ids[0].clone());
@@ -1001,7 +1013,7 @@ async fn waiting_counts_the_whole_queue_of_one_session() {
         .chat_delivery_receipt(&aspen_id, &ids[0], receipt("read"))
         .await
         .unwrap();
-    let sessions = f.store.chat_sessions(&f.owner).await.unwrap();
+    let sessions = f.store.sessions(&f.owner).await.unwrap();
     let waiting = |agent: &IssuedChatSession| {
         sessions
             .iter()
@@ -1087,7 +1099,7 @@ async fn a_rehired_context_keeps_memberships_and_can_join_another_chat() {
             &f.owner,
             HireChatSession {
                 name: "aspen".into(),
-                actor_id: Some(aspen.actor.id.clone()),
+                actor_id: Some(aspen.actor.as_ref().unwrap().id.clone()),
                 harness: Harness::ClaudeCode,
                 native_session_id: aspen.session.native_session_id.clone(),
                 title: "Same context".into(),
@@ -1116,7 +1128,7 @@ async fn a_rehired_context_keeps_memberships_and_can_join_another_chat() {
             conversation
                 .members
                 .iter()
-                .any(|m| m.actor_id == aspen.actor.id
+                .any(|m| m.actor_id == aspen.actor.as_ref().unwrap().id
                     && m.session_id.as_deref() == Some(reattached.session.id.as_str()))
         );
     }
@@ -1160,7 +1172,7 @@ async fn a_relink_keeps_the_session_its_deliveries_and_their_states() {
             &f.owner,
             HireChatSession {
                 name: "aspen".into(),
-                actor_id: Some(aspen.actor.id.clone()),
+                actor_id: Some(aspen.actor.as_ref().unwrap().id.clone()),
                 harness: Harness::ClaudeCode,
                 native_session_id: aspen.session.native_session_id.clone(),
                 title: "Reattached".into(),
@@ -1175,7 +1187,8 @@ async fn a_relink_keeps_the_session_its_deliveries_and_their_states() {
         new.session.id, aspen.session.id,
         "the same session continues"
     );
-    assert_eq!(new.session.title, "Reattached");
+    // The title is the session's: a relink does not rename it.
+    assert_eq!(new.session.title, aspen.session.title);
     assert!(matches!(
         f.store.chat_identity(Some(&aspen.token)).await,
         Err(Error::Unauthorized)
@@ -1271,12 +1284,14 @@ async fn simultaneous_rehire_by_different_actors_cannot_duplicate_one_native_ses
         resume: true,
     };
     let (a, b) = tokio::join!(
-        f.store.hire_chat_session(&f.owner, input(&aspen.actor.id)),
-        f.store.hire_chat_session(&f.owner, input(&birch.actor.id)),
+        f.store
+            .hire_chat_session(&f.owner, input(&aspen.actor.as_ref().unwrap().id)),
+        f.store
+            .hire_chat_session(&f.owner, input(&birch.actor.as_ref().unwrap().id)),
     );
     assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
     assert!(matches!(a, Err(Error::Conflict)) || matches!(b, Err(Error::Conflict)));
-    let sessions = f.store.chat_sessions(&f.owner).await.unwrap();
+    let sessions = f.store.sessions(&f.owner).await.unwrap();
     assert_eq!(
         sessions
             .iter()
@@ -1313,8 +1328,8 @@ async fn runtime_recovery_marks_live_sessions_attention_without_changing_stopped
         .await
         .unwrap();
     f.clear_outbox().await;
-    f.store.recover_chat_sessions().await.unwrap();
-    let sessions = f.store.chat_sessions(&f.owner).await.unwrap();
+    f.store.recover_sessions().await.unwrap();
+    let sessions = f.store.sessions(&f.owner).await.unwrap();
     let active = sessions.iter().find(|s| s.id == aspen.session.id).unwrap();
     assert_eq!(active.status, "attention");
     assert!(
@@ -1343,7 +1358,7 @@ async fn runtime_recovery_marks_live_sessions_attention_without_changing_stopped
     let events = f.store.pending_chat_events(100).await.unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].payload["type"], "session.changed");
-    f.store.recover_chat_sessions().await.unwrap();
+    f.store.recover_sessions().await.unwrap();
     assert_eq!(f.store.pending_chat_events(100).await.unwrap().len(), 1);
 }
 
@@ -1861,7 +1876,7 @@ async fn approvals_require_owner_decision_and_native_dispatch_is_never_replayed(
         .iter()
         .filter(|e| e.payload["type"] == "approval.changed")
     {
-        assert!(!event.actor_ids.contains(&birch.actor.id));
+        assert!(!event.actor_ids.contains(&birch.actor.as_ref().unwrap().id));
         assert!(event.payload.get("details").is_none());
     }
 }
@@ -1878,11 +1893,14 @@ async fn outbox_rechecks_membership_before_notifying_a_removed_member() {
         .unwrap();
     f.exec(
         "DELETE FROM conversation_members WHERE conversation_id=$1 AND actor_id=$2",
-        vec![room.id.clone().into(), aspen.actor.id.clone().into()],
+        vec![
+            room.id.clone().into(),
+            aspen.actor.as_ref().unwrap().id.clone().into(),
+        ],
     )
     .await;
     let events = f.store.pending_chat_events(100).await.unwrap();
-    assert_eq!(events[0].actor_ids, vec![f.owner.actor_id.clone()]);
+    assert_eq!(events[0].actor_ids, vec![f.owner.actor_id.clone().unwrap()]);
 }
 
 /// One row per native session of an agent: every relink keeps its ID and replaces only the
@@ -1905,7 +1923,7 @@ async fn relinks_keep_one_session_per_native_context() {
     f.store.chat_identity(Some(&token)).await.unwrap();
     let listed: Vec<String> = f
         .store
-        .chat_sessions(&f.owner)
+        .sessions(&f.owner)
         .await
         .unwrap()
         .into_iter()
@@ -1924,7 +1942,7 @@ async fn relink(
             &f.owner,
             HireChatSession {
                 name: "".into(),
-                actor_id: Some(session.actor.id.clone()),
+                actor_id: Some(session.actor.as_ref().unwrap().id.clone()),
                 harness: Harness::ClaudeCode,
                 native_session_id: session.session.native_session_id.clone(),
                 title: "cedar session".into(),
@@ -2093,7 +2111,7 @@ async fn threads_open_or_join_at_a_root_with_the_parents_audience() {
         .message
         .deliveries
         .iter()
-        .find(|d| d.actor_id == a.actor.id)
+        .find(|d| d.actor_id == a.actor.as_ref().unwrap().id)
         .unwrap()
         .id
         .clone();
@@ -2106,7 +2124,7 @@ async fn threads_open_or_join_at_a_root_with_the_parents_audience() {
             OpenThread {
                 root: a_delivery,
                 title: "release plan".into(),
-                participants: vec![c.actor.id.clone()],
+                participants: vec![c.actor.as_ref().unwrap().id.clone()],
             },
         )
         .await
@@ -2120,7 +2138,7 @@ async fn threads_open_or_join_at_a_root_with_the_parents_audience() {
             OpenThread {
                 root: root.message.id.clone(),
                 title: "release schedule".into(),
-                participants: vec![d.actor.id.clone()],
+                participants: vec![d.actor.as_ref().unwrap().id.clone()],
             },
         )
         .await
@@ -2145,7 +2163,7 @@ async fn threads_open_or_join_at_a_root_with_the_parents_audience() {
                 OpenThread {
                     root: root.message.id.clone(),
                     title: "x".into(),
-                    participants: vec![outsider.actor.id.clone()],
+                    participants: vec![outsider.actor.as_ref().unwrap().id.clone()],
                 },
             )
             .await,
@@ -2173,7 +2191,11 @@ async fn threads_open_or_join_at_a_root_with_the_parents_audience() {
         .map(|d| d.actor_id.clone())
         .collect();
     recipients.sort();
-    let mut expected = vec![b.actor.id.clone(), c.actor.id.clone(), d.actor.id.clone()];
+    let mut expected = vec![
+        b.actor.as_ref().unwrap().id.clone(),
+        c.actor.as_ref().unwrap().id.clone(),
+        d.actor.as_ref().unwrap().id.clone(),
+    ];
     expected.sort();
     assert_eq!(recipients, expected);
     // An agent of the parent who is not a participant reads the thread (the audience is the
@@ -2258,7 +2280,7 @@ async fn threads_open_or_join_at_a_root_with_the_parents_audience() {
             OpenThread {
                 root: other_root.message.id.clone(),
                 title: "docs".into(),
-                participants: vec![b.actor.id.clone()],
+                participants: vec![b.actor.as_ref().unwrap().id.clone()],
             },
         )
         .await
@@ -2268,7 +2290,7 @@ async fn threads_open_or_join_at_a_root_with_the_parents_audience() {
         .message
         .deliveries
         .iter()
-        .find(|d| d.actor_id == a.actor.id)
+        .find(|d| d.actor_id == a.actor.as_ref().unwrap().id)
         .unwrap()
         .id
         .clone();
@@ -2376,7 +2398,7 @@ async fn a_thread_rests_with_its_chat_and_still_delivers_what_was_written_before
             OpenThread {
                 root: root.message.id.clone(),
                 title: "plan".into(),
-                participants: vec![b.actor.id.clone()],
+                participants: vec![b.actor.as_ref().unwrap().id.clone()],
             },
         )
         .await
@@ -2400,8 +2422,8 @@ async fn a_thread_rests_with_its_chat_and_still_delivers_what_was_written_before
             e.payload["type"] == "message.created" && e.payload["message_id"] == first.message.id
         })
         .unwrap();
-    assert!(event.actor_ids.contains(&f.owner.actor_id));
-    assert!(event.actor_ids.contains(&b.actor.id));
+    assert!(event.actor_ids.contains(f.owner.actor_id.as_ref().unwrap()));
+    assert!(event.actor_ids.contains(&b.actor.as_ref().unwrap().id));
     let first = first.message.deliveries[0].id.clone();
     // Pausing the chat pauses its threads; a thread has no pause of its own.
     f.store
@@ -2487,7 +2509,7 @@ async fn every_listed_chat_carries_its_newest_message() {
     assert_eq!(
         (&last.author_id, &last.text, last.created_at),
         (
-            &f.owner.actor_id,
+            f.owner.actor_id.as_ref().unwrap(),
             &"Hello agent".to_owned(),
             first.created_at
         )
@@ -2502,7 +2524,11 @@ async fn every_listed_chat_carries_its_newest_message() {
         let last = chat.last_message.as_ref().unwrap();
         assert_eq!(
             (&last.author_id, &last.text, last.created_at),
-            (&a.actor.id, &"Hello owner".to_owned(), second.created_at)
+            (
+                &a.actor.as_ref().unwrap().id,
+                &"Hello owner".to_owned(),
+                second.created_at
+            )
         );
         assert_eq!(chat.last_seq, second.seq);
     }
@@ -2516,7 +2542,7 @@ async fn every_listed_chat_carries_its_newest_message() {
             OpenThread {
                 root: second.id.clone(),
                 title: "aside".into(),
-                participants: vec![b.actor.id.clone()],
+                participants: vec![b.actor.as_ref().unwrap().id.clone()],
             },
         )
         .await
@@ -2559,10 +2585,10 @@ async fn every_listed_chat_carries_its_newest_message() {
 async fn an_agents_model_effort_and_harness_settings_are_the_owners_to_set() {
     let f = Fixture::new().await;
     let (aspen, aspen_id) = f.hire("aspen", None).await;
-    assert_eq!(aspen.actor.model, None);
+    assert_eq!(aspen.actor.as_ref().unwrap().model, None);
     let set = |settings: AgentSettings| {
         f.store
-            .set_agent_settings(&f.owner, &aspen.actor.id, settings)
+            .set_agent_settings(&f.owner, &aspen.actor.as_ref().unwrap().id, settings)
     };
     // Model and effort for every harness; Claude Code's permission mode for a Claude agent.
     let actor = set(AgentSettings {
@@ -2601,19 +2627,14 @@ async fn an_agents_model_effort_and_harness_settings_are_the_owners_to_set() {
     // Only the owner sets them.
     assert!(matches!(
         f.store
-            .set_agent_settings(&aspen_id, &aspen.actor.id, AgentSettings::default())
+            .set_agent_settings(
+                &aspen_id,
+                &aspen.actor.as_ref().unwrap().id,
+                AgentSettings::default()
+            )
             .await,
         Err(Error::Forbidden)
     ));
-    // What the harness reports is recorded, and never replaced with nothing.
-    f.store
-        .observe_agent_settings(&aspen.actor.id, Some("claude-sonnet"), None)
-        .await
-        .unwrap();
-    f.store
-        .observe_agent_settings(&aspen.actor.id, None, Some(""))
-        .await
-        .unwrap();
     let actor = f
         .store
         .workspace()
@@ -2621,9 +2642,135 @@ async fn an_agents_model_effort_and_harness_settings_are_the_owners_to_set() {
         .unwrap()
         .actors
         .into_iter()
-        .find(|a| a.id == aspen.actor.id)
+        .find(|a| a.id == aspen.actor.as_ref().unwrap().id)
         .unwrap();
-    assert_eq!(actor.model.as_deref(), Some("claude-sonnet"));
+    assert_eq!(actor.model.as_deref(), Some("claude-opus"));
     assert_eq!(actor.effort, None);
     assert_eq!(actor.permission_mode.as_deref(), Some("acceptEdits"));
+}
+
+#[tokio::test]
+async fn a_session_without_an_agent_is_the_owners_and_takes_no_part_in_chats() {
+    let f = Fixture::new().await;
+    let (free, identity) = f.hire("", None).await;
+    assert!(free.actor.is_none());
+    assert_eq!(free.session.actor_id, None);
+    assert_eq!(identity.actor_id, None);
+    assert_eq!(identity.addressee(), free.session.id);
+    // No agent was created for it.
+    let workspace = f.store.workspace().await.unwrap();
+    assert!(workspace.actors.iter().all(|a| a.kind == "human"));
+    // Its link works: inbox, requests to the owner.
+    let inbox = f.store.chat_inbox(&identity).await.unwrap();
+    assert!(inbox.conversations.is_empty() && inbox.deliveries.is_empty());
+    f.store
+        .create_chat_approval(
+            &identity,
+            CreateChatApproval {
+                id: Uuid::new_v4().to_string(),
+                delivery_id: None,
+                native_request_id: "tool-1".into(),
+                kind: "permission".into(),
+                summary: "Run tests".into(),
+                details: json!({}),
+            },
+        )
+        .await
+        .unwrap();
+    let approvals = f.store.chat_approvals(&f.owner).await.unwrap();
+    assert_eq!(approvals[0].actor_id, None);
+    // The owner learns of it, and so does the session itself.
+    let event = f
+        .store
+        .pending_chat_events(100)
+        .await
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|e| e.payload["type"] == "approval.changed")
+        .unwrap();
+    assert!(event.actor_ids.contains(&free.session.id));
+    assert!(event.actor_ids.contains(f.owner.actor_id.as_ref().unwrap()));
+    // Chats are the agents' and the owner's.
+    let (aspen, _) = f.hire("aspen", None).await;
+    let room = f.room(&[&aspen]).await;
+    assert!(matches!(
+        f.store
+            .send_chat_message(&identity, &room.id, message("hello"))
+            .await,
+        Err(Error::Forbidden)
+    ));
+    assert!(f.store.conversations(&identity).await.unwrap().is_empty());
+    // A session that works for an agent is not given to another one, nor taken from it.
+    assert!(matches!(
+        f.store
+            .hire_chat_session(
+                &f.owner,
+                HireChatSession {
+                    name: "".into(),
+                    actor_id: None,
+                    harness: Harness::ClaudeCode,
+                    native_session_id: aspen.session.native_session_id.clone(),
+                    title: "Taken".into(),
+                    workspace: aspen.session.workspace.clone(),
+                    native_locator: json!({}),
+                    resume: false,
+                },
+            )
+            .await,
+        Err(Error::Conflict)
+    ));
+}
+
+#[tokio::test]
+async fn the_owner_names_pins_and_archives_a_session() {
+    let f = Fixture::new().await;
+    let (free, identity) = f.hire("", None).await;
+    let change = |input: SessionChange| f.store.change_session(&f.owner, &free.session.id, input);
+    let named = change(SessionChange {
+        title: Some(" Release notes ".into()),
+        pinned: Some(true),
+        ..SessionChange::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(named.title, "Release notes");
+    let pinned_at = named.pinned_at.unwrap();
+    // Pinning again keeps when it was pinned; archiving leaves the rest as it is.
+    let archived = change(SessionChange {
+        pinned: Some(true),
+        archived: Some(true),
+        ..SessionChange::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(archived.pinned_at, Some(pinned_at));
+    assert!(archived.archived_at.is_some());
+    assert_eq!(archived.title, "Release notes");
+    let restored = change(SessionChange {
+        pinned: Some(false),
+        archived: Some(false),
+        ..SessionChange::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!((restored.pinned_at, restored.archived_at), (None, None));
+    assert!(matches!(
+        change(SessionChange::default()).await,
+        Err(Error::Invalid(_))
+    ));
+    // Only the owner organizes sessions.
+    assert!(matches!(
+        f.store
+            .change_session(
+                &identity,
+                &free.session.id,
+                SessionChange {
+                    pinned: Some(true),
+                    ..SessionChange::default()
+                },
+            )
+            .await,
+        Err(Error::Forbidden)
+    ));
 }
