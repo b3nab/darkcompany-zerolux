@@ -15,6 +15,10 @@ import {
   localURL,
   nativeFingerprint,
   integrationCode,
+  readSession,
+  sendSession,
+  startSession,
+  stopSession,
   type ChatHost,
   type LiveChange,
 } from "@zerolux/bridge";
@@ -116,7 +120,15 @@ export function runCommand(
   });
 }
 /** The tools an agent's session takes part in chats with. */
-const CHAT_TOOLS = ["zerolux_send", "zerolux_thread", "zerolux_close_thread"];
+const CHAT_TOOLS = [
+  "zerolux_send",
+  "zerolux_thread",
+  "zerolux_close_thread",
+  "zerolux_session_start",
+  "zerolux_session_read",
+  "zerolux_session_send",
+  "zerolux_session_stop",
+];
 const installedCode = integrationCode(import.meta.url);
 
 export default function chatExtension(pi: ExtensionAPI) {
@@ -554,6 +566,100 @@ export default function chatExtension(pi: ExtensionAPI) {
         ],
         details: undefined,
       };
+    },
+  });
+  // Sessions this one starts, follows and steers to delegate work, through its agent's link.
+  const delegating = () => {
+    const linked = bridges().filter(
+      (bridge) => bridge.connected && bridge.agent,
+    );
+    if (linked.length !== 1)
+      throw new Error(
+        linked.length
+          ? "Several ZeroLux workspaces are linked; delegate from one"
+          : "No ZeroLux chat is connected",
+      );
+    const bridge = linked[0]!;
+    return <T>(path: string, body?: unknown) => bridge.call<T>(path, body);
+  };
+  const result = (value: unknown) => ({
+    content: [{ type: "text" as const, text: JSON.stringify(value) }],
+    details: undefined,
+  });
+  pi.registerTool({
+    name: "zerolux_session_start",
+    label: "ZeroLux session",
+    description: "Start a session to delegate work to.",
+    parameters: Type.Object({
+      harness: Type.Union(
+        [
+          Type.Literal("claude-code"),
+          Type.Literal("codex"),
+          Type.Literal("pi"),
+        ],
+        { description: "Harness" },
+      ),
+      prompt: Type.String({ description: "The work, as its first input" }),
+      workspace: Type.Optional(
+        Type.String({ description: "Absolute folder; yours by default" }),
+      ),
+      model: Type.Optional(Type.String({ description: "Model" })),
+      effort: Type.Optional(Type.String({ description: "Effort" })),
+    }),
+    async execute(_id, args, _signal, _update, ctx) {
+      const session = await startSession(delegating(), {
+        ...args,
+        workspace: args.workspace ?? ctx.cwd,
+      });
+      return result({ id: session.id, title: session.title });
+    },
+  });
+  pi.registerTool({
+    name: "zerolux_session_read",
+    label: "ZeroLux session",
+    description: "Read a delegated session: its state and last answer.",
+    parameters: Type.Object({
+      id: Type.String({ description: "Session ID" }),
+    }),
+    async execute(_id, args) {
+      return result(await readSession(delegating(), args.id));
+    },
+  });
+  pi.registerTool({
+    name: "zerolux_session_send",
+    label: "ZeroLux session",
+    description: "Write to a delegated session.",
+    parameters: Type.Object({
+      id: Type.String({ description: "Session ID" }),
+      text: Type.String({ description: "Message" }),
+      mode: Type.Optional(
+        Type.Union(
+          [
+            Type.Literal("steer"),
+            Type.Literal("queue"),
+            Type.Literal("interrupt"),
+          ],
+          {
+            description: "While it works: into its turn, after it, or instead",
+          },
+        ),
+      ),
+    }),
+    async execute(_id, args) {
+      await sendSession(delegating(), args.id, args.text, args.mode);
+      return result({ sent: true });
+    },
+  });
+  pi.registerTool({
+    name: "zerolux_session_stop",
+    label: "ZeroLux session",
+    description: "Stop a delegated session.",
+    parameters: Type.Object({
+      id: Type.String({ description: "Session ID" }),
+    }),
+    async execute(_id, args) {
+      await stopSession(delegating(), args.id);
+      return result({ stopped: true });
     },
   });
   pi.registerTool({
