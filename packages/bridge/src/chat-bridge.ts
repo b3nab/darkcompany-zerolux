@@ -5,7 +5,8 @@ import { localURL } from "./local-url.ts";
 const MAX_TEXT = 64 * 1024;
 export interface ChatSession {
   id: string;
-  actor_id: string;
+  /** The agent the session works for; null for the owner's own session. */
+  actor_id: string | null;
   harness: string;
   native_session_id: string;
   workspace: string;
@@ -164,6 +165,21 @@ export function chatRequest(base: string, token: string): ChatRequest {
       request.end(body === undefined ? undefined : JSON.stringify(body));
     });
 }
+/** What a session is producing right now, before its native record has it. */
+export type LiveChange =
+  | {
+      /** `set` carries all of an item so far, for output a harness reports whole. */
+      type: "append" | "set";
+      item: string;
+      kind: "text" | "thinking" | "output";
+      text: string;
+    }
+  | { type: "done"; item: string }
+  | { type: "clear" };
+/** How often streamed output reaches ZeroLux. */
+const LIVE_EVERY_MS = 150;
+/** Characters of one report's append: within what ZeroLux takes. */
+const LIVE_APPEND = 16 * 1024;
 interface Outgoing {
   conversation: string;
   body: { id: string; text: string; reply_to_delivery_id?: string };
@@ -252,6 +268,9 @@ export class ChatBridge {
   private turnFingerprint?: string;
   /** With `oneChatPerTurn`: the chat batches go to until the agent settles. */
   private steering?: string;
+  /** Streamed output not yet reported, and its timer. */
+  private liveChanges: LiveChange[] = [];
+  private liveTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
     private readonly host: ChatHost,
@@ -274,6 +293,10 @@ export class ChatBridge {
   }
   get sessionId() {
     return this.session?.id;
+  }
+  /** Whether this link's session works for an agent: only then does it take part in chats. */
+  get agent() {
+    return Boolean(this.session?.actor_id);
   }
   /** Whether `chat` is one of this link's chats or threads, as of the last inbox. */
   knows(chat: string) {
@@ -839,8 +862,63 @@ export class ChatBridge {
     this.statusUpdates = update;
     return update;
   }
+  /**
+   * Streamed output, to ZeroLux: shown while it streams, never stored. Appends wait a moment
+   * to travel together; the end of an item or turn goes at once. A lost report is not sent
+   * again, since the native record will have the step.
+   */
+  live(change: LiveChange) {
+    if (!this.session || this.closed) return;
+    if (change.type !== "done" && change.type !== "clear") {
+      if (change.text.length > LIVE_APPEND) {
+        for (let at = 0; at < change.text.length; at += LIVE_APPEND)
+          this.live({
+            ...change,
+            type: at === 0 ? change.type : "append",
+            text: change.text.slice(at, at + LIVE_APPEND),
+          });
+        return;
+      }
+      // A whole item replaces what was waiting for it.
+      if (change.type === "set")
+        this.liveChanges = this.liveChanges.filter(
+          (waiting) =>
+            (waiting.type !== "append" && waiting.type !== "set") ||
+            waiting.item !== change.item,
+        );
+    }
+    const last = this.liveChanges.at(-1);
+    if (
+      change.type === "append" &&
+      (last?.type === "append" || last?.type === "set") &&
+      last.item === change.item &&
+      last.text.length + change.text.length <= LIVE_APPEND
+    )
+      last.text += change.text;
+    else this.liveChanges.push({ ...change });
+    if (
+      change.type === "done" ||
+      change.type === "clear" ||
+      this.liveChanges.length >= 200
+    )
+      this.reportLive();
+    else this.liveTimer ??= setTimeout(() => this.reportLive(), LIVE_EVERY_MS);
+  }
+  private reportLive() {
+    clearTimeout(this.liveTimer);
+    this.liveTimer = undefined;
+    const changes = this.liveChanges;
+    this.liveChanges = [];
+    if (!changes.length || !this.session || this.closed) return;
+    void this.request(
+      `/chat/sessions/${encodeURIComponent(this.session.id)}/live`,
+      { changes },
+    ).catch(() => {});
+  }
   /** Stop cancels only a turn a chat message started and nobody else joined. */
   async stop() {
+    clearTimeout(this.liveTimer);
+    this.liveChanges = [];
     if (this.closed) return;
     this.closed = true;
     this.dirty = false;
