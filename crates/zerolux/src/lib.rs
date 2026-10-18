@@ -30,3 +30,4 @@ pub mod server;
 pub mod sessions;
 pub mod store;
 pub mod workspace_files;
+pub mod workspace_git;
