@@ -126,6 +126,7 @@ import { useMe } from "./AuthGate";
 import { ChangesPanel, FilesPanel, TerminalPanel } from "./SessionCode";
 import { AskOnTheSide, InputActions } from "./SessionFork";
 import { SessionSchedules } from "./SessionSchedules";
+import { SessionTriggers } from "./SessionTriggers";
 import { GoalCard } from "./SessionGoal";
 import type { Fork } from "./SessionFork";
 import type { CodePane } from "./SessionCode";
@@ -909,6 +910,14 @@ export function SessionView({
               {about && access.write && (
                 <SessionSchedules
                   session={session}
+                  busy={busy}
+                  perform={perform}
+                />
+              )}
+              {about && access.write && (
+                <SessionTriggers
+                  session={session}
+                  revision={at}
                   busy={busy}
                   perform={perform}
                 />

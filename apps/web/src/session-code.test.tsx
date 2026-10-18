@@ -6,6 +6,7 @@ import { ChangesPanel, FilesPanel } from "./SessionCode";
 import { InputActions } from "./SessionFork";
 import { ScheduleForm } from "./SessionSchedules";
 import { GoalCard } from "./SessionGoal";
+import { TriggerForm } from "./SessionTriggers";
 import { Marked } from "./Console";
 import { SessionBlocks } from "@/components/session-blocks";
 import type { InputBlock } from "@/components/session-blocks";
@@ -206,4 +207,19 @@ test("a search's words stand out in what matched, and each step names where it i
     />,
   );
   expect(blocks).toContain('data-at="4096"');
+});
+
+test("a session listens for its CI: failures only by default, then the owner's words", () => {
+  const form = (failures_only: boolean) =>
+    renderToStaticMarkup(
+      <TriggerForm
+        initial={{ failures_only, prompt: "Fix what failed." }}
+        busy={false}
+        save={() => {}}
+        cancel={() => {}}
+      />,
+    );
+  expect(form(true)).toContain("hears of a failure");
+  expect(form(true)).toContain(">Fix what failed.</textarea>");
+  expect(form(false)).toContain("hears how they went");
 });
