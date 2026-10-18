@@ -99,6 +99,16 @@ impl Kernel {
             .unwrap()
     }
 
+    async fn join(&self, name: &str, email: &str, invite: &str) -> reqwest::Response {
+        self.client
+            .post(format!("{}/api/auth/sign-up/email", self.url))
+            .header("x-zerolux-invite", invite)
+            .json(&json!({ "name": name, "email": email, "password": "correct horse battery" }))
+            .send()
+            .await
+            .unwrap()
+    }
+
     async fn sign_in(&self, email: &str) -> String {
         let response = self
             .post(
@@ -391,4 +401,141 @@ async fn two_kernels_of_one_workspace_share_sign_in_and_keep_their_own_sessions(
     assert_eq!(status(&on_b.session.id), "connected");
     a.server.shutdown().await.unwrap();
     b.server.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_person_joins_with_an_invitation_from_the_owner() {
+    if !installed("bun") || !installed("livekit-server") {
+        eprintln!("bun or livekit-server not installed: skipped");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let database = db::TestDatabase::new(dir.path().join("data/zerolux.db")).await;
+    let kernel = Kernel::start(dir.path(), database.location().clone()).await;
+    assert!(
+        kernel.health().await["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("people-v1"))
+    );
+    let owner = token_of(&kernel.sign_up("Owner fixture", "owner@example.test").await);
+    kernel
+        .post("/api/auth/claim", Some(&owner), json!({}))
+        .await;
+    let identity: Value = kernel
+        .get("/api/auth/identity", Some(&owner))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(identity["owner"], true);
+    // The owner invites; the token is in that answer only.
+    let created: Value = kernel
+        .post("/api/invites", Some(&owner), json!({}))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let invite = created["token"].as_str().unwrap().to_owned();
+    assert!(created["invite"].get("token_hash").is_none());
+    let shown: Value = kernel
+        .get(&format!("/api/auth/invites/{invite}"), None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(shown["invitation"]["invited_by"], "Owner fixture");
+    // Without it nobody signs up; with it a person does, and joins by claiming it.
+    assert_eq!(
+        kernel.sign_up("Ada", "ada@example.test").await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        kernel
+            .join("Ada", "ada@example.test", "not-an-invitation")
+            .await
+            .status(),
+        StatusCode::GONE
+    );
+    let joined = kernel.join("Ada", "ada@example.test", &invite).await;
+    assert_eq!(joined.status(), StatusCode::OK);
+    let ada = token_of(&joined);
+    assert_eq!(
+        kernel.get("/api/workspace", Some(&ada)).await.status(),
+        StatusCode::FORBIDDEN,
+        "not a person until the claim"
+    );
+    assert_eq!(
+        kernel
+            .post("/api/auth/claim", Some(&ada), json!({}))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let claimed: Value = kernel
+        .post("/api/auth/claim", Some(&ada), json!({ "invite": invite }))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(claimed["owner"], false);
+    assert!(claimed["actor_id"].is_string());
+    let workspace: Value = kernel
+        .get("/api/workspace", Some(&ada))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let people: Vec<_> = workspace["actors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["kind"] == "human")
+        .collect();
+    assert_eq!(people.len(), 2);
+    // Used up: nobody else joins with it, and only the owner invites or renames.
+    assert_eq!(
+        kernel
+            .get(&format!("/api/auth/invites/{invite}"), None)
+            .await
+            .status(),
+        StatusCode::GONE
+    );
+    assert_eq!(
+        kernel
+            .join("Bea", "bea@example.test", &invite)
+            .await
+            .status(),
+        StatusCode::GONE
+    );
+    assert_eq!(
+        kernel
+            .post("/api/invites", Some(&ada), json!({}))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        kernel
+            .post("/api/workspace", Some(&ada), json!({ "name": "Mine" }))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    // Sessions on this computer are its owner's.
+    assert_eq!(
+        kernel
+            .get("/api/sessions/discover", Some(&ada))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let sessions: Value = kernel
+        .get("/api/sessions", Some(&ada))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(sessions["sessions"], json!([]));
+    kernel.server.shutdown().await.unwrap();
 }

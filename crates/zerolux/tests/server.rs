@@ -449,7 +449,7 @@ async fn the_desktop_app_origin_is_accepted_as_the_request_it_makes_with_explici
         );
         assert_eq!(
             preflight.headers()["access-control-allow-headers"],
-            "content-type, authorization"
+            "content-type, authorization, x-zerolux-invite"
         );
         assert_eq!(
             preflight.headers()["access-control-expose-headers"],

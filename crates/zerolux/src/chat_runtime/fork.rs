@@ -14,7 +14,7 @@ impl ChatRuntime {
         name: &str,
         actor_id: Option<String>,
     ) -> Result<(Option<Actor>, ChatSession)> {
-        if !who.is_owner() {
+        if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
         let session = self.store.chat_session(who, id).await?;
@@ -161,7 +161,7 @@ impl ChatRuntime {
         dry_run: bool,
     ) -> Result<Value> {
         async {
-            if !who.is_owner() {
+            if !who.is_person() {
                 return Err(Error::Forbidden.into());
             }
             let session = self.store.chat_session(who, id).await?;

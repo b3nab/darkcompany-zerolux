@@ -26,7 +26,7 @@ impl ChatRuntime {
         who: &ChatIdentity,
         input: CreateClaudeSession,
     ) -> Result<(Option<Actor>, ChatSession)> {
-        if !who.is_owner() {
+        if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
         self.store
@@ -82,7 +82,7 @@ impl ChatRuntime {
         who: &ChatIdentity,
         id: &str,
     ) -> Result<(Option<Actor>, ChatSession)> {
-        if !who.is_owner() {
+        if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
         let mode = self
@@ -421,7 +421,7 @@ impl ChatRuntime {
             };
             if result.is_err()
                 && !*stop.borrow()
-                && let Ok(owner) = store.chat_identity(None).await
+                && let Ok(owner) = store.session_person(&id).await
             {
                 let _ = store.set_chat_session_status(&owner, &id, ChatSessionStatus {
                     status: "attention".into(), reason: Some("The Claude runner ended or became unreachable. Waiting to restore the saved session.".into()),
@@ -443,7 +443,7 @@ impl ChatRuntime {
     }
 
     pub(super) async fn stop_untracked_owned(&self, id: &str) -> Result<bool> {
-        let owner = self.store.chat_identity(None).await?;
+        let owner = self.store.session_person(id).await?;
         let Some(mode) = self.owned_mode(&owner, id).await? else {
             return Ok(false);
         };

@@ -23,6 +23,7 @@ pub mod livekit;
 pub mod model;
 pub mod native_events;
 pub mod native_output;
+pub mod people;
 #[cfg(unix)]
 mod pi_runner;
 pub mod requests;

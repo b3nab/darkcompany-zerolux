@@ -75,11 +75,11 @@ async fn terminal_notices(
         while let Ok(id) = heard.try_recv() {
             grown.insert(id);
         }
-        let Ok(people) = store.people().await else {
-            continue;
-        };
         for id in grown {
             let Ok(info) = terminals.info(&id) else {
+                continue;
+            };
+            let Ok(people) = store.readers(&info.session_id).await else {
                 continue;
             };
             let notice = serde_json::json!({"type":"terminal.output","terminal_id":id,
@@ -370,7 +370,7 @@ impl ChatRuntime {
         if let Some(cost) = cost {
             self.check_budget(id, cost).await;
         }
-        let people = self.store.people().await?;
+        let people = self.store.readers(id).await?;
         for notice in applied.notices() {
             let payload = serde_json::json!({"type":"session.live","session_id":id,
                 "first":notice.first,"changes":notice.changes});
@@ -384,7 +384,7 @@ impl ChatRuntime {
     /// At its budget, a session's work stops: the turn in progress is interrupted and the
     /// owner told, once for that budget. A higher budget lets it go on.
     async fn check_budget(&self, id: &str, cost: f64) {
-        let Ok(owner) = self.store.chat_identity(None).await else {
+        let Ok(owner) = self.store.session_person(id).await else {
             return;
         };
         let Ok(session) = self.store.chat_session(&owner, id).await else {
@@ -476,9 +476,10 @@ impl ChatRuntime {
     /// input, after the turn in progress. A session that is not running misses the run, and
     /// the schedule says why.
     pub async fn run_schedules(&self) -> Result<()> {
-        let owner = self.store.chat_identity(None).await?;
         let now = crate::store::now_ms();
         for schedule in self.store.due_schedules(now).await? {
+            // As the person whose session it is.
+            let owner = self.store.session_person(&schedule.session_id).await?;
             let sent = self
                 .input(
                     &owner,
@@ -541,7 +542,7 @@ impl ChatRuntime {
         name: &str,
         actor_id: Option<String>,
     ) -> Result<(Option<Actor>, ChatSession)> {
-        if !who.is_owner() {
+        if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
         if discovered_session_id.len() != 64
@@ -738,7 +739,7 @@ impl ChatRuntime {
         who: &ChatIdentity,
         input: CreateCodexSession,
     ) -> Result<(Option<Actor>, ChatSession)> {
-        if !who.is_owner() {
+        if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
         self.store
@@ -803,7 +804,7 @@ impl ChatRuntime {
         who: &ChatIdentity,
         input: crate::model::CreatePiSession,
     ) -> Result<(Option<Actor>, ChatSession)> {
-        if !who.is_owner() {
+        if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
         self.store
@@ -868,7 +869,7 @@ impl ChatRuntime {
         who: &ChatIdentity,
         session: ChatSession,
     ) -> Result<(Option<Actor>, ChatSession)> {
-        if !who.is_owner() {
+        if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
         ensure!(
@@ -915,7 +916,7 @@ impl ChatRuntime {
         who: &ChatIdentity,
         id: &str,
     ) -> Result<(Option<Actor>, ChatSession)> {
-        if !who.is_owner() {
+        if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
         let session = self.store.chat_session(who, id).await?;
@@ -942,7 +943,7 @@ impl ChatRuntime {
     /// the later launch and still requires proof of native death; this request starts none.
     #[cfg(unix)]
     pub async fn takeover_pi(&self, who: &ChatIdentity, id: &str) -> Result<ChatSession> {
-        if !who.is_owner() {
+        if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
         let session = self.store.chat_session(who, id).await?;
@@ -1051,15 +1052,15 @@ impl ChatRuntime {
     }
 
     async fn relink(&self, backoff: bool) -> Result<()> {
-        let owner = self.store.chat_identity(None).await?;
         // A pi whose integration restarted (reloaded for an update, or crashed) no longer
         // has the control its link went through: the link is lost, though nobody said so.
-        for session in self.store.sessions(&owner).await?.into_iter().filter(|s| {
+        for session in self.store.all_sessions().await?.into_iter().filter(|s| {
             s.stopped_at.is_none()
                 && s.status == "connected"
                 && s.harness == "pi"
                 && s.host_id.as_deref() == self.store.host()
         }) {
+            let owner = ChatIdentity::person(&session.owner_id);
             let locator = self.store.chat_session_locator(&owner, &session.id).await?;
             if locator["descriptor"]
                 .as_str()
@@ -1080,13 +1081,15 @@ impl ChatRuntime {
                 self.changed();
             }
         }
-        let linked = self.store.sessions(&owner).await?;
+        let linked = self.store.all_sessions().await?;
         // This host's sessions only: their native processes are here.
         for session in linked.into_iter().filter(|s| {
             s.stopped_at.is_none()
                 && s.status == "attention"
                 && s.host_id.as_deref() == self.store.host()
         }) {
+            // The kernel acts for the person whose session it is.
+            let owner = ChatIdentity::person(&session.owner_id);
             // A notice on a live link is for the owner: relinking would replace the link
             // and erase it. Only a lost link is relinked, and a failing one less often.
             if self.link_alive(&owner, &session).await || (backoff && !self.retry_due(&session.id))
@@ -1365,7 +1368,7 @@ impl ChatRuntime {
             }
             if result.is_err()
                 && !*stop.borrow()
-                && let Ok(owner) = store.chat_identity(None).await
+                && let Ok(owner) = store.session_person(&session_id).await
             {
                 let _ = store.set_chat_session_status(&owner, &session_id, ChatSessionStatus {
                         status: "attention".into(),
@@ -1436,7 +1439,7 @@ impl ChatRuntime {
             actual.native_locator["kind"] = serde_json::json!("pi-runner");
             target = actual;
         }
-        let owner = self.store.chat_identity(None).await?;
+        let owner = self.store.session_person(&session.id).await?;
         if self
             .store
             .chat_session(&owner, &session.id)
@@ -1497,7 +1500,7 @@ impl ChatRuntime {
             }
             #[cfg(unix)]
             {
-                let owner = self.store.chat_identity(None).await?;
+                let owner = self.store.session_person(id).await?;
                 let session = self.store.chat_session(&owner, id).await?;
                 if session.harness == "pi"
                     && let Some(host) = self

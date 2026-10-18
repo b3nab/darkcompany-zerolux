@@ -9,7 +9,8 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    entity::{schedules, sessions},
+    chat::Access,
+    entity::schedules,
     model::ChatIdentity,
     store::{Error, Result, Store, now_ms, text},
 };
@@ -76,31 +77,46 @@ fn prompt(value: &str) -> Result<String> {
 }
 
 impl Store {
-    async fn owner_session(&self, who: &ChatIdentity, id: &str) -> Result<()> {
-        if !who.is_owner() {
-            return Err(Error::Forbidden);
+    /// A person who may write to the session.
+    async fn writer(&self, who: &ChatIdentity, id: &str) -> Result<()> {
+        match self.session_access(who, id).await? {
+            Some(access) if who.is_person() && access >= Access::Write => Ok(()),
+            _ => Err(Error::Forbidden),
         }
-        sessions::Entity::find_by_id(id)
+    }
+
+    async fn schedule_row(&self, who: &ChatIdentity, id: &str) -> Result<schedules::Model> {
+        let row = schedules::Entity::find_by_id(id)
             .one(self.db())
             .await?
             .ok_or(Error::NotFound)?;
-        Ok(())
+        self.writer(who, &row.session_id).await?;
+        Ok(row)
     }
 
-    /// The schedules of a session, or of every session.
+    /// The schedules of a session, or of every session one may read.
     pub async fn schedules(
         &self,
         who: &ChatIdentity,
         session: Option<&str>,
     ) -> Result<Vec<Schedule>> {
-        if !who.is_owner() {
+        if !who.is_person() {
             return Err(Error::Forbidden);
         }
-        let mut query = schedules::Entity::find();
-        if let Some(session) = session {
-            query = query.filter(schedules::Column::SessionId.eq(session));
-        }
-        Ok(query
+        let readable = match session {
+            Some(session) => {
+                self.chat_session(who, session).await?;
+                vec![session.to_owned()]
+            }
+            None => self
+                .sessions(who)
+                .await?
+                .into_iter()
+                .map(|s| s.id)
+                .collect(),
+        };
+        Ok(schedules::Entity::find()
+            .filter(schedules::Column::SessionId.is_in(readable))
             .order_by_asc(schedules::Column::CreatedAt)
             .all(self.db())
             .await?
@@ -115,7 +131,7 @@ impl Store {
         session: &str,
         input: NewSchedule,
     ) -> Result<Schedule> {
-        self.owner_session(who, session).await?;
+        self.writer(who, session).await?;
         let prompt = prompt(&input.prompt)?;
         let now = now_ms();
         let next = next_run(&input.cron, now)?;
@@ -141,13 +157,7 @@ impl Store {
         id: &str,
         input: ScheduleChange,
     ) -> Result<Schedule> {
-        if !who.is_owner() {
-            return Err(Error::Forbidden);
-        }
-        let row = schedules::Entity::find_by_id(id)
-            .one(self.db())
-            .await?
-            .ok_or(Error::NotFound)?;
+        let row = self.schedule_row(who, id).await?;
         let cron = input
             .cron
             .as_deref()
@@ -174,9 +184,7 @@ impl Store {
     }
 
     pub async fn delete_schedule(&self, who: &ChatIdentity, id: &str) -> Result<()> {
-        if !who.is_owner() {
-            return Err(Error::Forbidden);
-        }
+        self.schedule_row(who, id).await?;
         let deleted = schedules::Entity::delete_by_id(id)
             .exec(self.db())
             .await?

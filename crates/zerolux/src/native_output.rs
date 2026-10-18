@@ -21,7 +21,7 @@ use tokio::{
 };
 
 use crate::{
-    entity::{actors, sessions},
+    entity::sessions,
     livekit::LiveKit,
     model::{ChatIdentity, ChatSession},
     native_events::{Event, Item, Tail, of_chat, project, tail},
@@ -416,21 +416,12 @@ async fn watch_once(
     livekit: &LiveKit,
     sizes: &mut HashMap<String, u64>,
 ) -> anyhow::Result<()> {
-    let (sessions, people) = {
+    let sessions = {
         let tx = store.read().await?;
-        let sessions = sessions::Entity::find()
+        sessions::Entity::find()
             .filter(sessions::Column::StoppedAt.is_null())
             .all(&tx)
-            .await?;
-        let people: Vec<String> = actors::Entity::find()
-            .filter(actors::Column::Kind.eq("human"))
-            .filter(actors::Column::Archived.eq(false))
-            .all(&tx)
             .await?
-            .into_iter()
-            .map(|actor| actor.id)
-            .collect();
-        (sessions, people)
     };
     let mut seen = HashMap::new();
     let mut tails = HashMap::new();
@@ -462,7 +453,9 @@ async fn watch_once(
             notice["type"] = json!("session.output");
             notice["session_id"] = json!(session.id);
             notice["end"] = json!(end);
-            livekit.notify(&notice, &people).await?;
+            livekit
+                .notify(&notice, &store.readers(&session.id).await?)
+                .await?;
         }
         tails.insert(session.id.clone(), ending);
         seen.insert(session.id, end);

@@ -1,7 +1,7 @@
 use sea_orm::{ConnectionTrait, DatabaseBackend, EntityTrait, Statement};
 use serde_json::json;
 use uuid::Uuid;
-use zerolux::{entity, harness::Harness, model::*, store::Error};
+use zerolux::{chat::Access, entity, harness::Harness, model::*, store::Error};
 
 #[path = "support/db.rs"]
 mod db;
@@ -2893,12 +2893,14 @@ async fn a_session_follows_and_steers_the_sessions_it_delegates_to_and_no_other(
     // It acts for the owner on its own child, never on another session.
     let acting = f
         .store
-        .acting_for(&lead_id, &child.session.id)
+        .acting_for(&lead_id, &child.session.id, Access::Write)
         .await
         .unwrap();
-    assert!(acting.is_owner());
+    assert!(acting.is_person());
     assert!(matches!(
-        f.store.acting_for(&lead_id, &other.session.id).await,
+        f.store
+            .acting_for(&lead_id, &other.session.id, Access::Read)
+            .await,
         Err(Error::Forbidden)
     ));
     // It sees itself and its children.
@@ -2912,4 +2914,176 @@ async fn a_session_follows_and_steers_the_sessions_it_delegates_to_and_no_other(
         .collect();
     assert!(seen.contains(&lead.session.id) && seen.contains(&child.session.id));
     assert!(!seen.contains(&other.session.id));
+}
+
+#[tokio::test]
+async fn a_person_joins_by_invitation_and_sees_only_their_own_and_shared_sessions() {
+    let f = Fixture::new().await;
+    let (invite, token) = f.store.create_invite(&f.owner).await.unwrap();
+    assert_eq!(
+        f.store.invites(&f.owner).await.unwrap()[0].id,
+        invite.id,
+        "pending"
+    );
+    let invitation = f.store.invitation(&token).await.unwrap();
+    assert_eq!(invitation.invited_by, "Owner fixture");
+    // The owner's name is taken; another joins once, and the invitation is used up.
+    assert!(matches!(
+        f.store.join(&token, "subject-a", "owner FIXTURE").await,
+        Err(Error::Invalid(_))
+    ));
+    let person = f.store.join(&token, "subject-a", "Ada").await.unwrap();
+    assert_eq!(person.invited_by.as_deref(), f.owner.actor_id.as_deref());
+    assert!(matches!(
+        f.store.join(&token, "subject-b", "Bea").await,
+        Err(Error::NotFound)
+    ));
+    assert!(f.store.invites(&f.owner).await.unwrap().is_empty());
+    let ada = ChatIdentity::person(&person.id);
+    // Only the workspace's owner invites.
+    assert!(f.store.is_workspace_owner(&f.owner).await.unwrap());
+    assert!(!f.store.is_workspace_owner(&ada).await.unwrap());
+    assert!(matches!(
+        f.store.create_invite(&ada).await,
+        Err(Error::Forbidden)
+    ));
+
+    // The owner's session is private: Ada neither lists, reads nor steers it.
+    let (session, agent) = f.hire("", None).await;
+    let id = session.session.id.clone();
+    assert_eq!(session.session.owner_id, f.owner.actor_id.clone().unwrap());
+    assert!(f.store.sessions(&ada).await.unwrap().is_empty());
+    assert_eq!(f.store.session_access(&ada, &id).await.unwrap(), None);
+    assert!(matches!(
+        f.store.acting_for(&ada, &id, Access::Read).await,
+        Err(Error::Forbidden)
+    ));
+    let share = |shared: Option<&str>| SessionChange {
+        shared: Some(shared.map(str::to_owned)),
+        ..SessionChange::default()
+    };
+    // Only its person shares it.
+    assert!(matches!(
+        f.store
+            .change_session(&ada, &id, share(Some("write")))
+            .await,
+        Err(Error::Forbidden)
+    ));
+    assert!(matches!(
+        f.store
+            .change_session(&f.owner, &id, share(Some("all")))
+            .await,
+        Err(Error::Invalid(_))
+    ));
+    // Shared to read: Ada sees it and follows it, and still cannot steer it.
+    let shared = f
+        .store
+        .change_session(&f.owner, &id, share(Some("read")))
+        .await
+        .unwrap();
+    assert_eq!(shared.shared.as_deref(), Some("read"));
+    assert_eq!(f.store.sessions(&ada).await.unwrap().len(), 1);
+    assert_eq!(f.store.readers(&id).await.unwrap().len(), 2);
+    assert!(f.store.acting_for(&ada, &id, Access::Read).await.is_ok());
+    assert!(matches!(
+        f.store.acting_for(&ada, &id, Access::Write).await,
+        Err(Error::Forbidden)
+    ));
+    // Shared to write: Ada acts on it as its person does, without owning it.
+    f.store
+        .change_session(&f.owner, &id, share(Some("write")))
+        .await
+        .unwrap();
+    let acting = f.store.acting_for(&ada, &id, Access::Write).await.unwrap();
+    assert_eq!(acting.actor_id, f.owner.actor_id);
+    assert!(matches!(
+        f.store.acting_for(&ada, &id, Access::Own).await,
+        Err(Error::Forbidden)
+    ));
+    // Its requests are its person's: Ada sees them and does not decide them.
+    let approval = f
+        .store
+        .create_chat_approval(
+            &agent,
+            CreateChatApproval {
+                id: Uuid::new_v4().to_string(),
+                delivery_id: None,
+                native_request_id: "fixture-shared".into(),
+                kind: "permission".into(),
+                summary: "Fixture permission".into(),
+                details: json!({}),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(f.store.chat_approvals(&ada).await.unwrap().len(), 1);
+    assert!(matches!(
+        f.store
+            .decide_chat_approval(&ada, &approval.id, decision("allow"))
+            .await,
+        Err(Error::Forbidden)
+    ));
+    // Private again: gone for Ada, requests included.
+    f.store
+        .change_session(&f.owner, &id, share(None))
+        .await
+        .unwrap();
+    assert!(f.store.sessions(&ada).await.unwrap().is_empty());
+    assert!(f.store.chat_approvals(&ada).await.unwrap().is_empty());
+    assert_eq!(
+        f.store.readers(&id).await.unwrap(),
+        vec![f.owner.actor_id.clone().unwrap()]
+    );
+    f.store
+        .decide_chat_approval(&f.owner, &approval.id, decision("allow"))
+        .await
+        .unwrap();
+
+    // Chats are shared: Ada and the owner's agent are in a group with the owner.
+    let room = f
+        .store
+        .create_conversation(
+            &f.owner,
+            CreateConversation {
+                kind: "group".into(),
+                title: "Together".into(),
+                members: vec![
+                    ConversationMemberInput {
+                        actor_id: person.id.clone(),
+                        session_id: None,
+                    },
+                    ConversationMemberInput {
+                        actor_id: session.actor.as_ref().map_or(id.clone(), |a| a.id.clone()),
+                        session_id: Some(id.clone()),
+                    },
+                ],
+            },
+        )
+        .await;
+    // A session without an agent is no chat member.
+    assert!(room.is_err());
+    let (helper, _) = f.hire("helper", None).await;
+    let room = f
+        .store
+        .create_conversation(
+            &ada,
+            CreateConversation {
+                kind: "group".into(),
+                title: "Together".into(),
+                members: vec![
+                    ConversationMemberInput {
+                        actor_id: f.owner.actor_id.clone().unwrap(),
+                        session_id: None,
+                    },
+                    ConversationMemberInput {
+                        actor_id: helper.actor.clone().unwrap().id,
+                        session_id: Some(helper.session.id.clone()),
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(room.members.len(), 3);
+    assert_eq!(f.store.conversations(&f.owner).await.unwrap().len(), 1);
 }

@@ -25,6 +25,7 @@ use tower_http::{
 
 use crate::{
     auth::{AuthService, HumanSession},
+    chat::Access,
     chat_runtime::ChatRuntime,
     codex::CodexStartFailure,
     model::*,
@@ -296,6 +297,8 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/chat/inbox", get(chat_inbox))
         .route("/chat/deliveries/{id}/dispatch", post(dispatch_delivery))
         .route("/chat/deliveries/{id}/receipt", post(delivery_receipt))
+        .route("/invites", get(list_invites).post(create_invite))
+        .route("/invites/{id}", axum::routing::delete(revoke_invite))
         .route("/chat/approvals", get(approvals).post(create_approval))
         .route("/chat/approvals/{id}/decision", post(decide_approval))
         .route("/chat/approvals/{id}/answer", post(answer_approval))
@@ -307,6 +310,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/health", get(health))
         .route("/auth/identity", get(auth_identity))
         .route("/auth/claim", post(auth_claim))
+        .route("/auth/invites/{token}", get(invitation))
         .route("/auth/{*rest}", axum::routing::any(auth_proxy));
     let api = open
         .merge(domain)
@@ -463,12 +467,25 @@ async fn require_identity(
     }
 }
 
+/// Native sessions on this kernel's computer are its person's: the workspace's owner, who
+/// runs it. Others bring theirs on their own computers.
+async fn host_person(state: &AppState, who: &ChatIdentity) -> Result<(), ApiFailure> {
+    if state.store.is_workspace_owner(who).await? {
+        Ok(())
+    } else {
+        Err(failure(
+            StatusCode::FORBIDDEN,
+            "Sessions on this computer are its owner's; start yours on your own computer",
+        ))
+    }
+}
+
 async fn owner_only(
     Extension(who): Extension<ChatIdentity>,
     request: Request,
     next: Next,
 ) -> Response {
-    if !who.is_owner() {
+    if !who.is_person() {
         return Error::Forbidden.into_response();
     }
     next.run(request).await
@@ -527,7 +544,8 @@ async fn discover_sessions(
     State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
 ) -> Result<Json<Value>, ApiFailure> {
-    if !who.is_owner() {
+    host_person(&state, &who).await?;
+    if !who.is_person() {
         return Err(Error::Forbidden.into());
     }
     Ok(Json(json!(
@@ -549,7 +567,8 @@ async fn attach_session(
     Extension(who): Extension<ChatIdentity>,
     ChatJson(input): ChatJson<AttachRequest>,
 ) -> Result<Json<Value>, ApiFailure> {
-    if !who.is_owner() {
+    host_person(&state, &who).await?;
+    if !who.is_person() {
         return Err(Error::Forbidden.into());
     }
     let (actor, session) = runtime(&state)?
@@ -584,16 +603,17 @@ async fn create_session(
     ChatJson(mut input): ChatJson<NewSession>,
 ) -> Result<Json<Value>, ApiFailure> {
     let parent = who.session_id.clone();
-    let acting = if parent.is_some() {
+    let acting = if let Some(parent) = &parent {
         match &mut input {
             NewSession::Claude(input) => (input.name.clear(), input.actor_id = None),
             NewSession::Codex(input) => (input.name.clear(), input.actor_id = None),
             NewSession::Pi(input) => (input.name.clear(), input.actor_id = None),
         };
-        state.store.chat_identity(None).await?
+        state.store.session_person(parent).await?
     } else {
         who
     };
+    host_person(&state, &acting).await?;
     let created = match input {
         NewSession::Claude(input) => {
             create_claude_session(State(state.clone()), Extension(acting), input).await
@@ -623,7 +643,7 @@ async fn create_codex_session(
     Extension(who): Extension<ChatIdentity>,
     input: CreateCodexSession,
 ) -> Result<Json<Value>, ApiFailure> {
-    if !who.is_owner() {
+    if !who.is_person() {
         return Err(Error::Forbidden.into());
     }
     let (actor, session) = runtime(&state)?
@@ -661,7 +681,7 @@ async fn create_pi_session(
     Extension(who): Extension<ChatIdentity>,
     input: CreatePiSession,
 ) -> Result<Json<Value>, ApiFailure> {
-    if !who.is_owner() {
+    if !who.is_person() {
         return Err(Error::Forbidden.into());
     }
     #[cfg(unix)]
@@ -709,7 +729,7 @@ async fn create_claude_session(
     Extension(who): Extension<ChatIdentity>,
     input: CreateClaudeSession,
 ) -> Result<Json<Value>, ApiFailure> {
-    if !who.is_owner() {
+    if !who.is_person() {
         return Err(Error::Forbidden.into());
     }
     #[cfg(unix)]
@@ -735,7 +755,8 @@ async fn takeover_pi_session(
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
-    if !who.is_owner() {
+    let who = state.store.acting_for(&who, &id, Access::Own).await?;
+    if !who.is_person() {
         return Err(Error::Forbidden.into());
     }
     #[cfg(unix)]
@@ -758,7 +779,8 @@ async fn resume_session(
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
-    if !who.is_owner() {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
+    if !who.is_person() {
         return Err(Error::Forbidden.into());
     }
     let (actor, session) = runtime(&state)?
@@ -787,6 +809,7 @@ async fn fork_session(
     Path(id): Path<String>,
     ChatJson(input): ChatJson<ForkRequest>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Own).await?;
     let (actor, session) = runtime(&state)?
         .fork(&who, &id, input.at, &input.name, input.actor_id)
         .await
@@ -810,6 +833,7 @@ async fn rewind_files(
     Path(id): Path<String>,
     ChatJson(input): ChatJson<RewindFiles>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
     let result = runtime(&state)?
         .rewind_files(&who, &id, input.at, input.dry_run)
         .await
@@ -882,7 +906,7 @@ async fn read_session(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, Error> {
     if who.session_id.as_deref() != Some(&id) {
-        store.acting_for(&who, &id).await?;
+        store.acting_for(&who, &id, Access::Read).await?;
     }
     let session = crate::native_output::with_tails(store.sessions(&who).await?)
         .into_iter()
@@ -897,6 +921,7 @@ async fn change_session(
     Path(id): Path<String>,
     ChatJson(input): ChatJson<SessionChange>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Own).await?;
     let budget = input.budget_usd.is_some();
     let mut session = state.store.change_session(&who, &id, input).await?;
     if let Some(runtime) = &state.runtime {
@@ -917,7 +942,8 @@ async fn read_session_settings(
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
-    if !who.is_owner() {
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
+    if !who.is_person() {
         return Err(Error::Forbidden.into());
     }
     let settings = runtime(&state)?
@@ -933,7 +959,8 @@ async fn change_session_settings(
     Path(id): Path<String>,
     ChatJson(input): ChatJson<AgentSettings>,
 ) -> Result<Json<Value>, ApiFailure> {
-    if !who.is_owner() {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
+    if !who.is_person() {
         return Err(Error::Forbidden.into());
     }
     let settings = runtime(&state)?
@@ -948,7 +975,7 @@ async fn stop_session(
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let who = state.store.acting_for(&who, &id).await?;
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
     let (mut session, was_already_stopped) =
         state.store.stop_chat_session_with_state(&who, &id).await?;
     let note = if was_already_stopped {
@@ -1033,6 +1060,7 @@ async fn session_live(
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
     state.store.observed_session(&who, &id).await?;
     Ok(Json(json!(runtime(&state)?.live_state(&id))))
 }
@@ -1051,6 +1079,7 @@ async fn session_output(
     Path(id): Path<String>,
     query: Result<Query<OutputQuery>, QueryRejection>,
 ) -> Result<Json<crate::native_output::Page>, Error> {
+    let who = store.acting_for(&who, &id, Access::Read).await?;
     let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
     Ok(Json(store.native_output(&who, &id, query.after).await?))
 }
@@ -1062,6 +1091,7 @@ async fn session_events(
     Path(id): Path<String>,
     query: Result<Query<crate::native_output::EventQuery>, QueryRejection>,
 ) -> Result<Json<crate::native_output::EventPage>, Error> {
+    let who = store.acting_for(&who, &id, Access::Read).await?;
     let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
     Ok(Json(store.native_events(&who, &id, query).await?))
 }
@@ -1072,7 +1102,7 @@ async fn interrupt_session(
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let who = state.store.acting_for(&who, &id).await?;
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
     let interrupted = runtime(&state)?
         .interrupt(&who, &id)
         .await
@@ -1094,6 +1124,7 @@ async fn compact_session(
     Path(id): Path<String>,
     ChatJson(request): ChatJson<CompactRequest>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
     runtime(&state)?
         .compact(&who, &id, request.instructions.as_deref())
         .await
@@ -1119,7 +1150,7 @@ async fn session_input(
     Path(id): Path<String>,
     ChatJson(input): ChatJson<InputRequest>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let who = state.store.acting_for(&who, &id).await?;
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
     runtime(&state)?
         .input(&who, &id, &input.text, input.mode, &input.images)
         .await
@@ -1169,6 +1200,7 @@ async fn session_file(
     Path(id): Path<String>,
     Query(input): Query<PathQuery>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
     let folder = session_folder(&state, &who, &id).await?;
     let text = crate::workspace_git::file(&folder, &input.path)
         .await
@@ -1182,6 +1214,7 @@ async fn session_git(
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
     let folder = session_folder(&state, &who, &id).await?;
     let status = crate::workspace_git::status(&folder)
         .await
@@ -1205,6 +1238,7 @@ async fn session_diff(
     Path(id): Path<String>,
     Query(input): Query<DiffQuery>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
     let folder = session_folder(&state, &who, &id).await?;
     let diff = crate::workspace_git::diff(&folder, input.path.as_deref(), input.staged)
         .await
@@ -1224,6 +1258,7 @@ async fn session_terminals(
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
     session_folder(&state, &who, &id).await?;
     Ok(Json(
         json!({ "terminals": runtime(&state)?.terminals.of(&id) }),
@@ -1237,6 +1272,7 @@ async fn open_terminal(
     Path(id): Path<String>,
     ChatJson(size): ChatJson<TerminalSize>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
     let folder = session_folder(&state, &who, &id).await?;
     let terminal = runtime(&state)?
         .terminals
@@ -1246,13 +1282,15 @@ async fn open_terminal(
 }
 
 /// The terminal of a session the owner may see.
+/// A terminal of a session `who` may read, or for `Write` also type into, resize and close.
 async fn owned_terminal(
     state: &AppState,
     who: &ChatIdentity,
     terminal: &str,
+    need: Access,
 ) -> Result<crate::terminals::Info, ApiFailure> {
     let info = runtime(state)?.terminals.info(terminal)?;
-    state.store.chat_session(who, &info.session_id).await?;
+    state.store.acting_for(who, &info.session_id, need).await?;
     Ok(info)
 }
 
@@ -1270,7 +1308,7 @@ async fn terminal_output(
     Path(terminal): Path<String>,
     Query(input): Query<TerminalRead>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let info = owned_terminal(&state, &who, &terminal).await?;
+    let info = owned_terminal(&state, &who, &terminal, Access::Read).await?;
     let output = runtime(&state)?.terminals.output(&terminal, input.after)?;
     Ok(Json(json!({ "terminal": info, "output": output })))
 }
@@ -1288,7 +1326,7 @@ async fn terminal_input(
     Path(terminal): Path<String>,
     ChatJson(input): ChatJson<TerminalInput>,
 ) -> Result<Json<Value>, ApiFailure> {
-    owned_terminal(&state, &who, &terminal).await?;
+    owned_terminal(&state, &who, &terminal, Access::Write).await?;
     runtime(&state)?
         .terminals
         .write(&terminal, &input.data)
@@ -1302,7 +1340,7 @@ async fn resize_terminal(
     Path(terminal): Path<String>,
     ChatJson(size): ChatJson<TerminalSize>,
 ) -> Result<Json<Value>, ApiFailure> {
-    owned_terminal(&state, &who, &terminal).await?;
+    owned_terminal(&state, &who, &terminal, Access::Write).await?;
     let info = runtime(&state)?
         .terminals
         .resize(&terminal, size.cols, size.rows)
@@ -1316,7 +1354,7 @@ async fn close_terminal(
     Extension(who): Extension<ChatIdentity>,
     Path(terminal): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
-    owned_terminal(&state, &who, &terminal).await?;
+    owned_terminal(&state, &who, &terminal, Access::Write).await?;
     runtime(&state)?.terminals.close(&terminal)?;
     Ok(Json(json!({ "closed": true })))
 }
@@ -1333,6 +1371,7 @@ async fn git_stage(
     Path(id): Path<String>,
     ChatJson(input): ChatJson<GitPaths>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
     let folder = session_folder(&state, &who, &id).await?;
     crate::workspace_git::stage(&folder, &input.paths)
         .await
@@ -1346,6 +1385,7 @@ async fn git_unstage(
     Path(id): Path<String>,
     ChatJson(input): ChatJson<GitPaths>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
     let folder = session_folder(&state, &who, &id).await?;
     crate::workspace_git::unstage(&folder, &input.paths)
         .await
@@ -1360,6 +1400,7 @@ async fn git_discard(
     Path(id): Path<String>,
     ChatJson(input): ChatJson<GitPaths>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
     let folder = session_folder(&state, &who, &id).await?;
     crate::workspace_git::discard(&folder, &input.paths)
         .await
@@ -1379,6 +1420,7 @@ async fn git_commit(
     Path(id): Path<String>,
     ChatJson(input): ChatJson<GitCommit>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
     let folder = session_folder(&state, &who, &id).await?;
     let commit = crate::workspace_git::commit(&folder, &input.message)
         .await
@@ -1391,6 +1433,7 @@ async fn git_push(
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
     let folder = session_folder(&state, &who, &id).await?;
     crate::workspace_git::push(&folder)
         .await
@@ -1404,6 +1447,7 @@ async fn git_pull_request(
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
     let folder = session_folder(&state, &who, &id).await?;
     let pull_request = crate::workspace_git::pull_request(&folder)
         .await
@@ -1427,6 +1471,7 @@ async fn git_open_pull_request(
     Path(id): Path<String>,
     ChatJson(input): ChatJson<OpenPullRequest>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
     let folder = session_folder(&state, &who, &id).await?;
     let url =
         crate::workspace_git::open_pull_request(&folder, &input.title, &input.body, input.draft)
@@ -1442,6 +1487,7 @@ async fn session_files(
     Path(id): Path<String>,
     Query(input): Query<FilesQuery>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
     let folder = session_folder(&state, &who, &id).await?;
     let files = crate::workspace_files::find(&folder, &input.query, input.limit)
         .await
@@ -1462,6 +1508,7 @@ async fn requeue(
     Path((id, item)): Path<(String, String)>,
     ChatJson(input): ChatJson<QueuedChange>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
     runtime(&state)?
         .change_queued(&who, &id, &item, Some(&input.text))
         .await
@@ -1475,6 +1522,7 @@ async fn unqueue(
     Extension(who): Extension<ChatIdentity>,
     Path((id, item)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
     runtime(&state)?
         .change_queued(&who, &id, &item, None)
         .await
@@ -1488,6 +1536,7 @@ async fn session_commands(
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
     let commands = runtime(&state)?
         .commands(&who, &id)
         .await
@@ -1585,7 +1634,7 @@ async fn agent_settings(
     Path(id): Path<String>,
     ChatJson(input): ChatJson<Value>,
 ) -> Result<Json<Value>, ApiFailure> {
-    if !who.is_owner() {
+    if !who.is_person() {
         return Err(Error::Forbidden.into());
     }
     Ok(Json(
@@ -1598,7 +1647,7 @@ async fn read_agent_settings(
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
-    if !who.is_owner() {
+    if !who.is_person() {
         return Err(Error::Forbidden.into());
     }
     Ok(Json(json!(
@@ -1619,7 +1668,7 @@ async fn settings_catalog(
     Extension(who): Extension<ChatIdentity>,
     Query(input): Query<CatalogQuery>,
 ) -> Result<Json<Value>, ApiFailure> {
-    if !who.is_owner() {
+    if !who.is_person() {
         return Err(Error::Forbidden.into());
     }
     Ok(Json(
@@ -1884,7 +1933,7 @@ fn desktop_preflight(origin: &str) -> Response {
     );
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
-        header::HeaderValue::from_static("content-type, authorization"),
+        header::HeaderValue::from_static("content-type, authorization, x-zerolux-invite"),
     );
     headers.insert(
         header::ACCESS_CONTROL_MAX_AGE,
@@ -2010,11 +2059,14 @@ async fn workspace(State(store): State<Store>) -> Result<Json<Workspace>, Error>
 /// refusing a number. 2: the domain requires a signed-in, bound account (`auth-v1`).
 pub const API_VERSION: u32 = 2;
 
+/// The invitation a signup comes with, once the workspace has its owner.
+const INVITE_HEADER: &str = "x-zerolux-invite";
+
 /// Reachable without credentials: what this kernel is, the company it runs, and whether an
 /// account still has to be bound to its owner.
 async fn health(State(state): State<AppState>) -> Result<Json<Value>, Error> {
     let workspace = state.store.workspace_info().await?;
-    let mut capabilities = vec!["byoh-v1", "owner-onboarding-v1", "chat-v1"];
+    let mut capabilities = vec!["byoh-v1", "owner-onboarding-v1", "chat-v1", "people-v1"];
     let auth = match &state.auth {
         Some(_) => {
             capabilities.push("auth-v1");
@@ -2043,10 +2095,17 @@ fn failure(status: StatusCode, message: &str) -> ApiFailure {
     ApiFailure(Box::new(refused(status, message)))
 }
 
-fn identity_json(session: &HumanSession, actor_id: Option<&str>, setup_required: bool) -> Value {
+/// `owner`: whether the account is the workspace's owner, rather than a person who joined.
+fn identity_json(
+    session: &HumanSession,
+    actor_id: Option<&str>,
+    owner: bool,
+    setup_required: bool,
+) -> Value {
     json!({
         "user": { "id": session.subject, "name": session.name, "email": session.email },
         "actor_id": actor_id,
+        "owner": owner,
         "setup_required": setup_required,
     })
 }
@@ -2059,10 +2118,13 @@ async fn auth_identity(
     auth_of(&state)?;
     let setup_required = !state.store.owner_bound().await?;
     match identity {
-        Identity::Unbound(session) => Ok(Json(identity_json(&session, None, setup_required))),
-        Identity::Known(who, Some(session)) if who.is_owner() => Ok(Json(identity_json(
+        Identity::Unbound(session) => {
+            Ok(Json(identity_json(&session, None, false, setup_required)))
+        }
+        Identity::Known(who, Some(session)) if who.is_person() => Ok(Json(identity_json(
             &session,
             who.actor_id.as_deref(),
+            state.store.is_workspace_owner(&who).await?,
             setup_required,
         ))),
         Identity::Known(..) => Err(Error::Forbidden.into()),
@@ -2070,16 +2132,29 @@ async fn auth_identity(
     }
 }
 
-/// Binds the signed-in account to the owner: the first account to claim is the owner; no
-/// later account is.
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Claim {
+    invite: Option<String>,
+}
+
+/// Binds the signed-in account to a person: the first account to claim is the owner; a later
+/// one joins as a new person with an invitation.
 async fn auth_claim(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
+    body: axum::body::Bytes,
 ) -> Result<Json<Value>, ApiFailure> {
     auth_of(&state)?;
+    let claim: Claim = if body.iter().all(u8::is_ascii_whitespace) {
+        Claim::default()
+    } else {
+        serde_json::from_slice(&body)
+            .map_err(|_| failure(StatusCode::BAD_REQUEST, "Send an invitation, or nothing"))?
+    };
     let session = match identity {
         Identity::Unbound(session) => session,
-        Identity::Known(who, _) if who.is_owner() => {
+        Identity::Known(who, _) if who.is_person() => {
             return Err(failure(
                 StatusCode::CONFLICT,
                 "This account is already the owner",
@@ -2088,6 +2163,22 @@ async fn auth_claim(
         Identity::Known(..) => return Err(Error::Forbidden.into()),
         Identity::Anonymous => return Err(Error::Unauthorized.into()),
     };
+    if let Some(invite) = claim.invite {
+        let person = state
+            .store
+            .join(&invite, &session.subject, &session.name)
+            .await
+            .map_err(|error| match error {
+                Error::NotFound => invitation_gone(),
+                other => other.into(),
+            })?;
+        return Ok(Json(identity_json(
+            &session,
+            Some(&person.id),
+            false,
+            false,
+        )));
+    }
     let owner = state
         .store
         .bind_owner(&session.subject, &session.name)
@@ -2095,11 +2186,11 @@ async fn auth_claim(
         .map_err(|error| match error {
             Error::Conflict => failure(
                 StatusCode::FORBIDDEN,
-                "This workspace already has its owner",
+                "This workspace already has its owner; join it with an invitation",
             ),
             other => other.into(),
         })?;
-    Ok(Json(identity_json(&session, Some(&owner.id), false)))
+    Ok(Json(identity_json(&session, Some(&owner.id), true, false)))
 }
 
 /// Better Auth's own endpoints, through the kernel: sign-in, sign-out, sessions, password.
@@ -2140,18 +2231,29 @@ async fn auth_proxy(
     );
     let peer = peer(&request);
     let enroll = if signup {
-        match state.store.owner_bound().await {
-            Ok(false) => {}
-            Ok(true) => {
+        // Open for the owner's account; after it, for a person with an invitation.
+        let invite = request
+            .headers()
+            .get(INVITE_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        match (state.store.owner_bound().await, &invite) {
+            (Ok(false), _) => {}
+            (Ok(true), None) => {
                 return refused(
                     StatusCode::FORBIDDEN,
-                    "This workspace already has its owner; sign in instead",
+                    "This workspace already has its owner; sign in, or join it with an invitation",
                 );
             }
-            Err(error) => return error.into_response(),
+            (Ok(true), Some(invite)) => match state.store.invitation(invite).await {
+                Ok(_) => {}
+                Err(Error::NotFound) => return invitation_gone().into_response(),
+                Err(error) => return error.into_response(),
+            },
+            (Err(error), _) => return error.into_response(),
         }
-        // The owner's name, as the kernel checks it: a signup the claim would refuse is
-        // refused here, before an account exists.
+        // The name, as the kernel checks it: a signup the claim would refuse is refused
+        // here, before an account exists.
         let (parts, body) = request.into_parts();
         let bytes = match axum::body::to_bytes(body, 64 * 1024).await {
             Ok(bytes) => bytes,
@@ -2161,7 +2263,11 @@ async fn auth_proxy(
             .ok()
             .and_then(|v| v.get("name").and_then(Value::as_str).map(str::to_owned))
             .unwrap_or_default();
-        if let Err(error) = crate::store::owner_name(&name) {
+        let checked = match invite {
+            Some(_) => state.store.person_name(&name).await,
+            None => crate::store::owner_name(&name),
+        };
+        if let Err(error) = checked {
             return error.into_response();
         }
         request = Request::from_parts(parts, Body::from(bytes));
@@ -2174,7 +2280,7 @@ async fn auth_proxy(
             if revokes
                 && response.status().is_success()
                 && let Identity::Known(who, _) = identity
-                && who.is_owner()
+                && who.is_person()
                 && let Some(runtime) = &state.runtime
                 && let Err(error) = runtime.disconnect_clients(who.addressee()).await
             {
@@ -2196,21 +2302,79 @@ async fn auth_proxy(
 }
 async fn set_owner_name(
     State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
     Json(input): Json<SetOwnerName>,
 ) -> Result<Json<Actor>, Error> {
+    if !store.is_workspace_owner(&who).await? {
+        return Err(Error::Forbidden);
+    }
     Ok(Json(store.set_owner_name(input).await?))
 }
 async fn set_workspace_name(
     State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
     Json(input): Json<SetWorkspaceName>,
 ) -> Result<Json<Value>, Error> {
+    if !store.is_workspace_owner(&who).await? {
+        return Err(Error::Forbidden);
+    }
     Ok(Json(
         json!({ "workspace": store.set_workspace_name(input).await? }),
     ))
 }
+/// A person's own new agent.
 async fn create_agent(
     State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
     Json(input): Json<CreateAgent>,
 ) -> Result<impl IntoResponse, Error> {
+    if who.actor_id.as_deref() != Some(input.owner_id.as_str()) {
+        return Err(Error::Forbidden);
+    }
     Ok((StatusCode::CREATED, Json(store.create_agent(input).await?)))
+}
+
+/// A new invitation to join the workspace: its token is in the answer only.
+async fn create_invite(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+) -> Result<Json<Value>, Error> {
+    let (invite, token) = store.create_invite(&who).await?;
+    Ok(Json(json!({ "invite": invite, "token": token })))
+}
+
+async fn list_invites(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(json!({ "invites": store.invites(&who).await? })))
+}
+
+async fn revoke_invite(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, Error> {
+    store.revoke_invite(&who, &id).await?;
+    Ok(Json(json!({ "revoked": true })))
+}
+
+/// What an invitation is to, before one signs up with it.
+async fn invitation(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    auth_of(&state)?;
+    match state.store.invitation(&token).await {
+        Ok(invitation) => Ok(Json(json!({ "invitation": invitation }))),
+        Err(Error::NotFound) => Err(invitation_gone()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn invitation_gone() -> ApiFailure {
+    failure(
+        StatusCode::GONE,
+        "This invitation was used, withdrawn or has expired; ask for a new one",
+    )
 }

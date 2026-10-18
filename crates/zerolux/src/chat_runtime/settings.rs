@@ -277,7 +277,7 @@ impl ChatRuntime {
         who: &ChatIdentity,
         harness: &str,
     ) -> Result<Vec<ModelOption>> {
-        if !who.is_owner() {
+        if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
         for session in self
@@ -368,10 +368,9 @@ impl ChatRuntime {
 
     /// Observe, never enforce: choosing a model in the native harness is reflected here too.
     pub async fn refresh_settings(&self) -> Result<()> {
-        let who = self.store.chat_identity(None).await?;
         for session in self
             .store
-            .sessions(&who)
+            .all_sessions()
             .await?
             .into_iter()
             .filter(|session| {
@@ -380,6 +379,7 @@ impl ChatRuntime {
                     && session.host_id.as_deref() == self.store.host()
             })
         {
+            let who = ChatIdentity::person(&session.owner_id);
             let gate = self.settings_gate(&session.id).await;
             let Ok(_guard) = gate.try_lock() else {
                 continue;

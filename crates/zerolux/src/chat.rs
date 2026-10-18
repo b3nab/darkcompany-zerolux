@@ -55,6 +55,7 @@ async fn identity_in<C: ConnectionTrait>(db: &C, who: &ChatIdentity) -> Result<(
     } else {
         actors::Entity::find_by_id(who.actor()?)
             .filter(actors::Column::Kind.eq("human"))
+            .filter(actors::Column::Archived.eq(false))
             .one(db)
             .await?
             .is_some()
@@ -91,9 +92,9 @@ async fn hireable_in<C: ConnectionTrait>(
     }
 }
 
-async fn owner_in<C: ConnectionTrait>(db: &C, who: &ChatIdentity) -> Result<()> {
+async fn person_in<C: ConnectionTrait>(db: &C, who: &ChatIdentity) -> Result<()> {
     identity_in(db, who).await?;
-    if who.is_owner() {
+    if who.is_person() {
         Ok(())
     } else {
         Err(Error::Forbidden)
@@ -152,12 +153,69 @@ async fn session_row_in<C: ConnectionTrait>(db: &C, id: &str) -> Result<sessions
         .ok_or(Error::NotFound)
 }
 
-async fn session_access<C: ConnectionTrait>(db: &C, who: &ChatIdentity, id: &str) -> Result<()> {
+/// What one may do with a session, from reading it to deciding everything about it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Access {
+    /// Its record, output, code and requests.
+    Read,
+    /// Also its input and turn, settings, terminals, code actions, schedules, stop and resume.
+    Write,
+    /// Also its title, organization, budget, sharing, requests and forks: its person's.
+    Own,
+}
+
+/// A person has their own sessions and those shared with the workspace; a session reads
+/// itself and steers the sessions it delegates work to.
+async fn access_of<C: ConnectionTrait>(
+    db: &C,
+    who: &ChatIdentity,
+    id: &str,
+) -> Result<Option<Access>> {
     identity_in(db, who).await?;
-    if !who.is_owner() && who.session_id.as_deref() != Some(id) {
-        return Err(Error::Forbidden);
+    let session = session_row_in(db, id).await?;
+    Ok(match &who.session_id {
+        Some(me) if me == id => Some(Access::Read),
+        Some(me) if session.parent_session_id.as_ref() == Some(me) => Some(Access::Write),
+        Some(_) => None,
+        None if who.actor_id.as_ref() == Some(&session.owner_id) => Some(Access::Own),
+        None => match session.shared.as_deref() {
+            Some("write") => Some(Access::Write),
+            Some("read") => Some(Access::Read),
+            _ => None,
+        },
+    })
+}
+
+async fn session_access_in<C: ConnectionTrait>(
+    db: &C,
+    who: &ChatIdentity,
+    id: &str,
+    need: Access,
+) -> Result<()> {
+    match access_of(db, who, id).await? {
+        Some(access) if access >= need => Ok(()),
+        _ => Err(Error::Forbidden),
     }
-    Ok(())
+}
+
+async fn session_access<C: ConnectionTrait>(db: &C, who: &ChatIdentity, id: &str) -> Result<()> {
+    session_access_in(db, who, id, Access::Read).await
+}
+
+/// The session itself, as its integration reports on it, or its person.
+async fn reporter_in<C: ConnectionTrait>(db: &C, who: &ChatIdentity, id: &str) -> Result<()> {
+    identity_in(db, who).await?;
+    if who.session_id.as_deref() == Some(id) {
+        Ok(())
+    } else {
+        session_access_in(db, who, id, Access::Own).await
+    }
+}
+
+/// The person whose session it is.
+async fn own_in<C: ConnectionTrait>(db: &C, who: &ChatIdentity, id: &str) -> Result<()> {
+    person_in(db, who).await?;
+    session_access_in(db, who, id, Access::Own).await
 }
 
 async fn members_in<C: ConnectionTrait>(db: &C, id: &str) -> Result<Vec<ConversationMember>> {
@@ -322,9 +380,11 @@ async fn personal_event<C: ConnectionTrait>(
         sql(
             db,
             "SELECT COALESCE(s.actor_id,s.id) AS actor_id FROM sessions s WHERE s.id=$1
-            UNION SELECT a.owner_id AS actor_id FROM actors a JOIN sessions s ON s.actor_id=a.id WHERE s.id=$1
-            UNION SELECT h.id AS actor_id FROM actors h JOIN sessions s ON s.actor_id IS NULL
-            WHERE s.id=$1 AND h.kind='human'",
+            UNION SELECT COALESCE(p.actor_id,p.id) AS actor_id FROM sessions p
+            JOIN sessions s ON s.parent_session_id=p.id WHERE s.id=$1
+            UNION SELECT h.id AS actor_id FROM actors h JOIN sessions s
+            ON h.id=s.owner_id OR (s.shared IS NOT NULL AND h.kind='human' AND h.archived=FALSE)
+            WHERE s.id=$1",
             [session_id.into()],
         ),
     )
@@ -364,27 +424,35 @@ async fn delivery_in<C: ConnectionTrait>(db: &C, id: &str) -> Result<ChatDeliver
         .ok_or(Error::NotFound)
 }
 
-async fn agent_session_in<C: ConnectionTrait>(
-    db: &C,
-    who: &ChatIdentity,
-    actor_id: &str,
-    session_id: &str,
-) -> Result<()> {
-    let valid: bool = scalar(
-        db,
-        sql(
+/// A chat member: a person of the workspace, or any person's agent through one of its active
+/// sessions. Chats are shared; an agent's requests still go to its own person.
+async fn member_in<C: ConnectionTrait>(db: &C, member: &ConversationMemberInput) -> Result<()> {
+    let valid: bool = match &member.session_id {
+        None => scalar(
             db,
-            "SELECT EXISTS(SELECT 1 FROM sessions s JOIN actors a ON a.id=s.actor_id
-            WHERE s.id=$1 AND s.actor_id=$2 AND s.stopped_at IS NULL AND a.archived=FALSE AND a.owner_id=$3)",
-            [session_id.into(), actor_id.into(), who.actor()?.into()],
-        ),
-    )
-    .await?;
+            sql(
+                db,
+                "SELECT EXISTS(SELECT 1 FROM actors WHERE id=$1 AND kind='human' AND archived=FALSE)",
+                [member.actor_id.clone().into()],
+            ),
+        )
+        .await?,
+        Some(session_id) => scalar(
+            db,
+            sql(
+                db,
+                "SELECT EXISTS(SELECT 1 FROM sessions s JOIN actors a ON a.id=s.actor_id
+                WHERE s.id=$1 AND s.actor_id=$2 AND s.stopped_at IS NULL AND a.archived=FALSE)",
+                [session_id.clone().into(), member.actor_id.clone().into()],
+            ),
+        )
+        .await?,
+    };
     if valid {
         Ok(())
     } else {
         Err(Error::Invalid(
-            "Choose an active session owned by this agent".into(),
+            "Choose a person, or an active session of the agent".into(),
         ))
     }
 }
@@ -538,11 +606,25 @@ async fn approval_in<C: ConnectionTrait>(db: &C, id: &str) -> Result<ChatApprova
     })
 }
 
+/// A session's own requests; for a person, those of the sessions they may read.
 async fn approvals_in<C: ConnectionTrait>(db: &C, who: &ChatIdentity) -> Result<Vec<ChatApproval>> {
     let mut query = tool_approvals::Entity::find();
-    if let Some(session) = &who.session_id {
-        query = query.filter(tool_approvals::Column::SessionId.eq(session));
-    }
+    query = match &who.session_id {
+        Some(session) => query.filter(tool_approvals::Column::SessionId.eq(session)),
+        None => query.filter(
+            tool_approvals::Column::SessionId.in_subquery(
+                sea_orm::sea_query::Query::select()
+                    .column(sessions::Column::Id)
+                    .from(sessions::Entity)
+                    .cond_where(
+                        sea_orm::Condition::any()
+                            .add(sessions::Column::OwnerId.eq(who.actor()?))
+                            .add(sessions::Column::Shared.is_not_null()),
+                    )
+                    .to_owned(),
+            ),
+        ),
+    };
     let rows = query
         .order_by_asc(tool_approvals::Column::CreatedAt)
         .order_by_asc(tool_approvals::Column::Id)
@@ -583,15 +665,14 @@ impl Store {
                 session_id: Some(session.id),
             })
         } else {
+            // Without a token: the workspace's owner, as a kernel without sign-in serves them.
             let owner = actors::Entity::find()
                 .filter(actors::Column::Kind.eq("human"))
+                .filter(actors::Column::InvitedBy.is_null())
                 .one(&self.db)
                 .await?
                 .ok_or(Error::NotFound)?;
-            Ok(ChatIdentity {
-                actor_id: Some(owner.id),
-                session_id: None,
-            })
+            Ok(ChatIdentity::person(&owner.id))
         }
     }
 
@@ -606,7 +687,7 @@ impl Store {
     ) -> Result<()> {
         self.require_onboarding().await?;
         let tx = self.read().await?;
-        owner_in(&tx, who).await?;
+        person_in(&tx, who).await?;
         hireable_in(&tx, who, harness, actor_id, name).await?;
         Ok(())
     }
@@ -624,7 +705,7 @@ impl Store {
             return Err(Error::Invalid("Invalid native session locator".into()));
         }
         let tx = self.write().await?;
-        owner_in(&tx, who).await?;
+        person_in(&tx, who).await?;
         let actor = match hireable_in(
             &tx,
             who,
@@ -652,6 +733,7 @@ impl Store {
                     permission_mode: Set(None),
                     approval_policy: Set(None),
                     sandbox: Set(None),
+                    invited_by: Set(None),
                 }
                 .insert(&tx)
                 .await?,
@@ -674,6 +756,9 @@ impl Store {
                     (true, true) => return Err(Error::StoppedByOwner),
                     (false, false) => return Err(Error::Conflict),
                     _ => {}
+                }
+                if who.actor_id.as_ref() != Some(&row.owner_id) {
+                    return Err(Error::Forbidden);
                 }
                 // A session works for one agent; one without may be given to an agent.
                 if row.actor_id.is_some() && row.actor_id != actor_id {
@@ -727,6 +812,8 @@ impl Store {
                     archived_at: Set(None),
                     budget_cents: Set(None),
                     parent_session_id: Set(None),
+                    owner_id: Set(who.actor()?.to_owned()),
+                    shared: Set(None),
                 }
                 .insert(&tx)
                 .await?;
@@ -743,43 +830,79 @@ impl Store {
         })
     }
 
-    /// The people in the workspace: whom notices about every session reach.
-    pub(crate) async fn people(&self) -> Result<Vec<String>> {
-        Ok(actors::Entity::find()
-            .filter(actors::Column::Kind.eq("human"))
-            .filter(actors::Column::Archived.eq(false))
-            .all(&self.db)
-            .await?
-            .into_iter()
-            .map(|actor| actor.id)
-            .collect())
+    /// Whom notices about a session reach: its person, or every person when it is shared.
+    pub async fn readers(&self, session_id: &str) -> Result<Vec<String>> {
+        ids(
+            &self.db,
+            sql(
+                &self.db,
+                "SELECT h.id FROM actors h JOIN sessions s
+                ON h.id=s.owner_id OR (s.shared IS NOT NULL AND h.kind='human' AND h.archived=FALSE)
+                WHERE s.id=$1",
+                [session_id.into()],
+            ),
+        )
+        .await
     }
 
-    /// A session's row, for reading its native record: every workspace identity may.
+    /// A session's row, for reading its native record: whoever may read the session.
     pub(crate) async fn observed_session(
         &self,
         who: &ChatIdentity,
         id: &str,
     ) -> Result<sessions::Model> {
         let tx = self.read().await?;
-        identity_in(&tx, who).await?;
+        session_access(&tx, who, id).await?;
         session_row_in(&tx, id).await
     }
 
+    /// A person's own sessions and those shared with the workspace; for a session, itself and
+    /// the sessions it delegates work to.
     pub async fn sessions(&self, who: &ChatIdentity) -> Result<Vec<ChatSession>> {
         let tx = self.read().await?;
         identity_in(&tx, who).await?;
+        let (filter, value) = match &who.session_id {
+            Some(session) => ("s.id=$1 OR s.parent_session_id=$1", session.clone()),
+            None => (
+                "s.owner_id=$1 OR s.shared IS NOT NULL",
+                who.actor()?.to_owned(),
+            ),
+        };
         fetch_all(
             &tx,
             sql(
                 &tx,
-                format!(
-                    "{SESSIONS} WHERE $1 IS NULL OR s.id=$1 OR s.parent_session_id=$1 ORDER BY s.created_at,s.id"
-                ),
-                [who.session_id.clone().into()],
+                format!("{SESSIONS} WHERE {filter} ORDER BY s.created_at,s.id"),
+                [value.into()],
             ),
         )
         .await
+    }
+
+    /// Every session this kernel hosts or knows of, for the kernel's own work on them.
+    pub(crate) async fn all_sessions(&self) -> Result<Vec<ChatSession>> {
+        fetch_all(
+            &self.db,
+            sql(
+                &self.db,
+                format!("{SESSIONS} ORDER BY s.created_at,s.id"),
+                Vec::new(),
+            ),
+        )
+        .await
+    }
+
+    /// The person whose session it is, as the kernel acts for them on it.
+    pub async fn session_person(&self, id: &str) -> Result<ChatIdentity> {
+        Ok(ChatIdentity::person(
+            &session_row_in(&self.db, id).await?.owner_id,
+        ))
+    }
+
+    /// What `who` may do with a session; none when it is not theirs to see.
+    pub async fn session_access(&self, who: &ChatIdentity, id: &str) -> Result<Option<Access>> {
+        let tx = self.read().await?;
+        access_of(&tx, who, id).await
     }
 
     /// Called once when the kernel runtime starts, not on every database open, for the
@@ -809,7 +932,7 @@ impl Store {
 
     pub async fn chat_session_locator(&self, who: &ChatIdentity, id: &str) -> Result<Value> {
         let tx = self.read().await?;
-        session_access(&tx, who, id).await?;
+        reporter_in(&tx, who, id).await?;
         decode(&session_row_in(&tx, id).await?.native_locator_json)
     }
 
@@ -853,7 +976,7 @@ impl Store {
         id: &str,
     ) -> Result<IssuedChatSession> {
         let tx = self.write().await?;
-        owner_in(&tx, who).await?;
+        own_in(&tx, who, id).await?;
         let session = session_in(&tx, id).await?;
         if session.stopped_at.is_some() {
             return Err(Error::StoppedByOwner);
@@ -909,7 +1032,7 @@ impl Store {
         id: &str,
     ) -> Result<(ChatSession, bool)> {
         let tx = self.write().await?;
-        owner_in(&tx, who).await?;
+        own_in(&tx, who, id).await?;
         let existing = session_in(&tx, id).await?;
         let was_already_stopped = existing.stopped_at.is_some();
         if !was_already_stopped {
@@ -926,7 +1049,7 @@ impl Store {
     pub async fn fail_chat_link(&self, who: &ChatIdentity, id: &str, reason: &str) -> Result<bool> {
         let reason = text(reason, "Attention reason", 2_000, true)?;
         let tx = self.write().await?;
-        owner_in(&tx, who).await?;
+        own_in(&tx, who, id).await?;
         if session_in(&tx, id).await?.stopped_at.is_some() {
             return Ok(true);
         }
@@ -959,14 +1082,14 @@ impl Store {
             .is_some())
     }
 
-    /// One session of the owner's, as it is now.
+    /// One session, as it is now, for whoever may read it.
     pub async fn chat_session(&self, who: &ChatIdentity, id: &str) -> Result<ChatSession> {
         let tx = self.read().await?;
-        owner_in(&tx, who).await?;
+        session_access(&tx, who, id).await?;
         session_in(&tx, id).await
     }
 
-    /// A session the owner started for another one, to delegate work to it.
+    /// A session its person started for another one, to delegate work to it.
     pub async fn delegate(&self, child: &str, parent: &str) -> Result<ChatSession> {
         let tx = self.write().await?;
         sessions::Entity::update_many()
@@ -983,21 +1106,19 @@ impl Store {
         Ok(session)
     }
 
-    /// Who acts on a session: the owner, or the session that started it to delegate work to it,
-    /// which acts for the owner on it alone.
-    pub async fn acting_for(&self, who: &ChatIdentity, id: &str) -> Result<ChatIdentity> {
-        let owner = self.chat_identity(None).await?;
-        if who.is_owner() {
-            return Ok(who.clone());
-        }
+    /// Who acts on a session when `who` may do `need` with it: its person, for whom the
+    /// people it is shared with and the session that delegates work to it act.
+    pub async fn acting_for(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+        need: Access,
+    ) -> Result<ChatIdentity> {
         let tx = self.read().await?;
-        identity_in(&tx, who).await?;
-        let session = session_in(&tx, id).await?;
-        if session.parent_session_id.is_some() && session.parent_session_id == who.session_id {
-            Ok(owner)
-        } else {
-            Err(Error::Forbidden)
-        }
+        session_access_in(&tx, who, id, need).await?;
+        Ok(ChatIdentity::person(
+            &session_row_in(&tx, id).await?.owner_id,
+        ))
     }
 
     /// The owner names, pins or archives a session.
@@ -1015,9 +1136,19 @@ impl Store {
             && input.pinned.is_none()
             && input.archived.is_none()
             && input.budget_usd.is_none()
+            && input.shared.is_none()
         {
             return Err(Error::Invalid("Nothing to change".into()));
         }
+        let shared = input
+            .shared
+            .map(|shared| match shared.as_deref() {
+                None | Some("read" | "write") => Ok(shared),
+                Some(_) => Err(Error::Invalid(
+                    "Share a session to read, to write, or not at all".into(),
+                )),
+            })
+            .transpose()?;
         let budget = input
             .budget_usd
             .map(|usd| {
@@ -1030,7 +1161,7 @@ impl Store {
             })
             .transpose()?;
         let tx = self.write().await?;
-        owner_in(&tx, who).await?;
+        own_in(&tx, who, id).await?;
         let existing = session_in(&tx, id).await?;
         let now = now_ms();
         let mut update = sessions::Entity::update_many().filter(sessions::Column::Id.eq(id));
@@ -1047,6 +1178,9 @@ impl Store {
         }
         if let Some(cents) = budget {
             update = update.col_expr(sessions::Column::BudgetCents, Expr::value(cents));
+        }
+        if let Some(shared) = shared {
+            update = update.col_expr(sessions::Column::Shared, Expr::value(shared));
         }
         update.exec(&tx).await?;
         personal_event(&tx, "session.changed", id, json!({"session_id":id})).await?;
@@ -1065,7 +1199,7 @@ impl Store {
     ) -> Result<ChatSession> {
         let reason = text(reason, "Stop reason", 2_000, true)?;
         let tx = self.write().await?;
-        owner_in(&tx, who).await?;
+        own_in(&tx, who, id).await?;
         let existing = session_in(&tx, id).await?;
         if existing.stopped_at.is_none() || existing.status != "stopped" {
             return Err(Error::Conflict);
@@ -1096,7 +1230,7 @@ impl Store {
         }
         let reason = reason(input.reason)?;
         let tx = self.write().await?;
-        session_access(&tx, who, id).await?;
+        reporter_in(&tx, who, id).await?;
         let existing = session_in(&tx, id).await?;
         if existing.stopped_at.is_some() {
             return Err(Error::Conflict);
@@ -1132,7 +1266,7 @@ impl Store {
         }
         let conversation = conversation.filter(|_| activity.as_deref() == Some("working"));
         let tx = self.write().await?;
-        session_access(&tx, who, id).await?;
+        reporter_in(&tx, who, id).await?;
         let existing = session_in(&tx, id).await?;
         if existing.stopped_at.is_some() {
             return Err(Error::Conflict);
@@ -1178,7 +1312,7 @@ impl Store {
             ));
         }
         let tx = self.write().await?;
-        owner_in(&tx, who).await?;
+        person_in(&tx, who).await?;
         let me = who.actor()?.to_owned();
         if !input.members.iter().any(|m| m.actor_id == me) {
             input.members.push(ConversationMemberInput {
@@ -1199,19 +1333,7 @@ impl Store {
             ));
         }
         for member in &input.members {
-            if member.actor_id == me {
-                if member.session_id.is_some() {
-                    return Err(Error::Invalid(
-                        "Human members do not have agent sessions".into(),
-                    ));
-                }
-                continue;
-            }
-            let session_id = member
-                .session_id
-                .as_deref()
-                .ok_or_else(|| Error::Invalid("Choose a session for each agent".into()))?;
-            agent_session_in(&tx, who, &member.actor_id, session_id).await?;
+            member_in(&tx, member).await?;
         }
         let id = Uuid::new_v4().to_string();
         conversations::ActiveModel {
@@ -1246,7 +1368,7 @@ impl Store {
     pub async fn rename_agent(&self, who: &ChatIdentity, id: &str, name: &str) -> Result<Actor> {
         let name = text(name, "Agent name", 200, true)?;
         let tx = self.write().await?;
-        owner_in(&tx, who).await?;
+        person_in(&tx, who).await?;
         // Members recognize each other by name: two actors never share one.
         let taken: bool = scalar(
             &tx,
@@ -1291,7 +1413,7 @@ impl Store {
 
     pub(crate) async fn settings_actor(&self, who: &ChatIdentity, id: &str) -> Result<Actor> {
         let tx = self.read().await?;
-        owner_in(&tx, who).await?;
+        person_in(&tx, who).await?;
         let actor = actors::Entity::find_by_id(id)
             .filter(actors::Column::OwnerId.eq(who.actor()?))
             .filter(actors::Column::Kind.eq("agent"))
@@ -1348,7 +1470,7 @@ impl Store {
         input: AgentSettings,
     ) -> Result<Actor> {
         let tx = self.write().await?;
-        owner_in(&tx, who).await?;
+        person_in(&tx, who).await?;
         let actor = actors::Entity::find_by_id(id)
             .filter(actors::Column::OwnerId.eq(who.actor()?))
             .filter(actors::Column::Kind.eq("agent"))
@@ -1592,7 +1714,7 @@ impl Store {
             who.actor_id.as_deref() == Some(m.actor_id.as_str())
                 && (who.session_id.is_none() || m.session_id == who.session_id)
         });
-        if !participant && !who.is_owner() {
+        if !participant && !who.is_person() {
             return Err(Error::Forbidden);
         }
         if existing.closed_at.is_none() {
@@ -1615,31 +1737,28 @@ impl Store {
         input: ConversationMemberInput,
     ) -> Result<Conversation> {
         let tx = self.write().await?;
-        owner_in(&tx, who).await?;
+        person_in(&tx, who).await?;
         let conversation = conversation_in(&tx, id).await?;
         if conversation.kind != "group" {
             return Err(Error::Invalid("Only a group accepts new members".into()));
         }
-        let session_id = input
-            .session_id
-            .as_deref()
-            .ok_or_else(|| Error::Invalid("Choose a session for each agent".into()))?;
+        access_in(&tx, who, id).await?;
         if let Some(member) = conversation
             .members
             .iter()
             .find(|m| m.actor_id == input.actor_id)
         {
-            return if member.session_id.as_deref() == Some(session_id) {
+            return if member.session_id == input.session_id {
                 Ok(conversation)
             } else {
                 Err(Error::Conflict)
             };
         }
-        agent_session_in(&tx, who, &input.actor_id, session_id).await?;
+        member_in(&tx, &input).await?;
         conversation_members::ActiveModel {
             conversation_id: Set(id.to_owned()),
             actor_id: Set(input.actor_id),
-            session_id: Set(Some(session_id.to_owned())),
+            session_id: Set(input.session_id),
         }
         .insert(&tx)
         .await?;
@@ -1656,7 +1775,7 @@ impl Store {
         paused: bool,
     ) -> Result<Conversation> {
         let tx = self.write().await?;
-        owner_in(&tx, who).await?;
+        person_in(&tx, who).await?;
         access_in(&tx, who, id).await?;
         let existing = conversation_in(&tx, id).await?;
         if existing.parent_id.is_some() {
@@ -2168,8 +2287,9 @@ impl Store {
             _ => None,
         };
         let tx = self.write().await?;
-        owner_in(&tx, who).await?;
         let existing = approval_in(&tx, id).await?;
+        // A session's requests are its person's to decide.
+        own_in(&tx, who, &existing.session_id).await?;
         if existing.kind != "permission" {
             return Err(Error::Invalid("Answer this request instead".into()));
         }
@@ -2231,8 +2351,9 @@ impl Store {
         answer: Value,
     ) -> Result<ChatApproval> {
         let tx = self.write().await?;
-        owner_in(&tx, who).await?;
         let existing = approval_in(&tx, id).await?;
+        // A session's requests are its person's to decide.
+        own_in(&tx, who, &existing.session_id).await?;
         crate::requests::check_answer(&existing.kind, &existing.details, &answer)?;
         if let Some(previous) = &existing.answer {
             return if previous == &answer {

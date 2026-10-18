@@ -255,6 +255,7 @@ impl Store {
         }
         if actors::Entity::find()
             .filter(actors::Column::Kind.eq("human"))
+            .filter(actors::Column::InvitedBy.is_null())
             .one(&tx)
             .await?
             .is_none()
@@ -274,6 +275,7 @@ impl Store {
                 permission_mode: sea_orm::Set(None),
                 approval_policy: sea_orm::Set(None),
                 sandbox: sea_orm::Set(None),
+                invited_by: sea_orm::Set(None),
             }
             .insert(&tx)
             .await?;
@@ -289,6 +291,7 @@ impl Store {
             .col_expr(actors::Column::Name, Expr::value(name))
             .col_expr(actors::Column::NameConfirmed, Expr::value(true))
             .filter(actors::Column::Kind.eq("human"))
+            .filter(actors::Column::InvitedBy.is_null())
             .exec_with_returning(&tx)
             .await?
             .pop()
@@ -330,6 +333,7 @@ impl Store {
     pub async fn actor_for_subject(&self, subject: &str) -> Result<Option<Actor>> {
         Ok(actors::Entity::find()
             .filter(actors::Column::AuthSubject.eq(subject))
+            .filter(actors::Column::Archived.eq(false))
             .one(&self.db)
             .await?)
     }
@@ -342,6 +346,7 @@ impl Store {
         let tx = self.write().await?;
         let owner = actors::Entity::find()
             .filter(actors::Column::Kind.eq("human"))
+            .filter(actors::Column::InvitedBy.is_null())
             .one(&tx)
             .await?
             .ok_or(Error::NotFound)?;
@@ -375,6 +380,7 @@ impl Store {
     async fn owner(&self) -> Result<Actor> {
         actors::Entity::find()
             .filter(actors::Column::Kind.eq("human"))
+            .filter(actors::Column::InvitedBy.is_null())
             .one(&self.db)
             .await?
             .ok_or(Error::NotFound)
@@ -425,7 +431,7 @@ impl Store {
             .await?;
         let onboarding_required = !actors
             .iter()
-            .find(|actor| actor.kind == "human")
+            .find(|actor| actor.kind == "human" && actor.invited_by.is_none())
             .ok_or(Error::NotFound)?
             .name_confirmed;
         tx.commit().await?;

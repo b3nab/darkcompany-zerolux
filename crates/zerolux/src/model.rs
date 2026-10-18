@@ -59,11 +59,20 @@ pub struct ChatIdentity {
 }
 
 impl ChatIdentity {
-    pub fn is_owner(&self) -> bool {
+    /// A person of the workspace, rather than a session.
+    pub fn is_person(&self) -> bool {
         self.session_id.is_none()
     }
 
-    /// Who takes part in chats: the owner, or an agent through its session.
+    /// A person, as the kernel acts for them.
+    pub fn person(id: &str) -> Self {
+        Self {
+            actor_id: Some(id.to_owned()),
+            session_id: None,
+        }
+    }
+
+    /// Who takes part in chats: a person, or an agent through its session.
     pub fn actor(&self) -> Result<&str, crate::store::Error> {
         self.actor_id
             .as_deref()
@@ -247,6 +256,10 @@ pub struct ChatSession {
     pub budget_usd: Option<f64>,
     /// The session that started this one to delegate work to it.
     pub parent_session_id: Option<String>,
+    /// The person whose session it is.
+    pub owner_id: String,
+    /// Private when none; otherwise the workspace's people may `read` it, or `write` to it too.
+    pub shared: Option<String>,
     /// How its native record ends, from this kernel host's watcher.
     #[serde(flatten)]
     pub tail: crate::native_events::Tail,
@@ -284,6 +297,8 @@ impl FromQueryResult for ChatSession {
                 .try_get::<Option<i64>>(pre, "budget_cents")?
                 .map(|cents| cents as f64 / 100.0),
             parent_session_id: row.try_get(pre, "parent_session_id")?,
+            owner_id: row.try_get(pre, "owner_id")?,
+            shared: row.try_get(pre, "shared")?,
             tail: Default::default(),
         })
     }
@@ -320,7 +335,7 @@ pub struct SessionCommand {
     pub invoke: String,
 }
 
-/// What the owner changes about a session; what is omitted stays.
+/// What a session's person changes about it; what is omitted stays.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionChange {
@@ -329,6 +344,18 @@ pub struct SessionChange {
     pub archived: Option<bool>,
     /// What the session may cost, in US dollars; `0` takes the limit away.
     pub budget_usd: Option<f64>,
+    /// `read` or `write` shares it with the workspace's people; `null` makes it private again.
+    #[serde(default, deserialize_with = "present")]
+    pub shared: Option<Option<String>>,
+}
+
+/// A field that is present, even as `null`, as opposed to one left out.
+fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Serialize, Deserialize)]

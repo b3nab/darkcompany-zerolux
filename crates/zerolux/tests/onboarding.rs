@@ -251,7 +251,8 @@ async fn renaming_owner_preserves_uuid_and_existing_agent_ownership() {
             )
             .await
             .status(),
-        StatusCode::BAD_REQUEST
+        // An agent is hired by its own person.
+        StatusCode::FORBIDDEN
     );
 }
 
@@ -362,10 +363,11 @@ async fn only_the_owner_renames_the_workspace_and_names_are_bytes_bounded() {
     let pool = migrated_database(&path).await;
     let token = "agent-token";
     let hash = format!("{:x}", sha2::Sha256::digest(token.as_bytes()));
-    sqlx::query("INSERT INTO sessions (id, actor_id, harness, native_session_id, title, workspace, native_locator_json, token_hash, status, created_at)
-        VALUES ('s1', ?, 'pi', 'native', 'pi', '/w', '{}', ?, 'connected', 1)")
+    sqlx::query("INSERT INTO sessions (id, actor_id, harness, native_session_id, title, workspace, native_locator_json, token_hash, status, created_at, owner_id)
+        VALUES ('s1', ?, 'pi', 'native', 'pi', '/w', '{}', ?, 'connected', 1, ?)")
         .bind(&agent.id)
         .bind(&hash)
+        .bind(agent.owner_id.as_deref())
         .execute(&pool)
         .await
         .unwrap();

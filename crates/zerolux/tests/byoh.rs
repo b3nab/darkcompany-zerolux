@@ -98,7 +98,8 @@ async fn hiring_names_an_agent_of_a_harness_and_only_humans_can_own_agents() {
             )
             .await
             .status(),
-        StatusCode::BAD_REQUEST
+        // A person's agents are their own: nobody hires one for someone, or something, else.
+        StatusCode::FORBIDDEN
     );
     assert_eq!(
         kernel

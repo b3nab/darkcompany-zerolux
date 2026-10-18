@@ -77,7 +77,7 @@ impl ChatRuntime {
         id: &str,
         instructions: Option<&str>,
     ) -> Result<()> {
-        if !who.is_owner() {
+        if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
         let instructions = instructions.map(str::trim).filter(|text| !text.is_empty());
@@ -143,7 +143,7 @@ impl ChatRuntime {
         text: Option<&str>,
     ) -> Result<()> {
         async {
-            if !who.is_owner() {
+            if !who.is_person() {
                 return Err(Error::Forbidden.into());
             }
             if text.is_some_and(|text| text.trim().is_empty() || text.len() > 64 * 1024) {
@@ -178,7 +178,7 @@ impl ChatRuntime {
     }
 
     async fn commands_native(&self, who: &ChatIdentity, id: &str) -> Result<Vec<SessionCommand>> {
-        if !who.is_owner() {
+        if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
         let session = self.store.chat_session(who, id).await?;
@@ -238,7 +238,7 @@ impl ChatRuntime {
         mode: InputMode,
         images: &[InputImage],
     ) -> Result<()> {
-        if !who.is_owner() {
+        if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
         if (text.trim().is_empty() && images.is_empty()) || text.len() > 64 * 1024 {
@@ -306,7 +306,7 @@ impl ChatRuntime {
     }
 
     async fn interrupt_native(&self, who: &ChatIdentity, id: &str) -> Result<bool> {
-        if !who.is_owner() {
+        if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
         let session = self
