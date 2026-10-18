@@ -61,6 +61,34 @@ pub(crate) fn workspace_dir(path: &str) -> Result<String> {
     Ok(workspace.to_string_lossy().into_owned())
 }
 
+/// Tells the people in the workspace when a terminal's output grows or it ends, at most every
+/// 100 ms per terminal: clients then read the new output over HTTP.
+async fn terminal_notices(
+    store: Store,
+    livekit: Arc<LiveKit>,
+    terminals: Arc<crate::terminals::Terminals>,
+    mut heard: mpsc::UnboundedReceiver<String>,
+) {
+    while let Some(first) = heard.recv().await {
+        let mut grown = std::collections::HashSet::from([first]);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        while let Ok(id) = heard.try_recv() {
+            grown.insert(id);
+        }
+        let Ok(people) = store.people().await else {
+            continue;
+        };
+        for id in grown {
+            let Ok(info) = terminals.info(&id) else {
+                continue;
+            };
+            let notice = serde_json::json!({"type":"terminal.output","terminal_id":id,
+                "session_id":info.session_id,"end":info.end,"ended":info.ended});
+            let _ = livekit.notify(&notice, &people).await;
+        }
+    }
+}
+
 /// `git` in `dir`, bounded; its own message on failure.
 async fn git(dir: &std::path::Path, args: &[&str]) -> Result<String> {
     let output = tokio::time::timeout(
@@ -212,6 +240,9 @@ pub struct ChatRuntime {
     live: crate::live::Live,
     /// The budget, in cents, each session last reached: its work was stopped for it once.
     budgets_reached: std::sync::Mutex<HashMap<String, i64>>,
+    /// Terminals the owner opened in sessions' folders.
+    pub terminals: Arc<crate::terminals::Terminals>,
+    terminal_notices: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl ChatRuntime {
@@ -252,6 +283,14 @@ impl ChatRuntime {
     ) -> Result<Arc<Self>> {
         store.recover_sessions().await?;
         let worktrees = links.with_file_name("worktrees");
+        let (grown, heard) = mpsc::unbounded_channel();
+        let terminals = Arc::new(crate::terminals::Terminals::new(grown));
+        let terminal_notices = tokio::spawn(terminal_notices(
+            store.clone(),
+            livekit.clone(),
+            terminals.clone(),
+            heard,
+        ));
         let attachments = links.with_file_name("attachments");
         let (stop, stopped) = watch::channel(false);
         let changed = Arc::new(Notify::new());
@@ -315,6 +354,8 @@ impl ChatRuntime {
             attachments,
             live: crate::live::Live::default(),
             budgets_reached: std::sync::Mutex::new(HashMap::new()),
+            terminals,
+            terminal_notices: Mutex::new(Some(terminal_notices)),
         }))
     }
 
@@ -1425,6 +1466,7 @@ impl ChatRuntime {
 
     pub async fn stop_session(&self, id: &str) -> Result<Option<&'static str>> {
         self.live.forget(id);
+        self.terminals.close_all(id);
         let agent = self.agents.lock().await.remove(id);
         let Some(mut agent) = agent else {
             #[cfg(unix)]
@@ -1481,6 +1523,10 @@ impl ChatRuntime {
     pub async fn shutdown(&self) -> Result<()> {
         self.stop.send_replace(true);
         let mut error = None;
+        if let Some(notices) = self.terminal_notices.lock().await.take() {
+            notices.abort();
+            let _ = notices.await;
+        }
         for (_, agent) in self.agents.lock().await.drain() {
             agent.release().await;
         }

@@ -29,5 +29,6 @@ pub mod requests;
 pub mod server;
 pub mod sessions;
 pub mod store;
+pub mod terminals;
 pub mod workspace_files;
 pub mod workspace_git;
