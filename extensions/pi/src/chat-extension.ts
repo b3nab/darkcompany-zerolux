@@ -818,7 +818,16 @@ export default function chatExtension(pi: ExtensionAPI) {
           pi.sendUserMessage(content, options);
           for (let waited = 0; waited < 3000 && !seen; waited += 50) {
             await new Promise((resolve) => setTimeout(resolve, 50));
-            if (!seen && !ctx.isIdle() && ctx.hasPendingMessages()) return;
+            if (!seen && !ctx.isIdle() && ctx.hasPendingMessages()) {
+              // Waiting in pi's queue: shown as such until it enters the context.
+              ownerQueue.push({
+                id: randomUUID(),
+                text: text.trim() || "[image]",
+                expanded: waiter.expanded,
+              });
+              reportQueue();
+              return;
+            }
           }
           if (!seen)
             throw new Error(
@@ -964,6 +973,13 @@ export default function chatExtension(pi: ExtensionAPI) {
         );
     }
   });
+  /** The owner's inputs waiting in pi's queue, oldest first. */
+  const ownerQueue: { id: string; text: string; expanded: boolean }[] = [];
+  const reportQueue = () =>
+    live({
+      type: "queue",
+      items: ownerQueue.map(({ id, text }) => ({ id, text })),
+    });
   // What the session produces streams to every linked workspace while it runs: its words
   // and reasoning as they come, a tool's output as it grows. The record has them after.
   const live = (change: LiveChange) => {
@@ -1049,6 +1065,13 @@ export default function chatExtension(pi: ExtensionAPI) {
               .join("\n");
       for (const waiter of ownerInputs)
         if (waiter.expanded || waiter.text === text) waiter.seen();
+      const taken = ownerQueue.findIndex(
+        (queued) => queued.expanded || queued.text === text,
+      );
+      if (taken >= 0) {
+        ownerQueue.splice(taken, 1);
+        reportQueue();
+      }
     }
     void messageStarted(bridges(), event.message, queuedInputs);
   });
@@ -1056,6 +1079,11 @@ export default function chatExtension(pi: ExtensionAPI) {
     streaming = undefined;
     toolOutput.clear();
     live({ type: "clear" });
+    // Nothing waits once pi has settled with an empty queue.
+    if (ownerQueue.length && !context?.hasPendingMessages()) {
+      ownerQueue.length = 0;
+      reportQueue();
+    }
     settled = true;
     dialogShared = false;
     await Promise.all(bridges().map((bridge) => bridge.settled()));

@@ -1307,6 +1307,7 @@ while IFS= read -r line; do :; done
     });
     const handlers = new Map<string, (event: any, ctx: any) => unknown>();
     let command!: { handler(args: string, ctx: unknown): Promise<void> };
+    let busy = false;
     let active = [
       "read",
       "bash",
@@ -1320,8 +1321,8 @@ while IFS= read -r line; do :; done
         getSessionId: () => "11111111-1111-4111-8111-111111111111",
         getSessionName: () => "fixture",
       },
-      isIdle: () => true,
-      hasPendingMessages: () => false,
+      isIdle: () => !busy,
+      hasPendingMessages: () => busy,
       abort() {},
       ui: { setStatus() {}, notify() {} },
     };
@@ -1389,6 +1390,27 @@ while IFS= read -r line; do :; done
         { type: "done", item: "call" },
         { type: "clear" },
       ]);
+      // An input waiting in pi's queue shows as waiting until it enters the context.
+      busy = true;
+      const queued = await rpc(record.endpoint, {
+        nonce: record.nonce,
+        method: "input",
+        link_id: "own",
+        text: "then the docs",
+        mode: "queue",
+      });
+      expect(queued.ok).toBe(true);
+      for (let i = 0; i < 100 && live.length < 6; i++) await Bun.sleep(20);
+      expect(live[5]).toMatchObject({
+        type: "queue",
+        items: [{ text: "then the docs" }],
+      });
+      await handlers.get("message_start")!(
+        { message: { role: "user", content: "then the docs" } },
+        ctx,
+      );
+      for (let i = 0; i < 100 && live.length < 7; i++) await Bun.sleep(20);
+      expect(live[6]).toEqual({ type: "queue", items: [] });
     } finally {
       await command?.handler("off", ctx);
       await handlers.get("session_shutdown")?.({}, ctx);
