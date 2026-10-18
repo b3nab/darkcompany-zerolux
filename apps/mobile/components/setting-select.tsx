@@ -5,7 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 
-/** Native choices, virtualized for a harness catalog; never a free-form model input. */
+/**
+ * Native choices, virtualized for a harness catalog; never a free-form model input. Compact,
+ * it is a pill named by its value, as under a session's box.
+ */
 export function SettingSelect({
   label,
   value,
@@ -13,7 +16,8 @@ export function SettingSelect({
   onChange,
   disabled = false,
   none,
-  placeholder = "Not reported or varies by session",
+  placeholder = "The harness's own default",
+  compact = false,
 }: {
   label: string;
   value: string;
@@ -22,6 +26,7 @@ export function SettingSelect({
   disabled?: boolean;
   none?: string;
   placeholder?: string;
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const choices = [
@@ -32,8 +37,8 @@ export function SettingSelect({
     choices.find((choice) => choice.value === value)?.label ??
     (value || placeholder);
   return (
-    <View className="gap-2">
-      <Text className="text-sm font-medium">{label}</Text>
+    <View className={compact ? "max-w-[48%]" : "gap-2"}>
+      {compact ? null : <Text className="text-sm font-medium">{label}</Text>}
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={label}
@@ -42,11 +47,16 @@ export function SettingSelect({
         disabled={disabled}
         onPress={() => setOpen(true)}
         className={cn(
-          "min-h-11 rounded-md border border-input bg-background px-3 py-2",
+          compact
+            ? "rounded-full border border-border px-2.5 py-1 active:bg-accent"
+            : "min-h-11 rounded-md border border-input bg-background px-3 py-2",
           disabled && "opacity-50",
         )}
       >
-        <Text numberOfLines={2} className="text-sm">
+        <Text
+          numberOfLines={compact ? 1 : 2}
+          className={compact ? "text-xs text-muted-foreground" : "text-sm"}
+        >
           {selected}
         </Text>
       </Pressable>
