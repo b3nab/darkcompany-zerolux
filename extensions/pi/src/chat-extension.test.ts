@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import setupChatExtension from "./chat-extension.ts";
+import setupChatExtension, { runCommand } from "./chat-extension.ts";
 
 // These lifecycle fixtures have no model configured, but still expose the native SDK accessor.
 const chatExtension = (api: ExtensionAPI) =>
@@ -1304,3 +1304,19 @@ while IFS= read -r line; do :; done
   },
   15000,
 );
+
+test("the extension's own commands are dispatched by pi, never sent to the model as text", () => {
+  const sent: unknown[][] = [];
+  const pi = {
+    sendUserMessage: (...args: unknown[]) => sent.push(args),
+  } as unknown as ExtensionAPI;
+  runCommand(pi, "auto-reload", "followUp");
+  runCommand(pi, "reload");
+  expect(sent).toEqual([
+    [
+      "/zerolux-chat auto-reload",
+      { expandPromptTemplates: true, deliverAs: "followUp" },
+    ],
+    ["/zerolux-chat reload", { expandPromptTemplates: true }],
+  ]);
+});

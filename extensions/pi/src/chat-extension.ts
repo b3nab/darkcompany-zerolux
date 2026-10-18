@@ -100,6 +100,21 @@ interface Link {
 
 /** The key of a link: its workspace. A kernel that names none gets the legacy single slot. */
 const LEGACY = "";
+
+/**
+ * Runs one of this extension's own commands. pi dispatches an extension command only when
+ * the message asks for it; otherwise the model would receive the command as text.
+ */
+export function runCommand(
+  pi: Pick<ExtensionAPI, "sendUserMessage">,
+  args: string,
+  deliverAs?: "followUp",
+) {
+  pi.sendUserMessage(`/zerolux-chat ${args}`, {
+    expandPromptTemplates: true,
+    ...(deliverAs ? { deliverAs } : {}),
+  });
+}
 /** The tools an agent's session takes part in chats with. */
 const CHAT_TOOLS = ["zerolux_send", "zerolux_thread", "zerolux_close_thread"];
 const installedCode = integrationCode(import.meta.url);
@@ -217,9 +232,7 @@ export default function chatExtension(pi: ExtensionAPI) {
       }
       updateQueued = true;
       // A native extension command, not model input; no autowake or new inference.
-      pi.sendUserMessage("/zerolux-chat auto-reload", {
-        deliverAs: "followUp",
-      });
+      runCommand(pi, "auto-reload", "followUp");
     } catch {
       cancelUpdate();
     }
@@ -555,9 +568,7 @@ export default function chatExtension(pi: ExtensionAPI) {
     async execute(_id, args, _signal, _update, ctx) {
       await leaveWake(ctx.sessionManager.getSessionId(), args.then);
       // Tools cannot reload; the command does, once pi is idle.
-      pi.sendUserMessage("/zerolux-chat reload", {
-        expandPromptTemplates: true,
-      });
+      runCommand(pi, "reload");
       return {
         content: [
           {
