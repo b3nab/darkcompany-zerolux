@@ -13,4 +13,5 @@ pub mod messages;
 pub mod schedules;
 pub mod sessions;
 pub mod tool_approvals;
+pub mod triggers;
 pub mod workspace;

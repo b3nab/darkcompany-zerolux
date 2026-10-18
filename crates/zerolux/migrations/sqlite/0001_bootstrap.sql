@@ -50,3 +50,5 @@ CREATE INDEX `schedules_due` ON `schedules` (`next_run_at`) WHERE "enabled" = TR
 CREATE TABLE `invites` (`id` text NOT NULL, `token_hash` text NOT NULL, `created_by` text NOT NULL, `created_at` integer NOT NULL, `expires_at` integer NOT NULL, `accepted_by` text NULL, `accepted_at` integer NULL, PRIMARY KEY (`id`), CONSTRAINT `0` FOREIGN KEY (`accepted_by`) REFERENCES `actors` (`id`) ON UPDATE NO ACTION ON DELETE NO ACTION, CONSTRAINT `1` FOREIGN KEY (`created_by`) REFERENCES `actors` (`id`) ON UPDATE NO ACTION ON DELETE NO ACTION);
 -- Create index "invites_token_hash" to table: "invites"
 CREATE UNIQUE INDEX `invites_token_hash` ON `invites` (`token_hash`);
+-- Create "triggers" table
+CREATE TABLE `triggers` (`id` text NOT NULL, `session_id` text NOT NULL, `event` text NOT NULL, `failures_only` boolean NOT NULL, `prompt` text NOT NULL, `enabled` boolean NOT NULL, `last_seen` text NULL, `last_run_at` integer NULL, `last_error` text NULL, `created_at` integer NOT NULL, PRIMARY KEY (`id`), CONSTRAINT `0` FOREIGN KEY (`session_id`) REFERENCES `sessions` (`id`) ON UPDATE NO ACTION ON DELETE NO ACTION, CHECK ("event" IN ('ci')));

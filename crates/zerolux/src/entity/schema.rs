@@ -77,6 +77,7 @@ pub fn sql(backend: DatabaseBackend) -> String {
         tool_approvals,
         schedules,
         invites,
+        triggers,
     );
     tables.extend(indexes);
     tables.extend(foreign_keys);
