@@ -29,7 +29,7 @@ import {
   type SavedPiSession,
 } from "./saved-session.ts";
 import { waitAndExec } from "./exec-gate.ts";
-import { newPiSession } from "./new-session.ts";
+import { newPiSession, openPiSession } from "./new-session.ts";
 type Snapshot = PiHistorySnapshot & Partial<PiInitialState>;
 
 export interface PiRunnerConfig {
@@ -42,6 +42,8 @@ export interface PiRunnerConfig {
   entry: string;
   /** Set only by the execution host for one explicit creation request. */
   creation?: boolean;
+  /** Set only by the execution host when the owner opens a saved session in ZeroLux. */
+  opening?: boolean;
   initial?: NativeSettingsPatch;
 }
 export interface PiRunnerDeps {
@@ -117,7 +119,7 @@ export class PiRunner {
   private inputClosed = false;
   private verifiedState?: PiInitialState;
   private controlPath?: string;
-  private identity?: { actor: string; company: string; link: string };
+  private identity?: { actor: string | null; company: string; link: string };
   private phase: "waiting" | "starting" | "running" | "stopping" | "ended" =
     "waiting";
   private links = new Set<string>();
@@ -154,6 +156,7 @@ export class PiRunner {
       );
       if (
         !this.config.creation &&
+        !this.config.opening &&
         !this.lease.previousNativeStopped(this.profile.lastPid) &&
         this.deps.alive(this.profile.lastPid)
       )
@@ -845,6 +848,13 @@ async function main() {
       config.entry,
       config.pi,
       config.initial,
+    );
+  else if (config.opening)
+    config = await openPiSession(
+      config.file,
+      config.workspace,
+      config.entry,
+      config.pi,
     );
   await mkdir(registry, { recursive: true, mode: 0o700 });
   const runner = new PiRunner(config);
