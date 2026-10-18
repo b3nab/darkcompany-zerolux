@@ -113,6 +113,7 @@ import { sendsOnEnter } from "./ChatView";
 import { useOwner } from "./AuthGate";
 import { ChangesPanel, FilesPanel, TerminalPanel } from "./SessionCode";
 import { AskOnTheSide, InputActions } from "./SessionFork";
+import { SessionSchedules } from "./SessionSchedules";
 import type { Fork } from "./SessionFork";
 import type { CodePane } from "./SessionCode";
 import { SidePanel } from "@/components/side-panel";
@@ -791,6 +792,13 @@ export function SessionView({
                       ? () => perform(() => chat.takeoverPi(session.id))
                       : undefined
                   }
+                />
+              )}
+              {about && owner && (
+                <SessionSchedules
+                  session={session}
+                  busy={busy}
+                  perform={perform}
                 />
               )}
               {more && (

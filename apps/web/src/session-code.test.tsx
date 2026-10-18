@@ -4,6 +4,7 @@ import { setKernelFetch, useSessionGit } from "@zerolux/chat";
 import type { ChatSession, GitStatus } from "@zerolux/chat";
 import { ChangesPanel, FilesPanel } from "./SessionCode";
 import { InputActions } from "./SessionFork";
+import { ScheduleForm } from "./SessionSchedules";
 import type { InputBlock } from "@/components/session-blocks";
 
 afterEach(() => setKernelFetch());
@@ -146,4 +147,26 @@ test("the Files panel finds a session's files by what is typed", () => {
     />,
   );
   expect(html).toContain('aria-label="Find a file"');
+});
+
+test("a schedule is written as a rule, and says in words when it runs", () => {
+  const form = (rule: Parameters<typeof ScheduleForm>[0]["initial"]["rule"]) =>
+    renderToStaticMarkup(
+      <ScheduleForm
+        initial={{ rule, prompt: "Check the build" }}
+        busy={false}
+        save={() => {}}
+        cancel={() => {}}
+      />,
+    );
+  const weekday = form({ every: "weekday", hour: 9, minute: 0 });
+  expect(weekday).toContain("Every weekday at 09:00");
+  expect(weekday).toContain('value="09:00"');
+  expect(weekday).toContain(">Check the build</textarea>");
+  expect(form({ every: "week", day: 1, hour: 18, minute: 30 })).toContain(
+    "Every Monday at 18:30",
+  );
+  const custom = form({ every: "custom", cron: "*/15 * * * *" });
+  expect(custom).toContain('aria-label="Cron pattern"');
+  expect(custom).toContain("*/15 * * * *, in the time");
 });
