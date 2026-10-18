@@ -211,28 +211,32 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/actors", post(create_agent))
         .route_layer(middleware::from_fn(owner_only));
     let domain = legacy
-        .route("/sessions", get(discover_sessions))
-        .route("/chat/hire", post(hire_session))
-        .route("/chat/claude-sessions", post(create_claude_session))
-        .route("/chat/codex-sessions", post(create_codex_session))
-        .route("/chat/pi-sessions", post(create_pi_session))
-        .route("/chat/sessions/{id}/resume", post(resume_session))
-        .route("/chat/sessions/{id}/takeover", post(takeover_pi_session))
+        .route("/sessions", get(list_sessions).post(create_session))
+        .route("/sessions/discover", get(discover_sessions))
+        .route("/sessions/attach", post(attach_session))
+        .route("/sessions/catalog", get(settings_catalog))
+        .route("/sessions/{id}", get(read_session).patch(change_session))
+        .route(
+            "/sessions/{id}/settings",
+            get(read_session_settings).patch(change_session_settings),
+        )
+        .route("/sessions/{id}/resume", post(resume_session))
+        .route("/sessions/{id}/takeover", post(takeover_pi_session))
+        .route("/sessions/{id}/stop", post(stop_session))
+        .route("/sessions/{id}/output", get(session_output))
+        .route("/sessions/{id}/live", get(session_live))
+        .route("/sessions/{id}/events", get(session_events))
+        .route("/sessions/{id}/interrupt", post(interrupt_session))
+        .route("/sessions/{id}/input", post(session_input))
+        .route("/sessions/{id}/compact", post(compact_session))
         .route("/actors/{id}/name", post(rename_agent))
         .route(
             "/actors/{id}/settings",
             get(read_agent_settings).post(agent_settings),
         )
-        .route("/chat/settings-catalog", get(settings_catalog))
-        .route("/chat/sessions", get(chat_sessions))
-        .route("/chat/sessions/{id}/stop", post(stop_session))
         .route("/chat/sessions/{id}/status", post(session_status))
         .route("/chat/sessions/{id}/activity", post(session_activity))
-        .route("/chat/sessions/{id}/output", get(session_output))
-        .route("/chat/sessions/{id}/events", get(session_events))
-        .route("/chat/sessions/{id}/interrupt", post(interrupt_session))
-        .route("/chat/sessions/{id}/input", post(session_input))
-        .route("/chat/sessions/{id}/compact", post(compact_session))
+        .route("/chat/sessions/{id}/live", post(session_live_changes))
         .route(
             "/conversations",
             get(conversations).post(create_conversation),
@@ -361,7 +365,7 @@ async fn identify(State(state): State<AppState>, mut request: Request, next: Nex
                             Err(error) => return error.into_response(),
                             Ok(Some(actor)) => Identity::Known(
                                 ChatIdentity {
-                                    actor_id: actor.id,
+                                    actor_id: Some(actor.id),
                                     session_id: None,
                                 },
                                 Some(session),
@@ -489,22 +493,24 @@ async fn discover_sessions(
 }
 
 #[derive(Deserialize)]
-struct HireRequest {
+struct AttachRequest {
     discovered_session_id: String,
+    /// A new agent's name; with neither a name nor `actor_id` the session has no agent.
+    #[serde(default)]
     name: String,
     actor_id: Option<String>,
 }
 
-async fn hire_session(
+async fn attach_session(
     State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
-    ChatJson(input): ChatJson<HireRequest>,
+    ChatJson(input): ChatJson<AttachRequest>,
 ) -> Result<Json<Value>, ApiFailure> {
     if !who.is_owner() {
         return Err(Error::Forbidden.into());
     }
     let (actor, session) = runtime(&state)?
-        .hire(
+        .attach(
             &who,
             &input.discovered_session_id,
             &input.name,
@@ -515,10 +521,34 @@ async fn hire_session(
     Ok(Json(json!({ "actor": actor, "session": session })))
 }
 
+/// A new session of one of the harnesses, with or without an agent.
+#[derive(Deserialize)]
+#[serde(tag = "harness")]
+enum NewSession {
+    #[serde(rename = "claude-code")]
+    Claude(CreateClaudeSession),
+    #[serde(rename = "codex")]
+    Codex(CreateCodexSession),
+    #[serde(rename = "pi")]
+    Pi(CreatePiSession),
+}
+
+async fn create_session(
+    state: State<AppState>,
+    who: Extension<ChatIdentity>,
+    ChatJson(input): ChatJson<NewSession>,
+) -> Result<Json<Value>, ApiFailure> {
+    match input {
+        NewSession::Claude(input) => create_claude_session(state, who, input).await,
+        NewSession::Codex(input) => create_codex_session(state, who, input).await,
+        NewSession::Pi(input) => create_pi_session(state, who, input).await,
+    }
+}
+
 async fn create_codex_session(
     State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
-    ChatJson(input): ChatJson<CreateCodexSession>,
+    input: CreateCodexSession,
 ) -> Result<Json<Value>, ApiFailure> {
     if !who.is_owner() {
         return Err(Error::Forbidden.into());
@@ -556,7 +586,7 @@ async fn create_codex_session(
 async fn create_pi_session(
     State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
-    ChatJson(input): ChatJson<CreatePiSession>,
+    input: CreatePiSession,
 ) -> Result<Json<Value>, ApiFailure> {
     if !who.is_owner() {
         return Err(Error::Forbidden.into());
@@ -604,7 +634,7 @@ async fn create_pi_session(
 async fn create_claude_session(
     State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
-    ChatJson(input): ChatJson<CreateClaudeSession>,
+    input: CreateClaudeSession,
 ) -> Result<Json<Value>, ApiFailure> {
     if !who.is_owner() {
         return Err(Error::Forbidden.into());
@@ -658,34 +688,79 @@ async fn resume_session(
     if !who.is_owner() {
         return Err(Error::Forbidden.into());
     }
-    #[cfg(unix)]
-    {
-        let current = state.store.chat_session(&who, &id).await?;
-        let result = if current.harness == "pi" {
-            runtime(&state)?.resume_pi(&who, &id).await
-        } else {
-            runtime(&state)?.resume_claude(&who, &id).await
-        };
-        let (actor, session) = result.map_err(runtime_error)?;
-        Ok(Json(json!({"actor":actor,"session":session})))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (state, id);
-        Err(
-            Error::Invalid("Owned Claude sessions are not available on this platform".into())
-                .into(),
-        )
-    }
+    let (actor, session) = runtime(&state)?
+        .resume(&who, &id)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({"actor":actor,"session":session})))
 }
 
-async fn chat_sessions(
+async fn list_sessions(
     State(store): State<Store>,
     Extension(who): Extension<ChatIdentity>,
 ) -> Result<Json<Value>, Error> {
-    Ok(Json(
-        json!({ "sessions": store.chat_sessions(&who).await? }),
-    ))
+    Ok(Json(json!({ "sessions": store.sessions(&who).await? })))
+}
+
+async fn read_session(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, Error> {
+    if !who.is_owner() && who.session_id.as_deref() != Some(&id) {
+        return Err(Error::Forbidden);
+    }
+    let session = store
+        .sessions(&who)
+        .await?
+        .into_iter()
+        .find(|session| session.id == id)
+        .ok_or(Error::NotFound)?;
+    Ok(Json(json!({ "session": session })))
+}
+
+async fn change_session(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<SessionChange>,
+) -> Result<Json<Value>, ApiFailure> {
+    let session = state.store.change_session(&who, &id, input).await?;
+    if let Some(runtime) = &state.runtime {
+        runtime.changed();
+    }
+    Ok(Json(json!({ "session": session })))
+}
+
+async fn read_session_settings(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    if !who.is_owner() {
+        return Err(Error::Forbidden.into());
+    }
+    let settings = runtime(&state)?
+        .session_settings(&who, &id)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!(settings)))
+}
+
+async fn change_session_settings(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<AgentSettings>,
+) -> Result<Json<Value>, ApiFailure> {
+    if !who.is_owner() {
+        return Err(Error::Forbidden.into());
+    }
+    let settings = runtime(&state)?
+        .change_session_settings(&who, &id, input)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!(settings)))
 }
 
 async fn stop_session(
@@ -746,6 +821,39 @@ async fn session_status(
     Ok(Json(
         json!({ "session": store.set_chat_session_status(&who, &id, input).await? }),
     ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LiveChanges {
+    changes: Vec<crate::live::Change>,
+}
+
+/// The integration's report of what its session is producing right now.
+async fn session_live_changes(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<LiveChanges>,
+) -> Result<Json<Value>, ApiFailure> {
+    if who.session_id.as_deref() != Some(&id) {
+        return Err(Error::Forbidden.into());
+    }
+    let seq = runtime(&state)?
+        .live_changes(&id, input.changes)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "seq": seq })))
+}
+
+/// What the session is producing right now, before its native record has it.
+async fn session_live(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    state.store.observed_session(&who, &id).await?;
+    Ok(Json(json!(runtime(&state)?.live_state(&id))))
 }
 
 #[derive(Deserialize)]
@@ -1041,8 +1149,8 @@ async fn livekit_token(
     let runtime = runtime(&state)?;
     // A person's token ends with their sign-in; an agent's lasts its working day.
     let mut ticket = match session {
-        Some(Extension(session)) => runtime.human_token(&who.actor_id, session.expires_at),
-        None => runtime.client_token(&who.actor_id),
+        Some(Extension(session)) => runtime.human_token(who.addressee(), session.expires_at),
+        None => runtime.client_token(who.addressee()),
     }
     .map_err(runtime_error)?;
     let host = request.headers().get("host").and_then(|h| h.to_str().ok());
@@ -1403,7 +1511,7 @@ async fn auth_identity(
         Identity::Unbound(session) => Ok(Json(identity_json(&session, None, setup_required))),
         Identity::Known(who, Some(session)) if who.is_owner() => Ok(Json(identity_json(
             &session,
-            Some(&who.actor_id),
+            who.actor_id.as_deref(),
             setup_required,
         ))),
         Identity::Known(..) => Err(Error::Forbidden.into()),
@@ -1517,7 +1625,7 @@ async fn auth_proxy(
                 && let Identity::Known(who, _) = identity
                 && who.is_owner()
                 && let Some(runtime) = &state.runtime
-                && let Err(error) = runtime.disconnect_clients(&who.actor_id).await
+                && let Err(error) = runtime.disconnect_clients(who.addressee()).await
             {
                 tracing::error!(
                     error = format!("{error:#}"),

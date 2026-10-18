@@ -228,7 +228,7 @@ async fn child_kernel_discovers_and_hires_an_isolated_native_session_over_http()
     let url = format!("http://127.0.0.1:{port}/api");
     let client = owner::client(&format!("http://127.0.0.1:{port}"), Duration::from_secs(20)).await;
     let discovery = client
-        .get(format!("{url}/sessions"))
+        .get(format!("{url}/sessions/discover"))
         .send()
         .await
         .unwrap()
@@ -260,7 +260,7 @@ async fn child_kernel_discovers_and_hires_an_isolated_native_session_over_http()
         "discovery must not attach"
     );
     let hired = client
-        .post(format!("{url}/chat/hire"))
+        .post(format!("{url}/sessions/attach"))
         .json(&json!({
             "discovered_session_id": codex["id"], "name":"Isolated Codex"
         }))
@@ -311,7 +311,7 @@ async fn child_kernel_discovers_and_hires_an_isolated_native_session_over_http()
     native.wait(|state| state.queue.len() == 1).await;
     let session = hired["session"]["id"].as_str().unwrap();
     let stopped = client
-        .post(format!("{url}/chat/sessions/{session}/stop"))
+        .post(format!("{url}/sessions/{session}/stop"))
         .send()
         .await
         .unwrap();
@@ -325,7 +325,7 @@ async fn child_kernel_discovers_and_hires_an_isolated_native_session_over_http()
     assert_eq!(native.count("thread/queue/delete"), 1);
 
     let hired_pi = client
-        .post(format!("{url}/chat/hire"))
+        .post(format!("{url}/sessions/attach"))
         .json(&json!({
             "discovered_session_id":pi["id"], "name":"Isolated pi"
         }))
@@ -338,7 +338,7 @@ async fn child_kernel_discovers_and_hires_an_isolated_native_session_over_http()
         .await
         .unwrap();
     let pi_session = hired_pi["session"]["id"].as_str().unwrap();
-    let pi_stop_url = format!("{url}/chat/sessions/{pi_session}/stop");
+    let pi_stop_url = format!("{url}/sessions/{pi_session}/stop");
     let stopped_pi = client
         .post(&pi_stop_url)
         .send()
@@ -449,7 +449,7 @@ async fn livekit_tickets_are_scoped_to_the_authenticated_actor_and_restart_requi
     )
     .await
     .unwrap();
-    let session = kernel.store.chat_sessions(&owner).await.unwrap().remove(0);
+    let session = kernel.store.sessions(&owner).await.unwrap().remove(0);
     assert_eq!(session.status, "attention");
     assert!(session.attention_reason.unwrap().contains("restarted"));
     let app = api::router_with_runtime(
@@ -484,9 +484,9 @@ async fn livekit_tickets_are_scoped_to_the_authenticated_actor_and_restart_requi
         assert!(!ticket.to_string().contains("fixture-secret-not-real"));
         let claims = verifier.verify(ticket["token"].as_str().unwrap()).unwrap();
         let expected = if token.is_some() {
-            &agent.actor.id
+            &agent.actor.as_ref().unwrap().id
         } else {
-            &owner.actor_id
+            owner.actor_id.as_ref().unwrap()
         };
         assert!(claims.sub.starts_with(&format!("{expected}:")));
         assert_eq!(claims.video.room, "zerolux");
@@ -496,10 +496,68 @@ async fn livekit_tickets_are_scoped_to_the_authenticated_actor_and_restart_requi
         identities.push(claims.sub);
     }
     assert_ne!(identities[0], identities[1]);
+    // What a session streams reaches whoever reads it; only the session itself reports it.
+    let live_path = format!("{url}/api/chat/sessions/{}/live", agent.session.id);
+    let reported = kernel
+        .client
+        .post(&live_path)
+        .bearer_auth(&agent.token)
+        .json(&json!({"changes":[
+            {"type":"append","item":"m","kind":"text","text":"Work"},
+            {"type":"append","item":"m","kind":"text","text":"ing"}
+        ]}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(reported["seq"], 2);
+    let state = kernel
+        .client
+        .get(format!("{url}/api/sessions/{}/live", agent.session.id))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        state,
+        json!({"seq":2,"items":[{"id":"m","kind":"text","text":"Working"}]})
+    );
+    let free = kernel.agent("", None).await;
     assert_eq!(
         kernel
             .client
-            .post(format!("{url}/api/chat/hire"))
+            .post(&live_path)
+            .bearer_auth(&free.token)
+            .json(&json!({"changes":[{"type":"clear"}]}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    // A session without an agent gets notices addressed to itself.
+    let ticket = kernel
+        .client
+        .get(format!("{url}/api/livekit/token"))
+        .bearer_auth(&free.token)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let claims = verifier.verify(ticket["token"].as_str().unwrap()).unwrap();
+    assert!(claims.sub.starts_with(&format!("{}:", free.session.id)));
+    assert_eq!(
+        kernel
+            .client
+            .post(format!("{url}/api/sessions/attach"))
             .json(&json!({"discovered_session_id":"invalid", "name":"Fixture"}))
             .send()
             .await
@@ -507,7 +565,7 @@ async fn livekit_tickets_are_scoped_to_the_authenticated_actor_and_restart_requi
             .status(),
         StatusCode::BAD_REQUEST
     );
-    let stop_url = format!("{url}/api/chat/sessions/{}/stop", agent.session.id);
+    let stop_url = format!("{url}/api/sessions/{}/stop", agent.session.id);
     let stopped = kernel
         .client
         .post(&stop_url)
@@ -646,7 +704,7 @@ impl Kernel {
                     actor_id,
                     harness: Harness::Codex,
                     native_session_id: Uuid::new_v4().to_string(),
-                    title: name.into(),
+                    title: format!("{name} session"),
                     workspace: self._dir.path().to_string_lossy().into_owned(),
                     native_locator: json!({ "fixture": true }),
                     resume: false,
@@ -663,7 +721,7 @@ impl Kernel {
                 None,
                 json!({
                     "kind": "dm", "title": "Fixture chat",
-                    "members": [{ "actor_id": agent.actor.id, "session_id": agent.session.id }]
+                    "members": [{ "actor_id": agent.actor.as_ref().unwrap().id, "session_id": agent.session.id }]
                 }),
             )
             .await;
@@ -783,7 +841,7 @@ async fn live_chat_round_trip_and_stop_use_the_real_runtime() {
         .await
         .unwrap();
     runtime.changed();
-    snapshot_after_invalidation(&kernel, "/chat/sessions", &mut invalidations, |view| {
+    snapshot_after_invalidation(&kernel, "/sessions", &mut invalidations, |view| {
         view["sessions"][0]["status"] == "connected"
     })
     .await;
@@ -848,12 +906,15 @@ async fn live_chat_round_trip_and_stop_use_the_real_runtime() {
     })
     .await;
     assert_eq!(view["messages"][1]["text"], "Verified integration fixture");
-    assert_eq!(view["messages"][1]["author_id"], agent.actor.id);
+    assert_eq!(
+        view["messages"][1]["author_id"],
+        agent.actor.as_ref().unwrap().id
+    );
     assert_eq!(view["messages"][1]["reply_to_delivery_id"], delivery);
     assert_eq!(view["messages"][0]["deliveries"][0]["status"], "read");
 
     // Compacting is the owner's choice: the agent's own token cannot start it.
-    let compact = format!("/chat/sessions/{}/compact", agent.session.id);
+    let compact = format!("/sessions/{}/compact", agent.session.id);
     assert_eq!(
         kernel
             .post(&compact, Some(&agent.token), json!({}))
@@ -906,7 +967,7 @@ async fn live_chat_round_trip_and_stop_use_the_real_runtime() {
     }));
     let stopped = kernel
         .post(
-            &format!("/chat/sessions/{}/stop", agent.session.id),
+            &format!("/sessions/{}/stop", agent.session.id),
             None,
             json!({}),
         )
@@ -931,7 +992,7 @@ async fn live_chat_round_trip_and_stop_use_the_real_runtime() {
     assert_eq!(native.state.lock().unwrap().queue.len(), 1);
     let repeated = kernel
         .post(
-            &format!("/chat/sessions/{}/stop", agent.session.id),
+            &format!("/sessions/{}/stop", agent.session.id),
             None,
             json!({}),
         )
@@ -956,7 +1017,7 @@ async fn live_chat_round_trip_and_stop_use_the_real_runtime() {
             &owner,
             HireChatSession {
                 name: "Codex fixture".into(),
-                actor_id: Some(agent.actor.id.clone()),
+                actor_id: Some(agent.actor.as_ref().unwrap().id.clone()),
                 harness: Harness::Codex,
                 native_session_id: codex_runtime::THREAD.into(),
                 title: "Fixture".into(),
@@ -977,7 +1038,7 @@ async fn live_chat_round_trip_and_stop_use_the_real_runtime() {
         .connect_codex(driver, &rehire.session, rehire.token.clone())
         .await
         .unwrap();
-    snapshot_after_invalidation(&kernel, "/chat/sessions", &mut invalidations, |view| {
+    snapshot_after_invalidation(&kernel, "/sessions", &mut invalidations, |view| {
         view["sessions"]
             .as_array()
             .unwrap()
@@ -995,7 +1056,7 @@ async fn live_chat_round_trip_and_stop_use_the_real_runtime() {
     })
     .await;
     native.state.lock().unwrap().drop_cancel_ack = true;
-    let stop_path = format!("/chat/sessions/{}/stop", rehire.session.id);
+    let stop_path = format!("/sessions/{}/stop", rehire.session.id);
     assert_eq!(
         kernel.post(&stop_path, None, json!({})).await.status(),
         StatusCode::SERVICE_UNAVAILABLE
@@ -1008,7 +1069,7 @@ async fn live_chat_round_trip_and_stop_use_the_real_runtime() {
         StatusCode::UNAUTHORIZED
     );
     let sessions = kernel
-        .get("/chat/sessions", None)
+        .get("/sessions", None)
         .await
         .json::<Value>()
         .await
@@ -1121,13 +1182,16 @@ async fn bearer_never_falls_back_to_owner_and_cannot_use_legacy_apis() {
         );
     }
     assert_eq!(
-        kernel.get("/sessions", Some(&agent.token)).await.status(),
+        kernel
+            .get("/sessions/discover", Some(&agent.token))
+            .await
+            .status(),
         StatusCode::FORBIDDEN
     );
     assert_eq!(
         kernel
             .post(
-                "/chat/hire",
+                "/sessions/attach",
                 Some(&agent.token),
                 json!({
                     "discovered_session_id": "a".repeat(64), "name": "Unauthorized hire"
@@ -1146,7 +1210,7 @@ async fn bearer_never_falls_back_to_owner_and_cannot_use_legacy_apis() {
         StatusCode::FORBIDDEN
     );
     let sessions = kernel
-        .get("/chat/sessions", Some(&agent.token))
+        .get("/sessions", Some(&agent.token))
         .await
         .json::<Value>()
         .await
@@ -1166,12 +1230,12 @@ async fn message_dispatch_reply_and_receipts_follow_one_delivery() {
     let body = json!({
         "id": Uuid::new_v4().to_string(), "text": "Please inspect the deterministic fixture",
         "reply_to_delivery_id": null,
-        "author_id": agent.actor.id
+        "author_id": agent.actor.as_ref().unwrap().id
     });
     let response = kernel.post(&path, None, body.clone()).await;
     assert_eq!(response.status(), StatusCode::CREATED);
     let message = response.json::<Value>().await.unwrap();
-    assert_eq!(message["author_id"], owner.actor_id);
+    assert_eq!(message["author_id"], owner.actor_id.clone().unwrap());
     assert_eq!(message["seq"], 1);
     assert_eq!(message["deliveries"][0]["status"], "stored");
     let delivery = message["deliveries"][0]["id"].as_str().unwrap();
@@ -1246,7 +1310,7 @@ async fn message_dispatch_reply_and_receipts_follow_one_delivery() {
     assert_eq!(saved.status(), StatusCode::CREATED);
     assert_eq!(
         saved.json::<Value>().await.unwrap()["author_id"],
-        agent.actor.id
+        agent.actor.as_ref().unwrap().id
     );
     let mut fallback = reply;
     fallback["id"] = json!(Uuid::new_v4().to_string());
@@ -1302,7 +1366,10 @@ async fn sessions_scope_history_and_stop_revokes_only_its_token() {
     let kernel = Kernel::start().await;
     let first = kernel.agent("Agent", None).await;
     let second = kernel
-        .agent("Another context", Some(first.actor.id.clone()))
+        .agent(
+            "Another context",
+            Some(first.actor.as_ref().unwrap().id.clone()),
+        )
         .await;
     let outsider = kernel.agent("Another agent", None).await;
     let conversation = kernel.conversation(&first).await;
@@ -1332,8 +1399,8 @@ async fn sessions_scope_history_and_stop_revokes_only_its_token() {
             json!({
                 "kind": "group", "title": "Different audience",
                 "members": [
-                    { "actor_id": first.actor.id, "session_id": first.session.id },
-                    { "actor_id": outsider.actor.id, "session_id": outsider.session.id }
+                    { "actor_id": first.actor.as_ref().unwrap().id, "session_id": first.session.id },
+                    { "actor_id": outsider.actor.as_ref().unwrap().id, "session_id": outsider.session.id }
                 ]
             }),
         )
@@ -1364,7 +1431,7 @@ async fn sessions_scope_history_and_stop_revokes_only_its_token() {
             .status(),
         StatusCode::FORBIDDEN
     );
-    let stop = format!("/chat/sessions/{}/stop", first.session.id);
+    let stop = format!("/sessions/{}/stop", first.session.id);
     assert_eq!(
         kernel
             .post(&stop, Some(&first.token), json!({}))
@@ -1390,6 +1457,93 @@ async fn sessions_scope_history_and_stop_revokes_only_its_token() {
             .await
             .status(),
         StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn the_console_lists_reads_and_organizes_sessions_with_or_without_an_agent() {
+    let kernel = Kernel::start().await;
+    let free = kernel.agent("", None).await;
+    let agent = kernel.agent("Agent", None).await;
+    assert!(free.actor.is_none());
+    let list = kernel
+        .get("/sessions", None)
+        .await
+        .json::<Value>()
+        .await
+        .unwrap();
+    let listed = list["sessions"].as_array().unwrap();
+    assert_eq!(listed.len(), 2);
+    assert!(
+        listed
+            .iter()
+            .any(|s| s["id"] == free.session.id && s["actor_id"].is_null())
+    );
+    // A session reads itself, never another; the owner reads every one.
+    let path = format!("/sessions/{}", free.session.id);
+    let own = kernel.get(&path, Some(&free.token)).await;
+    assert_eq!(own.status(), StatusCode::OK);
+    assert_eq!(
+        own.json::<Value>().await.unwrap()["session"]["id"],
+        free.session.id
+    );
+    assert_eq!(
+        kernel.get(&path, Some(&agent.token)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    // The owner names, pins and archives it.
+    let patch = |token: Option<&str>, body: Value| {
+        kernel
+            .request(Method::PATCH, &path, token)
+            .json(&body)
+            .send()
+    };
+    let changed = patch(None, json!({"title":"Release", "pinned":true}))
+        .await
+        .unwrap();
+    assert_eq!(changed.status(), StatusCode::OK);
+    let changed = changed.json::<Value>().await.unwrap();
+    assert_eq!(changed["session"]["title"], "Release");
+    assert!(changed["session"]["pinned_at"].is_i64());
+    assert!(changed["session"]["archived_at"].is_null());
+    assert_eq!(
+        patch(Some(&free.token), json!({"archived":true}))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        patch(None, json!({"owner":"someone"}))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    // A session without an agent keeps its link, and has no chats.
+    assert_eq!(
+        kernel.get("/chat/inbox", Some(&free.token)).await.status(),
+        StatusCode::OK
+    );
+    let conversation = kernel.conversation(&agent).await;
+    assert_eq!(
+        kernel
+            .post(
+                &format!("/conversations/{conversation}/messages"),
+                Some(&free.token),
+                json!({"id": Uuid::new_v4().to_string(), "text": "hello"}),
+            )
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    // A new session names its harness.
+    assert_eq!(
+        kernel
+            .post("/sessions", None, json!({"workspace": "/tmp"}))
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
     );
 }
 
@@ -1547,7 +1701,7 @@ async fn pause_and_native_approval_decisions_require_the_correct_caller() {
 #[tokio::test]
 async fn errors_are_json_and_loopback_boundary_is_unchanged() {
     let kernel = Kernel::start().await;
-    for path in ["/sessions", "/livekit/token"] {
+    for path in ["/sessions/discover", "/livekit/token"] {
         let response = kernel.get(path, None).await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert!(response.json::<Value>().await.unwrap()["error"].is_string());
