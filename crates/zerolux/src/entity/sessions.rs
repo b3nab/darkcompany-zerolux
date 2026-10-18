@@ -35,6 +35,8 @@ pub struct Model {
     pub host_id: Option<String>,
     pub pinned_at: Option<i64>,
     pub archived_at: Option<i64>,
+    /// What the session may cost, in cents: at the limit its work stops for the owner.
+    pub budget_cents: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
