@@ -1496,6 +1496,35 @@ test("what a session produces right now follows its recorded work", () => {
   setDensity("normal");
 });
 
+test("while a session works, written words join its turn, wait for its end, or replace it", () => {
+  const working = (origin: ChatSession["origin"]) => {
+    const busy = {
+      ...session("s-birch", BIRCH),
+      activity: "working" as const,
+      origin,
+    };
+    saveDraft("s-birch", "Also check the logs");
+    const html = renderToStaticMarkup(
+      <SessionView
+        session={busy}
+        chat={fakeChat({ sessions: [busy] })}
+        actors={actors}
+        busy={false}
+        perform={perform}
+      />,
+    );
+    saveDraft("s-birch", "");
+    return html;
+  };
+  const owned = working("owned");
+  expect(owned).toContain('aria-label="Other ways to send"');
+  expect(owned).toContain("⌥Enter sends when it ends");
+  // Claude Code in a terminal only takes words into the running turn.
+  const terminal = working("attached");
+  expect(terminal).not.toContain("Other ways to send");
+  expect(terminal).toContain("Joins the turn in progress · Esc interrupts");
+});
+
 test("the console holds sessions without an agent, pinned ones first, and archived apart", () => {
   const own: ChatSession = {
     ...session("s-own", ASPEN),

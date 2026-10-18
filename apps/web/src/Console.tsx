@@ -49,6 +49,7 @@ import type {
   Chat,
   ChatSession,
   Density,
+  InputMode,
   Perform,
   PlanStep,
 } from "@zerolux/chat";
@@ -73,6 +74,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -648,7 +650,7 @@ export function SessionView({
         working={working}
         busy={busy}
         perform={perform}
-        send={(text) => chat.input(session.id, text)}
+        send={(text, mode) => chat.input(session.id, text, mode)}
         compact={(instructions) => chat.compact(session.id, instructions)}
         interrupt={interrupt}
       >
@@ -682,7 +684,7 @@ function SessionInput({
   working: boolean;
   busy: boolean;
   perform: Perform;
-  send: (text: string) => Promise<void>;
+  send: (text: string, mode: InputMode) => Promise<void>;
   /** `/compact [instructions]`: the harness's own compaction, as in its terminal. */
   compact: (instructions: string) => Promise<void>;
   interrupt: () => void;
@@ -707,12 +709,18 @@ function SessionInput({
     write(`/${name} `);
     box.current?.focus();
   };
-  async function submit() {
+  // Claude Code in a terminal only takes words into the running turn.
+  const modes = !(
+    session.harness === "claude-code" && session.origin !== "owned"
+  );
+  async function submit(mode: InputMode = "steer") {
     if (!open || !text.trim() || tooLong) return;
     const sent = text;
     const run = sessionCommand(sent);
     const done = await perform(() =>
-      run?.name === "compact" ? compact(run.args) : send(sent.trim()),
+      run?.name === "compact"
+        ? compact(run.args)
+        : send(sent.trim(), working ? mode : "steer"),
     );
     if (!done) return;
     setStarted(run?.name === "compact");
@@ -784,7 +792,8 @@ function SessionInput({
             }
             if (!sendsOnEnter(event.nativeEvent)) return;
             event.preventDefault();
-            void submit();
+            // Option Enter waits for the turn to end, as Queue does.
+            void submit(event.altKey && working && modes ? "queue" : "steer");
           }}
           className="max-h-40 min-h-10.5 flex-1 resize-none rounded-md border border-input bg-background px-3 py-2.5 text-sm transition-[border-color,box-shadow] outline-none placeholder:text-faint focus:border-ring focus:ring-3 focus:ring-ring/20 disabled:opacity-60"
         />
@@ -801,14 +810,45 @@ function SessionInput({
             Interrupt
           </Button>
         ) : (
-          <Button
-            type="submit"
-            disabled={busy || !open || !text.trim() || tooLong}
-            className="h-10.5"
-          >
-            Send
-            <SendIcon data-icon="inline-end" />
-          </Button>
+          <div className="flex">
+            <Button
+              type="submit"
+              disabled={busy || !open || !text.trim() || tooLong}
+              className={cn("h-10.5", working && modes && "rounded-r-none")}
+            >
+              Send
+              <SendIcon data-icon="inline-end" />
+            </Button>
+            {working && modes && (
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  disabled={busy || !open || !text.trim() || tooLong}
+                  render={
+                    <Button
+                      type="button"
+                      aria-label="Other ways to send"
+                      className="h-10.5 rounded-l-none border-l border-l-background/30 px-2"
+                    />
+                  }
+                >
+                  <ChevronDownIcon />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-64">
+                  <DropdownMenuItem onClick={() => void submit("steer")}>
+                    Add to this turn
+                    <DropdownMenuShortcut>Enter</DropdownMenuShortcut>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void submit("queue")}>
+                    Send when this turn ends
+                    <DropdownMenuShortcut>⌥Enter</DropdownMenuShortcut>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void submit("interrupt")}>
+                    Stop the turn and send
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
         )}
       </div>
       {open && <SessionSettings session={session} perform={perform} />}
@@ -822,7 +862,9 @@ function SessionInput({
               : started
                 ? "Compacting: the summary, or why it failed, appears above"
                 : working
-                  ? "Joins the turn in progress · Esc interrupts"
+                  ? modes
+                    ? "Joins the turn in progress · ⌥Enter sends when it ends · Esc interrupts"
+                    : "Joins the turn in progress · Esc interrupts"
                   : "Straight into the session, not into a chat · / for commands"}
       </p>
     </form>
