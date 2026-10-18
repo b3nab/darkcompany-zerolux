@@ -84,6 +84,18 @@ test("a session opens without an agent, and the owner pins, renames or archives 
     text: "Then the docs",
     mode: "queue",
   });
+  // A waiting input is rewritten or taken out of the queue.
+  await chat.editQueued("s-1", "q/1", "Then the README");
+  expect(requests.at(-1)!.url).toBe(
+    "https://fixture.example.test/api/sessions/s-1/queue/q%2F1",
+  );
+  expect(requests.at(-1)!.init.method).toBe("PATCH");
+  expect(JSON.parse(requests.at(-1)!.init.body as string)).toEqual({
+    text: "Then the README",
+  });
+  await chat.removeQueued("s-1", "q/1");
+  expect(requests.at(-1)!.init.method).toBe("DELETE");
+  expect(requests.at(-1)!.init.body).toBeUndefined();
   await chat.updateSession("s-1", { pinned: true, title: "Release" });
   const change = requests.at(-1)!;
   expect(change.url).toBe("https://fixture.example.test/api/sessions/s-1");
