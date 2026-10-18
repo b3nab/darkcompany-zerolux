@@ -1,10 +1,17 @@
 import { View } from "react-native";
+import {
+  MessageCircleQuestionMarkIcon,
+  ShieldCheckIcon,
+  ShieldXIcon,
+} from "lucide-react-native";
+import { useCSSVariable } from "uniwind";
 import { answerSummary, approvalLabels } from "@zerolux/chat";
 import type { Approval, FormAnswer, QuestionAnswer } from "@zerolux/chat";
 import { ActorMark } from "@/components/member";
 import { McpForm, QuestionForm } from "@/components/request-answer";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
+import { cn } from "@/lib/utils";
 
 /** What an agent asks: a permission, a question or an MCP form. Only the owner answers. */
 export function ApprovalCard({
@@ -69,6 +76,45 @@ export function ApprovalCard({
           {approvalLabels[approval.status]}
         </Text>
       )}
+    </View>
+  );
+}
+
+/** An answered request as it stays in the session's work: what was asked and what you said. */
+export function ApprovalReceipt({ approval }: { approval: Approval }) {
+  const human = String(useCSSVariable("--color-human"));
+  const permission = approval.kind === "permission";
+  const answer = permission
+    ? approval.decision &&
+      (approval.decision === "allow" ? "Allowed" : "Denied")
+    : answerSummary(approval);
+  const Icon = !permission
+    ? MessageCircleQuestionMarkIcon
+    : approval.decision === "deny"
+      ? ShieldXIcon
+      : ShieldCheckIcon;
+  return (
+    <View className="flex-row items-center gap-2 rounded-md border border-human/20 bg-human/5 px-3 py-1.5">
+      <Icon color={human} size={14} strokeWidth={1.75} />
+      <Text
+        numberOfLines={1}
+        className="min-w-0 flex-1 text-[13px] text-muted-foreground"
+      >
+        {approval.summary}
+      </Text>
+      {answer ? (
+        <Text numberOfLines={1} className="max-w-[40%] text-[13px] font-medium">
+          {answer}
+        </Text>
+      ) : null}
+      <Text
+        className={cn(
+          "font-mono text-[11px] text-faint",
+          approval.status === "uncertain" && "text-attention",
+        )}
+      >
+        {approvalLabels[approval.status]}
+      </Text>
     </View>
   );
 }
