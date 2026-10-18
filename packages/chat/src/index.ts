@@ -27,3 +27,5 @@ export * from "./usage";
 export * from "./git";
 export * from "./schedules";
 export * from "./people";
+export * from "./goal";
+export * from "./history";
