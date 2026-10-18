@@ -10,7 +10,13 @@ import {
 } from "react-router";
 import { BellIcon, MenuIcon, SearchIcon } from "lucide-react";
 import { usePanelRef } from "react-resizable-panels";
-import { requestsFor, useChat, useStorage } from "@zerolux/chat";
+import {
+  requestsFor,
+  startsHere,
+  useChat,
+  useHosts,
+  useStorage,
+} from "@zerolux/chat";
 import type { Conversation } from "@zerolux/chat";
 import { activeActors, api, errorMessage } from "./api";
 import {
@@ -137,6 +143,10 @@ export function App({
   // The person signed in, and whether they own the workspace: invitations and this
   // computer's sessions and agents are the owner's.
   const { me, owner: owns } = useMe(actors);
+  // Sessions start on this computer for its person, or for anyone once it is open to them; a
+  // kernel without hosts has only its owner.
+  const { hosts } = useHosts();
+  const starts = hosts ? startsHere(hosts, me?.id) : owns;
   // Hide chat only when the kernel answers without it (an older kernel).
   const chatReady = health?.capabilities.includes("chat-v1") ?? true;
   const capabilities = health?.capabilities ?? [];
@@ -249,7 +259,7 @@ export function App({
     <ConsoleList
       chat={chat}
       actors={actors}
-      owns={owns}
+      starts={starts}
       busy={busy}
       perform={perform}
     />
@@ -274,7 +284,7 @@ export function App({
           workspace={workspace}
           chat={chat}
           owner={me}
-          hire={owns ? hire : undefined}
+          hire={starts ? hire : undefined}
         />
       </Page>,
     );
@@ -561,7 +571,7 @@ export function App({
                   agentList,
                   true,
                   <Page>
-                    {owns ? (
+                    {starts ? (
                       <Hire
                         chat={chat}
                         actors={workspace.actors}
@@ -570,8 +580,8 @@ export function App({
                       />
                     ) : (
                       <p className="text-sm text-muted-foreground">
-                        This computer's sessions and agents are the workspace
-                        owner's. Yours come from your own computer.
+                        This computer is not open to you: start your sessions on
+                        your own computer, or ask its person to open it.
                       </p>
                     )}
                   </Page>,
@@ -609,7 +619,12 @@ export function App({
                 path="/settings"
                 element={
                   <Page>
-                    <MySettingsPage />
+                    <MySettingsPage
+                      me={me}
+                      actors={actors}
+                      busy={busy}
+                      perform={perform}
+                    />
                   </Page>
                 }
               />

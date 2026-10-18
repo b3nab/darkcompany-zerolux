@@ -157,7 +157,12 @@ test("your profile, your settings and the administration are three separate page
 
   const mine = renderToStaticMarkup(
     <MemoryRouter>
-      <MySettingsPage />
+      <MySettingsPage
+        me={owner}
+        actors={company.actors}
+        busy={false}
+        perform={async () => true}
+      />
     </MemoryRouter>,
   );
   for (const part of ["Notifications", "This device", "Theme", "Light"])
@@ -171,7 +176,12 @@ test("your profile, your settings and the administration are three separate page
     try {
       return renderToStaticMarkup(
         <MemoryRouter>
-          <MySettingsPage />
+          <MySettingsPage
+            me={owner}
+            actors={company.actors}
+            busy={false}
+            perform={async () => true}
+          />
         </MemoryRouter>,
       );
     } finally {

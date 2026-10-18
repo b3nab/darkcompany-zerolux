@@ -1717,7 +1717,7 @@ test("another person's sessions: marked by whom, shared to read or to work in, a
   });
   const list = renderToStaticMarkup(
     <ConsoleList
-      owns={false}
+      starts={false}
       busy={false}
       perform={perform}
       chat={fakeChat({ sessions: [theirs("read")] })}

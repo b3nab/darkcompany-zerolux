@@ -8,6 +8,7 @@ import {
   deviceName,
   errorMessage,
   renameWorkspace,
+  useHosts,
 } from "@zerolux/chat";
 import type { AuthConnection, AuthDevice, Perform } from "@zerolux/chat";
 import { themes } from "@zerolux/theme/themes";
@@ -212,10 +213,21 @@ function Password({ account }: { account: AuthConnection }) {
 }
 
 /** Your own settings, and this device's: nothing here changes the workspace for anyone else. */
-export function MySettingsPage() {
+export function MySettingsPage({
+  me,
+  actors,
+  busy,
+  perform,
+}: {
+  me: Actor | undefined;
+  actors: Actor[];
+  busy: boolean;
+  perform: Perform;
+}) {
   const authentication = useAuthentication();
   return (
     <Settings eyebrow="Settings" title="My settings">
+      <Computers me={me} actors={actors} busy={busy} perform={perform} />
       <Section title="Notifications">
         <DeviceNotices />
         {/* TODO: kernel: notifications per channel (in app, push, email) with presets such as approvals only, exceptions per chat and quiet hours. */}
@@ -234,6 +246,128 @@ export function MySettingsPage() {
         <Connection />
       </Section>
     </Settings>
+  );
+}
+
+/**
+ * The computers that run the workspace's sessions, each a person's: on yours only you start and
+ * see sessions, unless you open it to the others, who then run their own there with their own
+ * harness accounts.
+ */
+function Computers({
+  me,
+  actors,
+  busy,
+  perform,
+}: {
+  me: Actor | undefined;
+  actors: Actor[];
+  busy: boolean;
+  perform: Perform;
+}) {
+  const { hosts, error, change } = useHosts();
+  const [naming, setNaming] = useState<{ id: string; name: string }>();
+  if (!hosts?.length && !error) return null;
+  return (
+    <Section title="Computers">
+      <p className="text-sm text-muted-foreground">
+        Sessions run on these computers. On yours, only you start and see
+        sessions, unless you open it: then the others start their own there,
+        with their own accounts, never yours.
+      </p>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      <ul className="flex flex-col divide-y">
+        {hosts?.map((host) => {
+          const mine = host.person_id === me?.id;
+          const person = actors.find((a) => a.id === host.person_id)?.name;
+          return (
+            <li key={host.id} className="flex flex-col gap-2 py-3">
+              {naming?.id === host.id ? (
+                <form
+                  className="flex gap-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    const name = naming.name.trim();
+                    if (name)
+                      void perform(() => change(host.id, { name })).then(
+                        (done) => done && setNaming(undefined),
+                      );
+                  }}
+                >
+                  <Input
+                    aria-label="Computer name"
+                    value={naming.name}
+                    autoFocus
+                    maxLength={100}
+                    onChange={(event) =>
+                      setNaming({ id: host.id, name: event.target.value })
+                    }
+                    className="h-8"
+                  />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={busy || !naming.name.trim()}
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setNaming(undefined)}
+                  >
+                    Cancel
+                  </Button>
+                </form>
+              ) : (
+                <div className="flex items-baseline gap-2">
+                  <span className="min-w-0 truncate text-sm font-medium">
+                    {host.name}
+                  </span>
+                  <span className="truncate font-mono text-[11px] text-faint">
+                    {mine ? "Yours" : (person ?? "Someone's")}
+                    {host.here && " · runs ZeroLux"} · seen {ago(host.seen_at)}
+                  </span>
+                  {mine && (
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="ml-auto h-auto p-0"
+                      onClick={() =>
+                        setNaming({ id: host.id, name: host.name })
+                      }
+                    >
+                      Rename
+                    </Button>
+                  )}
+                </div>
+              )}
+              {mine ? (
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={host.open}
+                    disabled={busy}
+                    onCheckedChange={(checked) =>
+                      void perform(() =>
+                        change(host.id, { open: checked === true }),
+                      )
+                    }
+                  />
+                  Open to people
+                </label>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {host.open
+                    ? "Open to you: your sessions run there with your own accounts."
+                    : "Closed: only its person starts sessions there."}
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </Section>
   );
 }
 
