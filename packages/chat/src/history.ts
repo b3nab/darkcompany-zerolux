@@ -23,6 +23,21 @@ export const hitKindLabels: Record<HistoryHit["kind"], string> = {
   tool_call: "Tool call",
 };
 
+/** A match's text in parts, the words searched marked, whatever their case. */
+export function matchParts(text: string, query: string) {
+  const words = query.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return [{ text, match: false }];
+  const pattern = new RegExp(
+    `(${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,
+    "gi",
+  );
+  // Splitting on a group keeps what matched at the odd places.
+  return text
+    .split(pattern)
+    .map((part, i) => ({ text: part, match: i % 2 === 1 }))
+    .filter((part) => part.text);
+}
+
 /**
  * What the sessions one may read said and did that contains the text, the latest first: up to
  * `limit` in all, 20 per session. `truncated` when the search stopped at its time limit.
