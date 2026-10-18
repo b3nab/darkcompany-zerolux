@@ -53,6 +53,8 @@ export interface ChatSession {
   archived_at: number | null;
   /** What it may cost, in US dollars: its work stops there until the owner raises it. */
   budget_usd: number | null;
+  /** The session that started this one to delegate work to it; it follows and steers it. */
+  parent_session_id: string | null;
   /** When its native record last grew, in ms. */
   output_at?: number | null;
   /** How its last turn ended; null while one runs or before the first. */

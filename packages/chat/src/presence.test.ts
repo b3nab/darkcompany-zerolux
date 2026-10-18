@@ -4,6 +4,8 @@ import type { Actor } from "./client";
 import {
   attentionInbox,
   consoleSessions,
+  delegatedBy,
+  delegatedTo,
   noticeText,
   sessionAttention,
   sessionAttentions,
@@ -31,6 +33,7 @@ const session = (
   pinned_at: null,
   archived_at: null,
   budget_usd: null,
+  parent_session_id: null,
 });
 
 test("the console lists live sessions working first, and keeps the stopped ones apart", () => {
@@ -163,4 +166,23 @@ test("a session tells you when it starts needing you, fails or finishes, once, a
     title: "aspen finished",
     body: "Fixed the build",
   });
+});
+
+test("a session knows the session that delegated work to it, and the ones it delegated to", () => {
+  const lead = session("lead", "connected");
+  const first = { ...session("first", "connected"), parent_session_id: "lead" };
+  const second = {
+    ...session("second", "stopped"),
+    parent_session_id: "lead",
+    created_at: 2,
+  };
+  const all = [lead, first, second, session("apart", "connected")];
+  expect(delegatedBy(first, all)).toBe(lead);
+  expect(delegatedBy(lead, all)).toBeUndefined();
+  // The latest first.
+  expect(delegatedTo("lead", all).map((s) => s.id)).toEqual([
+    "second",
+    "first",
+  ]);
+  expect(delegatedTo("apart", all)).toEqual([]);
 });

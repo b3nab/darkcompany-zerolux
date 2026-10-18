@@ -37,6 +37,7 @@ const session = (id: string, patch: Partial<ChatSession>): ChatSession => ({
   pinned_at: null,
   archived_at: null,
   budget_usd: null,
+  parent_session_id: null,
   ...patch,
 });
 const general: Conversation = {

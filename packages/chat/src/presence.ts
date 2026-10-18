@@ -47,6 +47,18 @@ export function consoleSessions(sessions: ChatSession[]) {
   };
 }
 
+/** The session that delegated work to this one, when it is known here. */
+export const delegatedBy = (session: ChatSession, sessions: ChatSession[]) =>
+  session.parent_session_id
+    ? sessions.find((s) => s.id === session.parent_session_id)
+    : undefined;
+
+/** The sessions a session delegated work to, the latest first. */
+export const delegatedTo = (sessionId: string, sessions: ChatSession[]) =>
+  sessions
+    .filter((s) => s.parent_session_id === sessionId)
+    .sort((a, b) => b.created_at - a.created_at);
+
 /**
  * Whether a session is one the owner is looking for: each word typed is in its title, agent,
  * folder, harness or latest summary, whatever the case. Nothing typed finds them all.
