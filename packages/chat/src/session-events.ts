@@ -456,13 +456,15 @@ export function sessionReader(
   sessionId: string,
   chat: string | undefined,
   changed: (record: SessionRecord) => void,
+  /** One of its subagents, whose events come in the same pages. */
+  subagent?: string,
 ) {
   const record: SessionRecord = { events: [], next: 0, error: "" };
   let closed = false;
   let queue = Promise.resolve();
   const page = (cursor: string) =>
     api<SessionEventPage>(
-      `/sessions/${encodeURIComponent(sessionId)}/events?${cursor}${chat ? `&chat=${encodeURIComponent(chat)}` : ""}`,
+      `/sessions/${encodeURIComponent(sessionId)}${subagent ? `/subagents/${encodeURIComponent(subagent)}` : ""}/events?${cursor}${chat ? `&chat=${encodeURIComponent(chat)}` : ""}`,
     );
   // Drawn once per read, when it is over and changed something: never page by page.
   let shown = "";
@@ -532,21 +534,28 @@ const unread: SessionRecord = { events: [], next: 0, error: "" };
 
 /**
  * A session's work, the latest first: earlier pages on request, later events whenever `grown`
- * changes (the `end` of its latest `session.output` notice).
+ * changes (the `end` of its latest `session.output` notice). With `subagent`, that subagent's
+ * work instead, read to its end whenever the session's record grows.
  */
-export function useSessionEvents(sessionId: string, grown?: number) {
+export function useSessionEvents(
+  sessionId: string,
+  grown?: number,
+  subagent?: string,
+) {
   const [record, setRecord] = useState(unread);
   const reader = useRef<SessionReader>(undefined);
   useEffect(() => {
-    const opened = sessionReader(sessionId, undefined, setRecord);
+    const opened = sessionReader(sessionId, undefined, setRecord, subagent);
     reader.current = opened;
     setRecord(unread);
     void opened.earlier();
     return opened.close;
-  }, [sessionId]);
+  }, [sessionId, subagent]);
   useEffect(() => {
-    if (grown !== undefined) void reader.current?.grow(grown);
-  }, [sessionId, grown]);
+    if (grown === undefined) return;
+    // No notice says where a subagent's record ends: it is read to its end.
+    void reader.current?.grow(subagent ? Number.MAX_SAFE_INTEGER : grown);
+  }, [sessionId, grown, subagent]);
   return {
     events: record.events,
     error: record.error,
