@@ -12,7 +12,7 @@ import { activeActors } from "./api";
 import type { Actor, Workspace } from "./api";
 import { agentPresence } from "./presence";
 import { AgentProfile } from "./Team";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import type { LampState } from "@/components/lamp";
 import { ActorMark, Eyebrow } from "@/components/presence";
 import {
@@ -24,6 +24,8 @@ import {
 } from "@/components/profile";
 import { SidePanel } from "@/components/side-panel";
 import { LG, useMedia } from "./media";
+import { useMe } from "./AuthGate";
+import { InvitePeople } from "./Invite";
 
 type View = "everyone" | "people" | "agents" | "shift";
 const views: Record<View, { label: string; note: string }> = {
@@ -60,7 +62,10 @@ export function Organization({
   const actors = activeActors(workspace.actors);
   // TODO: kernel: people report to people; the chart nests them then. Today each person heads a tree.
   const people = actors.filter((a) => a.kind === "human");
-  const owner = people[0];
+  // The workspace's owner set it up; everyone else joined by invitation.
+  const owner = people.find((a) => !a.invited_by) ?? people[0];
+  const { owner: owns } = useMe(actors);
+  const [inviting, setInviting] = useState(false);
   const agentsOf = (person: Actor) =>
     actors.filter((a) => a.owner_id === person.id);
   const state = (actor: Actor) => memberTone(actor, owner?.id, chat.sessions);
@@ -138,15 +143,32 @@ export function Organization({
               </button>
             ))}
           </div>
-          <Link
-            to="/team/hire"
-            className={cn(
-              buttonVariants({ variant: "outline", size: "sm" }),
-              "border-agent/30 bg-agent/10 text-agent-foreground hover:bg-agent/20 hover:text-agent-foreground",
-            )}
-          >
-            Hire agent
-          </Link>
+          {owns && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setInviting(true)}
+              >
+                Invite people
+              </Button>
+              <Link
+                to="/team/hire"
+                className={cn(
+                  buttonVariants({ variant: "outline", size: "sm" }),
+                  "border-agent/30 bg-agent/10 text-agent-foreground hover:bg-agent/20 hover:text-agent-foreground",
+                )}
+              >
+                Hire agent
+              </Link>
+              <InvitePeople
+                open={inviting}
+                close={() => setInviting(false)}
+                busy={busy}
+                perform={perform}
+              />
+            </>
+          )}
           <p className="max-w-md flex-[1_1_16rem] text-xs text-faint">
             {views[view].note}
           </p>
