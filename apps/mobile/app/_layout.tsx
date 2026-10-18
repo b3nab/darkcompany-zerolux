@@ -69,6 +69,7 @@ function Navigator() {
         <Stack.Screen name="diff/[id]" />
         <Stack.Screen name="files/[id]" />
         <Stack.Screen name="file/[id]" />
+        <Stack.Screen name="subagent/[id]" />
       </Stack.Protected>
       <Stack.Protected guard={Boolean(url) && !authorized}>
         <Stack.Screen name="auth" />

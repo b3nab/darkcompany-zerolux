@@ -63,6 +63,7 @@ import {
   useSessionEvents,
   useSessionFiles,
   useSessionGit,
+  useSessionSubagents,
   useSessionQueue,
   useSessionUsage,
   withMention,
@@ -77,6 +78,7 @@ import {
 import type {
   Actor,
   AgentSettings,
+  Subagent,
   Approval,
   ApprovalItem,
   BlockRun,
@@ -103,6 +105,11 @@ import {
 import { CiTrigger } from "@/components/ci-trigger";
 import { GoalSection } from "@/components/goal";
 import { Schedules } from "@/components/schedules";
+import {
+  SubagentLinks,
+  SubagentList,
+  useSubagentLinks,
+} from "@/components/subagents";
 import { ForkSession, useInputActions } from "@/components/session-fork";
 import { SettingSelect } from "@/components/setting-select";
 import { Button } from "@/components/ui/button";
@@ -153,6 +160,7 @@ export default function SessionPage() {
     (a) => a.id === session?.owner_id,
   )?.name;
   const inputs = useInputActions(session);
+
   // How many files it changed, on the Changes button: for whoever may follow it.
   const changed =
     useSessionGit(access.read ? id : undefined, session?.output_at, url).status
@@ -165,6 +173,14 @@ export default function SessionPage() {
     earlier,
   } = useSessionEvents(id, chat.outputs[id]?.end);
   const blocks = useMemo(() => sessionBlocks(events), [events]);
+  // Its subagents' work, from the tool calls that started them and in About: read again when
+  // a tool call comes, which is when one starts.
+  const { subagents } = useSessionSubagents(
+    id,
+    blocks.filter((block) => block.kind === "tool").length,
+    url,
+  );
+  const subagentLinks = useSubagentLinks(id, subagents);
   // The session's requests stand where it made them: open while pending, a receipt after.
   const items = useMemo(
     () =>
@@ -330,72 +346,74 @@ export default function SessionPage() {
         </View>
       }
     >
-      <ChatList
-        ref={list}
-        data={rows}
-        keyExtractor={(row) => (row as Row).key}
-        renderItem={({ item }) =>
-          (item as Row).kind === "live" ? (
-            <LiveItemView item={(item as LiveRow).item} />
-          ) : (
-            <View
-              className={cn(
-                "rounded-md",
-                marked === (item as Row).key && "bg-primary/10",
-              )}
+      <SubagentLinks value={subagentLinks}>
+        <ChatList
+          ref={list}
+          data={rows}
+          keyExtractor={(row) => (row as Row).key}
+          renderItem={({ item }) =>
+            (item as Row).kind === "live" ? (
+              <LiveItemView item={(item as LiveRow).item} />
+            ) : (
+              <View
+                className={cn(
+                  "rounded-md",
+                  marked === (item as Row).key && "bg-primary/10",
+                )}
+              >
+                <SessionRunView
+                  run={item as BlockRun<Item>}
+                  fresh={fresh}
+                  chatTitle={chatTitle}
+                  inputMenu={access.read ? inputs.open : undefined}
+                  renderApproval={(approval: Approval) =>
+                    // Its requests are its person's to decide; others see them wait.
+                    approval.status === "pending" && access.mine ? (
+                      <ApprovalCard
+                        approval={approval}
+                        agent={name}
+                        busy={busy}
+                        decide={(decision, options) =>
+                          void act(() =>
+                            chat.decide(approval.id, decision, options),
+                          )
+                        }
+                        answer={(answer) =>
+                          void act(() => chat.answer(approval.id, answer))
+                        }
+                      />
+                    ) : (
+                      <ApprovalReceipt
+                        approval={approval}
+                        waitingFor={access.mine ? undefined : person}
+                      />
+                    )
+                  }
+                />
+              </View>
+            )
+          }
+          contentContainerClassName="gap-3 px-3 pt-3 pb-3"
+          alignItemsAtEnd
+          initialScrollAtEnd
+          maintainScrollAtEnd
+          maintainVisibleContentPosition={{ data: true, size: true }}
+          // The latest work comes first; earlier work loads while scrolling up to it.
+          onStartReached={more ? earlier : undefined}
+          onStartReachedThreshold={0.4}
+          keyboardDismissMode="interactive"
+          keyboardOffset={insets.bottom}
+          ListEmptyComponent={
+            <Text
+              className={
+                readError ? "text-sm text-destructive" : "text-sm text-faint"
+              }
             >
-              <SessionRunView
-                run={item as BlockRun<Item>}
-                fresh={fresh}
-                chatTitle={chatTitle}
-                inputMenu={access.read ? inputs.open : undefined}
-                renderApproval={(approval: Approval) =>
-                  // Its requests are its person's to decide; others see them wait.
-                  approval.status === "pending" && access.mine ? (
-                    <ApprovalCard
-                      approval={approval}
-                      agent={name}
-                      busy={busy}
-                      decide={(decision, options) =>
-                        void act(() =>
-                          chat.decide(approval.id, decision, options),
-                        )
-                      }
-                      answer={(answer) =>
-                        void act(() => chat.answer(approval.id, answer))
-                      }
-                    />
-                  ) : (
-                    <ApprovalReceipt
-                      approval={approval}
-                      waitingFor={access.mine ? undefined : person}
-                    />
-                  )
-                }
-              />
-            </View>
-          )
-        }
-        contentContainerClassName="gap-3 px-3 pt-3 pb-3"
-        alignItemsAtEnd
-        initialScrollAtEnd
-        maintainScrollAtEnd
-        maintainVisibleContentPosition={{ data: true, size: true }}
-        // The latest work comes first; earlier work loads while scrolling up to it.
-        onStartReached={more ? earlier : undefined}
-        onStartReachedThreshold={0.4}
-        keyboardDismissMode="interactive"
-        keyboardOffset={insets.bottom}
-        ListEmptyComponent={
-          <Text
-            className={
-              readError ? "text-sm text-destructive" : "text-sm text-faint"
-            }
-          >
-            {readError || "Nothing recorded yet."}
-          </Text>
-        }
-      />
+              {readError || "Nothing recorded yet."}
+            </Text>
+          }
+        />
+      </SubagentLinks>
       <Composer
         session={session}
         name={name}
@@ -415,6 +433,7 @@ export default function SessionPage() {
         onRequestClose={() => setAbout(false)}
       >
         <About
+          subagents={subagents}
           session={session}
           agentId={agent?.id}
           name={name}
@@ -872,11 +891,13 @@ function PlanBar({ steps }: { steps: PlanStep[] }) {
 
 /** The session's details and its other controls, in a sheet like a chat's About. */
 function About({
+  subagents,
   session,
   agentId,
   name,
   close,
 }: {
+  subagents?: Subagent[];
   session: ChatSession;
   agentId?: string;
   name: string;
@@ -927,6 +948,11 @@ function About({
         </View>
         <Sharing session={session} />
         <Delegation session={session} close={close} />
+        <SubagentList
+          sessionId={session.id}
+          subagents={subagents}
+          close={close}
+        />
         {access.mine ? <Organize session={session} /> : null}
         <GoalSection session={session} />
         <ForkSession session={session} close={close} />

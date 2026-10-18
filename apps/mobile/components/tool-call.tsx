@@ -43,6 +43,7 @@ import {
 import type { PlanStep, ToolBlock, ToolOutcome, ToolView } from "@zerolux/chat";
 import { Fold } from "@/components/fold";
 import { MessageBody } from "@/components/message-body";
+import { useSubagentLink } from "@/components/subagents";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 
@@ -180,6 +181,8 @@ export function SubagentCard({
   );
   const state = toolState(tool, view, outcome);
   const faint = String(useCSSVariable("--color-faint"));
+  // Its own work, where the harness keeps it apart: Claude Code's and Codex's.
+  const openWork = useSubagentLink(tool.id);
   if (view.kind !== "agent")
     return <ToolCall tool={tool} chatTitle={chatTitle} />;
   const running = state === "running";
@@ -228,6 +231,18 @@ export function SubagentCard({
             </View>
           ) : running ? (
             <Text className="text-[12.5px] text-faint">Working on it…</Text>
+          ) : null}
+          {openWork ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={openWork}
+              hitSlop={6}
+              className="self-start"
+            >
+              <Text className="text-[13px] font-medium text-agent-foreground">
+                Open its work
+              </Text>
+            </Pressable>
           ) : null}
         </View>
       </Fold>
