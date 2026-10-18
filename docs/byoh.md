@@ -22,7 +22,7 @@ ZeroLux provides full observability and control over agents and all their output
 
 ## Native settings
 
-The agent's profile reads its effective model and effort, plus Claude Code's permission mode or Codex's approval policy and sandbox. Choose from the selectors and press **Apply**: connected sessions receive native control requests, not just database defaults. No prompt, new turn or replacement session is submitted.
+Each session has its own model and effort, plus Claude Code's permission mode or Codex's approval policy and sandbox. Its selectors read them from the harness and change them through native controls; no prompt, new turn or replacement session is submitted. An agent's settings are the defaults its new sessions start with; its running sessions keep theirs.
 
 Model catalogs come from the harness: pi's available model registry and supported thinking levels, Claude's SDK `supportedModels`, and Codex's paginated `model/list`. Effort choices belong to the selected model. The kernel does not maintain a model/effort catalog. Without a connected, controllable local harness, creation can still use native defaults; the client does not invent choices.
 
@@ -30,11 +30,11 @@ Model catalogs come from the harness: pi's available model registry and supporte
 - **Managed Claude** changes session-local SDK flags and permission mode. Native tool approval decisions are still respected, including requests for chat tools.
 - **Codex** updates the thread and targets its active turn for model/effort changes. Approval and sandbox changes require an idle session. A turn that ended is never restarted to apply a setting. Already-running inference cannot be rewritten; native controls govern subsequent inference steps.
 
-A disconnected session, another host's session, an older integration, or a Claude terminal with only an inbox does not expose these controls. The profile explains the limitation rather than claiming a saved choice was applied. Reading settings never takes over or restarts a terminal. Several sessions are preflighted before any mutation; their shared values and choices are intersected, with differing or unknown values left unset. Application across sessions is not a distributed transaction: a later failure can leave partial changes. Refresh reads the resulting native state; uncertain changes are not automatically retried.
+A disconnected session, another host's session, an older integration, or a Claude terminal with only an inbox does not expose these controls, and says so. Reading settings never takes over or restarts a terminal. A change is checked by the harness before it is applied; an uncertain change is not retried.
 
-`GET /actors/{id}/settings` returns the actor, native `models`, `editable` fields and per-session values/errors. `POST /actors/{id}/settings` applies only supplied fields and returns the confirmed actor. Values must be native choices, not empty-string resets. `GET /chat/settings-catalog?harness=…` supplies creation choices. These routes are owner-only. Confirmed snapshots contain only public settings, never raw native configuration or provider credentials. Background observation refreshes them every ten seconds without enforcing stored preferences.
+`GET /sessions/{id}/settings` returns the session's native `values`, `models` and `editable` fields; `PATCH /sessions/{id}/settings` applies only supplied fields and returns the confirmed values. `GET /actors/{id}/settings` returns the agent's defaults with its harness's `models` and `editable` fields; `POST /actors/{id}/settings` sets them. Values must be native choices, not empty-string resets. `GET /sessions/catalog?harness=…` supplies creation choices. These routes are owner-only. Confirmed snapshots contain only public settings, never raw native configuration or provider credentials. Background observation refreshes each session's values every ten seconds without enforcing them.
 
-New sessions accept optional model and effort overrides. Explicit choices win over an existing agent's last confirmed settings; otherwise the harness chooses. Changing model without an explicit effort leaves effort to the harness instead of carrying over an incompatible setting. Configuration is applied and checked before chat inputs can be dispatched. An agent with no active sessions can store validated choices for its next new session.
+New sessions accept optional model and effort overrides. Explicit choices win over the agent's defaults; otherwise the harness chooses. Changing model without an explicit effort leaves effort to the harness instead of carrying over an incompatible setting. Configuration is applied and checked before any input can be dispatched.
 
 ## Work through chats
 

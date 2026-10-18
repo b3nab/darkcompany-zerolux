@@ -5,8 +5,9 @@
 - **Kernel** (`crates/zerolux`): a Rust library and CLI executable with a shared server lifecycle. It serves the JSON API and the web app, stores data, runs the chat runtime and the harness drivers. Built on Axum and SeaORM.
 - **Database**: SQLite, built in and supported permanently, or shared PostgreSQL for replicas. See [foundations](foundations.md).
 - **Clients**: web (`apps/web`), desktop (`apps/desktop`) and mobile (`apps/mobile`) share chat logic (`packages/chat`) and [themes](themes.md) (`packages/theme`). Tauri uses the packaged interface to connect to a kernel, or explicitly hosts the kernel library for a local workspace. Connection identity, lifecycle, assets and desktop-private preferences are described in [desktop](desktop.md).
-- **Harnesses**: pi, Claude Code and Codex sessions join as agents. The kernel drives Codex through its app-server and Claude Code through its session inbox; pi runs the ZeroLux extension (`extensions/pi`). Detached hosts in `extensions/claude` and `extensions/pi` keep managed execution independent of the kernel's lifetime. New sessions use native configuration. Claude and Codex recover through their native resume APIs with the saved session identity; managed pi also keeps the launch profile needed by its RPC host.
-- **Real time**: LiveKit carries small change events; clients then read messages and state over HTTP.
+- **Sessions**: native sessions of pi, Claude Code and Codex, each one a session in ZeroLux, with or without an agent. Agents, chats and the organization are a layer on top of them.
+- **Harnesses**: pi, Claude Code and Codex sessions join ZeroLux, and may work as agents. The kernel drives Codex through its app-server and Claude Code through its session inbox; pi runs the ZeroLux extension (`extensions/pi`). Detached hosts in `extensions/claude` and `extensions/pi` keep managed execution independent of the kernel's lifetime. New sessions use native configuration. Claude and Codex recover through their native resume APIs with the saved session identity; managed pi also keeps the launch profile needed by its RPC host.
+- **Real time**: LiveKit carries small change events, and what sessions are producing as it streams; clients read messages and state over HTTP.
 
 ## Component boundaries
 
@@ -34,7 +35,7 @@ The workspace has a generated ID, an editable name and a creation date, preserve
 
 Humans and agents are actors with generated UUIDs and creation dates shown in their profiles. Each agent has a human owner. The owner is found among the workspace actors, never by a fixed ID.
 
-Native settings are observed, not enforced defaults. Harness adapters project public values and native model/effort catalogs; the kernel validates all linked sessions before changing any of them and persists confirmed snapshots in their locators. Actor fields are the common last-confirmed values across active sessions. Owner controls are serialized per actor, without holding database transactions across native requests. Unavailable or foreign-host controls fail closed, and partial native changes are not represented as atomic success. Clients share catalog-backed selectors and cancel stale settings requests when their actor or workspace changes. See [native settings](byoh.md#native-settings).
+Native settings belong to each session and are observed, not enforced. Harness adapters project public values and native model/effort catalogs; the kernel changes a session's settings through its harness and persists confirmed snapshots in its locator, for its relaunch. An agent's settings are the defaults its new sessions start with. Owner controls are serialized per session, without holding database transactions across native requests. Unavailable or foreign-host controls fail closed. See [native settings](byoh.md#native-settings).
 
 `created_at` stores a Unix timestamp in milliseconds. Displayed calendar dates use UTC; the company day counter starts at 1.
 
@@ -42,16 +43,16 @@ Native settings are observed, not enforced defaults. Harness adapters project pu
 
 All routes are under `/api`. Main groups:
 
-| Routes                                                          | Purpose                                                                       |
-| --------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `/health`, `/workspace`, `/onboarding/owner`                    | Kernel status, workspace metadata and snapshot, owner name                    |
-| `/actors`                                                       | Agents hired by name, renamed                                                 |
-| `/actors/{id}/settings`, `/chat/settings-catalog`               | Observed native settings, live changes and harness choices                    |
-| `/auth/identity`, `/auth/claim`, `/auth/*`                      | Sign-in: who the account is, binding it to the owner, Better Auth             |
-| `/sessions`, `/chat/hire`, `/chat/sessions`                     | Discover and link harness sessions                                            |
-| `/chat/sessions/{id}/output`, `/events`, `/input`, `/interrupt`, `/compact` | The session's native record, its common events, direct input, turn control and compaction |
-| `/conversations`                                                | Chats, threads, members and messages                                          |
-| `/chat/inbox`, `/chat/deliveries`, `/chat/approvals`            | Delivery, receipts and permission requests for agents                         |
-| `/livekit/token`                                                | Real-time token for clients                                                   |
+| Routes                                                                                                           | Purpose                                                                                                                                  |
+| ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `/health`, `/workspace`, `/onboarding/owner`                                                                     | Kernel status, workspace metadata and snapshot, owner name                                                                               |
+| `/actors`                                                                                                        | Agents hired by name, renamed                                                                                                            |
+| `/actors/{id}/settings`                                                                                          | An agent's defaults for its new sessions                                                                                                 |
+| `/auth/identity`, `/auth/claim`, `/auth/*`                                                                       | Sign-in: who the account is, binding it to the owner, Better Auth                                                                        |
+| `/sessions`, `/sessions/{id}`, `/sessions/discover`, `/sessions/attach`, `/sessions/catalog`                     | Sessions with or without an agent: create, list, organize, discover and open native ones                                                 |
+| `/sessions/{id}/output`, `/events`, `/live`, `/input`, `/interrupt`, `/compact`, `/settings`, `/stop`, `/resume` | The session's native record, its common events, what it is producing now, input, turn control, compaction, native settings and lifecycle |
+| `/conversations`                                                                                                 | Chats, threads, members and messages                                                                                                     |
+| `/chat/inbox`, `/chat/deliveries`, `/chat/approvals`, `/chat/sessions/{id}/status`, `/activity`, `/live`         | What a session's integration reads and reports: deliveries, receipts, requests, state and streamed output                                |
+| `/livekit/token`                                                                                                 | Real-time token for clients                                                                                                              |
 
 Timestamps are Unix milliseconds. Request bodies are limited to 1 MiB.
