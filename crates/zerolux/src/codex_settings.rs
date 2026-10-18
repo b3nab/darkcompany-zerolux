@@ -109,6 +109,20 @@ impl CodexSettings {
         Ok(true)
     }
 
+    /// Starts summarizing the thread's older history; Codex records the compaction itself.
+    /// Not while a turn runs: compacting would cut it short.
+    pub async fn compact(&self) -> Result<()> {
+        ensure!(
+            self.turn.borrow().is_none(),
+            "Codex is working: wait for the turn to end or interrupt it"
+        );
+        self.rpc
+            .request("thread/compact/start", json!({"threadId": self.thread_id}))
+            .await
+            .context("Codex did not confirm the compaction")?;
+        Ok(())
+    }
+
     pub async fn read(&self) -> Result<NativeSettings> {
         let models = models(&self.rpc).await?;
         let mut editable = Vec::new();

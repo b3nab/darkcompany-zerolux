@@ -64,6 +64,7 @@ impl Fixture {
                     }
                     "turn/settings/update" => json!({"status":turn_status}),
                     "turn/interrupt" => json!({}),
+                    "thread/compact/start" => json!({}),
                     "turn/steer" => json!({"turnId":"turn"}),
                     "thread/queue/add" => json!({"queuedSubmission":{"id":"q"}}),
                     other => panic!("Unexpected native method: {other}"),
@@ -219,6 +220,19 @@ async fn interrupt_stops_only_the_running_turn() {
         json!({"threadId":"thread","turnId":"turn"})
     );
     assert!(busy.calls("turn/start").is_empty());
+}
+
+#[tokio::test]
+async fn compaction_waits_for_the_running_turn() {
+    let busy = Fixture::new(true, false, "applied").await;
+    let error = busy.control.compact().await.unwrap_err();
+    assert!(error.to_string().contains("Codex is working"));
+    assert!(busy.calls("thread/compact/start").is_empty());
+    let idle = Fixture::new(false, false, "applied").await;
+    idle.control.compact().await.unwrap();
+    let calls = idle.calls("thread/compact/start");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["params"], json!({"threadId":"thread"}));
 }
 
 #[tokio::test]
