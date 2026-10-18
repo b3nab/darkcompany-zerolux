@@ -29,3 +29,4 @@ export * from "./schedules";
 export * from "./people";
 export * from "./goal";
 export * from "./history";
+export * from "./triggers";
