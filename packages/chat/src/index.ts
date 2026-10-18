@@ -22,3 +22,4 @@ export * from "./live";
 export * from "./files";
 export * from "./tool-view";
 export * from "./commands";
+export * from "./usage";
