@@ -7946,6 +7946,7 @@ dependencies = [
  "futures-util",
  "livekit",
  "livekit-api",
+ "memchr",
  "nix 0.30.1",
  "portable-pty",
  "reqwest 0.12.28",

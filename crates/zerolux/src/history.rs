@@ -114,6 +114,9 @@ fn scan(
     deadline: Instant,
 ) -> std::io::Result<(Vec<Match>, bool)> {
     let needle: String = query.iter().collect();
+    // Most lines say nothing of it: an ASCII query is looked for in the raw bytes first.
+    let finder = memchr::memmem::Finder::new(needle.as_bytes());
+    let mut lowered = Vec::new();
     let mut reader = std::io::BufReader::new(std::fs::File::open(path)?);
     let (mut found, mut at, mut line) = (Vec::new(), 0u64, Vec::new());
     loop {
@@ -125,10 +128,16 @@ fn scan(
         if read == 0 || line.last() != Some(&b'\n') {
             break;
         }
-        let text = String::from_utf8_lossy(&line);
-        if text.to_lowercase().contains(&needle)
-            && let Ok(value) = serde_json::from_str(text.trim_end())
-        {
+        let hit = if needle.is_ascii() {
+            lowered.clear();
+            lowered.extend(line.iter().map(u8::to_ascii_lowercase));
+            finder.find(&lowered).is_some()
+        } else {
+            String::from_utf8_lossy(&line)
+                .to_lowercase()
+                .contains(&needle)
+        };
+        if hit && let Ok(value) = serde_json::from_slice(&line) {
             let record = Record { at, record: value };
             for item in project(harness, std::slice::from_ref(&record)) {
                 if let Some((kind, words)) = searchable(&item.event)
