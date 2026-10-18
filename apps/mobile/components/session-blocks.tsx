@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { View } from "react-native";
+import { Pressable, View } from "react-native";
 import { ChevronRightIcon, CircleAlertIcon } from "lucide-react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { useCSSVariable } from "uniwind";
@@ -22,6 +22,7 @@ import type {
 } from "@zerolux/chat";
 import { Fold } from "@/components/fold";
 import { MessageBody } from "@/components/message-body";
+import type { InputBlock } from "@/components/session-fork";
 import {
   ExploredCalls,
   SubagentCard,
@@ -36,6 +37,8 @@ type ChatTitle = (id: string) => string | undefined;
 type Item = SessionBlock | ApprovalItem;
 /** A request of the session, drawn where it was made: open while pending, a receipt after. */
 type RenderApproval = (approval: Approval) => ReactNode;
+/** The owner's choices on one of their inputs, on a long press. */
+type InputMenu = (block: InputBlock) => void;
 
 /**
  * A session's work, block by block, the same in the Agent Console and in chats: tools run one
@@ -84,6 +87,7 @@ export function SessionRunView({
   fresh,
   chatTitle,
   renderApproval,
+  inputMenu,
 }: {
   run: BlockRun<Item>;
   /** The keys of the blocks that just arrived, from `useArrivals`. */
@@ -91,6 +95,7 @@ export function SessionRunView({
   /** The title of the chat an input came from; inputs name it when given. */
   chatTitle?: ChatTitle;
   renderApproval?: RenderApproval;
+  inputMenu?: InputMenu;
 }) {
   const density = useDensity();
   if (density === "compact" && run.kind === "thinking") return null;
@@ -101,7 +106,7 @@ export function SessionRunView({
       ) : run.kind === "approval" ? (
         renderApproval?.(run.approval)
       ) : (
-        <Block block={run} chatTitle={chatTitle} />
+        <Block block={run} chatTitle={chatTitle} inputMenu={inputMenu} />
       )}
     </Arrive>
   );
@@ -155,24 +160,34 @@ function ToolRun({
 function Block({
   block,
   chatTitle,
+  inputMenu,
 }: {
   block: SessionBlock;
   chatTitle?: ChatTitle;
+  inputMenu?: InputMenu;
 }) {
   const destructive = String(useCSSVariable("--color-destructive"));
   switch (block.kind) {
     case "input":
+      // With a menu, a long press opens it, and Copy is there; else the text is selectable.
       return (
-        <View className="max-w-[86%] gap-1 self-end rounded-md rounded-br-xs border border-human/25 bg-human/10 px-3 py-2">
+        <Pressable
+          disabled={!inputMenu}
+          onLongPress={inputMenu && (() => inputMenu(block))}
+          accessibilityHint={
+            inputMenu ? "Long press to edit and resend, and more" : undefined
+          }
+          className="max-w-[86%] gap-1 self-end rounded-md rounded-br-xs border border-human/25 bg-human/10 px-3 py-2 active:opacity-70"
+        >
           {block.chat && chatTitle ? (
             <Text className="font-mono text-[11px] text-faint">
               From {chatTitle(block.chat) ?? "a chat"}
             </Text>
           ) : null}
-          <Text selectable className="text-[15px] leading-[21px]">
+          <Text selectable={!inputMenu} className="text-[15px] leading-[21px]">
             {block.text}
           </Text>
-        </View>
+        </Pressable>
       );
     case "text":
       return <MessageBody text={block.text} />;

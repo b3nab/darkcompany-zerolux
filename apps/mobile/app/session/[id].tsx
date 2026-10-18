@@ -89,6 +89,7 @@ import { ActorMark, Fact } from "@/components/member";
 import { Screen } from "@/components/screen";
 import { Segmented } from "@/components/segmented";
 import { SessionCard, useInterrupt, useOrganize } from "@/components/session";
+import { ForkSession, useInputActions } from "@/components/session-fork";
 import { SettingSelect } from "@/components/setting-select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -124,6 +125,7 @@ export default function SessionPage() {
   const muted = String(useCSSVariable("--color-muted-foreground"));
   const insets = useSafeAreaInsets();
   const session = chat.sessions.find((s) => s.id === id);
+  const inputs = useInputActions(session);
   // Read from the start, then again from where it stopped at each session.output notice.
   const {
     events,
@@ -257,6 +259,7 @@ export default function SessionPage() {
               run={item as BlockRun<Item>}
               fresh={fresh}
               chatTitle={chatTitle}
+              inputMenu={owner ? inputs.open : undefined}
               renderApproval={(approval: Approval) =>
                 approval.status === "pending" ? (
                   <ApprovalCard
@@ -310,6 +313,7 @@ export default function SessionPage() {
           <PlanBar steps={plan} />
         ) : null}
       </Composer>
+      {inputs.sheet}
       <Modal
         visible={about}
         animationType="slide"
@@ -829,6 +833,7 @@ function About({
           />
         </View>
         <Organize session={session} />
+        <ForkSession session={session} close={close} />
         <UsageFacts sessionId={session.id} />
         <SessionCard session={session} name={name} facts />
       </ScrollView>
