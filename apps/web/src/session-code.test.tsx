@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { setKernelFetch, useSessionGit } from "@zerolux/chat";
 import type { ChatSession, GitStatus } from "@zerolux/chat";
-import { ChangesPanel } from "./SessionCode";
+import { ChangesPanel, FilesPanel } from "./SessionCode";
 import { InputActions } from "./SessionFork";
 import type { InputBlock } from "@/components/session-blocks";
 
@@ -131,4 +131,19 @@ test("an input is written again in a fork, and its files put back only where the
   expect(actions()).toContain("Edit");
   expect(actions()).not.toContain("Rewind files");
   expect(actions(true)).toContain("Rewind files");
+});
+
+test("the Files panel finds a session's files by what is typed", () => {
+  const html = renderToStaticMarkup(
+    <FilesPanel
+      session={session}
+      name="aspen"
+      revision={0}
+      busy={false}
+      perform={async () => true}
+      send={nothing}
+      close={() => {}}
+    />,
+  );
+  expect(html).toContain('aria-label="Find a file"');
 });

@@ -31,7 +31,9 @@ import {
   sessionTerminals,
   terminalReader,
   terminalWriter,
+  sessionFile,
   useSessionDiff,
+  useSessionFiles,
   useSessionPullRequest,
   writeTerminal,
 } from "@zerolux/chat";
@@ -51,7 +53,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useTheme } from "./theme";
 
 /** The panels of a session's code, opened by its owner beside its work. */
-export type CodePane = "changes" | "terminal";
+export type CodePane = "changes" | "files" | "terminal";
 
 type Git = ReturnType<typeof useSessionGit>;
 
@@ -725,69 +727,63 @@ function PullRequestBox({
   );
 }
 
-/** A line's number for a note: the file after, or before for a removed one. */
-const lineNumber = (line: GitDiffLine) => line.new ?? line.old ?? 0;
+/** A numbered line of a diff or a file: its kind, its text, and the line a note names. */
+interface Row {
+  kind: GitDiffLine["kind"];
+  text: string;
+  /** Before and after for a diff, one for a file; none for a hunk's header. */
+  numbers: (number | undefined)[];
+  /** The line a note on it names: the file after, or before for a removed one. */
+  line: number;
+}
 
 /**
- * A file's diff, numbered before and after. Choosing a line's number, and another with Shift,
- * opens a note on those lines that goes to the session as the owner's input.
+ * Numbered lines of a file. Choosing a line's number, and another with Shift, opens a note on
+ * those lines that goes to the session as the owner's input.
  */
-export function FileDiff({
-  sessionId,
+function NotedLines({
+  rows,
   path,
-  staged,
-  revision,
+  label,
+  signs,
   name,
   busy,
   perform,
   send,
 }: {
-  sessionId: string;
+  rows: Row[];
   path: string;
-  staged: boolean;
-  revision: unknown;
+  label: string;
+  /** A diff marks what was added and removed. */
+  signs: boolean;
   name: string;
   busy: boolean;
   perform: Perform;
   send: (text: string) => Promise<void>;
 }) {
-  const { diff, error } = useSessionDiff(sessionId, path, staged, revision);
   const [chosen, setChosen] = useState<{ from: number; to: number }>();
   const [note, setNote] = useState("");
-  if (error)
-    return (
-      <p role="alert" className="text-sm text-destructive">
-        {error}
-      </p>
-    );
-  if (!diff) return null;
-  if (diff.binary)
-    return <p className="text-sm text-muted-foreground">A binary file.</p>;
-  const lines = diff.lines;
   const range = chosen && {
     from: Math.min(chosen.from, chosen.to),
     to: Math.max(chosen.from, chosen.to),
-  };
-  const choose = (index: number, extend: boolean) => {
-    setChosen(
-      extend && chosen ? { ...chosen, to: index } : { from: index, to: index },
-    );
   };
   const noteBox = range && (
     <form
       className="flex flex-col gap-2 border-y bg-card p-2 font-sans"
       onSubmit={(event) => {
         event.preventDefault();
-        const first = lineNumber(lines[range.from]!);
-        const last = lineNumber(lines[range.to]!);
+        const text = lineComment(
+          path,
+          rows[range.from]!.line,
+          rows[range.to]!.line,
+          note,
+        );
         if (note.trim())
-          void perform(() => send(lineComment(path, first, last, note))).then(
-            (done) => {
-              if (!done) return;
-              setNote("");
-              setChosen(undefined);
-            },
-          );
+          void perform(() => send(text)).then((done) => {
+            if (!done) return;
+            setNote("");
+            setChosen(undefined);
+          });
       }}
     >
       <Textarea
@@ -821,67 +817,242 @@ export function FileDiff({
     </form>
   );
   return (
+    <div
+      role="table"
+      aria-label={label}
+      className="overflow-x-auto rounded-md border py-1 font-mono text-[12px]"
+    >
+      {rows.map((row, i) => (
+        <div key={i} role="rowgroup">
+          <div
+            role="row"
+            className={cn(
+              "flex min-w-max",
+              row.kind === "hunk" && "bg-muted/60 text-faint",
+              row.kind === "added" && "bg-success/10",
+              row.kind === "removed" && "bg-destructive/10",
+              range && i >= range.from && i <= range.to && "bg-primary/15",
+            )}
+          >
+            {row.kind === "hunk" ? (
+              <span className="px-3 py-0.5">{row.text}</span>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  aria-label={`Note on line ${row.line}`}
+                  onClick={(event) =>
+                    setChosen(
+                      event.shiftKey && chosen
+                        ? { ...chosen, to: i }
+                        : { from: i, to: i },
+                    )
+                  }
+                  className="flex shrink-0 text-faint select-none hover:text-foreground"
+                >
+                  {row.numbers.map((number, n) => (
+                    <span key={n} className="w-10 pr-1 text-right">
+                      {number}
+                    </span>
+                  ))}
+                </button>
+                {signs && (
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "w-4 shrink-0 text-center select-none",
+                      row.kind === "added" && "text-success",
+                      row.kind === "removed" && "text-destructive",
+                    )}
+                  >
+                    {row.kind === "added"
+                      ? "+"
+                      : row.kind === "removed"
+                        ? "−"
+                        : ""}
+                  </span>
+                )}
+                <span className="pr-3 pl-2 whitespace-pre">
+                  {row.text || " "}
+                </span>
+              </>
+            )}
+          </div>
+          {range?.to === i && noteBox}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** A file's diff, numbered before and after, with notes on its lines for the session. */
+export function FileDiff({
+  sessionId,
+  path,
+  staged,
+  revision,
+  name,
+  busy,
+  perform,
+  send,
+}: {
+  sessionId: string;
+  path: string;
+  staged: boolean;
+  revision: unknown;
+  name: string;
+  busy: boolean;
+  perform: Perform;
+  send: (text: string) => Promise<void>;
+}) {
+  const { diff, error } = useSessionDiff(sessionId, path, staged, revision);
+  if (error)
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        {error}
+      </p>
+    );
+  if (!diff) return null;
+  if (diff.binary)
+    return <p className="text-sm text-muted-foreground">A binary file.</p>;
+  return (
     <div className="flex flex-col gap-2">
       <p className="font-mono text-[11px] text-faint">
         <span className="text-success">+{diff.added}</span>{" "}
         <span className="text-destructive">−{diff.removed}</span> · choose a
         line's number to write a note on it
       </p>
-      <div
-        role="table"
-        aria-label={`Diff of ${path}`}
-        className="overflow-x-auto rounded-md border py-1 font-mono text-[12px]"
-      >
-        {lines.map((line, i) => (
-          <div key={i} role="rowgroup">
-            <div
-              role="row"
-              className={cn(
-                "flex min-w-max",
-                line.kind === "hunk" && "bg-muted/60 text-faint",
-                line.kind === "added" && "bg-success/10",
-                line.kind === "removed" && "bg-destructive/10",
-                range && i >= range.from && i <= range.to && "bg-primary/15",
-              )}
-            >
-              {line.kind === "hunk" ? (
-                <span className="px-3 py-0.5">{line.text}</span>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    aria-label={`Note on line ${lineNumber(line)}`}
-                    onClick={(event) => choose(i, event.shiftKey)}
-                    className="flex shrink-0 text-faint select-none hover:text-foreground"
-                  >
-                    <span className="w-10 pr-1 text-right">{line.old}</span>
-                    <span className="w-10 pr-1 text-right">{line.new}</span>
-                  </button>
-                  <span
-                    aria-hidden
-                    className={cn(
-                      "w-4 shrink-0 text-center select-none",
-                      line.kind === "added" && "text-success",
-                      line.kind === "removed" && "text-destructive",
-                    )}
-                  >
-                    {line.kind === "added"
-                      ? "+"
-                      : line.kind === "removed"
-                        ? "−"
-                        : ""}
-                  </span>
-                  <span className="pr-3 whitespace-pre">
-                    {line.text || " "}
-                  </span>
-                </>
-              )}
-            </div>
-            {range?.to === i && noteBox}
-          </div>
-        ))}
-      </div>
+      <NotedLines
+        rows={diff.lines.map((line) => ({
+          kind: line.kind,
+          text: line.text,
+          numbers: [line.old, line.new],
+          line: line.new ?? line.old ?? 0,
+        }))}
+        path={path}
+        label={`Diff of ${path}`}
+        signs
+        name={name}
+        busy={busy}
+        perform={perform}
+        send={send}
+      />
     </div>
+  );
+}
+
+/**
+ * The files of the session's folder, found by what is typed, best first; one opened shows its
+ * text as it is now, numbered, with notes on its lines for the session.
+ */
+export function FilesPanel({
+  session,
+  name,
+  revision,
+  busy,
+  perform,
+  send,
+  close,
+}: {
+  session: ChatSession;
+  name: string;
+  revision: unknown;
+  busy: boolean;
+  perform: Perform;
+  send: (text: string) => Promise<void>;
+  close: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState<string>();
+  const files = useSessionFiles(session.id, query);
+  const [read, setRead] = useState<{
+    path: string;
+    text?: string;
+    error?: string;
+  }>();
+  useEffect(() => {
+    if (open === undefined) return;
+    let current = true;
+    sessionFile(session.id, open).then(
+      (text) => current && setRead({ path: open, text }),
+      (failed: unknown) =>
+        current && setRead({ path: open, error: errorMessage(failed) }),
+    );
+    return () => {
+      current = false;
+    };
+  }, [session.id, open, revision]);
+  const shown = read?.path === open ? read : undefined;
+  if (open !== undefined)
+    return (
+      <Pane
+        title={
+          <>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="All files"
+              onClick={() => setOpen(undefined)}
+            >
+              <ArrowLeftIcon />
+            </Button>
+            <PathName path={open} />
+          </>
+        }
+        close={close}
+      >
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
+          {shown?.error && (
+            <p role="alert" className="text-sm text-destructive">
+              {shown.error}
+            </p>
+          )}
+          {shown?.text !== undefined && (
+            <NotedLines
+              rows={shown.text.split("\n").map((text, i) => ({
+                kind: "same",
+                text,
+                numbers: [i + 1],
+                line: i + 1,
+              }))}
+              path={open}
+              label={open}
+              signs={false}
+              name={name}
+              busy={busy}
+              perform={perform}
+              send={send}
+            />
+          )}
+        </div>
+      </Pane>
+    );
+  return (
+    <Pane title="Files" close={close}>
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
+        <Input
+          type="search"
+          aria-label="Find a file"
+          placeholder="Find a file"
+          value={query}
+          autoFocus
+          onChange={(event) => setQuery(event.target.value)}
+        />
+        <ul className="flex flex-col">
+          {files.map((path) => (
+            <li key={path}>
+              <button
+                type="button"
+                onClick={() => setOpen(path)}
+                className="flex w-full min-w-0 items-center rounded-sm px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring/50"
+              >
+                <PathName path={path} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </Pane>
   );
 }
 
