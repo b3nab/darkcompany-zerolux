@@ -386,13 +386,10 @@ function Agent({
   );
 }
 
+/** The agent's defaults for its new sessions, among its harness's native choices. */
 function AgentSettingsForm({ agent }: { agent: Actor }) {
-  const { setAgentSettings, url, chat } = useSession();
-  const revision = chat.sessions
-    .filter((session) => session.actor_id === agent.id)
-    .map((session) => `${session.id}:${session.status}:${session.activity}`)
-    .join("|");
-  const native = useAgentSettings(agent, revision, url);
+  const { setAgentSettings, url } = useSession();
+  const native = useAgentSettings(agent, "", url);
   const current = native.data?.actor ?? agent;
   const models = native.data?.models ?? [];
   const [changes, setChanges] = useState<AgentSettings>({});
@@ -472,23 +469,6 @@ function AgentSettingsForm({ agent }: { agent: Actor }) {
           />
         );
       })}
-      {native.data?.sessions.map(
-        (session) =>
-          session.error && (
-            <Text key={session.id} className="text-xs text-attention">
-              {session.error}
-            </Text>
-          ),
-      )}
-      {native.data &&
-        agent.harness === "codex" &&
-        native.data.sessions.length > 0 &&
-        !native.data.editable.includes("sandbox") &&
-        !native.data.sessions.some((session) => session.error) && (
-          <Text className="text-xs text-muted-foreground">
-            Codex allows approval and sandbox changes between turns.
-          </Text>
-        )}
       {native.error && (
         <Text accessibilityRole="alert" className="text-sm text-destructive">
           {native.error}
