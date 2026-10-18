@@ -29,7 +29,7 @@ import {
   type SavedPiSession,
 } from "./saved-session.ts";
 import { waitAndExec } from "./exec-gate.ts";
-import { newPiSession, openPiSession } from "./new-session.ts";
+import { forkPiSession, newPiSession, openPiSession } from "./new-session.ts";
 type Snapshot = PiHistorySnapshot & Partial<PiInitialState>;
 
 export interface PiRunnerConfig {
@@ -848,6 +848,15 @@ export class PiRunner {
 async function main() {
   if (process.argv[2] === "exec") {
     waitAndExec();
+    return;
+  }
+  if (process.argv[2] === "fork") {
+    const [file, upTo] = process.argv.slice(3);
+    console.log(
+      JSON.stringify(
+        await forkPiSession(file!, process.cwd(), upTo || undefined),
+      ),
+    );
     return;
   }
   const raw = process.env.ZEROLUX_PI_CONFIG;

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadPiProfile } from "./execution-profile.ts";
-import { openPiSession } from "./new-session.ts";
+import { forkPiSession, openPiSession } from "./new-session.ts";
 
 const agentDir = process.env.PI_CODING_AGENT_DIR;
 afterAll(() => {
@@ -58,4 +58,39 @@ test("a saved session of another folder is not opened", async () => {
   await expect(openPiSession(f.file, f.root, f.entry, "pi")).rejects.toThrow(
     "does not name this folder",
   );
+});
+
+test("a saved session forks whole, or up to one of its entries, into a session of its own", async () => {
+  const f = await fixture();
+  const entry = (id: string, parentId: string | null, text: string) => ({
+    type: "message",
+    id,
+    parentId,
+    timestamp: "2026-10-18T10:00:00.000Z",
+    message: { role: "user", content: [{ type: "text", text }], timestamp: 0 },
+  });
+  await writeFile(
+    f.file,
+    [
+      {
+        type: "session",
+        version: 3,
+        id: "saved-id",
+        cwd: f.work,
+        timestamp: "2026-10-18T10:00:00.000Z",
+      },
+      entry("a1", null, "first"),
+      entry("a2", "a1", "second"),
+    ]
+      .map((line) => JSON.stringify(line))
+      .join("\n") + "\n",
+  );
+  const whole = await forkPiSession(f.file, f.work);
+  expect(whole.native_session_id).not.toBe("saved-id");
+  const copied = await Bun.file(whole.file).text();
+  expect(copied).toContain("second");
+  const part = await forkPiSession(f.file, f.work, "a1");
+  const branched = await Bun.file(part.file).text();
+  expect(branched).toContain("first");
+  expect(branched).not.toContain("second");
 });
