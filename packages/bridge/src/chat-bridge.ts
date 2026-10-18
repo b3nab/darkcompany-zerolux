@@ -66,8 +66,6 @@ export interface ChatHost {
   harness: string;
   nativeSessionId: string;
   workspace: string;
-  /** A turn takes one chat's messages; other chats wait until it ends. */
-  oneChatPerTurn?: boolean;
   idle(): boolean;
   /** Everything waiting, in one delivery: the agent reads it all at once. */
   send(batches: Batch[]): void;
@@ -276,8 +274,6 @@ export class ChatBridge {
   /** The delivery a native question may be attached to, while the turn is one chat's. */
   private turnOf?: string | null;
   private turnFingerprint?: string;
-  /** With `oneChatPerTurn`: the chat batches go to until the agent settles. */
-  private steering?: string;
   /** Streamed output not yet reported, and its timer. */
   private liveChanges: LiveChange[] = [];
   private liveTimer?: ReturnType<typeof setTimeout>;
@@ -387,17 +383,14 @@ export class ChatBridge {
             d.status === "stored" &&
             d.session_id === this.session!.id &&
             !refused.has(d.id) &&
-            (!this.steering || d.message.conversation_id === this.steering) &&
             deliverable(inbox.conversations, d.message.conversation_id),
         );
         if (!waiting.length) continue;
-        // Chats in the order their messages wait; one chat per turn takes the first only.
+        // Chats in the order their messages wait.
         const chats = [
           ...new Set(waiting.map((d) => d.message.conversation_id)),
         ];
-        const planned = (
-          this.host.oneChatPerTurn ? chats.slice(0, 1) : chats
-        ).flatMap((id) => {
+        const planned = chats.flatMap((id) => {
           const conversation = inbox.conversations.find((c) => c.id === id)!;
           return runs(
             waiting
@@ -476,7 +469,6 @@ export class ChatBridge {
           deliveries.map((delivery) => ({ delivery, batch: batches[i]!.id })),
         );
         if (this.nativeSettled && this.host.idle()) this.ownsTurn = true;
-        if (this.host.oneChatPerTurn) this.steering = batches[0]!.chat;
         for (const { delivery } of sent) this.notifying.add(delivery.id);
         try {
           this.host.send(batches);
@@ -667,17 +659,10 @@ export class ChatBridge {
       this.receipts.delete(id);
     }
   }
-  /** The host starts its own turn for `chat` (a wake): only that chat joins it. */
-  steer(chat: string) {
-    if (!this.host.oneChatPerTurn) return;
-    if (this.nativeSettled && this.host.idle()) this.ownsTurn = true;
-    this.steering = chat;
-  }
   async settled() {
     this.nativeSettled = true;
     this.ownsTurn = false;
     this.turnChat = undefined;
-    this.steering = undefined;
     this.tellTurn(null);
     this.activity("idle");
     // The extension schedules subsequent work OUTSIDE agent_settled (notification-only).
@@ -810,7 +795,6 @@ export class ChatBridge {
       turnChat: this.turnChat,
       turnOf: this.turnOf,
       turnFingerprint: this.turnFingerprint,
-      steering: this.steering,
     };
     this.envelopes = new Map();
     this.outgoing = new Map();
@@ -826,7 +810,6 @@ export class ChatBridge {
     this.turnChat = state.turnChat;
     this.turnOf = state.turnOf;
     this.turnFingerprint = state.turnFingerprint;
-    this.steering = state.steering;
   }
 
   async attention(reason: string) {
