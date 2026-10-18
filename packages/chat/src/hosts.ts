@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { ChatSession, NewSession } from "./chat";
 import { errorMessage, kernelUrl, request } from "./client";
 
 /**
@@ -44,23 +45,67 @@ export const startsHere = (
     ? hosts.some((host) => host.here && (host.person_id === me || host.open))
     : fallback;
 
-/** The workspace's hosts, and the changes their persons make, each answered with the list. */
-export function useHosts(kernel = kernelUrl()) {
+/** The harnesses a joined computer runs so far; the others run on the kernel's computer. */
+export const joinedHarnesses: readonly NewSession["harness"][] = ["codex"];
+
+/** One's own joined computers that are online: where one starts sessions besides the kernel's. */
+export const ownComputers = (
+  hosts: Host[] | undefined,
+  me: string | undefined,
+) =>
+  hosts?.filter(
+    (host) => !host.here && host.joined && host.online && host.person_id === me,
+  ) ?? [];
+
+/** Whether a person starts sessions anywhere: on the kernel's computer or one of their own. */
+export const startsAnywhere = (
+  hosts: Host[] | undefined,
+  me: string | undefined,
+  fallback = false,
+) => startsHere(hosts, me, fallback) || ownComputers(hosts, me).length > 0;
+
+/** The joined computer a session runs on; none for the kernel's own, or while hosts are unknown. */
+export const sessionComputer = (
+  session: Pick<ChatSession, "host_id">,
+  hosts: Host[] | undefined,
+) =>
+  session.host_id
+    ? hosts?.find((host) => host.id === session.host_id && !host.here)
+    : undefined;
+
+/**
+ * The workspace's hosts, and the changes their persons make, each answered with the list. A
+ * read that finds nothing new keeps the list as it was; a failed one keeps the last list too.
+ */
+export function useHosts(kernel = kernelUrl(), enabled = true) {
   const [read, setRead] = useState<{
     kernel: string;
     hosts?: Host[];
     error?: string;
   }>();
   const reload = useCallback(
-    () =>
-      request<{ hosts: Host[] }>(kernel, "/hosts").then(
-        ({ hosts }) => setRead({ kernel, hosts }),
-        (error: unknown) => setRead({ kernel, error: errorMessage(error) }),
-      ),
-    [kernel],
+    async () =>
+      enabled
+        ? request<{ hosts: Host[] }>(kernel, "/hosts").then(
+            ({ hosts }) =>
+              setRead((was) =>
+                was?.kernel === kernel &&
+                !was.error &&
+                JSON.stringify(was.hosts) === JSON.stringify(hosts)
+                  ? was
+                  : { kernel, hosts },
+              ),
+            (error: unknown) =>
+              setRead((was) => ({
+                ...(was?.kernel === kernel ? was : { kernel }),
+                error: errorMessage(error),
+              })),
+          )
+        : undefined,
+    [kernel, enabled],
   );
   useEffect(() => void reload(), [reload]);
-  const current = read?.kernel === kernel ? read : undefined;
+  const current = enabled && read?.kernel === kernel ? read : undefined;
   return {
     hosts: current?.hosts,
     error: current?.error ?? "",

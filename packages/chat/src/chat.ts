@@ -224,6 +224,8 @@ export type NewSession = {
       harness: "codex";
       approval_policy?: CodexApprovalPolicy;
       sandbox?: CodexSandbox;
+      /** One of one's own joined computers to run it on; the kernel's when left out. */
+      host?: string;
     }
   | { harness: "pi" }
 );
