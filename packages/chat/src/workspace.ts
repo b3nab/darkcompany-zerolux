@@ -37,7 +37,10 @@ export async function renameWorkspace(
   return result.workspace;
 }
 
-/** Missing fields stay unchanged. Values are native choices, applied to connected sessions. */
+/**
+ * Native choices: an agent's defaults for its new sessions, or a session's own. Missing fields
+ * stay unchanged.
+ */
 export interface AgentSettings {
   model?: string;
   effort?: string;
@@ -57,11 +60,13 @@ export interface AgentSettingsView {
   actor: Actor;
   models: AgentModelOption[];
   editable: (keyof AgentSettings)[];
-  sessions: {
-    id: string;
-    values: Partial<Record<keyof AgentSettings, string | null>> | null;
-    error: string | null;
-  }[];
+}
+
+/** A session's own settings, as its harness reports them, with the choices it offers now. */
+export interface SessionSettingsView {
+  values: Partial<Record<keyof AgentSettings, string | null>>;
+  models: AgentModelOption[];
+  editable: (keyof AgentSettings)[];
 }
 
 export function agentModelOption(

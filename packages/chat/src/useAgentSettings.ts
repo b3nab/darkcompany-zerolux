@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { errorMessage, kernelUrl, request, type Actor } from "./client";
-import type { AgentModelOption, AgentSettingsView } from "./workspace";
+import type {
+  AgentModelOption,
+  AgentSettings,
+  AgentSettingsView,
+  SessionSettingsView,
+} from "./workspace";
 
 /** Request generations belong to this exact workspace/actor, never a previous connection. */
 function useSettingsResource<T>(
@@ -94,13 +99,45 @@ export function useAgentSettings(
   };
 }
 
-export function useModelCatalog(
+/** The models and efforts a new session of this harness can start with. */
+export function useSessionCatalog(
   harness: NonNullable<Actor["harness"]>,
   kernel = kernelUrl(),
 ) {
   return useSettingsResource<{ models: AgentModelOption[] }>(
-    `/chat/settings-catalog?harness=${encodeURIComponent(harness)}`,
+    `/sessions/catalog?harness=${encodeURIComponent(harness)}`,
     kernel,
     "",
   );
+}
+
+/**
+ * A session's own model, effort and permissions, read from its harness; `apply` changes them
+ * through it and shows what the harness confirmed.
+ */
+export function useSessionSettings(
+  sessionId: string,
+  revision = "",
+  kernel = kernelUrl(),
+) {
+  const path = `/sessions/${encodeURIComponent(sessionId)}/settings`;
+  const resource = useSettingsResource<SessionSettingsView>(
+    path,
+    kernel,
+    revision,
+  );
+  return {
+    ...resource,
+    async apply(change: AgentSettings) {
+      const confirmed = await request<SessionSettingsView>(
+        kernel,
+        path,
+        change,
+        undefined,
+        "PATCH",
+      );
+      resource.update(() => confirmed);
+      return confirmed;
+    },
+  };
 }
