@@ -134,7 +134,11 @@ export default function chatExtension(pi: ExtensionAPI) {
   const links = new Map<string, Link>();
   const queuedInputs = new Map<string, string[]>();
   /** The owner's direct inputs waiting to be seen entering pi's context. */
-  const ownerInputs = new Set<{ text: string; seen: () => void }>();
+  const ownerInputs = new Set<{
+    text: string;
+    expanded: boolean;
+    seen: () => void;
+  }>();
   const bridges = () => [...links.values()].map((link) => link.bridge);
   let pairing = false;
   let takingOver = false;
@@ -662,6 +666,8 @@ export default function chatExtension(pi: ExtensionAPI) {
           "agent-settings-v1",
           "interrupt-v1",
           "input-v1",
+          "input-v2",
+          "commands-v1",
           "compact-v1",
           ...(installedCode ? ["integration-update-v1"] : []),
         ],
@@ -745,23 +751,56 @@ export default function chatExtension(pi: ExtensionAPI) {
           throw error;
         }
       },
-      input: async (linkId, text) => {
+      input: async (linkId, text, mode) => {
         if (
           ![...links.values()].some(
             (link) => link.bridge.connected && link.bridge.sessionId === linkId,
           )
         )
           throw new Error("Unknown or disconnected link");
-        // The owner's words, as if typed here: a new turn when idle, steering while working.
-        // Always "steer": pi applies it only while a run is active. Choosing from isIdle()
-        // first races with a run that starts or ends meanwhile, and pi then drops the input
-        // with an error no one sees. Accepted means seen entering the context, or queued
-        // for the running turn; anything else is reported, never sent again.
+        // Interrupting: the running turn stops first, then the input starts the next one.
+        if (mode === "interrupt" && !ctx.isIdle()) {
+          ctx.abort();
+          for (let waited = 0; waited < 10_000 && !ctx.isIdle(); waited += 50)
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          if (!ctx.isIdle())
+            throw new Error("pi did not stop its turn; the input was not sent");
+        }
+        // The owner's words, as if typed here, commands included: a new turn when idle,
+        // steering or queued after the turn while working. pi applies "steer" only while a
+        // run is active; choosing from isIdle() first races with a run that starts or ends
+        // meanwhile, and pi then drops the input with an error no one sees. Accepted means
+        // seen entering the context, or queued for the running turn; anything else is
+        // reported, never sent again.
+        const command = text.startsWith("/")
+          ? pi
+              .getCommands()
+              .find(
+                (known) =>
+                  text === `/${known.name}` ||
+                  text.startsWith(`/${known.name} `),
+              )
+          : undefined;
+        const options = {
+          deliverAs:
+            mode === "queue" ? ("followUp" as const) : ("steer" as const),
+          expandPromptTemplates: true,
+        };
+        // An extension's command runs at once, without a turn of its own.
+        if (command?.source === "extension") {
+          pi.sendUserMessage(text, options);
+          return;
+        }
         let seen = false;
-        const waiter = { text, seen: () => (seen = true) };
+        // A skill or a prompt template enters the context expanded, not as typed.
+        const waiter = {
+          text,
+          expanded: command !== undefined,
+          seen: () => (seen = true),
+        };
         ownerInputs.add(waiter);
         try {
-          pi.sendUserMessage(text, { deliverAs: "steer" });
+          pi.sendUserMessage(text, options);
           for (let waited = 0; waited < 3000 && !seen; waited += 50) {
             await new Promise((resolve) => setTimeout(resolve, 50));
             if (!seen && !ctx.isIdle() && ctx.hasPendingMessages()) return;
@@ -773,6 +812,20 @@ export default function chatExtension(pi: ExtensionAPI) {
         } finally {
           ownerInputs.delete(waiter);
         }
+      },
+      commands: async (linkId) => {
+        if (
+          ![...links.values()].some(
+            (link) => link.bridge.connected && link.bridge.sessionId === linkId,
+          )
+        )
+          throw new Error("Unknown or disconnected link");
+        return pi.getCommands().map((command) => ({
+          name: command.name,
+          description: command.description ?? "",
+          argument_hint: null,
+          invoke: `/${command.name}`,
+        }));
       },
       compact: async (linkId, instructions) => {
         if (
@@ -979,7 +1032,8 @@ export default function chatExtension(pi: ExtensionAPI) {
               .filter((part) => part.type === "text")
               .map((part) => part.text ?? "")
               .join("\n");
-      for (const waiter of ownerInputs) if (waiter.text === text) waiter.seen();
+      for (const waiter of ownerInputs)
+        if (waiter.expanded || waiter.text === text) waiter.seen();
     }
     void messageStarted(bridges(), event.message, queuedInputs);
   });

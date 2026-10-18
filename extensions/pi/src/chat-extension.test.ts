@@ -922,6 +922,18 @@ while IFS= read -r line; do :; done
       sendUserMessage: (content: string, options?: unknown) => {
         sent.push({ content, options });
       },
+      getCommands: () => [
+        {
+          name: "zerolux-chat",
+          description: "ZeroLux chat",
+          source: "extension",
+        },
+        {
+          name: "skill:review",
+          description: "Review a change",
+          source: "skill",
+        },
+      ],
       events: { on: () => () => {}, emit() {} },
     } as unknown as ExtensionAPI);
     try {
@@ -986,7 +998,7 @@ while IFS= read -r line; do :; done
         await Bun.sleep(20);
       expect(sent.at(-1)).toEqual({
         content: "look at the logs",
-        options: { deliverAs: "steer" },
+        options: { deliverAs: "steer", expandPromptTemplates: true },
       });
       await handlers.get("message_start")!(
         {
@@ -1007,6 +1019,65 @@ while IFS= read -r line; do :; done
       expect(lost.ok).toBe(false);
       expect(lost.error).toContain("did not accept");
       expect(sent.filter((s) => s.content === "dropped")).toHaveLength(1);
+      // Queued: it waits for the end of the turn, in pi's own follow-up queue.
+      const queued = control({
+        method: "input",
+        link_id: "link-b",
+        text: "then the docs",
+        mode: "queue",
+      });
+      for (let i = 0; i < 100 && sent.at(-1)?.content !== "then the docs"; i++)
+        await Bun.sleep(20);
+      expect(sent.at(-1)!.options).toEqual({
+        deliverAs: "followUp",
+        expandPromptTemplates: true,
+      });
+      await handlers.get("message_start")!(
+        { message: { role: "user", content: "then the docs" } },
+        ctx,
+      );
+      expect((await queued).ok).toBe(true);
+      // A skill enters the context expanded; an extension's command runs without a turn.
+      const skill = control({
+        method: "input",
+        link_id: "link-b",
+        text: "/skill:review the parser",
+      });
+      for (
+        let i = 0;
+        i < 100 && !sent.at(-1)?.content.startsWith("/skill");
+        i++
+      )
+        await Bun.sleep(20);
+      await handlers.get("message_start")!(
+        { message: { role: "user", content: "Review instructions…" } },
+        ctx,
+      );
+      expect((await skill).ok).toBe(true);
+      expect(
+        (
+          await control({
+            method: "input",
+            link_id: "link-b",
+            text: "/zerolux-chat status",
+          })
+        ).ok,
+      ).toBe(true);
+      const offered = await control({ method: "commands", link_id: "link-b" });
+      expect(offered.commands).toEqual([
+        {
+          name: "zerolux-chat",
+          description: "ZeroLux chat",
+          argument_hint: null,
+          invoke: "/zerolux-chat",
+        },
+        {
+          name: "skill:review",
+          description: "Review a change",
+          argument_hint: null,
+          invoke: "/skill:review",
+        },
+      ]);
     } finally {
       await command?.handler("off", ctx);
       await handlers.get("session_shutdown")?.({}, ctx);

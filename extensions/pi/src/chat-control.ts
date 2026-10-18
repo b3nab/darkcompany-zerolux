@@ -1,5 +1,14 @@
 import { LocalControl, type NativeSettingsSnapshot } from "@zerolux/bridge";
 
+/** How the owner's input reaches a working session: into its turn, after it, or instead. */
+export type InputMode = "steer" | "queue" | "interrupt";
+/** A command or skill, and what the owner types to use it. */
+export interface SessionCommand {
+  name: string;
+  description: string;
+  argument_hint: string | null;
+  invoke: string;
+}
 export interface LiveDescription {
   native_session_id: string;
   workspace: string;
@@ -42,7 +51,9 @@ export interface ControlHost {
   /** Stops the native turn in progress, whoever started it, for the owner of a link. */
   interrupt?(linkId: string): Promise<{ interrupted: boolean }>;
   /** The owner's own input for a link's session: native user input, not a chat message. */
-  input?(linkId: string, text: string): Promise<void>;
+  input?(linkId: string, text: string, mode: InputMode): Promise<void>;
+  /** The commands and skills pi offers, as the owner types them. */
+  commands?(linkId: string): Promise<SessionCommand[]>;
   /** Starts pi's own compaction of a link's session; the session records how it went. */
   compact?(linkId: string, instructions?: string): Promise<void>;
   /**
@@ -95,11 +106,23 @@ export class ChatControl extends LocalControl {
               typeof request.link_id !== "string" ||
               !request.link_id ||
               typeof request.text !== "string" ||
-              !request.text.trim()
+              !request.text.trim() ||
+              !["steer", "queue", "interrupt", undefined].includes(
+                request.mode as string | undefined,
+              )
             )
               throw new Error("Invalid input request");
-            await host.input(request.link_id, request.text);
+            await host.input(
+              request.link_id,
+              request.text,
+              (request.mode as InputMode | undefined) ?? "steer",
+            );
             return {};
+          }
+          if (method === "commands" && host.commands) {
+            if (typeof request.link_id !== "string" || !request.link_id)
+              throw new Error("Invalid commands request");
+            return { commands: await host.commands(request.link_id) };
           }
           if (method === "compact" && host.compact) {
             if (
