@@ -92,7 +92,12 @@ import { ApprovalCard, ApprovalReceipt } from "@/components/approval-card";
 import { ActorMark, Fact } from "@/components/member";
 import { Screen } from "@/components/screen";
 import { Segmented } from "@/components/segmented";
-import { SessionCard, useInterrupt, useOrganize } from "@/components/session";
+import {
+  Delegation,
+  SessionCard,
+  useInterrupt,
+  useOrganize,
+} from "@/components/session";
 import { Schedules } from "@/components/schedules";
 import { ForkSession, useInputActions } from "@/components/session-fork";
 import { SettingSelect } from "@/components/setting-select";
@@ -861,6 +866,7 @@ function About({
             choose={setDensity}
           />
         </View>
+        <Delegation session={session} close={close} />
         <Organize session={session} />
         <ForkSession session={session} close={close} />
         <Schedules session={session} />

@@ -1,13 +1,16 @@
 import { Link, useRouter } from "expo-router";
 import { useState } from "react";
 import { Alert, Platform, Pressable, View } from "react-native";
-import { PinIcon } from "lucide-react-native";
+import { ChevronRightIcon, PinIcon } from "lucide-react-native";
 import { useCSSVariable } from "uniwind";
 import {
   ago,
+  delegatedBy,
+  delegatedTo,
   errorMessage,
   folderName,
   harnessLabels,
+  sessionName,
   sessionState,
   sessionTone,
 } from "@zerolux/chat";
@@ -56,8 +59,11 @@ export function SessionRow({
   asks?: Approval;
 }) {
   const organize = useOrganize(session);
+  const { workspace, chat } = useSession();
   const faint = String(useCSSVariable("--color-faint"));
   const unseen = attention === "unseen";
+  // A session another started works for it: the row says which.
+  const parent = delegatedBy(session, chat.sessions);
   // Why it stopped and waits for you, as the kernel says: a budget reached, a lost link.
   const stopped =
     session.status === "attention" && session.attention_reason
@@ -146,6 +152,11 @@ export function SessionRow({
                         (agent ? title : sessionState(session))}
               </Text>
             </View>
+            {parent ? (
+              <Text numberOfLines={1} className="text-xs text-faint">
+                Started by {sessionName(parent, workspace?.actors ?? [])}
+              </Text>
+            ) : null}
           </View>
         </Pressable>
       </Link.Trigger>
@@ -167,6 +178,68 @@ export function SessionRow({
         </Link.MenuAction>
       </Link.Menu>
     </Link>
+  );
+}
+
+/**
+ * In About: the session that started this one, and the sessions this one started to work
+ * for it, the latest first; a tap opens one.
+ */
+export function Delegation({
+  session,
+  close,
+}: {
+  session: ChatSession;
+  close: () => void;
+}) {
+  const { workspace, chat } = useSession();
+  const router = useRouter();
+  const faint = String(useCSSVariable("--color-faint"));
+  const actors = workspace?.actors ?? [];
+  const parent = delegatedBy(session, chat.sessions);
+  const children = delegatedTo(session.id, chat.sessions);
+  if (!parent && !children.length) return null;
+  const open = (id: string) => {
+    close();
+    router.push(`/session/${id}`);
+  };
+  const row = (other: ChatSession) => (
+    <Pressable
+      key={other.id}
+      accessibilityRole="button"
+      onPress={() => open(other.id)}
+      className="flex-row items-center gap-2.5 py-2 active:opacity-70"
+    >
+      <Lamp kind="agent" tone={sessionTone(other)} />
+      <View className="min-w-0 flex-1">
+        <Text numberOfLines={1} className="text-[15px]">
+          {sessionName(other, actors)}
+        </Text>
+        <Text numberOfLines={1} className="text-xs text-faint">
+          {harnessLabels[other.harness] ?? other.harness} ·{" "}
+          {other.summary || sessionState(other)}
+        </Text>
+      </View>
+      <ChevronRightIcon color={faint} size={16} strokeWidth={1.5} />
+    </Pressable>
+  );
+  return (
+    <View className="gap-1">
+      {parent ? (
+        <>
+          <Text className="text-sm text-faint">Started by</Text>
+          {row(parent)}
+        </>
+      ) : null}
+      {children.length ? (
+        <>
+          <Text className="text-sm text-faint">
+            Delegated · {children.length}
+          </Text>
+          {children.map(row)}
+        </>
+      ) : null}
+    </View>
   );
 }
 
