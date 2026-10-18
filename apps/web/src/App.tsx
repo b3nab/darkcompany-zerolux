@@ -146,7 +146,7 @@ export function App({
   // Sessions start on this computer for its person, or for anyone once it is open to them; a
   // kernel without hosts has only its owner.
   const { hosts } = useHosts();
-  const starts = hosts ? startsHere(hosts, me?.id) : owns;
+  const starts = startsHere(hosts, me?.id, owns);
   // Hide chat only when the kernel answers without it (an older kernel).
   const chatReady = health?.capabilities.includes("chat-v1") ?? true;
   const capabilities = health?.capabilities ?? [];
