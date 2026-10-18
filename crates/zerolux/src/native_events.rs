@@ -186,6 +186,15 @@ fn pi(record: &Value) -> Vec<Event> {
         Some("compaction") => vec![Event::Compacted {
             summary: record["summary"].as_str().map(str::to_owned),
         }],
+        // pi reports a failed compaction only to its extensions; ZeroLux's keeps it here.
+        Some("custom") if record["customType"] == "zerolux-compaction-failed" => {
+            vec![Event::Error {
+                message: record["data"]["error"]
+                    .as_str()
+                    .unwrap_or("Compaction failed")
+                    .to_owned(),
+            }]
+        }
         _ => Vec::new(),
     }
 }
@@ -423,6 +432,8 @@ mod tests {
                     json!({"type":"message","message":{"role":"toolResult","toolCallId":"c1","toolName":"read","content":[{"type":"text","text":"x"}],"isError":false}}),
                     json!({"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Done"}],"stopReason":"stop"}}),
                     json!({"type":"model_change","modelId":"m"}),
+                    json!({"type":"custom","customType":"zerolux-compaction-failed","data":{"error":"Compaction failed: 429"}}),
+                    json!({"type":"custom","customType":"other-extension","data":{"error":"not ours"}}),
                 ]
             ),
             vec![
@@ -452,6 +463,9 @@ mod tests {
                 },
                 Event::TurnEnded {
                     status: "completed".into()
+                },
+                Event::Error {
+                    message: "Compaction failed: 429".into()
                 },
             ]
         );
