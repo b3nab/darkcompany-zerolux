@@ -55,13 +55,13 @@ function Navigator() {
       <Stack.Protected guard={authorized}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="chat/[id]" />
-        <Stack.Screen name="chat/new" />
+        <Stack.Screen name="chat/new" options={{ presentation: "modal" }} />
         <Stack.Screen name="member/[id]" />
         <Stack.Screen name="meetings" />
         <Stack.Screen name="storage" />
         <Stack.Screen name="settings" />
         <Stack.Screen name="admin" />
-        <Stack.Screen name="session/new" />
+        <Stack.Screen name="session/new" options={{ presentation: "modal" }} />
         <Stack.Screen name="session/[id]" />
         <Stack.Screen name="terminal/[id]" />
         <Stack.Screen name="changes/[id]" />

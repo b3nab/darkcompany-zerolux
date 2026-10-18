@@ -1,4 +1,4 @@
-import { Stack, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import { CheckIcon } from "lucide-react-native";
 import { useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
@@ -85,7 +85,6 @@ export default function NewChat() {
 
   return (
     <Screen back="close" title="New chat">
-      <Stack.Screen options={{ presentation: "modal" }} />
       {agents.length === 0 ? (
         <View className="gap-2 p-5">
           <Text className="text-lg font-semibold">

@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { Pressable, ScrollView, Switch, View } from "react-native";
 import {
@@ -108,7 +108,6 @@ export default function NewSessionScreen() {
 
   return (
     <Screen back="close" title="New session">
-      <Stack.Screen options={{ presentation: "modal" }} />
       <ScrollView
         contentContainerClassName="gap-5 p-5"
         keyboardShouldPersistTaps="handled"
