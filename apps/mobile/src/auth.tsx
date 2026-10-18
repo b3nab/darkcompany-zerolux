@@ -17,6 +17,7 @@ import {
   type AuthDevice,
   type AuthIdentity,
   type AuthStorage,
+  type Invitation,
 } from "@zerolux/chat";
 
 // Expo SDK 57: this device's keychain/Keystore, never AsyncStorage or a cookie jar.
@@ -40,9 +41,17 @@ interface Authentication {
   busy: boolean;
   error: string;
   refresh(): Promise<void>;
-  signIn(email: string, password: string): Promise<boolean>;
-  signUp(name: string, email: string, password: string): Promise<boolean>;
-  claim(): Promise<boolean>;
+  /** With an invitation, a person who joins; without, the owner. */
+  signIn(email: string, password: string, invite?: string): Promise<boolean>;
+  signUp(
+    name: string,
+    email: string,
+    password: string,
+    invite?: string,
+  ): Promise<boolean>;
+  claim(invite?: string): Promise<boolean>;
+  /** What an invitation says, before any account: refused once it cannot be used. */
+  invitation(token: string): Promise<Invitation>;
   signOut(): Promise<boolean>;
   guard(canLeave: () => boolean): () => void;
   /** Your account, straight from the kernel: callers show their own errors. */
@@ -180,16 +189,22 @@ export function AuthenticationProvider({
         error,
         refresh,
         guard,
-        signIn: (email, password) =>
+        signIn: (email, password, invite) =>
           perform(async () => {
             const next = await client.signIn(email, password);
-            return !next.actor_id && next.setup_required
-              ? client.claim()
-              : next;
+            // An account not in the workspace yet joins with the invitation, or becomes its owner.
+            return next.actor_id
+              ? next
+              : invite
+                ? client.claim(invite)
+                : next.setup_required
+                  ? client.claim()
+                  : next;
           }),
-        signUp: (name, email, password) =>
-          perform(() => client.signUp(name, email, password)),
-        claim: () => perform(() => client.claim()),
+        signUp: (name, email, password, invite) =>
+          perform(() => client.signUp(name, email, password, invite)),
+        claim: (invite) => perform(() => client.claim(invite)),
+        invitation: (token) => client.invitation(token),
         signOut: () =>
           perform(async () => {
             await client.signOut();

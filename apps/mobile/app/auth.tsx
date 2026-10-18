@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ScrollView, View } from "react-native";
 import { errorMessage, ownerNameError } from "@zerolux/chat";
+import type { Invitation } from "@zerolux/chat";
 import { Wordmark } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SafeArea } from "@/components/ui/native";
 import { Text } from "@/components/ui/text";
 import { useAuthentication } from "../src/auth";
+import { setPendingInvite, usePendingInvite } from "../src/invite";
 import { useKernel, useSession } from "../src/kernel";
 
 export default function Authenticate() {
@@ -19,10 +21,36 @@ export default function Authenticate() {
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState("");
+  // Joining with an invitation: it is read with no account, and says when it is used up.
+  const invite = usePendingInvite();
+  const [invitation, setInvitation] = useState<Invitation>();
+  const [inviteError, setInviteError] = useState("");
+  const health = auth?.health;
+  const read = auth?.invitation;
+  useEffect(() => {
+    if (!invite || !health || !read) return;
+    let current = true;
+    read(invite).then(
+      (next) => current && setInvitation(next),
+      (e: unknown) => current && setInviteError(errorMessage(e)),
+    );
+    return () => {
+      current = false;
+    };
+    // Read again when the workspace is verified again, not at every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invite, health]);
+  // In the workspace, the invitation is used.
+  const member = auth?.identity?.actor_id;
+  useEffect(() => {
+    if (member) setPendingInvite(null);
+  }, [member]);
   if (!auth) return null;
+  const joining = invite && !inviteError ? invite : undefined;
   const enrollment =
     auth.identity?.setup_required ?? auth.health?.auth.setup_required ?? false;
-  const signup = enrollment && !existing && !auth.identity;
+  const signup =
+    (enrollment || Boolean(joining)) && !existing && !auth.identity;
   const invalid =
     !auth.identity &&
     (!email.trim() ||
@@ -36,10 +64,10 @@ export default function Authenticate() {
     if (!auth || auth.busy || auth.loading || invalid || !auth.health) return;
     setError("");
     const accepted = auth.identity
-      ? await auth.claim()
+      ? await auth.claim(joining)
       : signup
-        ? await auth.signUp(name, email, password)
-        : await auth.signIn(email, password);
+        ? await auth.signUp(name, email, password, joining)
+        : await auth.signIn(email, password, joining);
     if (accepted) {
       setPassword("");
       setConfirmation("");
@@ -68,18 +96,27 @@ export default function Authenticate() {
         <Wordmark height={22} />
         <View className="gap-2">
           <Text className="text-[32px] font-light tracking-tight">
+            {joining ? "Join " : ""}
             {auth.health?.workspace.name ?? "Your workspace"}
           </Text>
           <Text className="text-base leading-6 text-muted-foreground">
             {auth.loading
               ? "Verifying the workspace…"
-              : auth.identity
-                ? enrollment
-                  ? "Bind your account to this workspace’s existing owner. Nothing in the company is recreated."
-                  : "This account is not a member of this workspace. Sign out to use another account."
-                : signup
-                  ? "Create your account to become this workspace’s owner."
-                  : "Sign in to your workspace."}
+              : invite && inviteError
+                ? `This invitation can no longer be used (${inviteError}). Ask for a new one.`
+                : joining
+                  ? auth.identity
+                    ? "Join this workspace with the account you are signed in to."
+                    : invitation
+                      ? `${invitation.invited_by} invited you. Create your account, or sign in with one you already have.`
+                      : "Reading the invitation…"
+                  : auth.identity
+                    ? enrollment
+                      ? "Bind your account to this workspace’s existing owner. Nothing in the company is recreated."
+                      : "This account is not a member of this workspace. Sign out to use another account."
+                    : signup
+                      ? "Create your account to become this workspace’s owner."
+                      : "Sign in to your workspace."}
           </Text>
         </View>
         {auth.health && !auth.loading && (
@@ -157,7 +194,7 @@ export default function Authenticate() {
                 )}
               </>
             )}
-            {(!auth.identity || enrollment) && (
+            {(!auth.identity || enrollment || joining) && (
               <Button
                 disabled={auth.busy || Boolean(invalid)}
                 onPress={() => void submit()}
@@ -166,14 +203,18 @@ export default function Authenticate() {
                   {auth.busy
                     ? "Please wait…"
                     : auth.identity
-                      ? "Claim workspace"
+                      ? joining
+                        ? "Join workspace"
+                        : "Claim workspace"
                       : signup
-                        ? "Create account"
+                        ? joining
+                          ? "Join"
+                          : "Create account"
                         : "Sign in"}
                 </Text>
               </Button>
             )}
-            {!auth.identity && enrollment && (
+            {!auth.identity && (enrollment || joining) && (
               <Button
                 variant="ghost"
                 disabled={auth.busy}
@@ -217,9 +258,14 @@ export default function Authenticate() {
         <Button
           variant="ghost"
           disabled={auth.busy}
-          onPress={() => void changeKernel()}
+          onPress={() => {
+            setPendingInvite(null);
+            void changeKernel();
+          }}
         >
-          <Text>Connect to another kernel</Text>
+          <Text>
+            {invite ? "Use another link" : "Connect to another kernel"}
+          </Text>
         </Button>
       </ScrollView>
     </SafeArea>

@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { View } from "react-native";
-import { errorMessage } from "@zerolux/chat";
+import { errorMessage, readInviteLink } from "@zerolux/chat";
 import { Wordmark } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SafeArea } from "@/components/ui/native";
 import { Text } from "@/components/ui/text";
+import { setPendingInvite } from "../src/invite";
 import { useKernel } from "../src/kernel";
 
 export default function Connect() {
@@ -18,9 +19,13 @@ export default function Connect() {
     if (busy) return;
     setBusy(true);
     setError("");
+    // An invitation link names the kernel too: connect there, then join with it.
+    const link = readInviteLink(address);
     try {
-      await kernel.connect(address);
+      setPendingInvite(link?.invite ?? null);
+      await kernel.connect(link?.kernel ?? address);
     } catch (e) {
+      setPendingInvite(null);
       setError(errorMessage(e));
     } finally {
       setBusy(false);
@@ -42,13 +47,13 @@ export default function Connect() {
       </Text>
       <Text className="text-base leading-6 text-muted-foreground">
         Use your PC’s kernel address on the same local network, or an HTTPS
-        address for a workspace elsewhere.
+        address for a workspace elsewhere. Invited? Paste the link you received.
       </Text>
       <Input
         className="h-12 text-lg"
         value={address}
         onChangeText={setAddress}
-        placeholder="http://192.168.1.10:4310"
+        placeholder="http://192.168.1.10:4310 or an invitation link"
         autoCapitalize="none"
         autoCorrect={false}
         keyboardType="url"
