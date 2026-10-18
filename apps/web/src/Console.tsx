@@ -9,8 +9,10 @@ import {
   ChevronDownIcon,
   EllipsisIcon,
   GitCompareArrowsIcon,
+  GitForkIcon,
   ImagePlusIcon,
   ListChecksIcon,
+  MessageCircleQuestionIcon,
   PencilIcon,
   PinIcon,
   PinOffIcon,
@@ -105,6 +107,8 @@ import { ApprovalCard, ApprovalReceipt } from "./Approvals";
 import { sendsOnEnter } from "./ChatView";
 import { useOwner } from "./AuthGate";
 import { ChangesPanel, TerminalPanel } from "./SessionCode";
+import { AskOnTheSide, InputActions } from "./SessionFork";
+import type { Fork } from "./SessionFork";
 import type { CodePane } from "./SessionCode";
 import { SidePanel } from "@/components/side-panel";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -439,6 +443,18 @@ export function SessionView({
   const git = useSessionGit(owner ? session.id : undefined, at);
   const changed = git.status?.changes.length ?? 0;
   const [pane, setPane] = useState<CodePane>();
+  // A new session from this one, whole or before an input, with the owner's words, opened.
+  const navigate = useNavigate();
+  const [asking, setAsking] = useState(false);
+  const fork: Fork = (at, text) =>
+    perform(async () => {
+      const { session: forked } = await chat.forkSession(
+        session.id,
+        at === undefined ? {} : { at },
+      );
+      if (text) await chat.input(forked.id, text);
+      navigate(`/console/${forked.id}`);
+    });
   const wide = useMedia(XL);
   const toggle = (next: CodePane) => setPane(pane === next ? undefined : next);
   const code =
@@ -679,6 +695,14 @@ export function SessionView({
                     )}
                     {session.archived_at ? "Unarchive" : "Archive"}
                   </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void fork()}>
+                    <GitForkIcon />
+                    Fork
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setAsking(true)}>
+                    <MessageCircleQuestionIcon />
+                    Ask on the side…
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -743,6 +767,25 @@ export function SessionView({
                   chat.approvals.filter((a) => a.session_id === session.id),
                 )}
                 chatTitle={chatTitle}
+                inputActions={
+                  owner
+                    ? (input) => (
+                        <InputActions
+                          input={input}
+                          fork={fork}
+                          // Claude Code keeps checkpoints of the files; the others do not.
+                          rewind={
+                            session.harness === "claude-code"
+                              ? (at, dryRun) =>
+                                  chat.rewindFiles(session.id, at, dryRun)
+                              : undefined
+                          }
+                          busy={busy}
+                          perform={perform}
+                        />
+                      )
+                    : undefined
+                }
                 renderApproval={(approval) =>
                   approval.status === "pending" ? (
                     <ApprovalCard
@@ -808,6 +851,13 @@ export function SessionView({
           </SessionInput>
         </section>
       </SidePanel>
+      <AskOnTheSide
+        name={name}
+        open={asking}
+        close={() => setAsking(false)}
+        fork={fork}
+        busy={busy}
+      />
       {!wide && (
         <Sheet
           open={!!code}

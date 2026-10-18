@@ -36,12 +36,15 @@ export function SessionBlocks({
   blocks,
   chatTitle,
   renderApproval,
+  inputActions,
 }: {
   blocks: (SessionBlock | ApprovalItem)[];
   /** How a chat is named: inputs say which chat they came from, ZeroLux tools where they wrote. */
   chatTitle?: ChatTitle;
   /** A request of the session, drawn where it was made: open while pending, a receipt after. */
   renderApproval?: (approval: Approval) => ReactNode;
+  /** What the owner can do from one of the session's inputs, under it. */
+  inputActions?: (input: InputBlock) => ReactNode;
 }) {
   const fresh = useArrivals(blocks);
   const density = useDensity();
@@ -57,7 +60,11 @@ export function SessionBlocks({
         ) : run.kind === "approval" ? (
           renderApproval?.(run.approval)
         ) : (
-          <Block block={run} chatTitle={chatTitle} />
+          <Block
+            block={run}
+            chatTitle={chatTitle}
+            inputActions={inputActions}
+          />
         )}
       </div>
     );
@@ -141,25 +148,33 @@ function Fold({
   );
 }
 
+/** An input of the session's: the owner's words, or a chat's message it was given. */
+export type InputBlock = Extract<SessionBlock, { kind: "input" }>;
+
 function Block({
   block,
   chatTitle,
+  inputActions,
 }: {
   block: SessionBlock;
   chatTitle?: ChatTitle;
+  inputActions?: (input: InputBlock) => ReactNode;
 }) {
   switch (block.kind) {
     case "input":
       return (
-        <div className="max-w-[min(40rem,85%)] self-end rounded-md rounded-br-xs border border-human/25 bg-human/10 px-3.5 py-2">
-          {block.chat && chatTitle && (
-            <p className="mb-1 font-mono text-[11px] text-faint">
-              From {chatTitle(block.chat) ?? "a chat"}
+        <div className="group/input flex flex-col items-end gap-1">
+          <div className="max-w-[min(40rem,85%)] rounded-md rounded-br-xs border border-human/25 bg-human/10 px-3.5 py-2">
+            {block.chat && chatTitle && (
+              <p className="mb-1 font-mono text-[11px] text-faint">
+                From {chatTitle(block.chat) ?? "a chat"}
+              </p>
+            )}
+            <p className="text-sm whitespace-pre-wrap break-words">
+              {block.text}
             </p>
-          )}
-          <p className="text-sm whitespace-pre-wrap break-words">
-            {block.text}
-          </p>
+          </div>
+          {inputActions?.(block)}
         </div>
       );
     case "text":

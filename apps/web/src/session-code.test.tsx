@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { setKernelFetch, useSessionGit } from "@zerolux/chat";
 import type { ChatSession, GitStatus } from "@zerolux/chat";
 import { ChangesPanel } from "./SessionCode";
+import { InputActions } from "./SessionFork";
+import type { InputBlock } from "@/components/session-blocks";
 
 afterEach(() => setKernelFetch());
 
@@ -101,4 +103,32 @@ test("the owner's git actions go to the session's folder", async () => {
     [base, undefined],
     [`${base}/push`, {}],
   ]);
+});
+
+test("an input is written again in a fork, and its files put back only where the harness keeps checkpoints", () => {
+  const input: InputBlock = {
+    key: "1.0",
+    time: null,
+    kind: "input",
+    text: "Fix the build",
+    chat: null,
+    at: 42,
+  };
+  const actions = (rewind?: boolean) =>
+    renderToStaticMarkup(
+      <InputActions
+        input={input}
+        fork={async () => true}
+        rewind={
+          rewind
+            ? async () => ({ canRewind: true, filesChanged: ["a.md"] })
+            : undefined
+        }
+        busy={false}
+        perform={async () => true}
+      />,
+    );
+  expect(actions()).toContain("Edit");
+  expect(actions()).not.toContain("Rewind files");
+  expect(actions(true)).toContain("Rewind files");
 });
