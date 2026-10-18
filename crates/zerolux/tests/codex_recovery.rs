@@ -458,6 +458,7 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
         sandbox: None,
         model: None,
         effort: None,
+        host: None,
     };
     for (invalid, actor_id) in [
         ("work", None),

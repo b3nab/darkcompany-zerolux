@@ -110,6 +110,23 @@ async fn host_notices_task(
         if row.is_none_or(|row| row.host_id.as_deref() != Some(host.as_str())) {
             continue;
         }
+        // Its adapter ended there: the session waits for attention, and the computer's next
+        // connection continues it.
+        if notice["type"] == "session.ended" {
+            if let Ok(owner) = store.session_person(session).await {
+                let _ = store
+                    .set_chat_session_status(
+                        &owner,
+                        session,
+                        ChatSessionStatus {
+                            status: "attention".into(),
+                            reason: notice["reason"].as_str().map(str::to_owned),
+                        },
+                    )
+                    .await;
+            }
+            continue;
+        }
         if let Ok(people) = store.readers(session).await {
             let _ = livekit.notify(&notice, &people).await;
         }
@@ -600,6 +617,7 @@ impl ChatRuntime {
         // The in-process adapters first, directly: a publisher stuck on LiveKit must not
         // delay them. Then the publisher, for the clients outside.
         let _ = self.wake.send(());
+        self.hosts.wake_all();
         self.changed.notify_one();
     }
 
@@ -963,6 +981,17 @@ impl ChatRuntime {
         id: &str,
     ) -> Result<(Option<Actor>, ChatSession)> {
         let session = self.store.chat_session(who, id).await?;
+        if let Some(host) = self.remote_host(&session) {
+            ensure!(
+                session.harness == "codex",
+                "Only Codex runs on joined computers"
+            );
+            ensure!(
+                session.stopped_at.is_some() || session.status == "attention",
+                "Stop the running session before resuming it"
+            );
+            return self.continue_on(&host, &session, false).await;
+        }
         match session.harness.as_str() {
             "codex" => self.resume_codex(who, session).await,
             #[cfg(unix)]
@@ -1617,6 +1646,15 @@ impl ChatRuntime {
     pub async fn stop_session(&self, id: &str) -> Result<Option<&'static str>> {
         self.live.forget(id);
         self.terminals.close_all(id);
+        // On a joined computer: it stops its adapter there.
+        let owner = self.store.session_person(id).await?;
+        let session = self.store.chat_session(&owner, id).await?;
+        if let Some(host) = self.remote_host(&session) {
+            self.hosts
+                .call(&host, "codex.stop", serde_json::json!({"session_id": id}))
+                .await?;
+            return Ok(None);
+        }
         let agent = self.agents.lock().await.remove(id);
         let Some(mut agent) = agent else {
             #[cfg(unix)]
@@ -1716,6 +1754,7 @@ mod control;
 mod fork;
 #[cfg(unix)]
 mod owned;
+mod remote;
 mod settings;
 mod subagents;
 pub use subagents::Subagent;

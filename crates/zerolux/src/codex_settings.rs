@@ -198,6 +198,51 @@ impl CodexSettings {
             .collect())
     }
 
+    /// A control asked as the pi and Claude integrations are, `{method, ...}`: how a joined
+    /// computer is asked for its Codex sessions.
+    pub async fn request(&self, request: &Value) -> Result<Value> {
+        let text = |key: &str| request[key].as_str().unwrap_or_default().to_owned();
+        Ok(match request["method"].as_str().unwrap_or_default() {
+            "input" => {
+                let mode = serde_json::from_value(request["mode"].clone()).unwrap_or_default();
+                let images: Vec<String> = request["images"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|image| image["path"].as_str().map(str::to_owned))
+                    .collect();
+                self.input(&text("text"), mode, &images).await?;
+                json!({})
+            }
+            "interrupt" => json!({"interrupted": self.interrupt().await?}),
+            "compact" => {
+                self.compact().await?;
+                json!({})
+            }
+            "commands" => json!({"commands": self.commands().await?}),
+            "requeue" => {
+                self.requeue(&text("item"), &text("text")).await?;
+                json!({})
+            }
+            "unqueue" => {
+                self.unqueue(&text("item")).await?;
+                json!({})
+            }
+            "goal" => json!({"goal": self.goal().await?}),
+            "set_goal" => json!({"goal": self.set_goal(
+                request["objective"].as_str(),
+                request["status"].as_str(),
+                request["token_budget"].as_i64(),
+            )
+            .await?}),
+            "clear_goal" => {
+                self.clear_goal().await?;
+                json!({})
+            }
+            other => bail!("This computer's Codex control does not know `{other}`; update it"),
+        })
+    }
+
     /// Takes a waiting input out of Codex's queue.
     pub async fn unqueue(&self, item: &str) -> Result<()> {
         self.rpc

@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
+type Map<T> = std::sync::Mutex<HashMap<String, T>>;
+
 /// How long the kernel waits for a host's answer.
 const ANSWER: Duration = Duration::from_secs(60);
 /// What a host secret starts with, so it is never taken for another credential.
@@ -36,18 +38,25 @@ struct Link {
 /// The hosts connected to this kernel.
 #[derive(Default)]
 pub struct Links {
-    links: Mutex<HashMap<String, Link>>,
+    links: Map<Link>,
     next: AtomicU64,
 }
 
 impl Links {
     pub async fn online(&self, host: &str) -> bool {
-        self.links.lock().await.contains_key(host)
+        self.links.lock().expect("links").contains_key(host)
     }
 
     /// Closes a host's channel: it was removed from the workspace.
     pub async fn disconnect(&self, host: &str) {
-        self.links.lock().await.remove(host);
+        self.links.lock().expect("links").remove(host);
+    }
+
+    /// Tells every connected computer that chats changed: their adapters read their inboxes.
+    pub fn wake_all(&self) {
+        for link in self.links.lock().expect("links").values() {
+            let _ = link.send.send(json!({"wake": true}).to_string());
+        }
     }
 
     /// Asks a connected host to do `op`, and waits for its answer.
@@ -55,7 +64,7 @@ impl Links {
         let (answer, waiting) = oneshot::channel();
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         {
-            let links = self.links.lock().await;
+            let links = self.links.lock().expect("links");
             let link = links
                 .get(host)
                 .context("That computer is not connected to the workspace right now")?;
@@ -87,7 +96,7 @@ impl Links {
         let (send, mut outgoing) = mpsc::unbounded_channel::<String>();
         let pending: Pending = Arc::default();
         let generation = self.next.fetch_add(1, Ordering::Relaxed);
-        self.links.lock().await.insert(
+        self.links.lock().expect("links").insert(
             host.clone(),
             Link {
                 send,
@@ -127,7 +136,7 @@ impl Links {
             }
         }
         writer.abort();
-        let mut links = self.links.lock().await;
+        let mut links = self.links.lock().expect("links");
         if links
             .get(&host)
             .is_some_and(|link| link.generation == generation)
@@ -206,7 +215,19 @@ pub async fn join(url: &str, code: &str, name: &str, data_dir: &std::path::Path)
 
 /// Keeps this computer connected to its workspace, answering what the kernel asks, and
 /// connects again after a break.
-pub async fn run(config: HostConfig, mut stop: tokio::sync::watch::Receiver<bool>) -> Result<()> {
+pub async fn run(config: HostConfig, stop: tokio::sync::watch::Receiver<bool>) -> Result<()> {
+    let (tell, told) = mpsc::unbounded_channel();
+    let host = crate::host_runtime::HostRuntime::new(config.url.clone(), tell);
+    run_with(config, stop, host, told).await
+}
+
+/// The same, with a host runtime of the caller's.
+pub async fn run_with(
+    config: HostConfig,
+    mut stop: tokio::sync::watch::Receiver<bool>,
+    host: Arc<crate::host_runtime::HostRuntime>,
+    mut told: mpsc::UnboundedReceiver<Value>,
+) -> Result<()> {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
     let mut wait = Duration::from_secs(1);
@@ -226,14 +247,23 @@ pub async fn run(config: HostConfig, mut stop: tokio::sync::watch::Receiver<bool
                 loop {
                     tokio::select! {
                         _ = stop.changed() => return Ok(()),
+                        notice = told.recv() => {
+                            let Some(notice) = notice else { continue };
+                            let notice = json!({"notice": notice}).to_string();
+                            let _ = sink.lock().await.send(Message::Text(notice.into())).await;
+                        }
                         message = stream.next() => {
                             let Some(Ok(message)) = message else { break };
                             let Message::Text(text) = message else { continue };
                             let Ok(request) = serde_json::from_str::<Value>(&text) else { continue };
-                            let sink = sink.clone();
+                            if request.get("wake").is_some() {
+                                host.wake();
+                                continue;
+                            }
+                            let (sink, host) = (sink.clone(), host.clone());
                             tokio::spawn(async move {
                                 let op = request["op"].as_str().unwrap_or_default().to_owned();
-                                let reply = match crate::host_ops::answer(&op, request["params"].clone()).await {
+                                let reply = match host.answer(&op, request["params"].clone()).await {
                                     Ok(result) => json!({"id": request["id"], "result": result}),
                                     Err(error) => json!({"id": request["id"], "error": format!("{error:#}")}),
                                 };

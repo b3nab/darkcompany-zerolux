@@ -1089,6 +1089,16 @@ impl Store {
         session_in(&tx, id).await
     }
 
+    /// A session that runs on a joined computer: the kernel neither starts nor relinks it here.
+    pub(crate) async fn place_session(&self, id: &str, host: &str) -> Result<()> {
+        sessions::Entity::update_many()
+            .col_expr(sessions::Column::HostId, Expr::value(Some(host.to_owned())))
+            .filter(sessions::Column::Id.eq(id))
+            .exec(&self.db)
+            .await?;
+        Ok(())
+    }
+
     /// A session its person started for another one, to delegate work to it.
     pub async fn delegate(&self, child: &str, parent: &str) -> Result<ChatSession> {
         let tx = self.write().await?;

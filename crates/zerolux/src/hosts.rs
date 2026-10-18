@@ -287,6 +287,14 @@ impl Store {
         Ok(())
     }
 
+    /// The person whose computer a host is.
+    pub async fn host_person(&self, id: &str) -> Result<Option<String>> {
+        Ok(hosts::Entity::find_by_id(id)
+            .one(self.db())
+            .await?
+            .map(|row| row.person_id))
+    }
+
     /// How `who` may start sessions on this kernel's host, if at all.
     pub async fn host_use(&self, who: &ChatIdentity) -> Result<Option<HostUse>> {
         if !who.is_person() {

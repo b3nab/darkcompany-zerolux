@@ -146,6 +146,9 @@ pub struct CreateCodexSession {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    /// One of one's joined computers to run it on; this kernel's when omitted.
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 /// Native pi settings choose the model/tools; no initial prompt is supplied.

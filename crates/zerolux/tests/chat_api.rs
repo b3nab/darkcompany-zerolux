@@ -2210,3 +2210,130 @@ async fn a_computer_joins_as_a_host_and_answers_over_its_channel() {
     runtime.shutdown().await.unwrap();
     livekit.shutdown().await.unwrap();
 }
+
+/// A Codex session started on a joined computer: the computer starts the thread and runs its
+/// adapter with the token the kernel issues; input and Stop reach it over its channel.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_codex_session_runs_on_a_joined_computer() {
+    if std::process::Command::new("livekit-server")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("livekit-server not installed: skipped");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("laptop-work");
+    std::fs::create_dir_all(&work).unwrap();
+    let native = codex_runtime::Runtime::new_in(&work).await;
+    let host_dir = dir.path().join("laptop");
+    let database = db::TestDatabase::new(dir.path().join("kernel.db")).await;
+    let store = database.open().await;
+    store
+        .set_owner_name(SetOwnerName {
+            name: "Owner".into(),
+        })
+        .await
+        .unwrap();
+    let livekit = Arc::new(
+        LiveKit::start(LiveKitConfig {
+            url: None,
+            api_key: None,
+            api_secret: None,
+            data_dir: dir.path().join("livekit"),
+        })
+        .await
+        .unwrap(),
+    );
+    let (kernel, runtime) = Kernel::serve(dir, database, store, Some(livekit.clone())).await;
+    let runtime = runtime.unwrap();
+    let linked: Value = kernel
+        .post("/hosts/link", None, json!({}))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let host = linked["host"]["id"].as_str().unwrap().to_owned();
+    zerolux::host_link::join(
+        &kernel.url,
+        linked["code"].as_str().unwrap(),
+        "Laptop",
+        &host_dir,
+    )
+    .await
+    .unwrap();
+    let config = zerolux::host_link::HostConfig::load(&host_dir).unwrap();
+    let (tell, told) = tokio::sync::mpsc::unbounded_channel();
+    let computer = zerolux::host_runtime::HostRuntime::with_codex(
+        config.url.clone(),
+        Some(native.endpoint.clone()),
+        tell,
+    );
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let connected = tokio::spawn(zerolux::host_link::run_with(
+        config, stopped, computer, told,
+    ));
+    for _ in 0..100 {
+        if runtime.hosts.online(&host).await {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let created = kernel
+        .post(
+            "/sessions",
+            None,
+            json!({"harness": "codex", "workspace": work, "host": host}),
+        )
+        .await;
+    let status = created.status();
+    let created: Value = created.json().await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["session"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(created["session"]["host_id"], host);
+    assert_eq!(
+        created["session"]["native_session_id"],
+        codex_runtime::STARTED
+    );
+    assert_eq!(native.count("thread/start"), 1);
+    // The adapter on the computer reports to the kernel itself.
+    let mut session = Value::Null;
+    for _ in 0..100 {
+        session = kernel
+            .get(&format!("/sessions/{id}"), None)
+            .await
+            .json::<Value>()
+            .await
+            .unwrap()["session"]
+            .clone();
+        if session["status"] == "connected" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(session["status"], "connected", "{session}");
+    let sent = kernel
+        .post(
+            &format!("/sessions/{id}/input"),
+            None,
+            json!({"text": "Run the tests"}),
+        )
+        .await;
+    assert_eq!(
+        sent.status(),
+        StatusCode::OK,
+        "{}",
+        sent.text().await.unwrap()
+    );
+    // Idle, it waits in Codex's own queue and starts the next turn there.
+    assert_eq!(native.count("thread/queue/add"), 1);
+    let stopped = kernel
+        .post(&format!("/sessions/{id}/stop"), None, json!({}))
+        .await;
+    assert_eq!(stopped.status(), StatusCode::OK);
+    stop.send_replace(true);
+    connected.await.unwrap().unwrap();
+    runtime.shutdown().await.unwrap();
+    livekit.shutdown().await.unwrap();
+}

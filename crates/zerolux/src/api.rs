@@ -677,7 +677,12 @@ async fn create_session(
     } else {
         who
     };
-    host_open(&state, &acting).await?;
+    // On this kernel's computer, if it is open to them; on a joined computer, if it is theirs.
+    let elsewhere = matches!(&input, NewSession::Codex(codex)
+        if codex.host.as_deref().is_some_and(|host| Some(host) != state.store.host()));
+    if !elsewhere {
+        host_open(&state, &acting).await?;
+    }
     let created = match input {
         NewSession::Claude(input) => {
             create_claude_session(State(state.clone()), Extension(acting), input).await
@@ -710,33 +715,37 @@ async fn create_codex_session(
     if !who.is_person() {
         return Err(Error::Forbidden.into());
     }
-    let (actor, session) = runtime(&state)?
-        .create_codex(&who, input)
-        .await
-        .map_err(|error| {
-            // What Codex did, or may have done, is the owner's to know: a thread it started
-            // is named, an unanswered start is called uncertain. Nothing else is exposed.
-            match error.downcast_ref::<CodexStartFailure>() {
-                Some(failure) => {
-                    tracing::error!(
-                        error = format!("{error:#}"),
-                        "Codex session was not started"
-                    );
-                    let thread_id = match failure {
-                        CodexStartFailure::Unlinked { thread_id } => Some(thread_id.as_str()),
-                        CodexStartFailure::Uncertain => None,
-                    };
-                    ApiFailure(Box::new(
-                        (
-                            StatusCode::BAD_GATEWAY,
-                            Json(json!({ "error": failure.to_string(), "thread_id": thread_id })),
-                        )
-                            .into_response(),
-                    ))
-                }
-                None => runtime_error(error),
+    let runtime = runtime(&state)?;
+    let created = match input.host.clone() {
+        Some(host) if Some(host.as_str()) != state.store.host() => {
+            runtime.create_codex_on(&who, input, &host).await
+        }
+        _ => runtime.create_codex(&who, input).await,
+    };
+    let (actor, session) = created.map_err(|error| {
+        // What Codex did, or may have done, is the owner's to know: a thread it started
+        // is named, an unanswered start is called uncertain. Nothing else is exposed.
+        match error.downcast_ref::<CodexStartFailure>() {
+            Some(failure) => {
+                tracing::error!(
+                    error = format!("{error:#}"),
+                    "Codex session was not started"
+                );
+                let thread_id = match failure {
+                    CodexStartFailure::Unlinked { thread_id } => Some(thread_id.as_str()),
+                    CodexStartFailure::Uncertain => None,
+                };
+                ApiFailure(Box::new(
+                    (
+                        StatusCode::BAD_GATEWAY,
+                        Json(json!({ "error": failure.to_string(), "thread_id": thread_id })),
+                    )
+                        .into_response(),
+                ))
             }
-        })?;
+            None => runtime_error(error),
+        }
+    })?;
     Ok(Json(json!({"actor":actor,"session":session})))
 }
 
@@ -2669,9 +2678,29 @@ async fn host_channel(
     state.store.host_seen(&host).await?;
     Ok(upgrade.on_upgrade(move |socket| async move {
         let links = runtime.hosts.clone();
+        // Once connected, the computer continues its sessions with new tokens.
+        let relink = {
+            let (runtime, host) = (runtime.clone(), host.clone());
+            tokio::spawn(async move {
+                for _ in 0..50 {
+                    if runtime.hosts.online(&host).await {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                if let Err(error) = runtime.relink_host(&host).await {
+                    tracing::warn!(
+                        host,
+                        error = format!("{error:#}"),
+                        "Relinking a computer failed"
+                    );
+                }
+            })
+        };
         links
             .serve(host, socket, runtime.host_notices.clone())
             .await;
+        relink.abort();
     }))
 }
 

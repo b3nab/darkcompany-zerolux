@@ -14,7 +14,7 @@ pub struct AgentSettingsView {
 const SETTINGS: &str = "agent-settings-v1";
 
 pub(super) enum Control {
-    Codex(crate::codex_settings::CodexSettings),
+    Codex(super::remote::CodexControl),
     Pi(sessions::PiDescriptor),
     #[cfg(unix)]
     Claude(crate::claude_runner::RunnerLink),
@@ -219,10 +219,18 @@ impl ChatRuntime {
             session.stopped_at.is_none() && session.status == "connected",
             "The native session is not connected"
         );
-        ensure!(
-            session.host_id.as_deref() == self.store.host(),
-            "The session belongs to another kernel host"
-        );
+        // A Codex session on a joined computer is controlled there.
+        if let Some(host) = self.remote_host(session) {
+            ensure!(
+                session.harness == "codex",
+                "The session belongs to another kernel host"
+            );
+            return Ok(Control::Codex(super::remote::CodexControl::There {
+                hosts: self.hosts.clone(),
+                host,
+                session: session.id.clone(),
+            }));
+        }
         if session.harness == "codex" {
             return self
                 .agents
@@ -231,7 +239,7 @@ impl ChatRuntime {
                 .get(&session.id)
                 .filter(|agent| !agent.task.is_finished())
                 .and_then(|agent| agent.settings.clone())
-                .map(Control::Codex)
+                .map(|control| Control::Codex(super::remote::CodexControl::Here(control)))
                 .context("The native Codex settings control is unavailable");
         }
         let locator = self.store.chat_session_locator(who, &session.id).await?;
