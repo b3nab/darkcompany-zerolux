@@ -565,6 +565,72 @@ async fn livekit_tickets_are_scoped_to_the_authenticated_actor_and_restart_requi
     let raised = budget(5.0).await.unwrap().json::<Value>().await.unwrap();
     assert_eq!(raised["session"]["status"], "connected");
     assert_ne!(before.status, "stopped");
+    // A terminal in the session's folder, for the owner.
+    let opened = kernel
+        .client
+        .post(format!("{url}/api/sessions/{}/terminals", agent.session.id))
+        .json(&json!({"cols":80,"rows":24}))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let terminal = opened["terminal"]["id"].as_str().unwrap().to_owned();
+    kernel
+        .client
+        .post(format!("{url}/api/terminals/{terminal}/input"))
+        .json(&json!({"data":"echo from-$((6*7))\n"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let mut seen = String::new();
+    let mut after = 0;
+    for _ in 0..200 {
+        let read = kernel
+            .client
+            .get(format!("{url}/api/terminals/{terminal}?after={after}"))
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        after = read["output"]["next"].as_u64().unwrap();
+        let bytes = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            read["output"]["data"].as_str().unwrap(),
+        )
+        .unwrap();
+        seen.push_str(&String::from_utf8_lossy(&bytes));
+        if seen.contains("from-42") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(seen.contains("from-42"), "{seen}");
+    assert_eq!(
+        kernel
+            .client
+            .post(format!("{url}/api/terminals/{terminal}/input"))
+            .bearer_auth(&agent.token)
+            .json(&json!({"data":"ls\n"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    kernel
+        .client
+        .delete(format!("{url}/api/terminals/{terminal}"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
     let free = kernel.agent("", None).await;
     assert_eq!(
         kernel

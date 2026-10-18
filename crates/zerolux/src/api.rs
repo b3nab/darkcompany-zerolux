@@ -239,6 +239,16 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         )
         .route("/sessions/{id}/files", get(session_files))
         .route("/sessions/{id}/file", get(session_file))
+        .route(
+            "/sessions/{id}/terminals",
+            get(session_terminals).post(open_terminal),
+        )
+        .route(
+            "/terminals/{terminal}",
+            get(terminal_output).delete(close_terminal),
+        )
+        .route("/terminals/{terminal}/input", post(terminal_input))
+        .route("/terminals/{terminal}/resize", post(resize_terminal))
         .route("/sessions/{id}/git", get(session_git))
         .route("/sessions/{id}/git/diff", get(session_diff))
         .route("/sessions/{id}/git/stage", post(git_stage))
@@ -1056,6 +1066,115 @@ async fn session_diff(
         .await
         .map_err(runtime_error)?;
     Ok(Json(json!({ "diff": diff })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TerminalSize {
+    cols: u16,
+    rows: u16,
+}
+
+async fn session_terminals(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    session_folder(&state, &who, &id).await?;
+    Ok(Json(
+        json!({ "terminals": runtime(&state)?.terminals.of(&id) }),
+    ))
+}
+
+/// A shell in the session's folder, on the kernel host.
+async fn open_terminal(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(size): ChatJson<TerminalSize>,
+) -> Result<Json<Value>, ApiFailure> {
+    let folder = session_folder(&state, &who, &id).await?;
+    let terminal = runtime(&state)?
+        .terminals
+        .open(&id, &folder.to_string_lossy(), size.cols, size.rows)
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "terminal": terminal })))
+}
+
+/// The terminal of a session the owner may see.
+async fn owned_terminal(
+    state: &AppState,
+    who: &ChatIdentity,
+    terminal: &str,
+) -> Result<crate::terminals::Info, ApiFailure> {
+    let info = runtime(state)?.terminals.info(terminal)?;
+    state.store.chat_session(who, &info.session_id).await?;
+    Ok(info)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TerminalRead {
+    #[serde(default)]
+    after: u64,
+}
+
+/// The terminal's output after an offset, base64-encoded; `next` is where to read on.
+async fn terminal_output(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(terminal): Path<String>,
+    Query(input): Query<TerminalRead>,
+) -> Result<Json<Value>, ApiFailure> {
+    let info = owned_terminal(&state, &who, &terminal).await?;
+    let output = runtime(&state)?.terminals.output(&terminal, input.after)?;
+    Ok(Json(json!({ "terminal": info, "output": output })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TerminalInput {
+    data: String,
+}
+
+/// What the owner types, as the terminal receives it.
+async fn terminal_input(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(terminal): Path<String>,
+    ChatJson(input): ChatJson<TerminalInput>,
+) -> Result<Json<Value>, ApiFailure> {
+    owned_terminal(&state, &who, &terminal).await?;
+    runtime(&state)?
+        .terminals
+        .write(&terminal, &input.data)
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "sent": true })))
+}
+
+async fn resize_terminal(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(terminal): Path<String>,
+    ChatJson(size): ChatJson<TerminalSize>,
+) -> Result<Json<Value>, ApiFailure> {
+    owned_terminal(&state, &who, &terminal).await?;
+    let info = runtime(&state)?
+        .terminals
+        .resize(&terminal, size.cols, size.rows)
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "terminal": info })))
+}
+
+/// Ends the terminal's shell, if it still runs, and closes it.
+async fn close_terminal(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(terminal): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    owned_terminal(&state, &who, &terminal).await?;
+    runtime(&state)?.terminals.close(&terminal)?;
+    Ok(Json(json!({ "closed": true })))
 }
 
 #[derive(Deserialize)]
