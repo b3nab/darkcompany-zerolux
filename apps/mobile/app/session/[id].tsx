@@ -373,6 +373,10 @@ function Composer({
       setSending(false);
     }
   };
+  // Claude Code in a terminal only takes words, into the running turn.
+  const choosable = !(
+    session.harness === "claude-code" && session.origin !== "owned"
+  );
   const filled = Boolean(draft.trim() || photos.length);
   const interrupting = !filled && stop.allowed;
   const room = MAX_INPUT_IMAGES - photos.length;
@@ -406,10 +410,6 @@ function Composer({
         { text: "Cancel", style: "cancel" },
       ]);
   };
-  // Claude Code in a terminal only takes words into the running turn.
-  const choosable = !(
-    session.harness === "claude-code" && session.origin !== "owned"
-  );
   const modes: [string, InputMode][] = [
     ["Send when this turn ends", "queue"],
     ["Stop the turn and send", "interrupt"],
@@ -520,23 +520,25 @@ function Composer({
         ) : null}
         {owner ? (
           <View className="flex-row items-end gap-1.5">
-            <Pressable
-              onPress={attach}
-              disabled={!open || picking || room <= 0}
-              accessibilityRole="button"
-              accessibilityLabel="Attach a photo"
-              hitSlop={4}
-              className={cn(
-                "size-10 items-center justify-center rounded-sm active:bg-accent",
-                (!open || room <= 0) && "opacity-40",
-              )}
-            >
-              {picking ? (
-                <ActivityIndicator size="small" color={muted} />
-              ) : (
-                <ImagePlusIcon color={muted} size={20} strokeWidth={1.5} />
-              )}
-            </Pressable>
+            {choosable ? (
+              <Pressable
+                onPress={attach}
+                disabled={!open || picking || room <= 0}
+                accessibilityRole="button"
+                accessibilityLabel="Attach a photo"
+                hitSlop={4}
+                className={cn(
+                  "size-10 items-center justify-center rounded-sm active:bg-accent",
+                  (!open || room <= 0) && "opacity-40",
+                )}
+              >
+                {picking ? (
+                  <ActivityIndicator size="small" color={muted} />
+                ) : (
+                  <ImagePlusIcon color={muted} size={20} strokeWidth={1.5} />
+                )}
+              </Pressable>
+            ) : null}
             <View className="min-h-10 flex-1 flex-row items-end rounded-md border border-input bg-background">
               <TextInput
                 className={cn(
