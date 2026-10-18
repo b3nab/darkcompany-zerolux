@@ -1,6 +1,6 @@
 import { cn } from "cn";
 import { creationDateLabel, harnessLabels } from "@zerolux/chat";
-import type { Actor } from "@zerolux/chat";
+import type { Actor, ChatSession, Harness } from "@zerolux/chat";
 import { Lamp } from "@/components/lamp";
 import type { LampState } from "@/components/lamp";
 import { ActorMark } from "@/components/presence";
@@ -28,6 +28,53 @@ export function Mark({
       <ActorMark kind={actor.kind} name={actor.name} className={className} />
       <Lamp
         kind={actor.kind}
+        state={state}
+        className="absolute -right-0.5 -bottom-0.5 size-1.5 outline-2 outline-card"
+      />
+    </span>
+  );
+}
+
+/** A harness by its initials, where no agent stands for the session. */
+export function HarnessMark({
+  harness,
+  className,
+}: {
+  harness: Harness;
+  className?: string;
+}) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "inline-flex size-8 shrink-0 items-center justify-center rounded-[22%] border border-input bg-secondary font-mono text-[10px]",
+        className,
+      )}
+    >
+      {harness === "claude-code" ? "CC" : harness === "codex" ? "CX" : "pi"}
+    </span>
+  );
+}
+
+/** A session's mark: its agent's, or its harness's when it has none, with its light. */
+export function SessionMark({
+  session,
+  actors,
+  state,
+  className,
+}: {
+  session: ChatSession;
+  actors: Actor[];
+  state: LampState;
+  className?: string;
+}) {
+  const agent = actors.find((a) => a.id === session.actor_id);
+  if (agent) return <Mark actor={agent} state={state} className={className} />;
+  return (
+    <span className="relative shrink-0">
+      <HarnessMark harness={session.harness} className={className} />
+      <Lamp
+        kind="agent"
         state={state}
         className="absolute -right-0.5 -bottom-0.5 size-1.5 outline-2 outline-card"
       />

@@ -28,6 +28,7 @@ import {
 import type { Chat, Discovery, Perform } from "@zerolux/chat";
 import { themes } from "@zerolux/theme/themes";
 import { useTheme } from "./theme";
+import { HarnessMark } from "@/components/profile";
 import {
   Command,
   CommandDialog,
@@ -187,26 +188,16 @@ export function CommandMenu({
                     run(
                       () =>
                         void perform(async () => {
-                          await chat.hire(
-                            d.id,
-                            d.title || harnessLabels[d.harness],
-                          );
+                          await chat.attach(d.id, {
+                            name: d.title || harnessLabels[d.harness],
+                          });
                           navigate("/team");
                         }),
                     )
                   }
                   className="items-start py-2"
                 >
-                  <span
-                    aria-hidden
-                    className="grid size-8 shrink-0 place-items-center rounded-[22%] border border-input bg-secondary font-mono text-[10px]"
-                  >
-                    {d.harness === "claude-code"
-                      ? "CC"
-                      : d.harness === "codex"
-                        ? "CX"
-                        : "pi"}
-                  </span>
+                  <HarnessMark harness={d.harness} />
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                     <span className="truncate font-medium">
                       {d.title || "Untitled session"}
