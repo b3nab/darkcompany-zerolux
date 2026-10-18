@@ -147,6 +147,10 @@ export function App({
   // kernel without hosts has only its owner.
   const { hosts } = useHosts();
   const starts = startsHere(hosts, me?.id, owns);
+  // A computer open to me that is someone else's: my sessions there need my own accounts.
+  const guestOn = hosts?.find(
+    (host) => host.here && host.open && host.person_id !== me?.id,
+  )?.id;
   // Hide chat only when the kernel answers without it (an older kernel).
   const chatReady = health?.capabilities.includes("chat-v1") ?? true;
   const capabilities = health?.capabilities ?? [];
@@ -260,6 +264,7 @@ export function App({
       chat={chat}
       actors={actors}
       starts={starts}
+      guestOn={guestOn}
       busy={busy}
       perform={perform}
     />

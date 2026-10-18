@@ -126,6 +126,7 @@ import { sendsOnEnter } from "./ChatView";
 import { useMe } from "./AuthGate";
 import { ChangesPanel, FilesPanel, TerminalPanel } from "./SessionCode";
 import { SubagentList, SubagentPanel } from "./SessionSubagents";
+import { AccountsNeeded } from "./HostAccounts";
 import { AskOnTheSide, InputActions } from "./SessionFork";
 import { SessionSchedules } from "./SessionSchedules";
 import { SessionTriggers } from "./SessionTriggers";
@@ -219,6 +220,7 @@ export function ConsoleList({
   chat,
   actors,
   starts = true,
+  guestOn,
   busy,
   perform,
 }: {
@@ -226,6 +228,8 @@ export function ConsoleList({
   actors: Actor[];
   /** Sessions start on this computer for its person, or for anyone it is open to. */
   starts?: boolean;
+  /** The computer one is a guest on: one's sessions there need one's own accounts. */
+  guestOn?: string;
   busy: boolean;
   perform: Perform;
 }) {
@@ -278,6 +282,7 @@ export function ConsoleList({
               here; give it an agent to bring it into your chats too.
             </DialogDescription>
           </DialogHeader>
+          {guestOn && <AccountsNeeded hostId={guestOn} />}
           <StartSession
             chat={chat}
             actors={actors}

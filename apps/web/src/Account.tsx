@@ -24,6 +24,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Connection, WorkspaceSettings } from "@/components/workspace-settings";
+import { HostAccounts } from "./HostAccounts";
 
 /** A page of settings: what it is about, and its sections. */
 function Settings({
@@ -362,6 +363,9 @@ function Computers({
                     ? "Open to you: your sessions run there with your own accounts."
                     : "Closed: only its person starts sessions there."}
                 </p>
+              )}
+              {!mine && host.open && host.here && (
+                <HostAccounts host={host} busy={busy} perform={perform} />
               )}
             </li>
           );
