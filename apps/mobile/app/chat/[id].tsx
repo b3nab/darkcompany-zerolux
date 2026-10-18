@@ -22,6 +22,7 @@ import type { LucideIcon } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { Modal, Pressable, ScrollView, TextInput, View } from "react-native";
+import type { TextInputInstance } from "react-native";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCSSVariable } from "uniwind";
@@ -99,7 +100,7 @@ export default function ChatScreen() {
   // More than a screen above the latest messages: a button brings the reader back down.
   const [away, setAway] = useState(false);
   const list = useRef<LegendListRef>(null);
-  const input = useRef<TextInput>(null);
+  const input = useRef<TextInputInstance>(null);
   const recorder = useVoice();
   const [muted, faint, onLamp] = useCSSVariable([
     "--color-muted-foreground",
@@ -108,7 +109,8 @@ export default function ChatScreen() {
   ]).map(String);
   const conversation = chat.conversations.find((c) => c.id === id);
   const owner = actors.find((actor) => actor.kind === "human")?.id;
-  const actor = (actorId: string) => actors.find((a) => a.id === actorId);
+  const actor = (actorId: string | null) =>
+    actors.find((a) => a.id === actorId);
   const thread = conversation?.kind === "thread";
   // Agents coordinate in threads under a chat; the owner reads them, the answer comes here.
   const parent = chat.conversations.find(
@@ -751,7 +753,7 @@ function ThreadChip({
   className,
 }: {
   thread: Conversation;
-  name: (actorId: string) => string;
+  name: (actorId: string | null) => string;
   className?: string;
 }) {
   const router = useRouter();

@@ -47,7 +47,7 @@ interface Kernel {
 interface Session {
   url: string;
   actors: Actor[];
-  name(actorId: string): string;
+  name(actorId: string | null): string;
   chat: Chat;
   workspace: Workspace | undefined;
   renameWorkspace(name: string): Promise<void>;
