@@ -109,6 +109,9 @@ when due (one-day update age). Private authorization checks never extend them.
   account to complete the claim binds to the existing owner actor, and registration
   then closes. Concurrent claims cannot replace the owner. Existing names/history
   remain. Complete registration before exposing a new workspace to untrusted users.
+- After that, people join by invitation: the owner creates one, valid once for seven
+  days; the person signs up with it and claims it, becoming a new human actor whose
+  `invited_by` names the owner. The owner is the human without `invited_by`.
 - `/api/health` remains public for connection identity and setup status. Domain
   endpoints require a bound human identity or their existing scoped agent token.
   No implicit owner identity for a request without credentials.
@@ -128,21 +131,29 @@ when due (one-day update age). Private authorization checks never extend them.
   is announced by `api_version` 2; clients never refuse a kernel by its version,
   they use the capabilities it declares.
 - `GET /api/auth/identity` requires a valid human session and returns
-  `{user: {id, name, email}, actor_id: string | null, setup_required: boolean}`.
+  `{user: {id, name, email}, actor_id: string | null, owner: boolean, setup_required: boolean}`;
+  `owner` tells the workspace's owner from a person who joined.
   It allows an unbound account to see that enrollment is required, not domain data.
 - `POST /api/auth/sign-up/email` accepts name, email and password while
-  `auth.setup_required` is true. Once the owner is bound it returns 403; clients
-  show login instead. Better Auth applies its database-backed rate limiter.
+  `auth.setup_required` is true. Once the owner is bound it needs the header
+  `x-zerolux-invite: <token>` of a usable invitation, and a name no member has;
+  without one it returns 403, with a used, withdrawn or expired one 410. Better Auth applies its database-backed rate limiter.
   An account is not privileged until bound. The kernel must not hold a write
   transaction across the sidecar call: both components write the same SQLite database.
-- `POST /api/auth/claim` has no request body. Under a valid human session it
-  atomically binds the first claiming account to the existing owner and returns
-  the identity response. Clients claim after signup. Keeping claim separate allows
+- `POST /api/auth/claim` has no request body, or `{invite}`. Under a valid human
+  session it atomically binds the first claiming account to the existing owner, or
+  with an invitation makes the account a new person and uses the invitation up; it
+  returns the identity response. Clients claim after signup. Keeping claim separate allows
   recovery through sign-in if registration succeeded but enrollment was interrupted.
 - Sign-in/out, get-session, list/revoke sessions and change-password use the
   matching Better Auth endpoints under `/api/auth`. Preserve its HTTP statuses,
   cookies and `set-auth-token`; do not turn an auth failure into a success envelope.
-- Desktop CORS must allow `authorization` and `content-type`, and expose
+- `GET /api/auth/invites/{token}` needs no account: `{invitation: {workspace,
+  invited_by, expires_at}}` while it can be used, 410 otherwise. The owner creates
+  invitations with `POST /api/invites` (`{invite: {id, created_by, created_at,
+  expires_at}, token}`; the token is in this answer only), lists unused ones with
+  `GET /api/invites` and withdraws one with `DELETE /api/invites/{id}`.
+- Desktop CORS must allow `authorization`, `content-type` and `x-zerolux-invite`, and expose
   `set-auth-token` for the known app origins.
 
 ### Private service protocol (version 1)
@@ -202,7 +213,7 @@ is not automatically a trusted proxy.
   authentication routes, preserving status, Set-Cookie and `set-auth-token`,
   never exposing private `/internal/*` routes. Signup additionally requires
   `x-zerolux-auth-enroll: 1`, injected **only** after the kernel checks that the
-  owner has no account yet. Requests cannot grant themselves that permission.
+  owner has no account yet, or that the signup carries a usable invitation. Requests cannot grant themselves that permission.
 
 Use bounded startup/HTTP/shutdown deadlines. Stop the auth child on kernel
 shutdown; an auth outage must not kill, restart or duplicate native agent work.
