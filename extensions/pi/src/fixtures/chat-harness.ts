@@ -57,6 +57,8 @@ chatExtension({
   registerTool(tool: typeof send & { name: string }) {
     if (tool.name === "zerolux_send") send = tool;
   },
+  getActiveTools: () => [],
+  setActiveTools() {},
   registerCommand(_name: string, value: typeof command) {
     command = value;
   },

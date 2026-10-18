@@ -250,6 +250,8 @@ for (const scenario of ["idle", "owner-stop", "dispatch"] as const)
             handler: (event: unknown, ctx: ExtensionContext) => unknown,
           ) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
           registerTool() {},
+          getActiveTools: () => [],
+          setActiveTools() {},
           registerCommand() {},
           getThinkingLevel: () => "high",
           sendUserMessage(content: string) {

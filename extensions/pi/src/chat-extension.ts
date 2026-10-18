@@ -16,6 +16,7 @@ import {
   nativeFingerprint,
   integrationCode,
   type ChatHost,
+  type LiveChange,
 } from "@zerolux/bridge";
 import { ChatControl, type PairRequest } from "./chat-control.ts";
 import { PiSettings } from "./settings.ts";
@@ -99,6 +100,8 @@ interface Link {
 
 /** The key of a link: its workspace. A kernel that names none gets the legacy single slot. */
 const LEGACY = "";
+/** The tools an agent's session takes part in chats with. */
+const CHAT_TOOLS = ["zerolux_send", "zerolux_thread", "zerolux_close_thread"];
 const installedCode = integrationCode(import.meta.url);
 
 export default function chatExtension(pi: ExtensionAPI) {
@@ -164,7 +167,22 @@ export default function chatExtension(pi: ExtensionAPI) {
     )
       query.reply(active());
   });
+  /**
+   * Chat tools belong to an agent's session. With only sessions of the owner's own linked
+   * they are put away; a link being replaced leaves them as they are.
+   */
+  const chatTools = () => {
+    const linked = bridges().filter((bridge) => bridge.connected);
+    if (!linked.length) return;
+    const agent = linked.some((bridge) => bridge.agent);
+    const active = pi.getActiveTools();
+    const wanted = agent
+      ? [...new Set([...active, ...CHAT_TOOLS])]
+      : active.filter((tool) => !CHAT_TOOLS.includes(tool));
+    if (wanted.length !== active.length) pi.setActiveTools(wanted);
+  };
   const status = () => {
+    chatTools();
     const connected = bridges().filter((bridge) => bridge.connected).length;
     context?.ui.setStatus(
       "zerolux-chat",
@@ -867,6 +885,57 @@ export default function chatExtension(pi: ExtensionAPI) {
         );
     }
   });
+  // What the session produces streams to every linked workspace while it runs: its words
+  // and reasoning as they come, a tool's output as it grows. The record has them after.
+  const live = (change: LiveChange) => {
+    for (const bridge of bridges()) bridge.live(change);
+  };
+  const streamPrefix = randomUUID().slice(0, 8);
+  let streamed = 0;
+  let streaming: string | undefined;
+  const toolOutput = new Map<string, string>();
+  pi.on("message_update", (event) => {
+    const update = event.assistantMessageEvent;
+    // Each assistant message starts its own items.
+    if (update.type === "start" || !streaming)
+      streaming = `${streamPrefix}-${++streamed}`;
+    if (!("contentIndex" in update)) return;
+    const item = `${streaming}:${update.contentIndex}`;
+    if (update.type === "text_delta")
+      live({ type: "append", item, kind: "text", text: update.delta });
+    else if (update.type === "thinking_delta")
+      live({ type: "append", item, kind: "thinking", text: update.delta });
+    else if (update.type === "text_end" || update.type === "thinking_end")
+      live({ type: "done", item });
+  });
+  pi.on("tool_execution_update", (event) => {
+    const parts = (event.partialResult as { content?: unknown } | undefined)
+      ?.content;
+    const text = (Array.isArray(parts) ? parts : [])
+      .filter(
+        (part): part is { type: "text"; text: string } =>
+          part?.type === "text" && typeof part.text === "string",
+      )
+      .map((part) => part.text)
+      .join("");
+    const shown = toolOutput.get(event.toolCallId) ?? "";
+    if (text === shown) return;
+    live(
+      text.startsWith(shown)
+        ? {
+            type: "append",
+            item: event.toolCallId,
+            kind: "output",
+            text: text.slice(shown.length),
+          }
+        : { type: "set", item: event.toolCallId, kind: "output", text },
+    );
+    toolOutput.set(event.toolCallId, text);
+  });
+  pi.on("tool_execution_end", (event) => {
+    if (toolOutput.delete(event.toolCallId))
+      live({ type: "done", item: event.toolCallId });
+  });
   // Every link follows pi's turns; each one only acts on its own deliveries.
   pi.on("agent_start", () => {
     dialogShared ||= links.size !== 1;
@@ -904,6 +973,9 @@ export default function chatExtension(pi: ExtensionAPI) {
     void messageStarted(bridges(), event.message, queuedInputs);
   });
   pi.on("agent_settled", async () => {
+    streaming = undefined;
+    toolOutput.clear();
+    live({ type: "clear" });
     settled = true;
     dialogShared = false;
     await Promise.all(bridges().map((bridge) => bridge.settled()));

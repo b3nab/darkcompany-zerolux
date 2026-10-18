@@ -453,6 +453,8 @@ case "$init" in *TOKEN_1*) sleep 1 ;; esac
         handlers.set(name, handler);
       },
       registerTool() {},
+      getActiveTools: () => [],
+      setActiveTools() {},
       registerCommand: (_: string, value: typeof command) => {
         command = value;
       },
@@ -576,6 +578,8 @@ case "$init" in *TOKEN_1*) sleep 1 ;; esac
         handlers.set(name, handler);
       },
       registerTool() {},
+      getActiveTools: () => [],
+      setActiveTools() {},
       registerCommand: (_: string, value: typeof command) => {
         command = value;
       },
@@ -728,6 +732,8 @@ printf 'closed' > "${root}/$name-closed"
         handlers.set(name, handler);
       },
       registerTool() {},
+      getActiveTools: () => [],
+      setActiveTools() {},
       registerCommand: (_: string, value: typeof command) => {
         command = value;
       },
@@ -908,6 +914,8 @@ while IFS= read -r line; do :; done
         handlers.set(name, handler);
       },
       registerTool() {},
+      getActiveTools: () => [],
+      setActiveTools() {},
       registerCommand: (_: string, value: typeof command) => {
         command = value;
       },
@@ -1074,6 +1082,8 @@ printf 'closed' > "${root}/$name-closed"
         handlers.set(name, handler);
       },
       registerTool() {},
+      getActiveTools: () => [],
+      setActiveTools() {},
       registerCommand: (_: string, value: typeof command) => {
         command = value;
       },
@@ -1132,6 +1142,8 @@ test("a failed compaction is kept in the session's record; a cancelled one is no
       handlers.set(name, handler);
     },
     registerTool() {},
+    getActiveTools: () => [],
+    setActiveTools() {},
     registerCommand() {},
     sendUserMessage() {},
     appendEntry: (type: string, data: unknown) => entries.push([type, data]),
@@ -1154,3 +1166,141 @@ test("a failed compaction is kept in the session's record; a cancelled one is no
     ],
   ]);
 });
+
+unixTest(
+  "a session without an agent puts the chat tools away, and what it produces streams to ZeroLux",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "zpl-"));
+    const workspace = await realpath(root),
+      executable = join(root, "zerolux");
+    await writeFile(
+      executable,
+      `#!/bin/sh
+IFS= read -r init
+printf '{"type":"invalidate"}\\n'
+while IFS= read -r line; do :; done
+`,
+      { mode: 0o700 },
+    );
+    const live: unknown[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const path = new URL(request.url).pathname;
+        if (path === "/api/chat/inbox")
+          return Response.json({
+            session: {
+              id: "own",
+              actor_id: null,
+              harness: "pi",
+              native_session_id: "11111111-1111-4111-8111-111111111111",
+              workspace,
+              status: "connected",
+            },
+            workspace: { id: "ws", name: "W" },
+            conversations: [],
+            deliveries: [],
+          });
+        if (path === "/api/chat/sessions/own/live")
+          live.push(
+            ...((await request.json()) as { changes: unknown[] }).changes,
+          );
+        return Response.json({});
+      },
+    });
+    const handlers = new Map<string, (event: any, ctx: any) => unknown>();
+    let command!: { handler(args: string, ctx: unknown): Promise<void> };
+    let active = [
+      "read",
+      "bash",
+      "zerolux_send",
+      "zerolux_thread",
+      "zerolux_close_thread",
+    ];
+    const ctx = {
+      cwd: root,
+      sessionManager: {
+        getSessionId: () => "11111111-1111-4111-8111-111111111111",
+        getSessionName: () => "fixture",
+      },
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      abort() {},
+      ui: { setStatus() {}, notify() {} },
+    };
+    const agentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = root;
+    chatExtension({
+      on: (name: string, handler: (event: any, ctx: any) => unknown) => {
+        handlers.set(name, handler);
+      },
+      registerTool() {},
+      getActiveTools: () => active,
+      setActiveTools: (tools: string[]) => {
+        active = tools;
+      },
+      registerCommand: (_: string, value: typeof command) => {
+        command = value;
+      },
+      sendUserMessage() {},
+      events: { on: () => () => {}, emit() {} },
+    } as unknown as ExtensionAPI);
+    try {
+      await handlers.get("session_start")!({}, ctx);
+      const registry = join(root, "zerolux-links");
+      const record = JSON.parse(
+        await readFile(join(registry, (await readdir(registry))[0]!), "utf8"),
+      );
+      const paired = await rpc(record.endpoint, {
+        nonce: record.nonce,
+        method: "pair",
+        native_session_id: record.native_session_id,
+        workspace,
+        workspace_id: "ws",
+        base_url: server.url.origin,
+        token: "TOKEN",
+        executable,
+      });
+      expect(paired.ok).toBe(true);
+      expect(active).toEqual(["read", "bash"]);
+      const update = (assistantMessageEvent: unknown) =>
+        handlers.get("message_update")!({ assistantMessageEvent }, ctx);
+      await update({ type: "start" });
+      await update({ type: "thinking_delta", contentIndex: 0, delta: "Hmm" });
+      await update({ type: "thinking_end", contentIndex: 0, content: "Hmm" });
+      const output = (text: string) =>
+        handlers.get("tool_execution_update")!(
+          {
+            toolCallId: "call",
+            toolName: "bash",
+            args: {},
+            partialResult: { content: [{ type: "text", text }] },
+          },
+          ctx,
+        );
+      await output("one\n");
+      await output("one\ntwo\n");
+      await output("two\n"); // pi keeps the end of long output: shown whole.
+      await handlers.get("tool_execution_end")!({ toolCallId: "call" }, ctx);
+      await handlers.get("agent_settled")!({}, ctx);
+      for (let i = 0; i < 100 && live.length < 5; i++) await Bun.sleep(20);
+      const item = (live[0] as { item: string }).item;
+      expect(live).toEqual([
+        { type: "append", item, kind: "thinking", text: "Hmm" },
+        { type: "done", item },
+        { type: "set", item: "call", kind: "output", text: "two\n" },
+        { type: "done", item: "call" },
+        { type: "clear" },
+      ]);
+    } finally {
+      await command?.handler("off", ctx);
+      await handlers.get("session_shutdown")?.({}, ctx);
+      if (agentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = agentDir;
+      server.stop(true);
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  15000,
+);

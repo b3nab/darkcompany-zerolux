@@ -249,6 +249,8 @@ describe("permanent pi chat", () => {
         events.push(name);
       },
       registerTool: (tool: { name: string }) => tools.push(tool.name),
+      getActiveTools: () => [],
+      setActiveTools() {},
       registerCommand: (name: string) => commands.push(name),
       events: {
         on: () => () => {},
@@ -279,6 +281,8 @@ describe("permanent pi chat", () => {
     chatExtension({
       on() {},
       registerTool: (tool: { name: string }) => tools.set(tool.name, tool),
+      getActiveTools: () => [],
+      setActiveTools() {},
       registerCommand() {},
       events: { on: () => () => {}, emit() {} },
     } as unknown as ExtensionAPI);
@@ -307,6 +311,8 @@ describe("permanent pi chat", () => {
           if (name === "session_start") handlers.push(handler);
         },
         registerTool: (tool: { name: string }) => tools.set(tool.name, tool),
+        getActiveTools: () => [],
+        setActiveTools() {},
         registerCommand: (name: string, command: unknown) =>
           commands.set(name, command),
         sendUserMessage: (...args: unknown[]) => sent.push(args),
@@ -1366,4 +1372,36 @@ describe("permanent pi chat", () => {
     // No inbox in between: the agent writes in the thread right away.
     expect(f.bridge.knows("thread")).toBe(true);
   });
+});
+
+test("streamed output travels together, the end of an item at once, in pieces ZeroLux takes", async () => {
+  const f = fixture();
+  await f.bridge.connect();
+  const reports = () =>
+    f.calls
+      .filter((c) => c.path === "/chat/sessions/link/live")
+      .map((c) => c.body.changes);
+  f.bridge.live({ type: "append", item: "m", kind: "text", text: "Hel" });
+  f.bridge.live({ type: "append", item: "m", kind: "text", text: "lo" });
+  expect(reports()).toEqual([]);
+  await Bun.sleep(200);
+  expect(reports()).toEqual([
+    [{ type: "append", item: "m", kind: "text", text: "Hello" }],
+  ]);
+  f.bridge.live({ type: "append", item: "m", kind: "text", text: "!" });
+  f.bridge.live({ type: "done", item: "m" });
+  expect(reports()[1]).toEqual([
+    { type: "append", item: "m", kind: "text", text: "!" },
+    { type: "done", item: "m" },
+  ]);
+  f.bridge.live({
+    type: "append",
+    item: "cmd",
+    kind: "output",
+    text: "x".repeat(40_000),
+  });
+  f.bridge.live({ type: "clear" });
+  expect(
+    reports()[2]!.map((change: { text?: string }) => change.text?.length),
+  ).toEqual([16_384, 16_384, 7_232, undefined]);
 });

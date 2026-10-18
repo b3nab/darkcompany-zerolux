@@ -97,6 +97,8 @@ const pi = {
   registerTool(tool: any) {
     tools.set(tool.name, tool);
   },
+  getActiveTools: () => [],
+  setActiveTools() {},
   registerCommand() {},
   getThinkingLevel: () => thinking,
   setModel: async (next: typeof model) => {
