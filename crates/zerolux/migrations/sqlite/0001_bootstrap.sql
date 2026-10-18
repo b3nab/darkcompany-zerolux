@@ -53,4 +53,8 @@ CREATE UNIQUE INDEX `invites_token_hash` ON `invites` (`token_hash`);
 -- Create "triggers" table
 CREATE TABLE `triggers` (`id` text NOT NULL, `session_id` text NOT NULL, `event` text NOT NULL, `failures_only` boolean NOT NULL, `prompt` text NOT NULL, `enabled` boolean NOT NULL, `last_seen` text NULL, `last_run_at` integer NULL, `last_error` text NULL, `created_at` integer NOT NULL, PRIMARY KEY (`id`), CONSTRAINT `0` FOREIGN KEY (`session_id`) REFERENCES `sessions` (`id`) ON UPDATE NO ACTION ON DELETE NO ACTION, CHECK ("event" IN ('ci')));
 -- Create "hosts" table
-CREATE TABLE `hosts` (`id` text NOT NULL, `name` text NOT NULL, `person_id` text NOT NULL, `open` boolean NOT NULL, `created_at` integer NOT NULL, `seen_at` integer NOT NULL, PRIMARY KEY (`id`), CONSTRAINT `0` FOREIGN KEY (`person_id`) REFERENCES `actors` (`id`) ON UPDATE NO ACTION ON DELETE NO ACTION);
+CREATE TABLE `hosts` (`id` text NOT NULL, `name` text NOT NULL, `person_id` text NOT NULL, `open` boolean NOT NULL, `created_at` integer NOT NULL, `seen_at` integer NOT NULL, `secret_hash` text NULL, `link_hash` text NULL, `link_expires_at` integer NULL, PRIMARY KEY (`id`), CONSTRAINT `0` FOREIGN KEY (`person_id`) REFERENCES `actors` (`id`) ON UPDATE NO ACTION ON DELETE NO ACTION);
+-- Create index "hosts_secret_hash" to table: "hosts"
+CREATE UNIQUE INDEX `hosts_secret_hash` ON `hosts` (`secret_hash`);
+-- Create index "hosts_link_hash" to table: "hosts"
+CREATE UNIQUE INDEX `hosts_link_hash` ON `hosts` (`link_hash`);

@@ -14,8 +14,16 @@ pub struct Model {
     /// Other people may start their own sessions here, with their own harness accounts.
     pub open: bool,
     pub created_at: i64,
-    /// When its kernel last started.
+    /// When its kernel last started, or last connected.
     pub seen_at: i64,
+    /// What a joined computer proves it is with, hashed; none for a kernel serving the
+    /// workspace's database itself.
+    #[sea_orm(column_type = "Text", unique)]
+    pub secret_hash: Option<String>,
+    /// The one-time code its person gave the computer to join with, hashed, while unused.
+    #[sea_orm(column_type = "Text", unique)]
+    pub link_hash: Option<String>,
+    pub link_expires_at: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

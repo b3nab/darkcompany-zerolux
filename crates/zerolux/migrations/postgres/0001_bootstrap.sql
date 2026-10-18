@@ -21,7 +21,7 @@ CREATE TABLE "deliveries" ("id" text NOT NULL, "message_id" text NOT NULL, "acto
 -- Create index "deliveries_session" to table: "deliveries"
 CREATE INDEX "deliveries_session" ON "deliveries" ("session_id", "status", "created_at");
 -- Create "hosts" table
-CREATE TABLE "hosts" ("id" text NOT NULL, "name" text NOT NULL, "person_id" text NOT NULL, "open" boolean NOT NULL, "created_at" bigint NOT NULL, "seen_at" bigint NOT NULL, PRIMARY KEY ("id"));
+CREATE TABLE "hosts" ("id" text NOT NULL, "name" text NOT NULL, "person_id" text NOT NULL, "open" boolean NOT NULL, "created_at" bigint NOT NULL, "seen_at" bigint NOT NULL, "secret_hash" text NULL, "link_hash" text NULL, "link_expires_at" bigint NULL, PRIMARY KEY ("id"), CONSTRAINT "hosts_link_hash_key" UNIQUE ("link_hash"), CONSTRAINT "hosts_secret_hash_key" UNIQUE ("secret_hash"));
 -- Create "invites" table
 CREATE TABLE "invites" ("id" text NOT NULL, "token_hash" text NOT NULL, "created_by" text NOT NULL, "created_at" bigint NOT NULL, "expires_at" bigint NOT NULL, "accepted_by" text NULL, "accepted_at" bigint NULL, PRIMARY KEY ("id"), CONSTRAINT "invites_token_hash_key" UNIQUE ("token_hash"));
 -- Create "messages" table
