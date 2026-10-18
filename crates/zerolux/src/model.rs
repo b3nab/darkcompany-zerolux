@@ -269,6 +269,8 @@ pub struct ChatSession {
     pub owner_id: String,
     /// Private when none; otherwise the workspace's people may `read` it, or `write` to it too.
     pub shared: Option<String>,
+    /// ZeroLux started its native session, rather than finding one started elsewhere.
+    pub created: bool,
     /// How its native record ends, from this kernel host's watcher.
     #[serde(flatten)]
     pub tail: crate::native_events::Tail,
@@ -308,6 +310,7 @@ impl FromQueryResult for ChatSession {
             parent_session_id: row.try_get(pre, "parent_session_id")?,
             owner_id: row.try_get(pre, "owner_id")?,
             shared: row.try_get(pre, "shared")?,
+            created: row.try_get(pre, "created")?,
             tail: Default::default(),
         })
     }

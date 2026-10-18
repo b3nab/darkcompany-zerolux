@@ -2299,6 +2299,8 @@ async fn a_codex_session_runs_on_a_joined_computer() {
         created["session"]["native_session_id"],
         codex_runtime::STARTED
     );
+    // ZeroLux started it, rather than finding it.
+    assert_eq!(created["session"]["created"], true);
     assert_eq!(native.count("thread/start"), 1);
     // The adapter on the computer reports to the kernel itself.
     let mut session = Value::Null;

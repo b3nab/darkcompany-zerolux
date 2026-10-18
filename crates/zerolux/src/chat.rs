@@ -814,6 +814,7 @@ impl Store {
                     parent_session_id: Set(None),
                     owner_id: Set(who.actor()?.to_owned()),
                     shared: Set(None),
+                    created: Set(false),
                 }
                 .insert(&tx)
                 .await?;
@@ -1087,6 +1088,17 @@ impl Store {
         let tx = self.read().await?;
         session_access(&tx, who, id).await?;
         session_in(&tx, id).await
+    }
+
+    /// ZeroLux started the session's native session itself.
+    pub(crate) async fn mark_created(&self, session: &mut ChatSession) -> Result<()> {
+        sessions::Entity::update_many()
+            .col_expr(sessions::Column::Created, Expr::value(true))
+            .filter(sessions::Column::Id.eq(&session.id))
+            .exec(&self.db)
+            .await?;
+        session.created = true;
+        Ok(())
     }
 
     /// A session that runs on a joined computer: the kernel neither starts nor relinks it here.

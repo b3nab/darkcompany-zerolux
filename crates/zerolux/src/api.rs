@@ -750,6 +750,8 @@ async fn create_codex_session(
             None => runtime_error(error),
         }
     })?;
+    let mut session = session;
+    state.store.mark_created(&mut session).await?;
     Ok(Json(json!({"actor":actor,"session":session})))
 }
 
@@ -794,6 +796,8 @@ async fn create_pi_session(
                 runtime_error(error)
             }
         })?;
+        let mut session = session;
+        state.store.mark_created(&mut session).await?;
         Ok(Json(json!({"actor":actor,"session":session})))
     }
     #[cfg(not(unix))]
@@ -826,6 +830,8 @@ async fn create_claude_session(
                 .await
                 .map_err(runtime_error)?,
         };
+        let mut session = session;
+        state.store.mark_created(&mut session).await?;
         Ok(Json(json!({"actor":actor,"session":session})))
     }
     #[cfg(not(unix))]
@@ -902,6 +908,8 @@ async fn fork_session(
         .fork(&who, &id, input.at, &input.name, input.actor_id)
         .await
         .map_err(runtime_error)?;
+    let mut session = session;
+    state.store.mark_created(&mut session).await?;
     Ok(Json(json!({ "actor": actor, "session": session })))
 }
 

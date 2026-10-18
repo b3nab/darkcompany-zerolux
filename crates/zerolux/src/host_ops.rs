@@ -55,6 +55,7 @@ impl RecordRef {
             parent_session_id: None,
             owner_id: String::new(),
             shared: None,
+            created: false,
         }
     }
 }
