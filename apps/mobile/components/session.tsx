@@ -1,6 +1,8 @@
-import { useRouter } from "expo-router";
+import { Link, useRouter } from "expo-router";
 import { useState } from "react";
-import { Alert, Pressable, View } from "react-native";
+import { Alert, Platform, Pressable, View } from "react-native";
+import { PinIcon } from "lucide-react-native";
+import { useCSSVariable } from "uniwind";
 import {
   ago,
   errorMessage,
@@ -9,7 +11,7 @@ import {
   sessionState,
   sessionTone,
 } from "@zerolux/chat";
-import type { Actor, ChatSession } from "@zerolux/chat";
+import type { Actor, Approval, Attention, ChatSession } from "@zerolux/chat";
 import { ActorMark, Fact, Lamp } from "@/components/member";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
@@ -17,53 +19,145 @@ import { cn } from "@/lib/utils";
 import { useSession } from "@/src/kernel";
 import { useMe } from "@/src/me";
 
+/** Pin, archive and rename a session, keeping the kernel's reason when it refuses. */
+export function useOrganize(session: ChatSession) {
+  const { chat } = useSession();
+  const change = (update: Parameters<typeof chat.updateSession>[1]) =>
+    void chat
+      .updateSession(session.id, update)
+      .catch((e) => Alert.alert("Not changed", errorMessage(e)));
+  return {
+    pinned: Boolean(session.pinned_at),
+    archived: Boolean(session.archived_at),
+    pin: () => change({ pinned: !session.pinned_at }),
+    archive: () => change({ archived: !session.archived_at }),
+    rename: (title: string) => change({ title: title.trim() }),
+  };
+}
+
 /**
- * One agent session as the Console lists it, like a chat in the list of chats: the agent and
- * its harness, then what it does while it works, else the session's title.
+ * One session as the Console's inbox lists it, like a chat in the list of chats: its agent
+ * (or its title, without one) and harness, when it last wrote, then what it asks of you,
+ * what it does while it works, else its latest in a line; a dot while it has written what you
+ * have not seen. Held, it is pinned, archived or renamed: the system's menu on iOS.
  */
 export function SessionRow({
   session,
   agent,
+  attention,
+  asks,
 }: {
   session: ChatSession;
   agent?: Actor;
+  attention: Attention;
+  /** The request it waits on you for. */
+  asks?: Approval;
 }) {
-  const router = useRouter();
-  const tone = sessionTone(session);
+  const organize = useOrganize(session);
+  const faint = String(useCSSVariable("--color-faint"));
+  const unseen = attention === "unseen";
+  const title = session.title || "Untitled session";
+  const rename = () =>
+    Alert.prompt(
+      "Rename session",
+      undefined,
+      organize.rename,
+      "plain-text",
+      title,
+    );
+  // Android has no menu on a link: holding the row asks instead.
+  const ask = () =>
+    Alert.alert(agent?.name ?? title, undefined, [
+      { text: organize.pinned ? "Unpin" : "Pin", onPress: organize.pin },
+      {
+        text: organize.archived ? "Unarchive" : "Archive",
+        onPress: organize.archive,
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
   return (
-    <Pressable
-      onPress={() => router.push(`/session/${session.id}`)}
-      accessibilityRole="button"
-      className="flex-row items-center gap-3 px-5 py-2.5 active:bg-accent"
-    >
-      <ActorMark kind="agent" name={agent?.name ?? "?"} tone={tone} />
-      <View className="min-w-0 flex-1 gap-0.5">
-        <View className="flex-row items-baseline gap-2">
-          <Text
-            numberOfLines={1}
-            className="shrink font-mono text-sm text-agent-foreground"
-          >
-            {agent?.name ?? "Agent"}
-          </Text>
-          <Text className="font-mono text-[11px] text-faint">
-            {harnessLabels[session.harness] ?? session.harness}
-          </Text>
-        </View>
-        <Text
-          numberOfLines={1}
-          className={cn(
-            "text-[13px]",
-            tone === "working"
-              ? "text-agent-foreground"
-              : "text-muted-foreground",
-          )}
+    <Link href={`/session/${session.id}`} asChild>
+      <Link.Trigger>
+        <Pressable
+          onLongPress={Platform.OS === "ios" ? undefined : ask}
+          accessibilityRole="button"
+          className="flex-row items-center gap-3 px-5 py-2.5 active:bg-accent"
         >
-          {tone === "working"
-            ? sessionState(session)
-            : session.title || "Untitled session"}
-        </Text>
-      </View>
-    </Pressable>
+          <ActorMark
+            kind="agent"
+            name={agent?.name ?? title}
+            tone={sessionTone(session)}
+          />
+          <View className="min-w-0 flex-1 gap-0.5">
+            <View className="flex-row items-baseline gap-2">
+              <Text
+                numberOfLines={1}
+                className={cn(
+                  "shrink text-sm",
+                  agent ? "font-mono text-agent-foreground" : "font-medium",
+                )}
+              >
+                {agent?.name ?? title}
+              </Text>
+              <Text className="font-mono text-[11px] text-faint">
+                {harnessLabels[session.harness] ?? session.harness}
+              </Text>
+              <View className="ml-auto flex-row items-center gap-1">
+                {organize.pinned ? (
+                  <PinIcon color={faint} size={11} strokeWidth={2} />
+                ) : null}
+                {session.output_at ? (
+                  <Text className="font-mono text-[11px] text-faint">
+                    {ago(session.output_at)}
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+            <View className="flex-row items-center gap-1.5">
+              {unseen ? (
+                <View
+                  accessibilityLabel="New"
+                  className="size-1.5 rounded-full bg-agent"
+                />
+              ) : null}
+              <Text
+                numberOfLines={1}
+                className={cn(
+                  "flex-1 text-[13px] text-muted-foreground",
+                  attention === "working" && "text-agent-foreground",
+                  asks && "text-attention",
+                  unseen && "font-medium text-foreground",
+                )}
+              >
+                {attention === "working"
+                  ? sessionState(session)
+                  : asks
+                    ? `Asks: ${asks.summary}`
+                    : session.summary ||
+                      (agent ? title : sessionState(session))}
+              </Text>
+            </View>
+          </View>
+        </Pressable>
+      </Link.Trigger>
+      <Link.Menu>
+        <Link.MenuAction
+          icon={organize.pinned ? "pin.slash" : "pin"}
+          onPress={organize.pin}
+        >
+          {organize.pinned ? "Unpin" : "Pin"}
+        </Link.MenuAction>
+        <Link.MenuAction icon="pencil" onPress={rename}>
+          Rename
+        </Link.MenuAction>
+        <Link.MenuAction
+          icon={organize.archived ? "tray.and.arrow.up" : "archivebox"}
+          onPress={organize.archive}
+        >
+          {organize.archived ? "Unarchive" : "Archive"}
+        </Link.MenuAction>
+      </Link.Menu>
+    </Link>
   );
 }
 
@@ -182,17 +276,17 @@ export function SessionCard({
   const harness = harnessLabels[session.harness] ?? session.harness;
   return (
     <View className="gap-2 rounded-lg border border-border bg-card p-3">
-      <View className="flex-row items-center gap-3">
-        <View className="min-w-0 flex-1">
-          <Text numberOfLines={1} className="text-sm font-medium">
-            {session.title || "Untitled session"}
-          </Text>
-          <Text numberOfLines={1} className="text-xs text-muted-foreground">
-            {facts
-              ? sessionState(session)
-              : `${harness} · ${folderName(session.workspace)}`}
-          </Text>
-        </View>
+      <View className="min-w-0">
+        <Text numberOfLines={1} className="text-sm font-medium">
+          {session.title || "Untitled session"}
+        </Text>
+        <Text numberOfLines={1} className="text-xs text-muted-foreground">
+          {facts
+            ? sessionState(session)
+            : `${harness} · ${folderName(session.workspace)}`}
+        </Text>
+      </View>
+      <View className="flex-row flex-wrap items-start justify-end gap-2">
         <Interrupt session={session} />
         {takeable(session) ? (
           <Button
