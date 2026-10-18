@@ -1,20 +1,22 @@
-import { Stack, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import { Pressable, ScrollView, Switch, View } from "react-native";
 import {
   agentLaunchSettings,
   agentSettingFields,
-  useModelCatalog,
   claudeModes,
   codexApprovalPolicies,
   codexSandboxes,
   errorMessage,
   harnessLabels,
+  recentFolders,
+  useSessionCatalog,
 } from "@zerolux/chat";
 import type {
   ClaudeMode,
   CodexApprovalPolicy,
   CodexSandbox,
+  NewSession,
 } from "@zerolux/chat";
 import { Screen } from "@/components/screen";
 import { Button } from "@/components/ui/button";
@@ -31,19 +33,23 @@ const startable = {
   pi: harnessLabels.pi,
 } as const;
 type Startable = keyof typeof startable;
+/** Who the session works for: no agent, a new one, or an existing one by id. */
+const NEW = "new";
 
 /**
- * A new agent the kernel starts in a folder on its own computer, as a new agent or as
- * another session of an existing one. The same choices as the web app: what is left unset
- * for Codex follows the user's own Codex configuration.
+ * A new session the kernel starts in a folder on its own computer: on its own, for a new
+ * agent, or as another session of an existing one; then it opens. What is left unset follows
+ * the harness's own configuration. From the Org tab it starts with a new agent.
  */
-export default function NewAgent() {
+export default function NewSessionScreen() {
   const { chat, actors, url } = useSession();
   const router = useRouter();
+  const params = useLocalSearchParams<{ agent?: string }>();
   const [harness, setHarness] = useState<Startable>("claude-code");
-  const [actorId, setActorId] = useState<string | "">("");
+  const [agent, setAgent] = useState(params.agent === NEW ? NEW : "");
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
+  const [worktree, setWorktree] = useState<string>();
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
   const [mode, setMode] = useState<ClaudeMode>("default");
@@ -54,13 +60,14 @@ export default function NewAgent() {
   const agents = actors.filter(
     (a) => a.kind === "agent" && !a.archived && a.harness === harness,
   );
-  const catalog = useModelCatalog(harness, url);
+  const existing = agents.find((a) => a.id === agent);
+  const catalog = useSessionCatalog(harness, url);
   const launchFields = agentSettingFields(
     harness,
     catalog.data?.models ?? [],
-    model || agents.find((agent) => agent.id === actorId)?.model,
+    model || existing?.model,
   ).slice(0, 2);
-  const folders = [...new Set(chat.sessions.map((s) => s.workspace))];
+  const folders = recentFolders(chat.sessions);
   const label = harnessLabels[harness];
   const ready = workspace.trim().length > 0;
 
@@ -69,22 +76,29 @@ export default function NewAgent() {
     setBusy(true);
     setError("");
     const common = {
-      name: name.trim() || label,
       workspace: workspace.trim(),
       ...agentLaunchSettings(model, effort),
-      ...(actorId ? { actor_id: actorId } : {}),
+      ...(worktree !== undefined ? { worktree: worktree.trim() } : {}),
+      ...(existing
+        ? { actor_id: existing.id }
+        : agent === NEW
+          ? { name: name.trim() || label }
+          : {}),
     };
+    const input: NewSession =
+      harness === "claude-code"
+        ? { harness, ...common, permission_mode: mode }
+        : harness === "pi"
+          ? { harness, ...common }
+          : {
+              harness,
+              ...common,
+              ...(policy ? { approval_policy: policy } : {}),
+              ...(sandbox ? { sandbox } : {}),
+            };
     try {
-      if (harness === "claude-code")
-        await chat.startClaude({ ...common, permission_mode: mode });
-      else if (harness === "pi") await chat.startPi(common);
-      else
-        await chat.startCodex({
-          ...common,
-          ...(policy ? { approval_policy: policy } : {}),
-          ...(sandbox ? { sandbox } : {}),
-        });
-      router.back();
+      const { session } = await chat.createSession(input);
+      router.replace(`/session/${session.id}`);
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -93,15 +107,15 @@ export default function NewAgent() {
   }
 
   return (
-    <Screen back="close" title="New agent">
+    <Screen back="close" title="New session">
       <Stack.Screen options={{ presentation: "modal" }} />
       <ScrollView
         contentContainerClassName="gap-5 p-5"
         keyboardShouldPersistTaps="handled"
       >
         <Text className="text-sm text-muted-foreground">
-          ZeroLux starts it in a folder on the kernel's computer. What you write
-          in your chats reaches it as yours.
+          ZeroLux starts it in a folder on the kernel's computer and opens it
+          here. What you write to it reaches it as yours.
         </Text>
         <Choice
           label="Harness"
@@ -109,7 +123,7 @@ export default function NewAgent() {
           value={harness}
           onChange={(next) => {
             if (next) setHarness(next);
-            setActorId("");
+            if (agent !== NEW) setAgent("");
             setModel("");
             setEffort("");
             setMode("default");
@@ -117,24 +131,25 @@ export default function NewAgent() {
             setSandbox("");
           }}
         />
-        {agents.length > 0 ? (
-          <Choice
-            label="Agent"
-            options={Object.fromEntries(
+        <Choice
+          label="Agent"
+          options={{
+            [NEW]: "A new agent",
+            ...Object.fromEntries(
               agents.map((a) => [a.id, `Another session of ${a.name}`]),
-            )}
-            value={actorId}
-            onChange={(id) => {
-              const agent = agents.find((agent) => agent.id === id);
-              setActorId(id);
-              setMode((agent?.permission_mode as ClaudeMode) || "default");
-              setPolicy((agent?.approval_policy as CodexApprovalPolicy) || "");
-              setSandbox((agent?.sandbox as CodexSandbox) || "");
-            }}
-            none="A new agent"
-          />
-        ) : null}
-        {!actorId ? (
+            ),
+          }}
+          value={agent}
+          onChange={(id) => {
+            const chosen = agents.find((a) => a.id === id);
+            setAgent(id);
+            setMode((chosen?.permission_mode as ClaudeMode) || "default");
+            setPolicy((chosen?.approval_policy as CodexApprovalPolicy) || "");
+            setSandbox((chosen?.sandbox as CodexSandbox) || "");
+          }}
+          none="No agent"
+        />
+        {agent === NEW ? (
           <View className="gap-2">
             <Text className="text-sm font-medium">Agent name</Text>
             <Input
@@ -172,13 +187,34 @@ export default function NewAgent() {
             </View>
           ) : null}
         </View>
+        <View className="gap-2">
+          <View className="flex-row items-center gap-3">
+            <Text className="flex-1 text-sm font-medium">
+              In a new worktree
+            </Text>
+            <Switch
+              value={worktree !== undefined}
+              onValueChange={(on) => setWorktree(on ? "" : undefined)}
+            />
+          </View>
+          {worktree !== undefined ? (
+            <Input
+              value={worktree}
+              onChangeText={setWorktree}
+              placeholder="Branch, or ZeroLux names one"
+              autoCapitalize="none"
+              autoCorrect={false}
+              className="font-mono"
+            />
+          ) : null}
+        </View>
         {launchFields.map(({ key, label, options }) => (
           <SettingSelect
             key={key}
             label={label}
             value={key === "model" ? model : effort}
             options={options}
-            none="Agent or harness choice"
+            none={existing ? "The agent's choice" : "The harness's own default"}
             disabled={
               busy || catalog.loading || Object.keys(options).length === 0
             }
@@ -192,8 +228,8 @@ export default function NewAgent() {
         ))}
         {!catalog.loading && catalog.data?.models.length === 0 && (
           <Text className="text-xs text-muted-foreground">
-            Connect this harness to load its model choices. You can start with
-            its own settings.
+            Connect a session of this harness to load its model choices. You can
+            start with its own settings.
           </Text>
         )}
         {catalog.error && (
