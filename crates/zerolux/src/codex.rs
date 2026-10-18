@@ -407,7 +407,7 @@ pub struct CodexDriver {
 const LIVE_EVERY: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// What a Codex notification streams: text, reasoning or a tool's output as it grows, the end
-/// of an item, the end of a turn.
+/// of an item, the end of a turn, and how full the context is.
 fn live_change(event: &Value) -> Option<crate::live::Change> {
     use crate::live::{Change, Kind};
     let params = &event["params"];
@@ -426,6 +426,15 @@ fn live_change(event: &Value) -> Option<crate::live::Change> {
             item: params["item"]["id"].as_str()?.to_owned(),
         }),
         "turn/completed" => Some(Change::Clear),
+        "thread/tokenUsage/updated" => {
+            let usage = &params["tokenUsage"];
+            Some(Change::Usage(crate::live::Usage {
+                context_tokens: usage["last"]["totalTokens"].as_u64(),
+                context_window: usage["modelContextWindow"].as_u64(),
+                total_tokens: usage["total"]["totalTokens"].as_u64(),
+                cost_usd: None,
+            }))
+        }
         _ => None,
     }
 }

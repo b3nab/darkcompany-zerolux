@@ -2151,3 +2151,26 @@ async fn a_command_is_allowed_for_the_session_and_a_denial_says_why() {
         .await;
     finish(stop, task).await;
 }
+
+#[tokio::test]
+async fn how_full_the_context_is_reaches_the_kernel() {
+    let runtime = Runtime::new().await;
+    let kernel = KernelFixture::new("read").await;
+    let (_changed, stop, task) = run(&runtime, &kernel).await;
+    kernel.wait(|s| s.activity.as_deref() == Some("idle")).await;
+    let usage = |input| json!({"inputTokens":input,"cachedInputTokens":0,"outputTokens":10,"reasoningOutputTokens":0,"totalTokens":input + 10});
+    runtime.emit(
+        json!({"method":"thread/tokenUsage/updated","params":{"threadId":THREAD,"turnId":"t",
+        "tokenUsage":{"last":usage(41_990),"total":usage(99_990),"modelContextWindow":272_000}}}),
+    );
+    kernel
+        .wait(|s| {
+            s.live.last()
+                == Some(
+                    &json!({"type":"usage","context_tokens":42_000,"context_window":272_000,
+                    "total_tokens":100_000,"cost_usd":null}),
+                )
+        })
+        .await;
+    finish(stop, task).await;
+}

@@ -526,7 +526,7 @@ async fn livekit_tickets_are_scoped_to_the_authenticated_actor_and_restart_requi
         .unwrap();
     assert_eq!(
         state,
-        json!({"seq":2,"items":[{"id":"m","kind":"text","text":"Working"}],"queue":[]})
+        json!({"seq":2,"items":[{"id":"m","kind":"text","text":"Working"}],"queue":[],"usage":null})
     );
     let free = kernel.agent("", None).await;
     assert_eq!(

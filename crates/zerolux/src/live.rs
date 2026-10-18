@@ -60,7 +60,24 @@ pub enum Change {
     Clear,
     /// The owner's inputs waiting in the harness's queue, all of them, oldest first.
     Queue { items: Vec<Queued> },
+    /// How full the context is and what the session has used, as the harness counts them.
+    Usage(Usage),
 }
+
+/// How full a session's context is, and what it has used so far; unknown when absent.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Usage {
+    #[serde(default)]
+    pub context_tokens: Option<u64>,
+    #[serde(default)]
+    pub context_window: Option<u64>,
+    #[serde(default)]
+    pub total_tokens: Option<u64>,
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
+}
+
+impl Eq for Usage {}
 
 /// An input of the owner's, waiting for its turn.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +93,7 @@ pub struct State {
     pub seq: u64,
     pub items: Vec<Item>,
     pub queue: Vec<Queued>,
+    pub usage: Option<Usage>,
 }
 
 /// Changes as they were applied, numbered from `first`.
@@ -109,6 +127,9 @@ impl Live {
                 }
                 Change::Done { item } => item.is_empty() || item.len() > 200,
                 Change::Clear => false,
+                Change::Usage(usage) => usage
+                    .cost_usd
+                    .is_some_and(|cost| !cost.is_finite() || cost < 0.0),
                 Change::Queue { items } => {
                     items.len() > QUEUED || items.iter().any(|queued| queued.id.len() > 200)
                 }
@@ -151,6 +172,7 @@ impl Live {
                 Change::Done { item } => state.items.retain(|open| &open.id != item),
                 Change::Clear => state.items.clear(),
                 Change::Queue { items } => state.queue.clone_from(items),
+                Change::Usage(usage) => state.usage = Some(usage.clone()),
             }
             state.seq += 1;
         }
@@ -351,6 +373,34 @@ mod tests {
         live.apply("s", vec![Change::Queue { items: vec![] }])
             .unwrap();
         assert!(live.state("s").queue.is_empty());
+    }
+
+    #[test]
+    fn the_latest_usage_is_kept() {
+        let live = Live::default();
+        let usage = Usage {
+            context_tokens: Some(42_000),
+            context_window: Some(200_000),
+            total_tokens: None,
+            cost_usd: Some(0.5),
+        };
+        live.apply("s", vec![Change::Usage(usage.clone()), Change::Clear])
+            .unwrap();
+        assert_eq!(live.state("s").usage, Some(usage));
+        assert_eq!(
+            serde_json::to_value(Change::Usage(Usage::default())).unwrap()["type"],
+            "usage"
+        );
+        assert!(
+            live.apply(
+                "s",
+                vec![Change::Usage(Usage {
+                    cost_usd: Some(f64::NAN),
+                    ..Usage::default()
+                })]
+            )
+            .is_err()
+        );
     }
 
     #[test]
