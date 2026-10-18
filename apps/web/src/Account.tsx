@@ -13,11 +13,13 @@ import type { AuthConnection, AuthDevice, Perform } from "@zerolux/chat";
 import { themes } from "@zerolux/theme/themes";
 import type { Actor, Workspace } from "./api";
 import { useAuthentication } from "./AuthGate";
+import { noticeChoice, notifications } from "./notices";
 import { useTheme } from "./theme";
 import type { Light } from "./theme";
 import { Eyebrow } from "@/components/presence";
 import { ProfileHead } from "@/components/profile";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Connection, WorkspaceSettings } from "@/components/workspace-settings";
@@ -215,10 +217,10 @@ export function MySettingsPage() {
   return (
     <Settings eyebrow="Settings" title="My settings">
       <Section title="Notifications">
+        <DeviceNotices />
         {/* TODO: kernel: notifications per channel (in app, push, email) with presets such as approvals only, exceptions per chat and quiet hours. */}
         <NotYet>
-          What reaches you, in the app, on the phone and by email, with quiet
-          hours.
+          What reaches you on the phone and by email, with quiet hours.
         </NotYet>
       </Section>
       {authentication && (
@@ -232,6 +234,64 @@ export function MySettingsPage() {
         <Connection />
       </Section>
     </Settings>
+  );
+}
+
+/** What this device tells you about sessions, through the system's notifications. */
+function DeviceNotices() {
+  const system = notifications();
+  const [permission, setPermission] = useState(system?.permission);
+  const choice = noticeChoice.use();
+  if (!system)
+    return (
+      <p className="text-sm text-muted-foreground">
+        This browser cannot show notifications.
+      </p>
+    );
+  if (permission !== "granted")
+    return (
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="text-sm text-muted-foreground">
+          {permission === "denied"
+            ? "Notifications are blocked for this page in the browser's settings."
+            : "Get a notification on this device when a session needs you or finishes, unless you are looking at it."}
+        </p>
+        {permission !== "denied" && (
+          <Button
+            size="sm"
+            onClick={() =>
+              void system
+                .requestPermission()
+                .then(() => setPermission(system.permission))
+            }
+          >
+            Allow notifications
+          </Button>
+        )}
+      </div>
+    );
+  return (
+    <fieldset className="flex flex-col gap-3">
+      <legend className="mb-3 text-sm text-muted-foreground">
+        On this device, unless you are looking at the session:
+      </legend>
+      {(
+        [
+          ["needs", "When a session needs you: approvals, questions, errors"],
+          ["finished", "When a session finishes its work"],
+        ] as const
+      ).map(([key, label]) => (
+        <Label key={key} className="font-normal">
+          <Checkbox
+            checked={choice[key]}
+            onCheckedChange={(checked) =>
+              noticeChoice.set({ ...choice, [key]: checked })
+            }
+          />
+          {label}
+        </Label>
+      ))}
+    </fieldset>
   );
 }
 

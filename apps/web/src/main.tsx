@@ -4,7 +4,7 @@ import { BrowserRouter } from "react-router";
 import { App } from "./App";
 import { AuthGate } from "./AuthGate";
 import { preloadRenderer } from "./components/message-text";
-import { keepDraftsIn, setKernelUrl } from "@zerolux/chat";
+import { keepDraftsIn, keepSeenIn, setKernelUrl } from "@zerolux/chat";
 import { kernelAddress } from "./desktop";
 import { startTheme } from "./theme";
 
@@ -28,6 +28,19 @@ try {
   );
 } catch {
   // Unreadable or no storage: drafts start empty.
+}
+// What you have seen of each session, in this browser only.
+const SEEN = "zerolux-seen";
+try {
+  keepSeenIn(JSON.parse(localStorage.getItem(SEEN) ?? "{}"), (all) => {
+    try {
+      localStorage.setItem(SEEN, JSON.stringify(all));
+    } catch {
+      // Without storage it lasts until the page reloads.
+    }
+  });
+} catch {
+  // Unreadable or no storage: nothing is seen yet.
 }
 
 createRoot(document.getElementById("root")!).render(
