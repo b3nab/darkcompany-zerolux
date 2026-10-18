@@ -1,5 +1,12 @@
 import { ApiError } from "./client";
-import type { Actor, Harness } from "./client";
+import type {
+  Actor,
+  ClaudeMode,
+  CodexApprovalPolicy,
+  CodexSandbox,
+  Harness,
+} from "./client";
+import type { LiveNotice } from "./live";
 
 export const PAGE = 100;
 
@@ -20,7 +27,8 @@ export interface Discovery {
 }
 export interface ChatSession {
   id: string;
-  actor_id: string;
+  /** The agent it works for; null for a session of the owner's own. */
+  actor_id: string | null;
   /** The kernel host serving this native session, when known. */
   host_id: string | null;
   harness: Harness;
@@ -37,6 +45,17 @@ export interface ChatSession {
   waiting: number;
   /** "owned": a session ZeroLux runs and can resume; "attached": one the owner already had. */
   origin?: "owned" | "attached";
+  created_at: number;
+  /** Kept at the top of the Console while set. */
+  pinned_at: number | null;
+  /** Put away by the owner: out of the Console's lists, still readable. */
+  archived_at: number | null;
+  /** When its native record last grew, in ms. */
+  output_at?: number | null;
+  /** How its last turn ended; null while one runs or before the first. */
+  last_turn?: "completed" | "interrupted" | "error" | null;
+  /** Its latest text or step, in one line. */
+  summary?: string | null;
 }
 export interface Member {
   actor_id: string;
@@ -131,7 +150,8 @@ export type FormAnswer =
 /** What a session asks the owner: a permission, a question, or an MCP form. */
 export interface Approval {
   id: string;
-  actor_id: string;
+  /** The agent whose session asks; null for a session of the owner's own. */
+  actor_id: string | null;
   session_id: string;
   /** The chat whose message started the turn; null for the session's own work. */
   conversation_id: string | null;
@@ -159,8 +179,50 @@ export type ChatEvent = { event_id: string } & (
   | { type: "session.changed"; session_id: string }
   | { type: "delivery.changed"; conversation_id: string; message_id: string }
   | { type: "approval.changed"; approval_id: string }
-  | { type: "session.output"; session_id: string; end: number }
+  | ({
+      type: "session.output";
+      session_id: string;
+      end: number;
+    } & SessionTail)
+  | LiveNotice
 );
+/** How a session's native record ends, as the kernel's watcher last read it. */
+export type SessionTail = Partial<
+  Pick<ChatSession, "output_at" | "last_turn" | "summary">
+>;
+/** A new session ZeroLux starts in a folder: with an agent (`actor_id`, or a new one by
+ * `name`) or the owner's own. What is left out, the harness decides with its own settings. */
+export type NewSession = {
+  workspace: string;
+  /** Work in a new git worktree on this branch; empty: one ZeroLux names. */
+  worktree?: string;
+  model?: string;
+  effort?: string;
+  actor_id?: string;
+  name?: string;
+} & (
+  | { harness: "claude-code"; permission_mode?: ClaudeMode }
+  | {
+      harness: "codex";
+      approval_policy?: CodexApprovalPolicy;
+      sandbox?: CodexSandbox;
+    }
+  | { harness: "pi" }
+);
+/** A session's name: its agent's, or its own title when it has none. */
+export const sessionName = (session: ChatSession, actors: Actor[]) =>
+  actors.find((a) => a.id === session.actor_id)?.name ??
+  (session.title || "Untitled session");
+/** Folders sessions ran in, the most recent first: what a new session offers. */
+export const recentFolders = (sessions: ChatSession[]) => [
+  ...new Set(
+    [...sessions]
+      .sort(
+        (a, b) => (b.output_at ?? b.created_at) - (a.output_at ?? a.created_at),
+      )
+      .map((s) => s.workspace),
+  ),
+];
 
 export const sessionLabels: Record<ChatSession["status"], string> = {
   connecting: "Connecting…",
@@ -248,7 +310,10 @@ export const workingSessions = (
 export const workingIn = (
   conversation: Conversation,
   sessions: ChatSession[],
-) => workingSessions(conversation, sessions).map((s) => s.actor_id);
+) =>
+  workingSessions(conversation, sessions).flatMap((s) =>
+    s.actor_id ? [s.actor_id] : [],
+  );
 /** Who is working, the same words in the bubble and in the list of chats. */
 export const workingLabel = (names: string[]) =>
   `${names.join(", ")} ${names.length === 1 ? "is" : "are"} working`;
@@ -382,6 +447,7 @@ const eventTypes = new Set<string>([
   "delivery.changed",
   "approval.changed",
   "session.output",
+  "session.live",
 ]);
 export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
   try {
@@ -389,6 +455,9 @@ export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
     // A session's output notice names where its native record ends: that is its identity.
     if (event.type === "session.output" && typeof event.event_id !== "string")
       event.event_id = `session.output:${event.session_id}:${event.end}`;
+    // Live changes are numbered per session: the first one names the notice.
+    if (event.type === "session.live" && typeof event.event_id !== "string")
+      event.event_id = `session.live:${event.session_id}:${event.first}`;
     if (typeof event.event_id === "string" && eventTypes.has(event.type))
       return event;
   } catch {

@@ -98,6 +98,11 @@ test("only well-formed chat events are accepted", () => {
   expect(parseEvent(bytes("{not json"))).toBeUndefined();
   expect(parseEvent(bytes({ ...event, type: "prompt" }))).toBeUndefined();
   expect(parseEvent(bytes({ ...event, event_id: 1 }))).toBeUndefined();
+  // Notices without an ID get one from what they name.
+  const output = { type: "session.output", session_id: "s", end: 9 };
+  expect(parseEvent(bytes(output))?.event_id).toBe("session.output:s:9");
+  const live = { type: "session.live", session_id: "s", first: 4, changes: [] };
+  expect(parseEvent(bytes(live))?.event_id).toBe("session.live:s:4");
 });
 
 test("pages merge by sequence and newer copies replace delivery states", () => {
@@ -130,6 +135,9 @@ test("any live session of an agent may join any chat", () => {
     status,
     attention_reason: null,
     waiting: 0,
+    created_at: 1,
+    pinned_at: null,
+    archived_at: null,
     activity: "idle",
   });
   const sessions = [
@@ -443,6 +451,9 @@ test("the activity bubble shows only agents whose current turn serves this chat"
     status: "connected",
     attention_reason: null,
     waiting: 0,
+    created_at: 1,
+    pinned_at: null,
+    archived_at: null,
     activity,
     activity_conversation_id,
   });
@@ -576,6 +587,9 @@ test("the team lists live sessions, ones needing attention, and the latest stopp
     status,
     attention_reason,
     waiting: 0,
+    created_at: 1,
+    pinned_at: null,
+    archived_at: null,
     origin,
   });
   const listed = listedSessions([
