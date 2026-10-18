@@ -5,10 +5,17 @@ import {
   ShieldCheckIcon,
   ShieldXIcon,
 } from "lucide-react";
-import { answerSummary, approvalLabels } from "@zerolux/chat";
+import { useState } from "react";
+import {
+  answerSummary,
+  approvalLabels,
+  scopeLabels,
+  scopesOf,
+} from "@zerolux/chat";
 import type { Approval, Conversation } from "@zerolux/chat";
 import type { Chat, Perform } from "@zerolux/chat";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ActorMark, Eyebrow } from "@/components/presence";
 import { McpForm, QuestionForm } from "./RequestAnswer";
 
@@ -108,66 +115,102 @@ export function ApprovalCard({
           {JSON.stringify(approval.details, null, 2)}
         </pre>
       )}
-      {approval.kind !== "permission" ? (
-        approval.status === "pending" ? (
-          approval.kind === "question" ? (
-            <QuestionForm
-              approval={approval}
-              chat={chat}
-              busy={busy}
-              perform={perform}
-            />
-          ) : (
-            <McpForm
-              approval={approval}
-              chat={chat}
-              busy={busy}
-              perform={perform}
-            />
-          )
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            {answerSummary(approval)} · {approvalLabels[approval.status]}
-          </p>
-        )
-      ) : approval.status === "pending" ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            disabled={busy}
-            onClick={() =>
-              void perform(() => chat.decide(approval.id, "allow"))
-            }
-          >
-            Allow
-          </Button>
-          <Button
-            variant="outline"
-            disabled={busy}
-            onClick={() => void perform(() => chat.decide(approval.id, "deny"))}
-          >
-            Deny
-          </Button>
-          <span className="text-xs text-faint">
-            Only you can answer. The chat sees the decision.
-          </span>
-        </div>
-      ) : (
+      {approval.status !== "pending" ? (
         <p className="text-sm text-muted-foreground">
-          {approval.decision === "allow" ? "Allowed" : "Denied"} ·{" "}
-          {approvalLabels[approval.status]}
+          {answerSummary(approval)} · {approvalLabels[approval.status]}
         </p>
+      ) : approval.kind === "permission" ? (
+        <PermissionChoice
+          approval={approval}
+          chat={chat}
+          busy={busy}
+          perform={perform}
+        />
+      ) : approval.kind === "question" ? (
+        <QuestionForm
+          approval={approval}
+          chat={chat}
+          busy={busy}
+          perform={perform}
+        />
+      ) : (
+        <McpForm
+          approval={approval}
+          chat={chat}
+          busy={busy}
+          perform={perform}
+        />
       )}
     </article>
+  );
+}
+
+/**
+ * Allowed as far as the harness offers, the narrowest first; or denied, with what the session
+ * should hear instead.
+ */
+function PermissionChoice({
+  approval,
+  chat,
+  busy,
+  perform,
+}: {
+  approval: Approval;
+  chat: Chat;
+  busy: boolean;
+  perform: Perform;
+}) {
+  const [reason, setReason] = useState("");
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {scopesOf(approval).map((scope) => (
+          <Button
+            key={scope}
+            variant={scope === "once" ? "default" : "outline"}
+            disabled={busy}
+            onClick={() =>
+              void perform(() => chat.decide(approval.id, "allow", { scope }))
+            }
+          >
+            {scopeLabels[scope]}
+          </Button>
+        ))}
+      </div>
+      <form
+        className="flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void perform(() =>
+            chat.decide(approval.id, "deny", {
+              reason: reason.trim() || undefined,
+            }),
+          );
+        }}
+      >
+        <Input
+          aria-label="Why not, or what to do instead"
+          placeholder="Why not, or what to do instead (optional)"
+          value={reason}
+          maxLength={2000}
+          onChange={(event) => setReason(event.target.value)}
+          className="min-w-0 flex-1"
+        />
+        <Button type="submit" variant="outline" disabled={busy}>
+          Deny
+        </Button>
+      </form>
+      <span className="text-xs text-faint">
+        Only you can answer. The chat sees the decision.
+      </span>
+    </div>
   );
 }
 
 /** An answered request as it stays in the session's work: what was asked and what you said. */
 export function ApprovalReceipt({ approval }: { approval: Approval }) {
   const permission = approval.kind === "permission";
-  const answer = permission
-    ? approval.decision &&
-      (approval.decision === "allow" ? "Allowed" : "Denied")
-    : answerSummary(approval);
+  const answer = answerSummary(approval);
   const Icon = !permission
     ? MessageCircleQuestionMarkIcon
     : approval.decision === "deny"

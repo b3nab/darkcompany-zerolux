@@ -175,6 +175,8 @@ const approval = (
   details: { command: "bun test", html: "<script>alert(1)</script>" },
   status,
   decision,
+  scope: decision === "allow" ? "once" : null,
+  reason: null,
   answer: null,
   native_request_id: `native-${id}`,
   created_at: 1,
@@ -515,9 +517,11 @@ test("permission requests show plain JSON details and stay until delivered", () 
   expect(html).toContain("&quot;command&quot;: &quot;bun test&quot;");
   expect(html).toContain("&lt;script&gt;");
   expect(html).not.toContain("<script>");
-  expect(html).toContain(">Allow<");
+  expect(html).toContain(">Allow once<");
+  expect(html).not.toContain("Always allow");
   expect(html).toContain(">Deny<");
-  expect(html).toContain("Allowed · Decision may not have arrived");
+  expect(html).toContain("Why not, or what to do instead (optional)");
+  expect(html).toContain("Allowed once · Decision may not have arrived");
   expect(html.match(/<article/g)).toHaveLength(2);
   expect(
     renderToStaticMarkup(
@@ -530,6 +534,35 @@ test("permission requests show plain JSON details and stay until delivered", () 
       />,
     ),
   ).toBe("");
+});
+
+test("a permission is allowed as far as its harness offers, or denied with a reason", () => {
+  const card = (request: Approval) =>
+    renderToStaticMarkup(
+      <ApprovalCard
+        approval={request}
+        chat={fakeChat()}
+        actors={actors}
+        busy={false}
+        perform={perform}
+      />,
+    );
+  const offered = card({
+    ...approval("a1", "pending"),
+    details: { command: "bun test", scopes: ["once", "session", "always"] },
+  });
+  expect(offered).toMatch(
+    />Allow once<.*>Allow for this session<.*>Always allow</,
+  );
+  // What was chosen stays with the request: the scope, or the reason the session heard.
+  expect(
+    card({ ...approval("a2", "delivered", "allow"), scope: "always" }),
+  ).toContain("Always allowed · Decision delivered");
+  const denied = { ...approval("a3", "delivered", "deny"), reason: "Use bun" };
+  expect(card(denied)).toContain("Denied: Use bun · Decision delivered");
+  expect(renderToStaticMarkup(<ApprovalReceipt approval={denied} />)).toContain(
+    "Denied: Use bun",
+  );
 });
 
 test("hiring a stopped session again defaults to its previous agent", () => {
@@ -1632,7 +1665,7 @@ test("a session's work keeps its requests where they were made, and density sets
     html.indexOf("Check the tests"),
   );
   expect(html.indexOf("Push to main")).toBeGreaterThan(html.indexOf("Fixed."));
-  expect(html).toContain(">Allow</button>");
+  expect(html).toContain(">Allow once</button>");
   // A subagent is a card of its own, with its task.
   expect(html).toContain("Subagent");
   expect(html).toContain("Run the suite");
