@@ -97,7 +97,7 @@ export default function NewChat() {
           </Text>
           <Button
             className="self-start"
-            onPress={() => router.replace("/agent/new")}
+            onPress={() => router.replace("/session/new?agent=new")}
           >
             <Text>New agent</Text>
           </Button>

@@ -15,6 +15,7 @@ import type { Actor, MemberTone, ShiftSegment } from "@zerolux/chat";
 import { ActorMark } from "@/components/member";
 import { Eyebrow } from "@/components/meter";
 import { Screen } from "@/components/screen";
+import { Segmented } from "@/components/segmented";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/src/kernel";
@@ -51,7 +52,7 @@ export default function Org() {
   // Starting an agent commands the kernel: it runs on the kernel's computer, not here.
   const newAgent = (
     <Pressable
-      onPress={() => router.push("/agent/new")}
+      onPress={() => router.push("/session/new?agent=new")}
       accessibilityRole="button"
       accessibilityLabel="New agent"
       hitSlop={8}
@@ -77,29 +78,14 @@ export default function Org() {
   return (
     <Screen title="Org" action={newAgent}>
       <View className="px-5 pb-3">
-        <View className="flex-row rounded-lg border border-border bg-card p-0.5">
-          {(Object.keys(views) as Mode[]).map((id) => (
-            <Pressable
-              key={id}
-              onPress={() => setView(id)}
-              accessibilityRole="button"
-              accessibilityState={{ selected: view === id }}
-              className={cn(
-                "h-8 flex-1 items-center justify-center rounded-md",
-                view === id && "bg-accent",
-              )}
-            >
-              <Text
-                className={cn(
-                  "text-xs font-medium",
-                  view === id ? "text-foreground" : "text-muted-foreground",
-                )}
-              >
-                {views[id].label}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
+        <Segmented
+          options={(Object.keys(views) as Mode[]).map((id) => [
+            id,
+            views[id].label,
+          ])}
+          value={view}
+          choose={setView}
+        />
       </View>
       <ScrollView contentContainerClassName="gap-4 px-5 pb-10">
         <Text className="text-xs text-faint">{views[view].note}</Text>
