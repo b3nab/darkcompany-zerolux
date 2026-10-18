@@ -1705,6 +1705,8 @@ test("a session in the console: its work in the middle, and Interrupt in the box
   };
   expect(typed("/")).toContain('aria-label="Commands"');
   expect(typed("/")).toContain(">/compact<");
+  // What a command takes after it, as its hint.
+  expect(typed("/")).toContain("what to keep");
   expect(typed("/compact keep the plan")).not.toContain(
     'aria-label="Commands"',
   );

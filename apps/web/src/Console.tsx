@@ -39,6 +39,7 @@ import {
   sessionOutputAt,
   sessionState,
   useSeen,
+  useSessionCommands,
   useSessionEvents,
   useSessionLive,
   useSessionSettings,
@@ -701,12 +702,16 @@ function SessionInput({
   const open = owner && session.status === "connected";
   const tooLong = new TextEncoder().encode(text).length > MAX_TEXT;
   const stops = owner && working && !text.trim();
-  // The commands this box runs itself: listed while their name is typed.
+  // ZeroLux's commands and the harness's own, listed while one is typed.
   const command = sessionCommand(text);
-  const offered = open ? commandsFor(text) : [];
+  const harness = useSessionCommands(session.id);
+  const offered = open ? commandsFor(text, harness) : [];
+  const [chosen, setChosen] = useState(0);
+  const highlighted = offered[Math.min(chosen, offered.length - 1)];
   const [started, setStarted] = useState(false);
-  const complete = (name: string) => {
-    write(`/${name} `);
+  const complete = (invoke: string) => {
+    write(`${invoke} `);
+    setChosen(0);
     box.current?.focus();
   };
   // Claude Code in a terminal only takes words into the running turn.
@@ -741,17 +746,21 @@ function SessionInput({
         <div
           role="group"
           aria-label="Commands"
-          className="mx-auto w-full max-w-3xl overflow-hidden rounded-md border bg-popover text-sm shadow-sm"
+          className="mx-auto max-h-64 w-full max-w-3xl overflow-y-auto rounded-md border bg-popover text-sm shadow-sm"
         >
           {offered.map((offer) => (
             <button
-              key={offer.name}
+              key={offer.invoke}
               type="button"
-              onClick={() => complete(offer.name)}
-              className="flex w-full items-baseline gap-3 px-3 py-2 text-left transition-colors outline-none hover:bg-accent focus-visible:bg-accent"
+              aria-current={offer === highlighted || undefined}
+              onClick={() => complete(offer.invoke)}
+              className="flex w-full items-baseline gap-3 px-3 py-2 text-left transition-colors outline-none hover:bg-accent focus-visible:bg-accent aria-[current]:bg-accent"
             >
               <span className="shrink-0 font-mono text-[13px]">
-                /{offer.name}
+                {offer.invoke}
+                {offer.hint && (
+                  <span className="text-faint"> {offer.hint}</span>
+                )}
               </span>
               <span className="truncate text-muted-foreground">
                 {offer.description}
@@ -782,13 +791,31 @@ function SessionInput({
             event.target.style.height = `${event.target.scrollHeight}px`;
             write(event.target.value);
             setStarted(false);
+            setChosen(0);
           }}
           onKeyDown={(event) => {
-            // Tab completes the command being typed, as in a terminal.
-            if (event.key === "Tab" && offered[0]) {
-              event.preventDefault();
-              complete(offered[0].name);
-              return;
+            // While commands are listed: arrows move, Tab or Enter takes the one shown.
+            if (highlighted) {
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                const step = event.key === "ArrowDown" ? 1 : -1;
+                setChosen(
+                  (offered.indexOf(highlighted) + step + offered.length) %
+                    offered.length,
+                );
+                return;
+              }
+              // Enter on a command already typed in full runs it, as a terminal does.
+              const typed =
+                highlighted.invoke.toLowerCase() === text.trim().toLowerCase();
+              if (
+                event.key === "Tab" ||
+                (sendsOnEnter(event.nativeEvent) && !typed)
+              ) {
+                event.preventDefault();
+                complete(highlighted.invoke);
+                return;
+              }
             }
             if (!sendsOnEnter(event.nativeEvent)) return;
             event.preventDefault();
