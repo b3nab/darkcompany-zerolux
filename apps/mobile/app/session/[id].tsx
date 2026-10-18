@@ -1,9 +1,12 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import type { TextInputInstance } from "react-native";
 import {
   ChevronDownIcon,
+  ClockIcon,
   ImagePlusIcon,
+  PencilIcon,
   ChevronRightIcon,
   ListChecksIcon,
   PanelRightIcon,
@@ -52,8 +55,12 @@ import {
   sessionState,
   sessionTone,
   useArrivals,
+  mentionAt,
   useSessionCommands,
   useSessionEvents,
+  useSessionFiles,
+  useSessionQueue,
+  withMention,
   useSessionLive,
   useSessionSettings,
 } from "@zerolux/chat";
@@ -66,6 +73,7 @@ import type {
   Density,
   InputMode,
   LiveItem,
+  QueuedInput,
   PlanStep,
   SessionBlock,
 } from "@zerolux/chat";
@@ -75,6 +83,7 @@ import { Screen } from "@/components/screen";
 import { Segmented } from "@/components/segmented";
 import { SessionCard, useInterrupt, useOrganize } from "@/components/session";
 import { SettingSelect } from "@/components/setting-select";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { LiveItemView, SessionRunView } from "@/components/session-blocks";
 import { PlanSteps } from "@/components/tool-call";
@@ -321,8 +330,11 @@ function Composer({
   const { owner } = useMe();
   const stop = useInterrupt(session);
   const harnessCommands = useSessionCommands(session.id, url);
+  const queue = useSessionQueue(session.id, chat.live);
   // The unsent text waits in its session while you are elsewhere in the app.
   const [draft, setDraft] = useState(() => draftOf(session.id));
+  const box = useRef<TextInputInstance>(null);
+  const [cursor, setCursor] = useState(draft.length);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   // Photos go with the words, or alone; they wait here until sent.
@@ -335,6 +347,19 @@ function Composer({
     "--color-muted-foreground",
   ]).map(String);
   const commands = commandsFor(draft, harnessCommands);
+  // "@" offers the session's files; a command's menu comes first.
+  const mention = commands.length ? undefined : mentionAt(draft, cursor);
+  const files = useSessionFiles(session.id, mention?.query, url);
+  const mentionFile = (path: string) => {
+    if (!mention) return;
+    void Haptics.selectionAsync();
+    const next = withMention(draft, mention, path);
+    setDraft(next.text);
+    setCursor(next.cursor);
+    requestAnimationFrame(() =>
+      box.current?.setSelection(next.cursor, next.cursor),
+    );
+  };
   useEffect(() => saveDraft(session.id, draft), [session.id, draft]);
   const open = owner && session.status === "connected";
   // While it works, words join the turn; held, Send waits for the turn or stops it first.
@@ -456,6 +481,44 @@ function Composer({
             </Text>
           </View>
         ) : null}
+        {queue.length ? (
+          <View className="gap-1.5">
+            <Text className="px-1.5 font-mono text-[11px] text-faint">
+              Waiting for the turn to end · {queue.length}
+            </Text>
+            {queue.map((item) => (
+              <QueueCard key={item.id} session={session} item={item} />
+            ))}
+          </View>
+        ) : null}
+        {mention && files.length ? (
+          <View className="max-h-56 overflow-hidden rounded-md border border-border bg-background">
+            <ScrollView keyboardShouldPersistTaps="always">
+              {files.map((path) => {
+                const cut = path.lastIndexOf("/") + 1;
+                return (
+                  <Pressable
+                    key={path}
+                    onPress={() => mentionFile(path)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Mention ${path}`}
+                    className="flex-row items-baseline gap-2 px-3 py-2.5 active:bg-accent"
+                  >
+                    <Text className="font-mono text-sm text-agent-foreground">
+                      {path.slice(cut)}
+                    </Text>
+                    <Text
+                      numberOfLines={1}
+                      className="flex-1 font-mono text-xs text-faint"
+                    >
+                      {path.slice(0, cut)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+        ) : null}
         {commands.length ? (
           <View className="overflow-hidden rounded-md border border-border bg-background">
             {commands.map((command) => (
@@ -553,9 +616,13 @@ function Composer({
                       : `Write to ${name}, or / for commands`
                     : sessionState(session)
                 }
+                ref={box}
                 editable={open}
                 value={draft}
                 onChangeText={setDraft}
+                onSelectionChange={(event) =>
+                  setCursor(event.nativeEvent.selection.start)
+                }
                 multiline
               />
             </View>
@@ -780,6 +847,110 @@ function SettingsBar({ session }: { session: ChatSession }) {
           {error || settings.error}
         </Text>
       ) : null}
+    </View>
+  );
+}
+
+/**
+ * An input of the owner's waiting for the turn to end, above the box. Codex lets it be
+ * rewritten or taken back; the other harnesses show it as it waits.
+ */
+function QueueCard({
+  session,
+  item,
+}: {
+  session: ChatSession;
+  item: QueuedInput;
+}) {
+  const { chat } = useSession();
+  const editable = session.harness === "codex";
+  const [editing, setEditing] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [faint, muted] = useCSSVariable([
+    "--color-faint",
+    "--color-muted-foreground",
+  ]).map(String);
+  const act = async (work: () => Promise<unknown>) => {
+    setBusy(true);
+    setError("");
+    try {
+      await work();
+      setEditing(undefined);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <View className="gap-2 rounded-md border border-border bg-background px-3 py-2">
+      <View className="flex-row items-start gap-2">
+        <View className="mt-1">
+          <ClockIcon color={faint} size={13} strokeWidth={1.75} />
+        </View>
+        {editing === undefined ? (
+          <Text numberOfLines={3} className="flex-1 text-sm">
+            {item.text}
+          </Text>
+        ) : (
+          <TextInput
+            value={editing}
+            onChangeText={setEditing}
+            multiline
+            autoFocus
+            accessibilityLabel="Waiting input"
+            className="max-h-28 flex-1 font-sans text-sm text-foreground"
+          />
+        )}
+        {editable && editing === undefined ? (
+          <View className="flex-row gap-3">
+            <Pressable
+              onPress={() => setEditing(item.text)}
+              accessibilityRole="button"
+              accessibilityLabel="Edit the waiting input"
+              hitSlop={8}
+            >
+              <PencilIcon color={muted} size={15} strokeWidth={1.75} />
+            </Pressable>
+            <Pressable
+              onPress={() =>
+                void act(() => chat.removeQueued(session.id, item.id))
+              }
+              disabled={busy}
+              accessibilityRole="button"
+              accessibilityLabel="Take back the waiting input"
+              hitSlop={8}
+            >
+              <XIcon color={muted} size={15} strokeWidth={2} />
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
+      {editing !== undefined ? (
+        <View className="flex-row justify-end gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onPress={() => setEditing(undefined)}
+          >
+            <Text>Cancel</Text>
+          </Button>
+          <Button
+            size="sm"
+            disabled={busy || !editing.trim()}
+            onPress={() =>
+              void act(() =>
+                chat.editQueued(session.id, item.id, editing.trim()),
+              )
+            }
+          >
+            <Text>Save</Text>
+          </Button>
+        </View>
+      ) : null}
+      {error ? <Text className="text-xs text-destructive">{error}</Text> : null}
     </View>
   );
 }
