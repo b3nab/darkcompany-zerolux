@@ -300,6 +300,12 @@ export class ChatBridge {
   get sessionId() {
     return this.session?.id;
   }
+  /** The kernel, as this link's session: for the sessions it delegates work to. */
+  async call<T>(path: string, body?: unknown): Promise<T> {
+    if (!this.session || this.closed)
+      throw new Error("No ZeroLux chat is connected");
+    return this.request<T>(path, body);
+  }
   /** Whether this link's session works for an agent: only then does it take part in chats. */
   get agent() {
     return Boolean(this.session?.actor_id);
