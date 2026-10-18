@@ -69,11 +69,12 @@ export default function NewSessionScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ agent?: string }>();
   const [chosen, setHarness] = useState<Startable>("claude-code");
-  // A joined computer runs only some harnesses so far.
+  // What a joined computer runs so far, in the usual order.
+  const joinable = (Object.keys(startable) as Startable[]).filter((h) =>
+    joinedHarnesses.includes(h),
+  );
   const harness =
-    elsewhere && !joinedHarnesses.includes(chosen)
-      ? joinedHarnesses[0]!
-      : chosen;
+    elsewhere && !joinable.includes(chosen) ? joinable[0]! : chosen;
   const [agent, setAgent] = useState(params.agent === NEW ? NEW : "");
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
@@ -118,8 +119,7 @@ export default function NewSessionScreen() {
   const choosePlace = (id: string) => {
     setPlace(id);
     setWorktree(undefined);
-    if (id && !joinedHarnesses.includes(harness))
-      chooseHarness(joinedHarnesses[0]!);
+    if (id && !joinable.includes(harness)) chooseHarness(joinable[0]!);
   };
 
   async function start() {
@@ -184,9 +184,11 @@ export default function NewSessionScreen() {
             />
             {elsewhere ? (
               <Text className="text-xs text-muted-foreground">
-                {joinedHarnesses.map((h) => startable[h]).join(" and ")} run on
-                your other computers so far, with that computer's own accounts
-                and settings.
+                {joinable.length < Object.keys(startable).length
+                  ? `Only ${joinable.map((h) => startable[h]).join(" and ")} run there so far. `
+                  : ""}
+                It runs with {elsewhere.name}'s own harness accounts and
+                settings.
               </Text>
             ) : null}
           </View>
@@ -195,9 +197,7 @@ export default function NewSessionScreen() {
           label="Harness"
           options={
             elsewhere
-              ? Object.fromEntries(
-                  joinedHarnesses.map((h) => [h, startable[h]]),
-                )
+              ? Object.fromEntries(joinable.map((h) => [h, startable[h]]))
               : startable
           }
           value={harness}
