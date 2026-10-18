@@ -101,6 +101,36 @@ impl Registry {
         sessions::ensure_pi_stopped(Path::new(agent_dir), native).await?;
         self.launch(workspace, json!({"nativeSessionId":native,"workspace":workspace,"file":file,"profile":profile,"pi":"pi"}), Some(native)).await
     }
+    /// pi's own fork of a saved session, in its folder: all of it, or the path up to one of
+    /// its entries. The new session's identity and file.
+    pub(crate) async fn fork(
+        &self,
+        file: &str,
+        workspace: &str,
+        up_to: Option<&str>,
+    ) -> Result<(String, String)> {
+        let entry = self
+            .program
+            .pi_entry
+            .as_ref()
+            .context("The pi runner is not installed on this execution host")?;
+        let mut command = tokio::process::Command::new(&self.program.bun);
+        command.arg(entry).arg("fork").arg(file);
+        if let Some(up_to) = up_to {
+            command.arg(up_to);
+        }
+        let output = crate::claude_runner::forked(command, workspace).await?;
+        Ok((
+            output["native_session_id"]
+                .as_str()
+                .context("pi did not name the fork")?
+                .to_owned(),
+            output["file"]
+                .as_str()
+                .context("pi did not name the fork's file")?
+                .to_owned(),
+        ))
+    }
     /// A saved session the owner opens in ZeroLux, under a host of its own.
     pub(crate) async fn open(
         &self,

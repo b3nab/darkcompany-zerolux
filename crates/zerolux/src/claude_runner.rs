@@ -210,6 +210,26 @@ impl Registry {
     }
 
     /// Starts a runner after the caller has verified that the native session is not live.
+    /// Claude Code's own fork of a saved session, in its folder: all of it, or up to one of
+    /// its messages. The new session's ID.
+    pub(crate) async fn fork(
+        &self,
+        native: &str,
+        workspace: &str,
+        up_to: Option<&str>,
+    ) -> Result<String> {
+        let mut command = tokio::process::Command::new(&self.program.bun);
+        command.arg(&self.program.entry).arg("fork").arg(native);
+        if let Some(up_to) = up_to {
+            command.arg(up_to);
+        }
+        let output = forked(command, workspace).await?;
+        output["session_id"]
+            .as_str()
+            .map(str::to_owned)
+            .context("Claude Code did not name the fork")
+    }
+
     pub(crate) async fn launch(
         &self,
         native_id: &str,
@@ -534,4 +554,36 @@ impl RunnerLink {
             execution::Purpose::Stop(Some(&self.record.instance_id)),
         )
     }
+}
+
+/// A runner's `fork` in a session's folder, bounded: what it printed, or why it failed.
+pub(crate) async fn forked(
+    mut command: tokio::process::Command,
+    workspace: &str,
+) -> Result<serde_json::Value> {
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        command
+            .current_dir(workspace)
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .context("The fork timed out")??;
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        anyhow::bail!(if message.is_empty() {
+            "The fork failed".into()
+        } else {
+            message
+        });
+    }
+    let line = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .rev()
+        .find(|line| line.starts_with('{'))
+        .unwrap_or_default()
+        .to_owned();
+    Ok(serde_json::from_str(&line)?)
 }

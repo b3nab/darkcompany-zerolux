@@ -35,12 +35,16 @@ pub(crate) struct NativeState {
     pub(crate) paused_read: Option<Arc<Notify>>,
     /// After thread/start the runtime also holds the new thread; reads of it answer.
     pub(crate) started: bool,
+    /// After thread/fork the runtime also holds the fork.
+    pub(crate) forked: bool,
     cwd: Option<String>,
     thread_settings: HashMap<String, Value>,
 }
 
 /// The thread a `thread/start` creates.
 pub(crate) const STARTED: &str = "new-context";
+/// The thread a `thread/fork` creates.
+pub(crate) const FORKED: &str = "forked-context";
 
 pub(crate) struct Runtime {
     _dir: TempDir,
@@ -209,6 +213,9 @@ fn native_response(state: &mut NativeState, request: &Value) -> Option<Value> {
                 if state.started {
                     loaded.push(STARTED);
                 }
+                if state.forked {
+                    loaded.push(FORKED);
+                }
             }
             json!({"data":loaded,"nextCursor":null})
         }
@@ -216,6 +223,14 @@ fn native_response(state: &mut NativeState, request: &Value) -> Option<Value> {
             // A cold resume loads the persisted thread again, under the same identity.
             state.unloaded = false;
             current
+        }
+        "thread/fork" => {
+            state.forked = true;
+            let mut value = current;
+            value["thread"]["id"] = json!(FORKED);
+            value["thread"]["sessionId"] = json!(FORKED);
+            state.thread_settings.insert(FORKED.into(), value.clone());
+            value
         }
         "thread/start" => {
             state.started = true;

@@ -55,7 +55,7 @@ async fn kernel(
 #[allow(dead_code)]
 #[path = "support/codex_runtime.rs"]
 mod codex_runtime;
-use codex_runtime::{Runtime, STARTED, THREAD};
+use codex_runtime::{FORKED, Runtime, STARTED, THREAD};
 
 fn installed() -> bool {
     std::process::Command::new("livekit-server")
@@ -601,6 +601,22 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
         3,
         "recovery never starts a thread"
     );
+    // A fork goes on from the hired session's whole history, as a session of the owner's.
+    let (fork_actor, forked) = chat_runtime
+        .fork(&owner, &first.id, None, "", None)
+        .await
+        .unwrap();
+    assert!(fork_actor.is_none());
+    assert_eq!(forked.native_session_id, FORKED);
+    assert_eq!(forked.actor_id, None);
+    assert!(forked.title.ends_with("(fork)"));
+    assert_eq!(runtime.count("thread/fork"), 1);
+    wait_for(&store, |sessions| {
+        sessions
+            .iter()
+            .any(|s| s.id == forked.id && s.status == "connected")
+    })
+    .await;
     chat_runtime.shutdown().await.unwrap();
     server.abort();
     livekit.shutdown().await.unwrap();

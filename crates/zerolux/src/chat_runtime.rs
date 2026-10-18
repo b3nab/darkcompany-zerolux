@@ -1560,6 +1560,7 @@ impl ChatRuntime {
 }
 
 mod control;
+mod fork;
 #[cfg(unix)]
 mod owned;
 mod settings;
