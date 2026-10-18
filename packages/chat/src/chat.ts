@@ -209,6 +209,8 @@ export type NewSession = {
     }
   | { harness: "pi" }
 );
+/** How the owner's input joins a working session: into its turn, after it, or instead of it. */
+export type InputMode = "steer" | "queue" | "interrupt";
 /** A session's name: its agent's, or its own title when it has none. */
 export const sessionName = (session: ChatSession, actors: Actor[]) =>
   actors.find((a) => a.id === session.actor_id)?.name ??

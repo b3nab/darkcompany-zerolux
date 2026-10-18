@@ -19,6 +19,7 @@ import type {
   FormAnswer,
   Member,
   Message,
+  InputMode,
   MessagePage,
   NewSession,
   Outgoing,
@@ -427,11 +428,12 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       }
     },
     /**
-     * Writes the owner's own words into a session as native input, not as a chat message: a
-     * new turn when idle, joining the running turn otherwise. The session's events show it.
+     * Writes the owner's own words into a session as native input, not as a chat message. A
+     * session at rest starts a turn with them; a working one takes them into the running turn
+     * (`steer`), after it (`queue`), or in place of it (`interrupt`). The events show them.
      */
-    async input(sessionId: string, text: string) {
-      await api(`/sessions/${sessionId}/input`, { text });
+    async input(sessionId: string, text: string, mode: InputMode = "steer") {
+      await api(`/sessions/${sessionId}/input`, { text, mode });
     },
     /**
      * Starts the harness's own compaction of a session's history, to give its context room
