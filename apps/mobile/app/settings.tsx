@@ -7,7 +7,8 @@ import {
 } from "lucide-react-native";
 import type { LucideIcon } from "lucide-react-native";
 import { useEffect, useState } from "react";
-import { ScrollView, View } from "react-native";
+import { AppState, Linking, ScrollView, Switch, View } from "react-native";
+import * as Notifications from "expo-notifications";
 import { useCSSVariable } from "uniwind";
 import { ago, ApiError, deviceName, errorMessage } from "@zerolux/chat";
 import type { AuthDevice } from "@zerolux/chat";
@@ -20,6 +21,7 @@ import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useAuthentication } from "../src/auth";
 import { useKernel, useSession } from "../src/kernel";
+import { noticeChoice } from "../src/notices";
 import { chooseLight, chooseTheme, useTheme } from "../src/theme";
 import type { Light } from "../src/theme";
 
@@ -60,8 +62,11 @@ export default function MySettings() {
     <Screen back title="My settings">
       <ScrollView contentContainerClassName="gap-6 px-5 py-6">
         <Section title="Notifications">
-          {/* TODO: kernel: what reaches you (everything, mentions, approvals only), per chat exceptions and quiet hours. */}
-          <Unavailable>Not available yet.</Unavailable>
+          <DeviceNotices />
+          {/* TODO: kernel: push when the app is closed, email, per chat exceptions and quiet hours. */}
+          <Unavailable>
+            Not yet: when the app is closed, by email, with quiet hours.
+          </Unavailable>
         </Section>
         <Section title="Devices">
           <Devices />
@@ -257,6 +262,67 @@ function Devices() {
           {error || auth.error}
         </Text>
       ) : null}
+    </View>
+  );
+}
+
+/** What this phone tells you about sessions, through its notifications. */
+function DeviceNotices() {
+  const choice = noticeChoice.use();
+  const [permission, setPermission] =
+    useState<Notifications.NotificationPermissionsStatus>();
+  useEffect(() => {
+    const read = () =>
+      void Notifications.getPermissionsAsync().then(setPermission);
+    read();
+    // Back from the phone's Settings, the answer may have changed.
+    const watch = AppState.addEventListener("change", (state) => {
+      if (state === "active") read();
+    });
+    return () => watch.remove();
+  }, []);
+  if (!permission) return null;
+  if (!permission.granted)
+    return (
+      <View className="items-start gap-3 px-4 py-3">
+        <Text className="text-sm text-muted-foreground">
+          {permission.canAskAgain
+            ? "Get a notification on this phone when a session needs you or finishes, unless you are looking at it."
+            : "Notifications for ZeroLux are off in the phone's Settings."}
+        </Text>
+        <Button
+          size="sm"
+          onPress={() =>
+            void (permission.canAskAgain
+              ? Notifications.requestPermissionsAsync().then(setPermission)
+              : Linking.openSettings())
+          }
+        >
+          <Text>
+            {permission.canAskAgain ? "Allow notifications" : "Open Settings"}
+          </Text>
+        </Button>
+      </View>
+    );
+  return (
+    <View className="pt-3">
+      <Text className="px-4 text-sm text-muted-foreground">
+        On this phone, unless you are looking at the session:
+      </Text>
+      {(
+        [
+          ["needs", "When a session needs you: approvals, questions, errors"],
+          ["finished", "When a session finishes its work"],
+        ] as const
+      ).map(([key, label]) => (
+        <View key={key} className="flex-row items-center gap-3 px-4 py-3">
+          <Text className="flex-1 text-base">{label}</Text>
+          <Switch
+            value={choice[key]}
+            onValueChange={(on) => noticeChoice.set({ ...choice, [key]: on })}
+          />
+        </View>
+      ))}
     </View>
   );
 }
