@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   applyLive,
+  contextShare,
   liveNotice,
   liveResync,
   liveState,
@@ -31,6 +32,7 @@ test("changes build what is in progress, in order, each applied once", () => {
       { id: "m", kind: "text", text: "Hello" },
     ],
     queue: [],
+    usage: null,
   });
   // A notice already applied in part: only what follows seq counts.
   state = applyLive(state!, {
@@ -41,24 +43,37 @@ test("changes build what is in progress, in order, each applied once", () => {
       { type: "set", item: "cmd", kind: "output", text: "line 2\n" },
       { type: "done", item: "t" },
       { type: "queue", items: [{ id: "q1", text: "then run the tests" }] },
+      { type: "usage", context_tokens: 42_000, context_window: 200_000 },
     ],
   });
+  const usage = {
+    context_tokens: 42_000,
+    context_window: 200_000,
+    total_tokens: null,
+    cost_usd: null,
+  };
   expect(state).toEqual({
-    seq: 7,
+    seq: 8,
     items: [
       { id: "t", kind: "thinking", text: "Let me look", done: true },
       { id: "m", kind: "text", text: "Hello" },
       { id: "cmd", kind: "output", text: "line 2\n" },
     ],
     queue: [{ id: "q1", text: "then run the tests" }],
+    usage,
   });
-  // The turn's end leaves what waits for the next one.
-  expect(applyLive(state!, { first: 8, changes: [{ type: "clear" }] })).toEqual(
-    { seq: 8, items: [], queue: [{ id: "q1", text: "then run the tests" }] },
+  // The turn's end leaves what waits for the next one, and what it used.
+  expect(applyLive(state!, { first: 9, changes: [{ type: "clear" }] })).toEqual(
+    {
+      seq: 9,
+      items: [],
+      queue: [{ id: "q1", text: "then run the tests" }],
+      usage,
+    },
   );
   // A missing change: the state is read again.
   expect(
-    applyLive(state!, { first: 9, changes: [{ type: "clear" }] }),
+    applyLive(state!, { first: 10, changes: [{ type: "clear" }] }),
   ).toBeUndefined();
 });
 
@@ -98,6 +113,7 @@ test("a followed session reads its state, then follows the notices", async () =>
     seq: 9,
     items: [],
     queue: [{ id: "q1", text: "next" }],
+    usage: null,
   });
   // So does a reconnection.
   liveResync();
@@ -109,4 +125,33 @@ test("a followed session reads its state, then follows the notices", async () =>
   expect(liveState("birch")).toEqual(noLive);
   stop();
   expect(liveState("aspen")).toEqual(noLive);
+});
+
+test("the context's share is known only when the harness says both numbers", () => {
+  expect(
+    contextShare({
+      context_tokens: 50_000,
+      context_window: 200_000,
+      total_tokens: null,
+      cost_usd: null,
+    }),
+  ).toBe(0.25);
+  // Without both numbers, or past the window, the share says what it can.
+  expect(contextShare(null)).toBeUndefined();
+  expect(
+    contextShare({
+      context_tokens: 9,
+      context_window: null,
+      total_tokens: 9,
+      cost_usd: 0,
+    }),
+  ).toBeUndefined();
+  expect(
+    contextShare({
+      context_tokens: 300,
+      context_window: 200,
+      total_tokens: null,
+      cost_usd: null,
+    }),
+  ).toBe(1);
 });

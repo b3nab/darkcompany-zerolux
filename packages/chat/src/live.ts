@@ -18,18 +18,29 @@ export interface QueuedInput {
   text: string;
 }
 
+/** How full a session's context is and what it has used, as its harness counts them; null when it does not say. */
+export interface SessionUsage {
+  context_tokens: number | null;
+  context_window: number | null;
+  total_tokens: number | null;
+  cost_usd: number | null;
+}
+
 export type LiveChange =
   | { type: "append" | "set"; item: string; kind: LiveKind; text: string }
   | { type: "done"; item: string }
   | { type: "clear" }
   /** The whole queue as it is now. */
-  | { type: "queue"; items: QueuedInput[] };
+  | { type: "queue"; items: QueuedInput[] }
+  /** The latest usage, in place of the one before. */
+  | ({ type: "usage" } & Partial<SessionUsage>);
 
 /** What is in progress and what waits, and the number of the last change it includes. */
 export interface LiveState {
   seq: number;
   items: LiveItem[];
   queue: QueuedInput[];
+  usage: SessionUsage | null;
 }
 
 /** The kernel's notice of a session's changes, numbered from `first`. */
@@ -40,7 +51,21 @@ export interface LiveNotice {
   changes: LiveChange[];
 }
 
-export const noLive: LiveState = { seq: 0, items: [], queue: [] };
+export const noLive: LiveState = { seq: 0, items: [], queue: [], usage: null };
+
+/** What the kernel sends of a usage: what is missing is unknown. */
+const usageOf = (usage: Partial<SessionUsage>): SessionUsage => ({
+  context_tokens: usage.context_tokens ?? null,
+  context_window: usage.context_window ?? null,
+  total_tokens: usage.total_tokens ?? null,
+  cost_usd: usage.cost_usd ?? null,
+});
+
+/** How full the context is, from 0 to 1, when the harness says both how much and of what. */
+export function contextShare(usage: SessionUsage | null): number | undefined {
+  if (!usage?.context_tokens || !usage.context_window) return undefined;
+  return Math.min(1, usage.context_tokens / usage.context_window);
+}
 
 /** How long a complete item stays, at most, while the record shown catches up. */
 export const SETTLE_MS = 2000;
@@ -56,11 +81,13 @@ export function applyLive(
   if (notice.first > state.seq + 1) return undefined;
   let items = state.items;
   let queue = state.queue;
+  let usage = state.usage;
   notice.changes.forEach((change, n) => {
     if (notice.first + n <= state.seq) return;
     // The turn's end leaves the queue: what waits starts the next one.
     if (change.type === "clear") items = [];
     else if (change.type === "queue") queue = change.items;
+    else if (change.type === "usage") usage = usageOf(change);
     else if (change.type === "done")
       items = items.map((open) =>
         open.id === change.item ? { ...open, done: true } : open,
@@ -85,6 +112,7 @@ export function applyLive(
     seq: Math.max(state.seq, notice.first + notice.changes.length - 1),
     items,
     queue,
+    usage,
   };
 }
 
@@ -117,6 +145,7 @@ function reread(sessionId: string) {
         seq: read.seq,
         items: read.items.map(({ id, kind, text }) => ({ id, kind, text })),
         queue: read.queue ?? [],
+        usage: read.usage ? usageOf(read.usage) : null,
       };
       for (const notice of waiting) state = state && applyLive(state, notice);
       if (state) publish(entry, state);
@@ -207,4 +236,19 @@ export function useSessionQueue(sessionId: string, read: Read): QueuedInput[] {
   );
   const snapshot = () => liveState(sessionId);
   return useSyncExternalStore(subscribe, snapshot, snapshot).queue;
+}
+
+/** How full the session's context is and what it has used, as its harness last reported. */
+export function useSessionUsage(
+  sessionId: string,
+  read: Read,
+): SessionUsage | null {
+  const subscribe = useCallback(
+    (listener: () => void) => watchLive(sessionId, read, listener),
+    // The reader stays the same for a session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionId],
+  );
+  const snapshot = () => liveState(sessionId);
+  return useSyncExternalStore(subscribe, snapshot, snapshot).usage;
 }
