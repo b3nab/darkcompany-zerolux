@@ -8,6 +8,7 @@ import {
   ChevronLeftIcon,
   ChevronDownIcon,
   EllipsisIcon,
+  GitCompareArrowsIcon,
   ImagePlusIcon,
   ListChecksIcon,
   PencilIcon,
@@ -16,6 +17,7 @@ import {
   PlusIcon,
   SendIcon,
   SquareIcon,
+  SquareTerminalIcon,
   XIcon,
 } from "lucide-react";
 import {
@@ -50,6 +52,7 @@ import {
   useSessionLive,
   useSessionQueue,
   useSessionUsage,
+  useSessionGit,
   withMention,
   contextShare,
   percent,
@@ -101,6 +104,11 @@ import { SessionCard, StartSession, resumable, takeable } from "./Team";
 import { ApprovalCard, ApprovalReceipt } from "./Approvals";
 import { sendsOnEnter } from "./ChatView";
 import { useOwner } from "./AuthGate";
+import { ChangesPanel, TerminalPanel } from "./SessionCode";
+import type { CodePane } from "./SessionCode";
+import { SidePanel } from "@/components/side-panel";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { XL, useMedia } from "./media";
 
 const MAX_TEXT = 64 * 1024;
 
@@ -427,6 +435,32 @@ export function SessionView({
   const plan = latestPlan(blocks);
   const density = useDensity();
   const at = sessionOutputAt(chat, session);
+  // Its code, for its owner: what git sees, read again as the session writes; the panel open.
+  const git = useSessionGit(owner ? session.id : undefined, at);
+  const changed = git.status?.changes.length ?? 0;
+  const [pane, setPane] = useState<CodePane>();
+  const wide = useMedia(XL);
+  const toggle = (next: CodePane) => setPane(pane === next ? undefined : next);
+  const code =
+    owner &&
+    (pane === "changes" ? (
+      <ChangesPanel
+        session={session}
+        name={name}
+        git={git}
+        revision={at}
+        busy={busy}
+        perform={perform}
+        send={(text) => chat.input(session.id, text)}
+        close={() => setPane(undefined)}
+      />
+    ) : pane === "terminal" ? (
+      <TerminalPanel
+        session={session}
+        perform={perform}
+        close={() => setPane(undefined)}
+      />
+    ) : undefined);
   useEffect(() => {
     if (!at) return;
     // What it wrote while you look at it is seen; while the window is hidden, it waits.
@@ -472,256 +506,326 @@ export function SessionView({
   const chatTitle = (id: string | null) =>
     chat.conversations.find((c) => c.id === id)?.title;
   return (
-    <section
-      aria-label={`${name}'s session`}
-      className="flex min-h-0 min-w-0 flex-1 flex-col"
-    >
-      <header className="flex min-h-14 shrink-0 items-center gap-3 border-b px-3 py-2 md:px-5">
-        <Link
-          to="/console"
-          aria-label="All sessions"
-          className={buttonVariants({
-            variant: "ghost",
-            size: "icon-sm",
-            className: "md:hidden",
-          })}
-        >
-          <ChevronLeftIcon />
-        </Link>
-        <SessionMark
-          session={session}
-          actors={actors}
-          state={tone}
-          className="size-8"
-        />
-        <div className="min-w-0 flex-1">
-          {title !== undefined ? (
-            <form className="flex gap-2" onSubmit={(e) => void rename(e)}>
-              <Input
-                aria-label="Session title"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                maxLength={200}
-                autoFocus
-                className="h-7"
-              />
-              <Button type="submit" size="sm" disabled={busy || !title.trim()}>
-                Save
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setTitle(undefined)}
-              >
-                Cancel
-              </Button>
-            </form>
-          ) : agent ? (
-            <h2 className="truncate font-mono text-[15px] font-medium text-agent-foreground">
-              {name}
-              <span className="font-sans text-faint">
-                {" "}
-                · {session.title || "Untitled session"}
-              </span>
-            </h2>
-          ) : (
-            <h2 className="truncate text-[15px] font-medium">{name}</h2>
-          )}
-          <p className="truncate text-xs text-muted-foreground">
-            {sessionState(session)} ·{" "}
-            {harnessLabels[session.harness] ?? session.harness} ·{" "}
-            <span title={session.workspace} className="font-mono">
-              {folderName(session.workspace)}
-            </span>
-          </p>
-        </div>
-        <Presence tone={tone} className="max-lg:hidden">
-          {outputLine(chat, session) ?? sessionState(session)}
-        </Presence>
-        <Segmented<Density>
-          label="Density"
-          className="max-sm:hidden"
-          value={density}
-          choose={setDensity}
-          options={Object.entries(densityLabels) as [Density, string][]}
-        />
-        <Button
-          variant="outline"
-          size="sm"
-          aria-expanded={about}
-          onClick={() => setAbout(!about)}
-        >
-          About this session
-        </Button>
-        {owner && (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Session actions"
-                />
-              }
-            >
-              <EllipsisIcon />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem onClick={() => setTitle(session.title)}>
-                <PencilIcon />
-                Rename
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() =>
-                  void perform(() =>
-                    chat.updateSession(session.id, {
-                      pinned: !session.pinned_at,
-                    }),
-                  )
-                }
-              >
-                {session.pinned_at ? <PinOffIcon /> : <PinIcon />}
-                {session.pinned_at ? "Unpin" : "Pin"}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() =>
-                  void perform(() =>
-                    chat.updateSession(session.id, {
-                      archived: !session.archived_at,
-                    }),
-                  )
-                }
-              >
-                {session.archived_at ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
-                {session.archived_at ? "Unarchive" : "Archive"}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-      </header>
-      <div
-        ref={scroller}
-        className="min-h-0 flex-1 overflow-y-auto px-3 py-4 md:px-6"
-        onScroll={(event) => {
-          const view = event.currentTarget;
-          following.current =
-            view.scrollHeight - view.scrollTop - view.clientHeight < 80;
-        }}
+    <>
+      <SidePanel
+        id="session-code"
+        wide={wide}
+        panel={wide && code}
+        size={520}
+        min={340}
+        max={1000}
+        className="flex min-h-0 min-w-0 flex-1"
       >
-        <div className="mx-auto flex max-w-3xl flex-col gap-3">
-          {about && (
-            <SessionCard
+        <section
+          aria-label={`${name}'s session`}
+          className="flex min-h-0 min-w-0 flex-1 flex-col"
+        >
+          <header className="flex min-h-14 shrink-0 items-center gap-3 border-b px-3 py-2 md:px-5">
+            <Link
+              to="/console"
+              aria-label="All sessions"
+              className={buttonVariants({
+                variant: "ghost",
+                size: "icon-sm",
+                className: "md:hidden",
+              })}
+            >
+              <ChevronLeftIcon />
+            </Link>
+            <SessionMark
               session={session}
-              name={name}
-              facts
-              usage={usage}
-              // Codex reports no cost: a budget there would never be reached.
-              budget={
-                owner && session.harness !== "codex"
-                  ? (usd) =>
-                      perform(() =>
-                        chat.updateSession(session.id, { budget_usd: usd }),
-                      )
-                  : undefined
-              }
-              busy={busy}
-              stop={() => perform(() => chat.stop(session.id))}
-              resume={
-                resumable(session)
-                  ? () => perform(() => chat.resume(session.id))
-                  : undefined
-              }
-              takeover={
-                takeable(session)
-                  ? () => perform(() => chat.takeoverPi(session.id))
-                  : undefined
-              }
+              actors={actors}
+              state={tone}
+              className="size-8"
             />
-          )}
-          {more && (
+            <div className="min-w-0 flex-1">
+              {title !== undefined ? (
+                <form className="flex gap-2" onSubmit={(e) => void rename(e)}>
+                  <Input
+                    aria-label="Session title"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    maxLength={200}
+                    autoFocus
+                    className="h-7"
+                  />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={busy || !title.trim()}
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setTitle(undefined)}
+                  >
+                    Cancel
+                  </Button>
+                </form>
+              ) : agent ? (
+                <h2 className="truncate font-mono text-[15px] font-medium text-agent-foreground">
+                  {name}
+                  <span className="font-sans text-faint">
+                    {" "}
+                    · {session.title || "Untitled session"}
+                  </span>
+                </h2>
+              ) : (
+                <h2 className="truncate text-[15px] font-medium">{name}</h2>
+              )}
+              <p className="truncate text-xs text-muted-foreground">
+                {sessionState(session)} ·{" "}
+                {harnessLabels[session.harness] ?? session.harness} ·{" "}
+                <span title={session.workspace} className="font-mono">
+                  {folderName(session.workspace)}
+                </span>
+              </p>
+            </div>
+            <Presence tone={tone} className="max-xl:hidden">
+              {outputLine(chat, session) ?? sessionState(session)}
+            </Presence>
+            <Segmented<Density>
+              label="Density"
+              className="max-sm:hidden"
+              value={density}
+              choose={setDensity}
+              options={Object.entries(densityLabels) as [Density, string][]}
+            />
+            {owner && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-pressed={pane === "changes"}
+                  title="Changes"
+                  onClick={() => toggle("changes")}
+                  className="aria-pressed:bg-accent"
+                >
+                  <GitCompareArrowsIcon data-icon="inline-start" />
+                  <span className="max-xl:sr-only">Changes</span>
+                  {changed > 0 && (
+                    <span className="font-mono text-[11px] text-attention">
+                      {changed}
+                    </span>
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-pressed={pane === "terminal"}
+                  title="Terminal"
+                  onClick={() => toggle("terminal")}
+                  className="aria-pressed:bg-accent"
+                >
+                  <SquareTerminalIcon data-icon="inline-start" />
+                  <span className="max-xl:sr-only">Terminal</span>
+                </Button>
+              </>
+            )}
             <Button
               variant="outline"
               size="sm"
-              className="self-center"
-              onClick={() => {
-                const view = scroller.current;
-                if (view)
-                  fromBottom.current = view.scrollHeight - view.scrollTop;
-                earlier();
-              }}
+              aria-expanded={about}
+              onClick={() => setAbout(!about)}
             >
-              Show earlier work
+              About this session
             </Button>
-          )}
-          <SessionBlocks
-            blocks={placeApprovals(
-              blocks,
-              chat.approvals.filter((a) => a.session_id === session.id),
-            )}
-            chatTitle={chatTitle}
-            renderApproval={(approval) =>
-              approval.status === "pending" ? (
-                <ApprovalCard
-                  approval={approval}
-                  chat={chat}
-                  actors={actors}
-                  busy={busy}
-                  perform={perform}
-                />
-              ) : (
-                <ApprovalReceipt approval={approval} />
-              )
-            }
-          />
-          <LiveItems items={live} />
-          {!blocks.length && !live.length && !error && (
-            <p className="text-sm text-faint">Nothing recorded yet.</p>
-          )}
-          {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
-        </div>
-      </div>
-      <SessionInput
-        key={session.id}
-        session={session}
-        name={name}
-        owner={owner}
-        working={working}
-        busy={busy}
-        perform={perform}
-        send={(text, mode, images) =>
-          chat.input(session.id, text, mode, images)
-        }
-        compact={(instructions) => chat.compact(session.id, instructions)}
-        interrupt={interrupt}
-        usage={usage}
-      >
-        {plan?.some((step) => step.status !== "done") && (
-          <PlanBar steps={plan} />
-        )}
-        {queue.length > 0 && (
-          <QueueCards
-            queue={queue}
-            busy={busy}
-            // Codex lets a waiting input change; the other harnesses only show it.
-            change={
-              session.harness === "codex"
-                ? {
-                    remove: (item) =>
-                      perform(() => chat.removeQueued(session.id, item.id)),
-                    edit: (item, text) =>
-                      perform(() => chat.editQueued(session.id, item.id, text)),
+            {owner && (
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="Session actions"
+                    />
                   }
-                : undefined
+                >
+                  <EllipsisIcon />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem onClick={() => setTitle(session.title)}>
+                    <PencilIcon />
+                    Rename
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() =>
+                      void perform(() =>
+                        chat.updateSession(session.id, {
+                          pinned: !session.pinned_at,
+                        }),
+                      )
+                    }
+                  >
+                    {session.pinned_at ? <PinOffIcon /> : <PinIcon />}
+                    {session.pinned_at ? "Unpin" : "Pin"}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() =>
+                      void perform(() =>
+                        chat.updateSession(session.id, {
+                          archived: !session.archived_at,
+                        }),
+                      )
+                    }
+                  >
+                    {session.archived_at ? (
+                      <ArchiveRestoreIcon />
+                    ) : (
+                      <ArchiveIcon />
+                    )}
+                    {session.archived_at ? "Unarchive" : "Archive"}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </header>
+          <div
+            ref={scroller}
+            className="min-h-0 flex-1 overflow-y-auto px-3 py-4 md:px-6"
+            onScroll={(event) => {
+              const view = event.currentTarget;
+              following.current =
+                view.scrollHeight - view.scrollTop - view.clientHeight < 80;
+            }}
+          >
+            <div className="mx-auto flex max-w-3xl flex-col gap-3">
+              {about && (
+                <SessionCard
+                  session={session}
+                  name={name}
+                  facts
+                  usage={usage}
+                  // Codex reports no cost: a budget there would never be reached.
+                  budget={
+                    owner && session.harness !== "codex"
+                      ? (usd) =>
+                          perform(() =>
+                            chat.updateSession(session.id, { budget_usd: usd }),
+                          )
+                      : undefined
+                  }
+                  busy={busy}
+                  stop={() => perform(() => chat.stop(session.id))}
+                  resume={
+                    resumable(session)
+                      ? () => perform(() => chat.resume(session.id))
+                      : undefined
+                  }
+                  takeover={
+                    takeable(session)
+                      ? () => perform(() => chat.takeoverPi(session.id))
+                      : undefined
+                  }
+                />
+              )}
+              {more && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="self-center"
+                  onClick={() => {
+                    const view = scroller.current;
+                    if (view)
+                      fromBottom.current = view.scrollHeight - view.scrollTop;
+                    earlier();
+                  }}
+                >
+                  Show earlier work
+                </Button>
+              )}
+              <SessionBlocks
+                blocks={placeApprovals(
+                  blocks,
+                  chat.approvals.filter((a) => a.session_id === session.id),
+                )}
+                chatTitle={chatTitle}
+                renderApproval={(approval) =>
+                  approval.status === "pending" ? (
+                    <ApprovalCard
+                      approval={approval}
+                      chat={chat}
+                      actors={actors}
+                      busy={busy}
+                      perform={perform}
+                    />
+                  ) : (
+                    <ApprovalReceipt approval={approval} />
+                  )
+                }
+              />
+              <LiveItems items={live} />
+              {!blocks.length && !live.length && !error && (
+                <p className="text-sm text-faint">Nothing recorded yet.</p>
+              )}
+              {error && (
+                <p role="alert" className="text-sm text-destructive">
+                  {error}
+                </p>
+              )}
+            </div>
+          </div>
+          <SessionInput
+            key={session.id}
+            session={session}
+            name={name}
+            owner={owner}
+            working={working}
+            busy={busy}
+            perform={perform}
+            send={(text, mode, images) =>
+              chat.input(session.id, text, mode, images)
             }
-          />
-        )}
-      </SessionInput>
-    </section>
+            compact={(instructions) => chat.compact(session.id, instructions)}
+            interrupt={interrupt}
+            usage={usage}
+          >
+            {plan?.some((step) => step.status !== "done") && (
+              <PlanBar steps={plan} />
+            )}
+            {queue.length > 0 && (
+              <QueueCards
+                queue={queue}
+                busy={busy}
+                // Codex lets a waiting input change; the other harnesses only show it.
+                change={
+                  session.harness === "codex"
+                    ? {
+                        remove: (item) =>
+                          perform(() => chat.removeQueued(session.id, item.id)),
+                        edit: (item, text) =>
+                          perform(() =>
+                            chat.editQueued(session.id, item.id, text),
+                          ),
+                      }
+                    : undefined
+                }
+              />
+            )}
+          </SessionInput>
+        </section>
+      </SidePanel>
+      {!wide && (
+        <Sheet
+          open={!!code}
+          onOpenChange={(open) => !open && setPane(undefined)}
+        >
+          <SheetContent
+            side="right"
+            showCloseButton={false}
+            className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl"
+          >
+            <SheetTitle className="sr-only">
+              {pane === "terminal" ? "Terminal" : "Changes"}
+            </SheetTitle>
+            {code}
+          </SheetContent>
+        </Sheet>
+      )}
+    </>
   );
 }
 

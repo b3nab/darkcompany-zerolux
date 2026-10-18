@@ -3,6 +3,7 @@
 @import "shadcn/tailwind.css";
 @import "@zerolux/theme/theme.css";
 @import "@zerolux/theme/themes.css";
+@import "@xterm/xterm/css/xterm.css";
 /* Shared logic names classes too, such as the author colors. */
 @source "../../../packages/chat/src";
 /* The packaged desktop manager reuses these components and styles. */
