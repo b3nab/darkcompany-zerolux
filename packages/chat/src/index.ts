@@ -25,3 +25,4 @@ export * from "./tool-view";
 export * from "./commands";
 export * from "./usage";
 export * from "./git";
+export * from "./schedules";
