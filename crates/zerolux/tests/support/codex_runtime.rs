@@ -264,6 +264,7 @@ fn native_response(state: &mut NativeState, request: &Value) -> Option<Value> {
             None => json!({"turnId":request["params"]["expectedTurnId"]}),
         },
         "turn/interrupt" => json!({}),
+        "thread/compact/start" => json!({}),
         other => panic!("unexpected native method: {other}"),
     })
 }

@@ -852,6 +852,38 @@ async fn live_chat_round_trip_and_stop_use_the_real_runtime() {
     assert_eq!(view["messages"][1]["reply_to_delivery_id"], delivery);
     assert_eq!(view["messages"][0]["deliveries"][0]["status"], "read");
 
+    // Compacting is the owner's choice: the agent's own token cannot start it.
+    let compact = format!("/chat/sessions/{}/compact", agent.session.id);
+    assert_eq!(
+        kernel
+            .post(&compact, Some(&agent.token), json!({}))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let started = kernel
+        .post(&compact, None, json!({}))
+        .await
+        .error_for_status()
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(started, json!({ "started": true }));
+    assert_eq!(native.count("thread/compact/start"), 1);
+    let refused = kernel
+        .post(&compact, None, json!({ "instructions": "Keep the plan" }))
+        .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        refused
+            .text()
+            .await
+            .unwrap()
+            .contains("Codex compacts without instructions")
+    );
+    assert_eq!(native.count("thread/compact/start"), 1);
+
     kernel
         .post(
             &path,
