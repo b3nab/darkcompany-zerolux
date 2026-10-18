@@ -104,6 +104,18 @@ test("only well-formed chat events are accepted", () => {
   expect(parseEvent(bytes(output))?.event_id).toBe("session.output:s:9");
   const live = { type: "session.live", session_id: "s", first: 4, changes: [] };
   expect(parseEvent(bytes(live))?.event_id).toBe("session.live:s:4");
+  const terminal = {
+    type: "terminal.output",
+    terminal_id: "t",
+    session_id: "s",
+    end: 7,
+    ended: false,
+  };
+  expect(parseEvent(bytes(terminal))?.event_id).toBe("terminal.output:t:7");
+  // Its end at the same offset is a notice of its own.
+  expect(parseEvent(bytes({ ...terminal, ended: true }))?.event_id).toBe(
+    "terminal.output:t:7:ended",
+  );
 });
 
 test("pages merge by sequence and newer copies replace delivery states", () => {

@@ -7,6 +7,7 @@ import type {
   Harness,
 } from "./client";
 import type { LiveNotice } from "./live";
+import type { TerminalNotice } from "./terminals";
 
 export const PAGE = 100;
 
@@ -193,6 +194,7 @@ export type ChatEvent = { event_id: string } & (
       end: number;
     } & SessionTail)
   | LiveNotice
+  | TerminalNotice
 );
 /** How a session's native record ends, as the kernel's watcher last read it. */
 export type SessionTail = Partial<
@@ -487,6 +489,7 @@ const eventTypes = new Set<string>([
   "approval.changed",
   "session.output",
   "session.live",
+  "terminal.output",
 ]);
 export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
   try {
@@ -497,6 +500,9 @@ export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
     // Live changes are numbered per session: the first one names the notice.
     if (event.type === "session.live" && typeof event.event_id !== "string")
       event.event_id = `session.live:${event.session_id}:${event.first}`;
+    // A terminal's notice names where its output ends, and whether it ended there.
+    if (event.type === "terminal.output" && typeof event.event_id !== "string")
+      event.event_id = `terminal.output:${event.terminal_id}:${event.end}${event.ended ? ":ended" : ""}`;
     if (typeof event.event_id === "string" && eventTypes.has(event.type))
       return event;
   } catch {
