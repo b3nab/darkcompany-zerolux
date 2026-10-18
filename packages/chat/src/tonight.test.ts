@@ -33,6 +33,9 @@ const session = (id: string, patch: Partial<ChatSession>): ChatSession => ({
   status: "connected",
   attention_reason: null,
   waiting: 0,
+  created_at: 0,
+  pinned_at: null,
+  archived_at: null,
   ...patch,
 });
 const general: Conversation = {
@@ -71,7 +74,7 @@ test("what needs the owner: open permission requests and stuck sessions", () => 
     ["pi", "The session needs your attention", undefined],
   ]);
   expect(needs[0]!.approvalId).toBe("a-pending");
-  expect(needs[1]!.place).toEqual({ team: true });
+  expect(needs[1]!.place).toEqual({ session: "s1" });
 });
 
 test("what runs: an agent answering in a chat and a session elsewhere", () => {
@@ -89,7 +92,7 @@ test("what runs: an agent answering in a chat and a session elsewhere", () => {
   });
   expect(running.map((r) => [r.what, r.place])).toEqual([
     ["Answering in General", { chat: "general" }],
-    ["lin at work", { team: true }],
+    ["lin at work", { session: "s2" }],
   ]);
 });
 

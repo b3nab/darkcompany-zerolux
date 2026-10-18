@@ -2,14 +2,16 @@ import { harnessLabels } from "./client";
 import type { MemberTone } from "./presence";
 import type { Approval } from "./chat";
 import type { Chat } from "./useChat";
-/** Where a client opens an item: a chat or the agents' sessions. */
-export type Place = { chat: string } | { team: true };
+/** Where a client opens an item: a chat, or the session itself in the Console. */
+export type Place = { chat: string } | { session: string };
 type Activity = Pick<Chat, "approvals" | "sessions" | "conversations">;
 
 /** Something that waits for the owner. */
 export interface Need {
   key: string;
-  actorId: string;
+  /** The agent whose session it is; null for a session of the owner's own. */
+  actorId: string | null;
+  sessionId: string;
   /** "Permission" or the harness of a stuck session. */
   kind: string;
   title: string;
@@ -33,6 +35,7 @@ export function needsYou(chat: Activity): Need[] {
       .map((a) => ({
         key: a.id,
         actorId: a.actor_id,
+        sessionId: a.session_id,
         kind:
           a.kind === "permission"
             ? "Permission"
@@ -46,16 +49,17 @@ export function needsYou(chat: Activity): Need[] {
         approvalKind: a.kind,
         place: a.conversation_id
           ? { chat: a.conversation_id }
-          : ({ team: true } as const),
+          : { session: a.session_id },
       })),
     ...chat.sessions
       .filter((s) => s.status === "attention")
       .map((s) => ({
         key: s.id,
         actorId: s.actor_id,
+        sessionId: s.id,
         kind: harnessLabels[s.harness],
         title: s.attention_reason ?? "The session needs your attention",
-        place: { team: true } as const,
+        place: { session: s.id },
       })),
   ];
 }
@@ -63,7 +67,9 @@ export function needsYou(chat: Activity): Need[] {
 /** Something an agent is doing now. */
 export interface Running {
   key: string;
-  actorId: string;
+  /** The agent whose session it is; null for a session of the owner's own. */
+  actorId: string | null;
+  sessionId: string;
   what: string;
   place: Place;
   /** When it started, if the kernel knows. */
@@ -81,8 +87,9 @@ export function runningNow(chat: Activity): Running[] {
         return {
           key: s.id,
           actorId: s.actor_id,
+          sessionId: s.id,
           what: title ? `Answering in ${title}` : s.title,
-          place: id && title ? { chat: id } : ({ team: true } as const),
+          place: id && title ? { chat: id } : { session: s.id },
         };
       }),
   ];
