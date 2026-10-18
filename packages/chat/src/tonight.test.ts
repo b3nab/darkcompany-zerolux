@@ -59,6 +59,8 @@ const approval = (status: Approval["status"]): Approval => ({
   status,
   answer: null,
   decision: null,
+  scope: null,
+  reason: null,
   native_request_id: "n",
   created_at: 5,
 });

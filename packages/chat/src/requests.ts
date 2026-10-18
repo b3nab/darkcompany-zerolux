@@ -1,11 +1,35 @@
 import type {
   Approval,
+  ApprovalScope,
   FormAnswer,
   FormField,
   FormRequest,
   Question,
   QuestionAnswer,
 } from "./chat";
+
+/** What each scope allows, as the owner chooses it. */
+export const scopeLabels: Record<ApprovalScope, string> = {
+  once: "Allow once",
+  session: "Allow for this session",
+  always: "Always allow",
+};
+const allowed: Record<ApprovalScope, string> = {
+  once: "Allowed once",
+  session: "Allowed for this session",
+  always: "Always allowed",
+};
+
+/** How far a permission can be allowed: as far as its harness offers, and once at least. */
+export function scopesOf(approval: Approval): ApprovalScope[] {
+  const offered = approval.details.scopes;
+  const scopes = Array.isArray(offered)
+    ? (Object.keys(scopeLabels) as ApprovalScope[]).filter((scope) =>
+        offered.includes(scope),
+      )
+    : [];
+  return scopes.length ? scopes : ["once"];
+}
 
 /** The questions of a `question` request. */
 export const questionsOf = (approval: Approval) =>
@@ -79,6 +103,14 @@ export function formAnswer(
 
 /** What the owner answered, in a line. */
 export function answerSummary(approval: Approval): string {
+  if (approval.kind === "permission")
+    return approval.decision === "allow"
+      ? allowed[approval.scope ?? "once"]
+      : approval.decision === "deny"
+        ? approval.reason
+          ? `Denied: ${approval.reason}`
+          : "Denied"
+        : "";
   const answer = approval.answer;
   if (!answer) return "";
   if ("declined" in answer) return "Declined";

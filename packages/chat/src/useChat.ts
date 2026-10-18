@@ -12,6 +12,7 @@ import {
 } from "./chat";
 import type {
   Approval,
+  ApprovalScope,
   ChatEvent,
   ChatSession,
   Conversation,
@@ -481,13 +482,18 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
         ({ session }) => setSessions((ss) => replace(ss, session)),
       );
     },
-    async decide(approvalId: string, decision: "allow" | "deny") {
+    /** Allows a permission as far as `scope` says, or denies it with the owner's `reason`. */
+    async decide(
+      approvalId: string,
+      decision: "allow" | "deny",
+      how: { scope?: ApprovalScope; reason?: string } = {},
+    ) {
       await order.run(
         "approvals",
         () =>
           api<{ approval: Approval }>(
             `/chat/approvals/${approvalId}/decision`,
-            { decision },
+            { decision, ...how },
           ),
         ({ approval }) => setApprovals((as) => replace(as, approval)),
       );

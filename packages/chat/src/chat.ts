@@ -148,6 +148,8 @@ export type FormAnswer =
   | { action: "accept"; content?: Record<string, unknown> }
   | { action: "decline" | "cancel" };
 /** What a session asks the owner: a permission, a question, or an MCP form. */
+/** How far an allowed permission goes: this once, for the rest of the session, or always. */
+export type ApprovalScope = "once" | "session" | "always";
 export interface Approval {
   id: string;
   /** The agent whose session asks; null for a session of the owner's own. */
@@ -163,6 +165,10 @@ export interface Approval {
   status: "pending" | "decided" | "uncertain" | "delivered" | "resolved";
   /** A permission's decision. */
   decision: "allow" | "deny" | null;
+  /** How far an allowed permission goes. */
+  scope: ApprovalScope | null;
+  /** Why the owner denied it, as the session reads it. */
+  reason: string | null;
   /** The answer to a question or a form. */
   answer: QuestionAnswer | FormAnswer | null;
   native_request_id: string;

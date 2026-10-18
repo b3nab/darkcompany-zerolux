@@ -56,6 +56,8 @@ const request = (
   details: {},
   status,
   decision: null,
+  scope: null,
+  reason: null,
   answer: null,
   native_request_id: "n1",
   created_at: 1,
