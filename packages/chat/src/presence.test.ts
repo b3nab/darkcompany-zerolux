@@ -21,6 +21,7 @@ const session = (
   id,
   owner_id: "owner",
   shared: null,
+  created: false,
   actor_id: "aspen",
   host_id: null,
   harness: "pi",

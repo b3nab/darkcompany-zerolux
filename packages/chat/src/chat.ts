@@ -34,6 +34,9 @@ export interface ChatSession {
   owner_id: string;
   /** Private while null; shared with the workspace's people by its person. */
   shared: SessionShare;
+  /** The kernel started its native session: from New session, a fork or a delegation. False
+   * for one hired from the harness, and for any from before the kernel recorded it. */
+  created: boolean;
   /** The agent it works for; null for a session of the owner's own. */
   actor_id: string | null;
   /** The kernel host serving this native session, when known. */
@@ -218,14 +221,14 @@ export type NewSession = {
   effort?: string;
   actor_id?: string;
   name?: string;
+  /** One of one's own joined computers to run it on; the kernel's when left out. */
+  host?: string;
 } & (
   | { harness: "claude-code"; permission_mode?: ClaudeMode }
   | {
       harness: "codex";
       approval_policy?: CodexApprovalPolicy;
       sandbox?: CodexSandbox;
-      /** One of one's own joined computers to run it on; the kernel's when left out. */
-      host?: string;
     }
   | { harness: "pi" }
 );

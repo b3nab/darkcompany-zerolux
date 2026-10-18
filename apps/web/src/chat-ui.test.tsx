@@ -94,6 +94,7 @@ const session = (
   id,
   owner_id: OWNER,
   shared: null,
+  created: false,
   actor_id,
   host_id: null,
   harness: "claude-code",

@@ -46,7 +46,10 @@ export const startsHere = (
     : fallback;
 
 /** The harnesses a joined computer runs so far; the others run on the kernel's computer. */
-export const joinedHarnesses: readonly NewSession["harness"][] = ["codex"];
+export const joinedHarnesses: readonly NewSession["harness"][] = [
+  "codex",
+  "pi",
+];
 
 /** One's own joined computers that are online: where one starts sessions besides the kernel's. */
 export const ownComputers = (

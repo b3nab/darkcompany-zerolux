@@ -34,6 +34,7 @@ const session = (id: string, patch: Partial<ChatSession>): ChatSession => ({
   id,
   owner_id: "owner",
   shared: null,
+  created: false,
   actor_id: "lin",
   host_id: null,
   harness: "pi",
