@@ -8,6 +8,7 @@ import {
   ImagePlusIcon,
   PencilIcon,
   ChevronRightIcon,
+  FileDiffIcon,
   ListChecksIcon,
   PanelRightIcon,
   SendIcon,
@@ -225,6 +226,17 @@ export default function SessionPage() {
       }
       action={
         <View className="flex-row">
+          {owner ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Changes"
+              onPress={() => router.push(`/changes/${id}`)}
+              hitSlop={6}
+              className="size-10 items-center justify-center rounded-sm active:bg-accent"
+            >
+              <FileDiffIcon color={muted} size={20} strokeWidth={1.5} />
+            </Pressable>
+          ) : null}
           {owner ? (
             <Pressable
               accessibilityRole="button"
