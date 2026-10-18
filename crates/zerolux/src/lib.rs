@@ -16,6 +16,7 @@ mod codex_settings;
 pub mod db;
 pub mod entity;
 pub mod harness;
+pub mod history;
 mod integration_code;
 pub mod lease;
 pub mod live;

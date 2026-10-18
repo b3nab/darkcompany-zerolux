@@ -214,6 +214,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
     let domain = legacy
         .route("/sessions", get(list_sessions).post(create_session))
         .route("/sessions/discover", get(discover_sessions))
+        .route("/sessions/search", get(search_sessions))
         .route("/sessions/attach", post(attach_session))
         .route("/sessions/catalog", get(settings_catalog))
         .route("/sessions/{id}", get(read_session).patch(change_session))
@@ -248,6 +249,12 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route(
             "/sessions/{id}/queue/{item}",
             axum::routing::patch(requeue).delete(unqueue),
+        )
+        .route(
+            "/sessions/{id}/goal",
+            get(session_goal)
+                .put(set_session_goal)
+                .delete(clear_session_goal),
         )
         .route("/sessions/{id}/files", get(session_files))
         .route("/sessions/{id}/file", get(session_file))
@@ -1493,6 +1500,72 @@ async fn session_files(
         .await
         .map_err(runtime_error)?;
     Ok(Json(json!({ "files": files })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchQuery {
+    q: String,
+    #[serde(default = "search_limit")]
+    limit: usize,
+}
+
+fn search_limit() -> usize {
+    50
+}
+
+/// What the sessions one may read said and did, newest first: their words, reasoning and
+/// tool calls that contain the text looked for.
+async fn search_sessions(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    query: Result<Query<SearchQuery>, QueryRejection>,
+) -> Result<Json<crate::history::Results>, Error> {
+    let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
+    Ok(Json(
+        store.search_sessions(&who, &query.q, query.limit).await?,
+    ))
+}
+
+/// The goal the session works toward on its own, as its harness keeps it.
+async fn session_goal(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
+    let goal = runtime(&state)?
+        .goal(&who, &id, None, false)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "goal": goal })))
+}
+
+async fn set_session_goal(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(change): ChatJson<GoalChange>,
+) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
+    let goal = runtime(&state)?
+        .goal(&who, &id, Some(change), false)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "goal": goal })))
+}
+
+async fn clear_session_goal(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
+    runtime(&state)?
+        .goal(&who, &id, None, true)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "goal": null })))
 }
 
 #[derive(Deserialize)]
