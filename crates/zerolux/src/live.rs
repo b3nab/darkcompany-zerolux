@@ -12,6 +12,9 @@ use crate::store::Error;
 const ITEM_BYTES: usize = 256 * 1024;
 const ITEMS: usize = 64;
 const CHANGES: usize = 256;
+const QUEUED: usize = 50;
+/// What a queued input shows of its text.
+const QUEUED_TEXT: usize = 500;
 const APPEND_BYTES: usize = 64 * 1024;
 /// A notice stays well under what one realtime data packet carries.
 pub const NOTICE_BYTES: usize = 12 * 1024;
@@ -55,6 +58,16 @@ pub enum Change {
     Done { item: String },
     /// The turn ended: nothing is in progress.
     Clear,
+    /// The owner's inputs waiting in the harness's queue, all of them, oldest first.
+    Queue { items: Vec<Queued> },
+}
+
+/// An input of the owner's, waiting for its turn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Queued {
+    pub id: String,
+    /// The start of its text.
+    pub text: String,
 }
 
 /// A session's live state: what is in progress, and the number of the last change.
@@ -62,6 +75,7 @@ pub enum Change {
 pub struct State {
     pub seq: u64,
     pub items: Vec<Item>,
+    pub queue: Vec<Queued>,
 }
 
 /// Changes as they were applied, numbered from `first`.
@@ -95,6 +109,9 @@ impl Live {
                 }
                 Change::Done { item } => item.is_empty() || item.len() > 200,
                 Change::Clear => false,
+                Change::Queue { items } => {
+                    items.len() > QUEUED || items.iter().any(|queued| queued.id.len() > 200)
+                }
             })
         {
             return Err(Error::Invalid("Invalid live changes".into()));
@@ -133,6 +150,7 @@ impl Live {
                 }
                 Change::Done { item } => state.items.retain(|open| &open.id != item),
                 Change::Clear => state.items.clear(),
+                Change::Queue { items } => state.queue.clone_from(items),
             }
             state.seq += 1;
         }
@@ -203,6 +221,15 @@ fn pieces(changes: Vec<Change>) -> Vec<Change> {
                     rest = &rest[cut..];
                 }
             }
+            Change::Queue { items } => result.push(Change::Queue {
+                items: items
+                    .into_iter()
+                    .map(|queued| Queued {
+                        text: queued.text.chars().take(QUEUED_TEXT).collect(),
+                        id: queued.id,
+                    })
+                    .collect(),
+            }),
             change => result.push(change),
         }
     }
@@ -249,7 +276,7 @@ mod tests {
             live.state("s"),
             State {
                 seq: 5,
-                items: vec![]
+                ..State::default()
             }
         );
         assert_eq!(live.state("other"), State::default());
@@ -298,6 +325,32 @@ mod tests {
         assert!(matches!(applied.changes[0], Change::Set { .. }));
         assert!(matches!(applied.changes[1], Change::Append { .. }));
         assert_eq!(live.state("s").items[0].text, long);
+    }
+
+    #[test]
+    fn the_queue_is_reported_whole_and_outlives_the_turn() {
+        let live = Live::default();
+        let queued = |id: &str, text: &str| Queued {
+            id: id.into(),
+            text: text.into(),
+        };
+        live.apply(
+            "s",
+            vec![Change::Queue {
+                items: vec![
+                    queued("q1", "then the docs"),
+                    queued("q2", &"x".repeat(900)),
+                ],
+            }],
+        )
+        .unwrap();
+        live.apply("s", vec![Change::Clear]).unwrap();
+        let state = live.state("s");
+        assert_eq!(state.queue.len(), 2);
+        assert_eq!(state.queue[1].text.len(), QUEUED_TEXT);
+        live.apply("s", vec![Change::Queue { items: vec![] }])
+            .unwrap();
+        assert!(live.state("s").queue.is_empty());
     }
 
     #[test]
