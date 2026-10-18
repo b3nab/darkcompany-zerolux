@@ -1518,10 +1518,14 @@ test("while a session works, written words join its turn, wait for its end, or r
   };
   const owned = working("owned");
   expect(owned).toContain('aria-label="Other ways to send"');
+  // Images go too, by the clip, a paste or a drop; not to Claude Code in a terminal.
+  expect(owned).toContain('aria-label="Add images"');
+  expect(owned).toContain('accept="image/png,image/jpeg,image/gif,image/webp"');
   expect(owned).toContain("⌥Enter sends when it ends");
   // Claude Code in a terminal only takes words into the running turn.
   const terminal = working("attached");
   expect(terminal).not.toContain("Other ways to send");
+  expect(terminal).not.toContain("Add images");
   expect(terminal).toContain("Joins the turn in progress · Esc interrupts");
 });
 

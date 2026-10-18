@@ -8,6 +8,7 @@ import {
   ChevronLeftIcon,
   ChevronDownIcon,
   EllipsisIcon,
+  ImagePlusIcon,
   ListChecksIcon,
   PencilIcon,
   PinIcon,
@@ -15,6 +16,7 @@ import {
   PlusIcon,
   SendIcon,
   SquareIcon,
+  XIcon,
 } from "lucide-react";
 import {
   agentSettingFields,
@@ -27,6 +29,8 @@ import {
   draftOf,
   folderName,
   harnessLabels,
+  inputImageTypes,
+  inputImagesError,
   latestPlan,
   markSeen,
   placeApprovals,
@@ -50,6 +54,7 @@ import type {
   Chat,
   ChatSession,
   Density,
+  InputImage,
   InputMode,
   Perform,
   PlanStep,
@@ -88,6 +93,19 @@ import { sendsOnEnter } from "./ChatView";
 import { useOwner } from "./AuthGate";
 
 const MAX_TEXT = 64 * 1024;
+
+/** A picked image as the kernel takes it: its type and base64 bytes. */
+const imageOf = (file: File) =>
+  new Promise<InputImage>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () =>
+      resolve({
+        media_type: file.type,
+        data: String(reader.result).split(",", 2)[1] ?? "",
+      });
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
 
 const outputLine = (chat: Chat, session: ChatSession) => {
   const at = sessionOutputAt(chat, session);
@@ -651,7 +669,9 @@ export function SessionView({
         working={working}
         busy={busy}
         perform={perform}
-        send={(text, mode) => chat.input(session.id, text, mode)}
+        send={(text, mode, images) =>
+          chat.input(session.id, text, mode, images)
+        }
         compact={(instructions) => chat.compact(session.id, instructions)}
         interrupt={interrupt}
       >
@@ -685,7 +705,7 @@ function SessionInput({
   working: boolean;
   busy: boolean;
   perform: Perform;
-  send: (text: string, mode: InputMode) => Promise<void>;
+  send: (text: string, mode: InputMode, images: InputImage[]) => Promise<void>;
   /** `/compact [instructions]`: the harness's own compaction, as in its terminal. */
   compact: (instructions: string) => Promise<void>;
   interrupt: () => void;
@@ -701,7 +721,30 @@ function SessionInput({
   const box = useRef<HTMLTextAreaElement>(null);
   const open = owner && session.status === "connected";
   const tooLong = new TextEncoder().encode(text).length > MAX_TEXT;
-  const stops = owner && working && !text.trim();
+  // Images going with the next input, shown by object URLs freed once they go.
+  const [picked, setPicked] = useState<{ file: File; url: string }[]>([]);
+  const shown = useRef(picked);
+  shown.current = picked;
+  useEffect(
+    () => () => shown.current.forEach(({ url }) => URL.revokeObjectURL(url)),
+    [],
+  );
+  const imagesError = inputImagesError(picked.map(({ file }) => file));
+  const files = useRef<HTMLInputElement>(null);
+  const add = (from: Iterable<File>) => {
+    const images = [...from].filter((file) => file.type.startsWith("image/"));
+    if (images.length)
+      setPicked((all) => [
+        ...all,
+        ...images.map((file) => ({ file, url: URL.createObjectURL(file) })),
+      ]);
+  };
+  const remove = (url: string) => {
+    URL.revokeObjectURL(url);
+    setPicked((all) => all.filter((image) => image.url !== url));
+  };
+  const empty = !text.trim() && !picked.length;
+  const stops = owner && working && empty;
   // ZeroLux's commands and the harness's own, listed while one is typed.
   const command = sessionCommand(text);
   const harness = useSessionCommands(session.id);
@@ -714,20 +757,26 @@ function SessionInput({
     setChosen(0);
     box.current?.focus();
   };
-  // Claude Code in a terminal only takes words into the running turn.
+  // Claude Code in a terminal only takes words into the running turn, without images.
   const modes = !(
     session.harness === "claude-code" && session.origin !== "owned"
   );
   async function submit(mode: InputMode = "steer") {
-    if (!open || !text.trim() || tooLong) return;
+    if (!open || empty || tooLong || imagesError) return;
     const sent = text;
     const run = sessionCommand(sent);
-    const done = await perform(() =>
+    const going = run ? [] : picked;
+    const done = await perform(async () =>
       run?.name === "compact"
         ? compact(run.args)
-        : send(sent.trim(), working ? mode : "steer"),
+        : send(
+            sent.trim(),
+            working ? mode : "steer",
+            await Promise.all(going.map(({ file }) => imageOf(file))),
+          ),
     );
     if (!done) return;
+    going.forEach(({ url }) => remove(url));
     setStarted(run?.name === "compact");
     // What was typed meanwhile stays.
     if (draftOf(session.id) === sent) write("");
@@ -739,6 +788,15 @@ function SessionInput({
       onSubmit={(event) => {
         event.preventDefault();
         void submit();
+      }}
+      onDragOver={(event) => {
+        if (modes && open && event.dataTransfer.types.includes("Files"))
+          event.preventDefault();
+      }}
+      onDrop={(event) => {
+        if (!modes || !open) return;
+        event.preventDefault();
+        add(event.dataTransfer.files);
       }}
     >
       {children}
@@ -769,7 +827,58 @@ function SessionInput({
           ))}
         </div>
       )}
+      {picked.length > 0 && (
+        <ul
+          aria-label="Images to send"
+          className="mx-auto flex w-full max-w-3xl flex-wrap gap-2"
+        >
+          {picked.map(({ file, url }) => (
+            <li key={url} className="relative">
+              <img
+                src={url}
+                alt={file.name}
+                className="size-14 rounded-md border object-cover"
+              />
+              <button
+                type="button"
+                aria-label={`Remove ${file.name}`}
+                onClick={() => remove(url)}
+                className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full border bg-background text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <XIcon className="size-3" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
+        {modes && (
+          <>
+            <input
+              ref={files}
+              type="file"
+              accept={inputImageTypes.join(",")}
+              multiple
+              hidden
+              onChange={(event) => {
+                add(event.target.files ?? []);
+                event.target.value = "";
+              }}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-10.5 w-10"
+              aria-label="Add images"
+              title="Add images"
+              disabled={!open}
+              onClick={() => files.current?.click()}
+            >
+              <ImagePlusIcon />
+            </Button>
+          </>
+        )}
         <textarea
           ref={box}
           aria-label={`Write to ${name}`}
@@ -792,6 +901,14 @@ function SessionInput({
             write(event.target.value);
             setStarted(false);
             setChosen(0);
+          }}
+          onPaste={(event) => {
+            const pasted = [...event.clipboardData.files].filter((file) =>
+              file.type.startsWith("image/"),
+            );
+            if (!modes || !pasted.length) return;
+            event.preventDefault();
+            add(pasted);
           }}
           onKeyDown={(event) => {
             // While commands are listed: arrows move, Tab or Enter takes the one shown.
@@ -840,7 +957,7 @@ function SessionInput({
           <div className="flex">
             <Button
               type="submit"
-              disabled={busy || !open || !text.trim() || tooLong}
+              disabled={busy || !open || empty || tooLong || !!imagesError}
               className={cn("h-10.5", working && modes && "rounded-r-none")}
             >
               Send
@@ -849,7 +966,7 @@ function SessionInput({
             {working && modes && (
               <DropdownMenu>
                 <DropdownMenuTrigger
-                  disabled={busy || !open || !text.trim() || tooLong}
+                  disabled={busy || !open || empty || tooLong || !!imagesError}
                   render={
                     <Button
                       type="button"
@@ -882,17 +999,19 @@ function SessionInput({
       <p className="mx-auto w-full max-w-3xl font-mono text-[11px] text-faint">
         {tooLong
           ? "Too long: up to 64 KB."
-          : !owner
-            ? "Its work is open to everyone in the workspace"
-            : command?.name === "compact"
-              ? "Summarizes the older work; anything after /compact says what to keep"
-              : started
-                ? "Compacting: the summary, or why it failed, appears above"
-                : working
-                  ? modes
-                    ? "Joins the turn in progress · ⌥Enter sends when it ends · Esc interrupts"
-                    : "Joins the turn in progress · Esc interrupts"
-                  : "Straight into the session, not into a chat · / for commands"}
+          : imagesError
+            ? imagesError
+            : !owner
+              ? "Its work is open to everyone in the workspace"
+              : command?.name === "compact"
+                ? "Summarizes the older work; anything after /compact says what to keep"
+                : started
+                  ? "Compacting: the summary, or why it failed, appears above"
+                  : working
+                    ? modes
+                      ? "Joins the turn in progress · ⌥Enter sends when it ends · Esc interrupts"
+                      : "Joins the turn in progress · Esc interrupts"
+                    : "Straight into the session, not into a chat · / for commands"}
       </p>
     </form>
   );
