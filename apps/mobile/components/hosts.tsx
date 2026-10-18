@@ -112,7 +112,7 @@ export function Hosts() {
                     ? "waiting to join"
                     : host.online
                       ? "online"
-                      : `seen ${ago(host.seen_at)}`,
+                      : `offline · seen ${ago(host.seen_at)}`,
                   !mine && host.open ? "open to you" : null,
                 ]
                   .filter(Boolean)
