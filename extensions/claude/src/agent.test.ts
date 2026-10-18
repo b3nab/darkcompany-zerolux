@@ -854,3 +854,25 @@ test("the session's text and reasoning stream to ZeroLux while a subagent's stay
   ]);
   expect(f.options().includePartialMessages).toBe(true);
 });
+
+test("the owner's inputs show as waiting until the session takes them", async () => {
+  const f = fixture();
+  await f.start();
+  f.state("running");
+  await tick();
+  await f.agent.say("then the docs", "queue");
+  await tick();
+  const id = f.inputs.at(-1)!.uuid as string;
+  const queues = () =>
+    f.calls
+      .filter((c) => c.path === "/chat/sessions/link/live")
+      .flatMap((c) => c.body.changes)
+      .filter((change: { type: string }) => change.type === "queue");
+  expect(queues().at(-1)).toEqual({
+    type: "queue",
+    items: [{ id, text: "then the docs" }],
+  });
+  f.consumed(id);
+  await tick();
+  expect(queues().at(-1)).toEqual({ type: "queue", items: [] });
+});

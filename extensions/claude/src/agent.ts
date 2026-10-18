@@ -258,9 +258,15 @@ export class ClaudeAgent {
       })),
     );
     if (mode === "interrupt") await this.interrupt();
+    const uuid = randomUUID();
+    this.ownerQueue.push({
+      id: uuid,
+      text: text.trim() || attached.map(() => "[image]").join(" "),
+    });
+    this.reportQueue();
     this.input.push({
       type: "user",
-      uuid: randomUUID() as SDKUserMessage["uuid"],
+      uuid: uuid as SDKUserMessage["uuid"],
       session_id: "",
       parent_tool_use_id: null,
       message: {
@@ -304,6 +310,13 @@ export class ClaudeAgent {
     return batches.length
       ? batches.map((batch) => batch.content).join("\n\n")
       : "None.";
+  }
+
+  /** The owner's inputs the session has not taken yet, oldest first. */
+  private ownerQueue: { id: string; text: string }[] = [];
+
+  private reportQueue() {
+    this.bridge.live({ type: "queue", items: [...this.ownerQueue] });
   }
 
   /** The message being streamed, and the kind of each of its blocks. */
@@ -370,6 +383,15 @@ export class ClaudeAgent {
     }
     const consumed =
       "user_message_uuids" in message ? message.user_message_uuids : undefined;
+    const taken = this.ownerQueue.filter((queued) =>
+      consumed?.includes(queued.id),
+    );
+    if (taken.length) {
+      this.ownerQueue = this.ownerQueue.filter(
+        (queued) => !taken.includes(queued),
+      );
+      this.reportQueue();
+    }
     for (const id of consumed ?? []) {
       // The echo lists at most 64 IDs: everything written before one was consumed too.
       const at = this.written.findIndex((w) => w.id === id);
