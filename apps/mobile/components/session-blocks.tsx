@@ -5,30 +5,51 @@ import Animated, { FadeInDown } from "react-native-reanimated";
 import { useCSSVariable } from "uniwind";
 import {
   blockRuns,
+  isSubagent,
   thoughtLabel,
   toolItems,
+  toolsPhrase,
   turnLabel,
   useArrivals,
 } from "@zerolux/chat";
-import type { BlockRun, SessionBlock } from "@zerolux/chat";
+import type {
+  Approval,
+  ApprovalItem,
+  BlockRun,
+  LiveItem,
+  SessionBlock,
+  ToolsRun,
+} from "@zerolux/chat";
 import { Fold } from "@/components/fold";
 import { MessageBody } from "@/components/message-body";
-import { ExploredCalls, ToolCall } from "@/components/tool-call";
+import {
+  ExploredCalls,
+  SubagentCard,
+  ToolCall,
+  Verb,
+} from "@/components/tool-call";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
+import { useDensity } from "../src/density";
 
 type ChatTitle = (id: string) => string | undefined;
+type Item = SessionBlock | ApprovalItem;
+/** A request of the session, drawn where it was made: open while pending, a receipt after. */
+type RenderApproval = (approval: Approval) => ReactNode;
 
 /**
  * A session's work, block by block, the same in the Agent Console and in chats: tools run one
- * after another read as one list; work that arrives live slides in.
+ * after another read as one list; work that arrives live slides in. How much shows follows the
+ * density: compact keeps the outcome, detailed opens every step.
  */
 export function SessionBlocks({
   blocks,
   chatTitle,
+  renderApproval,
 }: {
-  blocks: SessionBlock[];
+  blocks: Item[];
   chatTitle?: ChatTitle;
+  renderApproval?: RenderApproval;
 }) {
   const fresh = useArrivals(blocks);
   return blockRuns(blocks).map((run) => (
@@ -37,6 +58,7 @@ export function SessionBlocks({
       run={run}
       fresh={fresh}
       chatTitle={chatTitle}
+      renderApproval={renderApproval}
     />
   ));
 }
@@ -54,41 +76,79 @@ function Arrive({ fresh, children }: { fresh: boolean; children: ReactNode }) {
 
 /**
  * One step of a session's work, as the web draws it: what the agent received and wrote open;
- * its reasoning, tools and compactions folded to a line that opens on a tap.
+ * its reasoning, tools and compactions folded to a line that opens on a tap; a request where
+ * it was made.
  */
 export function SessionRunView({
   run,
   fresh,
   chatTitle,
+  renderApproval,
 }: {
-  run: BlockRun;
+  run: BlockRun<Item>;
   /** The keys of the blocks that just arrived, from `useArrivals`. */
   fresh: ReadonlySet<string>;
   /** The title of the chat an input came from; inputs name it when given. */
   chatTitle?: ChatTitle;
+  renderApproval?: RenderApproval;
 }) {
-  if (run.kind === "tools")
-    return (
-      <Arrive fresh={fresh.has(run.key)}>
-        <View className="overflow-hidden rounded-md border border-border bg-card">
-          {toolItems(run.tools).map((item, i) => (
-            <Arrive key={item.key} fresh={fresh.has(item.key)}>
-              <View className={cn(i > 0 && "border-t border-border")}>
-                {item.kind === "explored" ? (
-                  <ExploredCalls tools={item.tools} chatTitle={chatTitle} />
-                ) : (
-                  <ToolCall tool={item} chatTitle={chatTitle} />
-                )}
-              </View>
-            </Arrive>
-          ))}
-        </View>
-      </Arrive>
-    );
+  const density = useDensity();
+  if (density === "compact" && run.kind === "thinking") return null;
   return (
     <Arrive fresh={fresh.has(run.key)}>
-      <Block block={run} chatTitle={chatTitle} />
+      {run.kind === "tools" ? (
+        <ToolRun run={run} fresh={fresh} chatTitle={chatTitle} />
+      ) : run.kind === "approval" ? (
+        renderApproval?.(run.approval)
+      ) : (
+        <Block block={run} chatTitle={chatTitle} />
+      )}
     </Arrive>
+  );
+}
+
+/** Tools run one after another: one card, or in compact density one line that opens on it. */
+function ToolRun({
+  run,
+  fresh,
+  chatTitle,
+}: {
+  run: ToolsRun;
+  fresh: ReadonlySet<string>;
+  chatTitle?: ChatTitle;
+}) {
+  const card = (
+    <View className="overflow-hidden rounded-md border border-border bg-card">
+      {toolItems(run.tools).map((item, i) => (
+        <Arrive key={item.key} fresh={fresh.has(item.key)}>
+          <View className={cn(i > 0 && "border-t border-border")}>
+            {item.kind === "explored" ? (
+              <ExploredCalls tools={item.tools} chatTitle={chatTitle} />
+            ) : (
+              <ToolCall tool={item} chatTitle={chatTitle} />
+            )}
+          </View>
+        </Arrive>
+      ))}
+    </View>
+  );
+  if (useDensity() !== "compact") return card;
+  return (
+    <Fold
+      summary={(open) => (
+        <View className="flex-row items-center gap-2">
+          <Chevron open={open} />
+          <Text
+            numberOfLines={1}
+            className="flex-1 font-mono text-xs text-faint"
+          >
+            {toolsPhrase(run.tools)}
+          </Text>
+        </View>
+      )}
+    >
+      <View className="mt-1.5">{card}</View>
+    </Fold>
   );
 }
 
@@ -147,7 +207,10 @@ function Block({
         </Fold>
       );
     case "tool":
-      return (
+      // A subagent stands alone as a card of its own; another lone tool, in its card.
+      return isSubagent(block) ? (
+        <SubagentCard tool={block} chatTitle={chatTitle} />
+      ) : (
         <View className="overflow-hidden rounded-md border border-border bg-card">
           <ToolCall tool={block} chatTitle={chatTitle} />
         </View>
@@ -186,6 +249,65 @@ function Block({
             </Text>
           ) : null}
         </Fold>
+      );
+  }
+}
+
+/** The last lines of a command's output, as a terminal shows them. */
+const tail = (text: string, lines = 12) =>
+  text.replace(/\n$/, "").split("\n").slice(-lines).join("\n");
+
+/**
+ * What the session is producing right now, at the end of its work, drawn as its block will
+ * be once the record has it: the agent's words as they come, its reasoning, a command's
+ * latest output.
+ */
+export function LiveItemView({ item }: { item: LiveItem }) {
+  const density = useDensity();
+  switch (item.kind) {
+    case "text":
+      return <MessageBody text={item.text} />;
+    case "thinking":
+      if (density === "compact") return null;
+      return (
+        <Fold
+          summary={(open) => (
+            <View className="flex-row items-center gap-2">
+              <Chevron open={open} />
+              <Verb running={!item.done}>Thinking</Verb>
+              <Text
+                numberOfLines={1}
+                className={cn(
+                  "flex-1 text-[12.5px] text-faint italic",
+                  open && "opacity-0",
+                )}
+              >
+                {tail(item.text.trim(), 1)}
+              </Text>
+            </View>
+          )}
+        >
+          <Text
+            selectable
+            className="mt-1.5 ml-1.5 border-l border-border pl-3.5 text-sm text-muted-foreground"
+          >
+            {item.text}
+          </Text>
+        </Fold>
+      );
+    case "output":
+      return (
+        <View className="overflow-hidden rounded-md border border-border bg-card">
+          <View className="border-b border-border px-3 py-1.5">
+            <Verb running={!item.done}>Output</Verb>
+          </View>
+          <Text
+            selectable
+            className="px-3 py-2 font-mono text-xs leading-[18px] text-muted-foreground"
+          >
+            {tail(item.text)}
+          </Text>
+        </View>
       );
   }
 }
