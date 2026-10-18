@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup as render } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { ApprovalCard, ApprovalReceipt, Approvals } from "./Approvals";
-import { ConsoleList, QueueCards, SessionView } from "./Console";
+import { ConsoleList, ContextMeter, QueueCards, SessionView } from "./Console";
 import {
   AddAgent,
   ChatHome,
@@ -27,6 +27,7 @@ import {
   AgentSettingsForm,
   Hire,
   HireForm,
+  SessionCard,
   StartSession,
   Team,
 } from "./Team";
@@ -1765,6 +1766,62 @@ test("a session in the console: its work in the middle, and Interrupt in the box
     />,
   );
   expect(stopped).toMatch(/<textarea[^>]*disabled/);
+});
+
+test("how full a session's context is shows beside its box, and what it has used in About", () => {
+  const usage = {
+    context_tokens: 170_000,
+    context_window: 200_000,
+    total_tokens: 1_234_567,
+    cost_usd: 0.5,
+  };
+  const meter = renderToStaticMarkup(<ContextMeter usage={usage} />);
+  expect(meter).toContain("85% context");
+  expect(meter).toContain('aria-valuenow="85"');
+  // Nearly full, it says how to make room.
+  expect(meter).toContain("170k of 200k tokens · /compact makes room");
+  expect(meter).not.toContain("<button");
+  // Almost out, it turns to danger; for the owner, choosing it readies /compact.
+  const out = renderToStaticMarkup(
+    <ContextMeter
+      usage={{ ...usage, context_tokens: 195_000 }}
+      compact={() => {}}
+    />,
+  );
+  expect(out).toContain("text-destructive");
+  expect(out).toMatch(/^<button/);
+  // A harness that does not say its window shows no share.
+  expect(
+    renderToStaticMarkup(
+      <ContextMeter usage={{ ...usage, context_window: null }} />,
+    ),
+  ).toBe("");
+  const about = renderToStaticMarkup(
+    <SessionCard
+      session={session("s-aspen", ASPEN)}
+      name="aspen"
+      facts
+      busy={false}
+      stop={perform}
+      usage={usage}
+    />,
+  );
+  expect(about).toContain("170k of 200k · 85%");
+  expect(about).toContain("1.2M");
+  expect(about).toContain("$0.50");
+  // What the harness does not report is left out.
+  expect(
+    renderToStaticMarkup(
+      <SessionCard
+        session={session("s-aspen", ASPEN)}
+        name="aspen"
+        facts
+        busy={false}
+        stop={perform}
+        usage={{ ...usage, cost_usd: null }}
+      />,
+    ),
+  ).not.toContain("Cost");
 });
 
 test("inputs waiting for the turn sit above the box, changed only where the harness allows", () => {

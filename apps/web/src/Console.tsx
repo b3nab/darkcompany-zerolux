@@ -49,7 +49,11 @@ import {
   useSessionFiles,
   useSessionLive,
   useSessionQueue,
+  useSessionUsage,
   withMention,
+  contextShare,
+  percent,
+  tokenCount,
   useSessionSettings,
 } from "@zerolux/chat";
 import type {
@@ -63,6 +67,7 @@ import type {
   Perform,
   PlanStep,
   QueuedInput,
+  SessionUsage,
 } from "@zerolux/chat";
 import type { Actor } from "./api";
 import { sessionTone } from "./presence";
@@ -417,6 +422,8 @@ export function SessionView({
   const live = useSessionLive(session.id, chat.live, events.length);
   // The owner's inputs waiting for the turn to end, as the harness queues them.
   const queue = useSessionQueue(session.id, chat.live);
+  // How full its context is and what it has used, as its harness last said.
+  const usage = useSessionUsage(session.id, chat.live);
   const plan = latestPlan(blocks);
   const density = useDensity();
   const at = sessionOutputAt(chat, session);
@@ -608,6 +615,7 @@ export function SessionView({
               session={session}
               name={name}
               facts
+              usage={usage}
               busy={busy}
               stop={() => perform(() => chat.stop(session.id))}
               resume={
@@ -681,6 +689,7 @@ export function SessionView({
         }
         compact={(instructions) => chat.compact(session.id, instructions)}
         interrupt={interrupt}
+        usage={usage}
       >
         {plan?.some((step) => step.status !== "done") && (
           <PlanBar steps={plan} />
@@ -721,6 +730,7 @@ function SessionInput({
   send,
   compact,
   interrupt,
+  usage,
   children,
 }: {
   session: ChatSession;
@@ -733,6 +743,7 @@ function SessionInput({
   /** `/compact [instructions]`: the harness's own compaction, as in its terminal. */
   compact: (instructions: string) => Promise<void>;
   interrupt: () => void;
+  usage: SessionUsage | null;
   /** What stays above the box while the session works, as its plan. */
   children?: ReactNode;
 }) {
@@ -1071,24 +1082,98 @@ function SessionInput({
         )}
       </div>
       {open && <SessionSettings session={session} perform={perform} />}
-      <p className="mx-auto w-full max-w-3xl font-mono text-[11px] text-faint">
-        {tooLong
-          ? "Too long: up to 64 KB."
-          : imagesError
-            ? imagesError
-            : !owner
-              ? "Its work is open to everyone in the workspace"
-              : command?.name === "compact"
-                ? "Summarizes the older work; anything after /compact says what to keep"
-                : started
-                  ? "Compacting: the summary, or why it failed, appears above"
-                  : working
-                    ? modes
-                      ? "Joins the turn in progress · ⌥Enter sends when it ends · Esc interrupts"
-                      : "Joins the turn in progress · Esc interrupts"
-                    : "Straight into the session, not into a chat · / for commands · @ for files"}
-      </p>
+      <div className="mx-auto flex w-full max-w-3xl items-center gap-3 font-mono text-[11px] text-faint">
+        <p className="min-w-0 flex-1">
+          {tooLong
+            ? "Too long: up to 64 KB."
+            : imagesError
+              ? imagesError
+              : !owner
+                ? "Its work is open to everyone in the workspace"
+                : command?.name === "compact"
+                  ? "Summarizes the older work; anything after /compact says what to keep"
+                  : started
+                    ? "Compacting: the summary, or why it failed, appears above"
+                    : working
+                      ? modes
+                        ? "Joins the turn in progress · ⌥Enter sends when it ends · Esc interrupts"
+                        : "Joins the turn in progress · Esc interrupts"
+                      : "Straight into the session, not into a chat · / for commands · @ for files"}
+        </p>
+        <ContextMeter
+          usage={usage}
+          compact={
+            open && !text.trim()
+              ? () => place("/compact ", "/compact ".length)
+              : undefined
+          }
+        />
+      </div>
     </form>
+  );
+}
+
+/**
+ * How full the session's context is, beside its box; nearly full, it says how to make room.
+ * With `compact`, choosing it puts /compact in the box.
+ */
+export function ContextMeter({
+  usage,
+  compact,
+}: {
+  usage: SessionUsage | null;
+  compact?: () => void;
+}) {
+  const share = contextShare(usage);
+  if (share === undefined || !usage) return null;
+  const full = share >= 0.8;
+  const meter = (
+    <span
+      role="meter"
+      aria-label="Context"
+      aria-valuenow={Math.round(share * 100)}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      title={`${tokenCount(usage.context_tokens ?? 0)} of ${tokenCount(usage.context_window ?? 0)} tokens${full ? " · /compact makes room" : ""}`}
+      className={cn(
+        "flex shrink-0 items-center gap-1.5",
+        full && "text-attention",
+        share >= 0.95 && "text-destructive",
+      )}
+    >
+      <svg viewBox="0 0 16 16" aria-hidden className="size-3.5 -rotate-90">
+        <circle
+          cx="8"
+          cy="8"
+          r="6"
+          fill="none"
+          strokeWidth="2"
+          className="stroke-border"
+        />
+        <circle
+          cx="8"
+          cy="8"
+          r="6"
+          fill="none"
+          strokeWidth="2"
+          stroke="currentColor"
+          pathLength={100}
+          strokeDasharray={`${share * 100} 100`}
+        />
+      </svg>
+      {percent(share)} context
+    </span>
+  );
+  return compact ? (
+    <button
+      type="button"
+      onClick={compact}
+      className="rounded-sm transition-colors outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+    >
+      {meter}
+    </button>
+  ) : (
+    meter
   );
 }
 

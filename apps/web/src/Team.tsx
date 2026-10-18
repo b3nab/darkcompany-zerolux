@@ -22,6 +22,10 @@ import {
   folderName,
   recentFolders,
   sessionState,
+  contextShare,
+  percent,
+  tokenCount,
+  usdCost,
 } from "@zerolux/chat";
 import type {
   AgentSettings,
@@ -32,6 +36,7 @@ import type {
   DiscoveredSession,
   Discovery,
   NewSession,
+  SessionUsage,
   Tone,
 } from "@zerolux/chat";
 import type { Chat, Perform } from "@zerolux/chat";
@@ -1144,11 +1149,14 @@ export function SessionCard({
   interrupt,
   resume,
   takeover,
+  usage,
 }: {
   session: ChatSession;
   name: string;
   /** Where and how it runs, in full; an earlier session names only its harness and folder. */
   facts: boolean;
+  /** How full its context is and what it has used, where its harness says. */
+  usage?: SessionUsage | null;
   busy: boolean;
   stop: () => Promise<boolean>;
   /** Stops the turn it is working on; the session stays. */
@@ -1190,6 +1198,20 @@ export function SessionCard({
           <Fact label="Started by">
             {session.origin === "owned" ? "ZeroLux" : "You, then hired"}
           </Fact>
+          {usage?.context_tokens != null && (
+            <Fact label="Context">
+              {tokenCount(usage.context_tokens)}
+              {usage.context_window
+                ? ` of ${tokenCount(usage.context_window)} · ${percent(contextShare(usage) ?? 0)}`
+                : ""}
+            </Fact>
+          )}
+          {usage?.total_tokens != null && (
+            <Fact label="Tokens used">{tokenCount(usage.total_tokens)}</Fact>
+          )}
+          {usage?.cost_usd != null && (
+            <Fact label="Cost">{usdCost(usage.cost_usd)}</Fact>
+          )}
         </Facts>
       )}
       {session.attention_reason && (
