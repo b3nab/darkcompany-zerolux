@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup as render } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { ApprovalCard, ApprovalReceipt, Approvals } from "./Approvals";
-import { ConsoleList, SessionView } from "./Console";
+import { ConsoleList, QueueCards, SessionView } from "./Console";
 import {
   AddAgent,
   ChatHome,
@@ -210,13 +210,15 @@ function fakeChat(overrides: Partial<Chat> = {}): Chat {
       session: session("s-new", ASPEN),
     }),
     updateSession: nothing,
-    live: async () => ({ seq: 0, items: [] }),
+    live: async () => ({ seq: 0, items: [], queue: [] }),
     takeoverPi: nothing,
     resume: nothing,
     stop: nothing,
     interrupt: async () => true,
     compact: nothing,
     input: nothing,
+    removeQueued: nothing,
+    editQueued: nothing,
     decide: nothing,
     answer: nothing,
     addMember: nothing,
@@ -1678,6 +1680,7 @@ test("a session in the console: its work in the middle, and Interrupt in the box
   expect(idle).toContain("Send");
   expect(idle).not.toContain(">Interrupt");
   expect(idle).toContain("Straight into the session, not into a chat");
+  expect(idle).toContain("/ for commands · @ for files");
   // Unsent words wait in their session's box.
   saveDraft("s-aspen", "Check the logs");
   expect(
@@ -1729,6 +1732,22 @@ test("a session in the console: its work in the middle, and Interrupt in the box
     />,
   );
   expect(stopped).toMatch(/<textarea[^>]*disabled/);
+});
+
+test("inputs waiting for the turn sit above the box, changed only where the harness allows", () => {
+  const queue = [{ id: "q1", text: "Then the docs" }];
+  const shown = renderToStaticMarkup(<QueueCards queue={queue} busy={false} />);
+  expect(shown).toContain("Then the docs");
+  expect(shown).not.toContain("Rewrite");
+  const changeable = renderToStaticMarkup(
+    <QueueCards
+      queue={queue}
+      busy={false}
+      change={{ remove: perform, edit: perform }}
+    />,
+  );
+  expect(changeable).toContain('aria-label="Rewrite"');
+  expect(changeable).toContain('aria-label="Take out of the queue"');
 });
 
 test("an agent's work sits under the message that asked, and its step rides the working bubble", () => {

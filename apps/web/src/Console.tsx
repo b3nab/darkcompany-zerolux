@@ -43,9 +43,13 @@ import {
   sessionOutputAt,
   sessionState,
   useSeen,
+  mentionAt,
   useSessionCommands,
   useSessionEvents,
+  useSessionFiles,
   useSessionLive,
+  useSessionQueue,
+  withMention,
   useSessionSettings,
 } from "@zerolux/chat";
 import type {
@@ -58,6 +62,7 @@ import type {
   InputMode,
   Perform,
   PlanStep,
+  QueuedInput,
 } from "@zerolux/chat";
 import type { Actor } from "./api";
 import { sessionTone } from "./presence";
@@ -410,6 +415,8 @@ export function SessionView({
   const blocks = sessionBlocks(events);
   // What it produces before its record has it, after the recorded work.
   const live = useSessionLive(session.id, chat.live, events.length);
+  // The owner's inputs waiting for the turn to end, as the harness queues them.
+  const queue = useSessionQueue(session.id, chat.live);
   const plan = latestPlan(blocks);
   const density = useDensity();
   const at = sessionOutputAt(chat, session);
@@ -678,6 +685,23 @@ export function SessionView({
         {plan?.some((step) => step.status !== "done") && (
           <PlanBar steps={plan} />
         )}
+        {queue.length > 0 && (
+          <QueueCards
+            queue={queue}
+            busy={busy}
+            // Codex lets a waiting input change; the other harnesses only show it.
+            change={
+              session.harness === "codex"
+                ? {
+                    remove: (item) =>
+                      perform(() => chat.removeQueued(session.id, item.id)),
+                    edit: (item, text) =>
+                      perform(() => chat.editQueued(session.id, item.id, text)),
+                  }
+                : undefined
+            }
+          />
+        )}
       </SessionInput>
     </section>
   );
@@ -730,7 +754,7 @@ function SessionInput({
     [],
   );
   const imagesError = inputImagesError(picked.map(({ file }) => file));
-  const files = useRef<HTMLInputElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
   const add = (from: Iterable<File>) => {
     const images = [...from].filter((file) => file.type.startsWith("image/"));
     if (images.length)
@@ -745,18 +769,57 @@ function SessionInput({
   };
   const empty = !text.trim() && !picked.length;
   const stops = owner && working && empty;
-  // ZeroLux's commands and the harness's own, listed while one is typed.
+  // ZeroLux's commands and the harness's own while one is typed; files after "@".
   const command = sessionCommand(text);
   const harness = useSessionCommands(session.id);
-  const offered = open ? commandsFor(text, harness) : [];
+  const [cursor, setCursor] = useState(text.length);
+  const mention = open ? mentionAt(text, cursor) : undefined;
+  const files = useSessionFiles(session.id, mention?.query);
   const [chosen, setChosen] = useState(0);
-  const highlighted = offered[Math.min(chosen, offered.length - 1)];
+  // Esc closes the list until the text changes, and only then interrupts.
+  const [dismissed, setDismissed] = useState(false);
   const [started, setStarted] = useState(false);
-  const complete = (invoke: string) => {
-    write(`${invoke} `);
+  const place = (next: string, at: number) => {
+    write(next);
     setChosen(0);
-    box.current?.focus();
+    setDismissed(false);
+    setCursor(at);
+    requestAnimationFrame(() => {
+      box.current?.focus();
+      box.current?.setSelectionRange(at, at);
+    });
   };
+  const suggestions: {
+    key: string;
+    label: ReactNode;
+    description?: string;
+    /** Typed in full already: Enter runs it instead of completing it. */
+    whole?: boolean;
+    take: () => void;
+  }[] = dismissed
+    ? []
+    : mention
+      ? files.map((path) => ({
+          key: path,
+          label: path,
+          take: () => {
+            const next = withMention(text, mention, path);
+            place(next.text, next.cursor);
+          },
+        }))
+      : (open ? commandsFor(text, harness) : []).map((offer) => ({
+          key: offer.invoke,
+          label: (
+            <>
+              {offer.invoke}
+              {offer.hint && <span className="text-faint"> {offer.hint}</span>}
+            </>
+          ),
+          description: offer.description,
+          whole: offer.invoke.toLowerCase() === text.trim().toLowerCase(),
+          take: () => place(`${offer.invoke} `, offer.invoke.length + 1),
+        }));
+  const highlighted = suggestions[Math.min(chosen, suggestions.length - 1)];
   // Claude Code in a terminal only takes words into the running turn, without images.
   const modes = !(
     session.harness === "claude-code" && session.origin !== "owned"
@@ -800,29 +863,33 @@ function SessionInput({
       }}
     >
       {children}
-      {offered.length > 0 && (
+      {suggestions.length > 0 && (
         <div
           role="group"
-          aria-label="Commands"
+          aria-label={mention ? "Files" : "Commands"}
           className="mx-auto max-h-64 w-full max-w-3xl overflow-y-auto rounded-md border bg-popover text-sm shadow-sm"
         >
-          {offered.map((offer) => (
+          {suggestions.map((suggestion) => (
             <button
-              key={offer.invoke}
+              key={suggestion.key}
               type="button"
-              aria-current={offer === highlighted || undefined}
-              onClick={() => complete(offer.invoke)}
+              aria-current={suggestion === highlighted || undefined}
+              onClick={suggestion.take}
               className="flex w-full items-baseline gap-3 px-3 py-2 text-left transition-colors outline-none hover:bg-accent focus-visible:bg-accent aria-[current]:bg-accent"
             >
-              <span className="shrink-0 font-mono text-[13px]">
-                {offer.invoke}
-                {offer.hint && (
-                  <span className="text-faint"> {offer.hint}</span>
+              <span
+                className={cn(
+                  "font-mono text-[13px]",
+                  suggestion.description ? "shrink-0" : "truncate",
                 )}
+              >
+                {suggestion.label}
               </span>
-              <span className="truncate text-muted-foreground">
-                {offer.description}
-              </span>
+              {suggestion.description && (
+                <span className="truncate text-muted-foreground">
+                  {suggestion.description}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -855,7 +922,7 @@ function SessionInput({
         {modes && (
           <>
             <input
-              ref={files}
+              ref={picker}
               type="file"
               accept={inputImageTypes.join(",")}
               multiple
@@ -873,7 +940,7 @@ function SessionInput({
               aria-label="Add images"
               title="Add images"
               disabled={!open}
-              onClick={() => files.current?.click()}
+              onClick={() => picker.current?.click()}
             >
               <ImagePlusIcon />
             </Button>
@@ -899,9 +966,12 @@ function SessionInput({
             event.target.style.height = "auto";
             event.target.style.height = `${event.target.scrollHeight}px`;
             write(event.target.value);
+            setCursor(event.target.selectionStart);
             setStarted(false);
             setChosen(0);
+            setDismissed(false);
           }}
+          onSelect={(event) => setCursor(event.currentTarget.selectionStart)}
           onPaste={(event) => {
             const pasted = [...event.clipboardData.files].filter((file) =>
               file.type.startsWith("image/"),
@@ -911,26 +981,31 @@ function SessionInput({
             add(pasted);
           }}
           onKeyDown={(event) => {
-            // While commands are listed: arrows move, Tab or Enter takes the one shown.
+            // While a list is shown: arrows move, Tab or Enter takes the one shown.
             if (highlighted) {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setDismissed(true);
+                return;
+              }
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                 event.preventDefault();
                 const step = event.key === "ArrowDown" ? 1 : -1;
                 setChosen(
-                  (offered.indexOf(highlighted) + step + offered.length) %
-                    offered.length,
+                  (suggestions.indexOf(highlighted) +
+                    step +
+                    suggestions.length) %
+                    suggestions.length,
                 );
                 return;
               }
               // Enter on a command already typed in full runs it, as a terminal does.
-              const typed =
-                highlighted.invoke.toLowerCase() === text.trim().toLowerCase();
               if (
                 event.key === "Tab" ||
-                (sendsOnEnter(event.nativeEvent) && !typed)
+                (sendsOnEnter(event.nativeEvent) && !highlighted.whole)
               ) {
                 event.preventDefault();
-                complete(highlighted.invoke);
+                highlighted.take();
                 return;
               }
             }
@@ -1011,7 +1086,7 @@ function SessionInput({
                     ? modes
                       ? "Joins the turn in progress · ⌥Enter sends when it ends · Esc interrupts"
                       : "Joins the turn in progress · Esc interrupts"
-                    : "Straight into the session, not into a chat · / for commands"}
+                    : "Straight into the session, not into a chat · / for commands · @ for files"}
       </p>
     </form>
   );
@@ -1125,5 +1200,110 @@ function SessionSettings({
         <span className="text-xs text-attention">{settings.error}</span>
       )}
     </div>
+  );
+}
+
+/**
+ * The owner's inputs waiting for the turn to end, above the box, in the order they will go.
+ * Where the harness allows it, each can be rewritten or taken out before it runs.
+ */
+export function QueueCards({
+  queue,
+  busy,
+  change,
+}: {
+  queue: QueuedInput[];
+  busy: boolean;
+  change?: {
+    remove: (item: QueuedInput) => Promise<boolean>;
+    edit: (item: QueuedInput, text: string) => Promise<boolean>;
+  };
+}) {
+  const [editing, setEditing] = useState<{ id: string; text: string }>();
+  return (
+    <ul
+      aria-label="Waiting for the turn to end"
+      className="mx-auto flex w-full max-w-3xl flex-col gap-1.5"
+    >
+      {queue.map((item) => (
+        <li
+          key={item.id}
+          className="flex items-start gap-2 rounded-md border border-dashed bg-card px-3 py-2 text-sm"
+        >
+          <span className="mt-0.5 shrink-0 font-mono text-[11px] text-faint">
+            Queued
+          </span>
+          {editing?.id === item.id ? (
+            <form
+              className="flex min-w-0 flex-1 flex-col gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const text = editing.text.trim();
+                if (text && change)
+                  void change.edit(item, text).then((done) => {
+                    if (done) setEditing(undefined);
+                  });
+              }}
+            >
+              <textarea
+                aria-label="Queued input"
+                value={editing.text}
+                autoFocus
+                rows={2}
+                onChange={(event) =>
+                  setEditing({ id: item.id, text: event.target.value })
+                }
+                className="min-h-14 resize-none rounded-sm border border-input bg-background px-2 py-1.5 text-sm outline-none focus:border-ring"
+              />
+              <div className="flex gap-2">
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={busy || !editing.text.trim()}
+                >
+                  Save
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setEditing(undefined)}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <p className="line-clamp-2 min-w-0 flex-1 whitespace-pre-wrap">
+              {item.text}
+            </p>
+          )}
+          {change && editing?.id !== item.id && (
+            <span className="flex shrink-0 gap-0.5">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Rewrite"
+                disabled={busy}
+                onClick={() => setEditing({ id: item.id, text: item.text })}
+              >
+                <PencilIcon />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Take out of the queue"
+                disabled={busy}
+                onClick={() => void change.remove(item)}
+              >
+                <XIcon />
+              </Button>
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
