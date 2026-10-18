@@ -221,6 +221,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
             get(read_session_settings).patch(change_session_settings),
         )
         .route("/sessions/{id}/resume", post(resume_session))
+        .route("/sessions/{id}/fork", post(fork_session))
         .route("/sessions/{id}/takeover", post(takeover_pi_session))
         .route("/sessions/{id}/stop", post(stop_session))
         .route("/sessions/{id}/output", get(session_output))
@@ -725,6 +726,32 @@ async fn resume_session(
         .await
         .map_err(runtime_error)?;
     Ok(Json(json!({"actor":actor,"session":session})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForkRequest {
+    /// The offset, in the session's `/events`, of the input to fork before; none: all of it.
+    #[serde(default)]
+    at: Option<u64>,
+    #[serde(default)]
+    name: String,
+    actor_id: Option<String>,
+}
+
+/// A new session that goes on from all of this one's history, or from before one of its
+/// inputs, with the harness's own fork.
+async fn fork_session(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<ForkRequest>,
+) -> Result<Json<Value>, ApiFailure> {
+    let (actor, session) = runtime(&state)?
+        .fork(&who, &id, input.at, &input.name, input.actor_id)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "actor": actor, "session": session })))
 }
 
 async fn list_sessions(
