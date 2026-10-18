@@ -502,11 +502,12 @@ async fn managed_claude_bootstrap_lifecycle() {
         .client
         .post(format!("{}/api/sessions", kernel.url))
         .bearer_auth(&peer.token)
-        .json(&json!({"harness":"claude-code","name":"Denied","workspace":workspace}))
+        .json(&json!({"harness":"claude-code","workspace":"relative"}))
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    // A session may start one to delegate work to it, checked like the owner's.
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     kernel
         .store
         .stop_chat_session(&owner, &peer.session.id)

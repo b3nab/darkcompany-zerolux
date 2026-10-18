@@ -245,6 +245,8 @@ pub struct ChatSession {
     pub archived_at: Option<i64>,
     /// What the session may cost, in US dollars; at the limit its work stops.
     pub budget_usd: Option<f64>,
+    /// The session that started this one to delegate work to it.
+    pub parent_session_id: Option<String>,
     /// How its native record ends, from this kernel host's watcher.
     #[serde(flatten)]
     pub tail: crate::native_events::Tail,
@@ -281,6 +283,7 @@ impl FromQueryResult for ChatSession {
             budget_usd: row
                 .try_get::<Option<i64>>(pre, "budget_cents")?
                 .map(|cents| cents as f64 / 100.0),
+            parent_session_id: row.try_get(pre, "parent_session_id")?,
             tail: Default::default(),
         })
     }

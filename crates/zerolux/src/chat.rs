@@ -726,6 +726,7 @@ impl Store {
                     pinned_at: Set(None),
                     archived_at: Set(None),
                     budget_cents: Set(None),
+                    parent_session_id: Set(None),
                 }
                 .insert(&tx)
                 .await?;
@@ -772,7 +773,9 @@ impl Store {
             &tx,
             sql(
                 &tx,
-                format!("{SESSIONS} WHERE $1 IS NULL OR s.id=$1 ORDER BY s.created_at,s.id"),
+                format!(
+                    "{SESSIONS} WHERE $1 IS NULL OR s.id=$1 OR s.parent_session_id=$1 ORDER BY s.created_at,s.id"
+                ),
                 [who.session_id.clone().into()],
             ),
         )
@@ -961,6 +964,40 @@ impl Store {
         let tx = self.read().await?;
         owner_in(&tx, who).await?;
         session_in(&tx, id).await
+    }
+
+    /// A session the owner started for another one, to delegate work to it.
+    pub async fn delegate(&self, child: &str, parent: &str) -> Result<ChatSession> {
+        let tx = self.write().await?;
+        sessions::Entity::update_many()
+            .col_expr(
+                sessions::Column::ParentSessionId,
+                Expr::value(Some(parent.to_owned())),
+            )
+            .filter(sessions::Column::Id.eq(child))
+            .exec(&tx)
+            .await?;
+        personal_event(&tx, "session.changed", child, json!({"session_id":child})).await?;
+        let session = session_in(&tx, child).await?;
+        tx.commit().await?;
+        Ok(session)
+    }
+
+    /// Who acts on a session: the owner, or the session that started it to delegate work to it,
+    /// which acts for the owner on it alone.
+    pub async fn acting_for(&self, who: &ChatIdentity, id: &str) -> Result<ChatIdentity> {
+        let owner = self.chat_identity(None).await?;
+        if who.is_owner() {
+            return Ok(who.clone());
+        }
+        let tx = self.read().await?;
+        identity_in(&tx, who).await?;
+        let session = session_in(&tx, id).await?;
+        if session.parent_session_id.is_some() && session.parent_session_id == who.session_id {
+            Ok(owner)
+        } else {
+            Err(Error::Forbidden)
+        }
     }
 
     /// The owner names, pins or archives a session.

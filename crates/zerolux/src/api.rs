@@ -576,16 +576,46 @@ enum NewSession {
     Pi(CreatePiSession),
 }
 
+/// A new session: the owner's, or one a session starts to delegate work to it, which the owner
+/// owns and that session may follow and steer. A delegated session has no agent.
 async fn create_session(
-    state: State<AppState>,
-    who: Extension<ChatIdentity>,
-    ChatJson(input): ChatJson<NewSession>,
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    ChatJson(mut input): ChatJson<NewSession>,
 ) -> Result<Json<Value>, ApiFailure> {
-    match input {
-        NewSession::Claude(input) => create_claude_session(state, who, input).await,
-        NewSession::Codex(input) => create_codex_session(state, who, input).await,
-        NewSession::Pi(input) => create_pi_session(state, who, input).await,
+    let parent = who.session_id.clone();
+    let acting = if parent.is_some() {
+        match &mut input {
+            NewSession::Claude(input) => (input.name.clear(), input.actor_id = None),
+            NewSession::Codex(input) => (input.name.clear(), input.actor_id = None),
+            NewSession::Pi(input) => (input.name.clear(), input.actor_id = None),
+        };
+        state.store.chat_identity(None).await?
+    } else {
+        who
+    };
+    let created = match input {
+        NewSession::Claude(input) => {
+            create_claude_session(State(state.clone()), Extension(acting), input).await
+        }
+        NewSession::Codex(input) => {
+            create_codex_session(State(state.clone()), Extension(acting), input).await
+        }
+        NewSession::Pi(input) => {
+            create_pi_session(State(state.clone()), Extension(acting), input).await
+        }
+    }?;
+    let Some(parent) = parent else {
+        return Ok(created);
+    };
+    let child = created.0["session"]["id"]
+        .as_str()
+        .ok_or_else(|| runtime_error(anyhow::anyhow!("The new session has no ID")))?;
+    let session = state.store.delegate(child, &parent).await?;
+    if let Some(runtime) = &state.runtime {
+        runtime.changed();
     }
+    Ok(Json(json!({ "actor": null, "session": session })))
 }
 
 async fn create_codex_session(
@@ -851,8 +881,8 @@ async fn read_session(
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, Error> {
-    if !who.is_owner() && who.session_id.as_deref() != Some(&id) {
-        return Err(Error::Forbidden);
+    if who.session_id.as_deref() != Some(&id) {
+        store.acting_for(&who, &id).await?;
     }
     let session = crate::native_output::with_tails(store.sessions(&who).await?)
         .into_iter()
@@ -918,6 +948,7 @@ async fn stop_session(
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id).await?;
     let (mut session, was_already_stopped) =
         state.store.stop_chat_session_with_state(&who, &id).await?;
     let note = if was_already_stopped {
@@ -1041,6 +1072,7 @@ async fn interrupt_session(
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id).await?;
     let interrupted = runtime(&state)?
         .interrupt(&who, &id)
         .await
@@ -1087,6 +1119,7 @@ async fn session_input(
     Path(id): Path<String>,
     ChatJson(input): ChatJson<InputRequest>,
 ) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id).await?;
     runtime(&state)?
         .input(&who, &id, &input.text, input.mode, &input.images)
         .await

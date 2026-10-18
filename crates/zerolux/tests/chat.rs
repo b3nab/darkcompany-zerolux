@@ -2874,3 +2874,42 @@ async fn a_permission_is_allowed_as_far_as_the_harness_offers_or_denied_with_a_r
     assert_eq!(denied.reason.as_deref(), Some("Not on main"));
     assert_eq!(denied.scope, None);
 }
+
+#[tokio::test]
+async fn a_session_follows_and_steers_the_sessions_it_delegates_to_and_no_other() {
+    let f = Fixture::new().await;
+    let (lead, lead_id) = f.hire("lead", None).await;
+    let (child, _) = f.hire("", None).await;
+    let (other, _) = f.hire("", None).await;
+    let delegated = f
+        .store
+        .delegate(&child.session.id, &lead.session.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        delegated.parent_session_id.as_deref(),
+        Some(lead.session.id.as_str())
+    );
+    // It acts for the owner on its own child, never on another session.
+    let acting = f
+        .store
+        .acting_for(&lead_id, &child.session.id)
+        .await
+        .unwrap();
+    assert!(acting.is_owner());
+    assert!(matches!(
+        f.store.acting_for(&lead_id, &other.session.id).await,
+        Err(Error::Forbidden)
+    ));
+    // It sees itself and its children.
+    let seen: Vec<_> = f
+        .store
+        .sessions(&lead_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    assert!(seen.contains(&lead.session.id) && seen.contains(&child.session.id));
+    assert!(!seen.contains(&other.session.id));
+}

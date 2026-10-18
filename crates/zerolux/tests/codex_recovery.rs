@@ -503,14 +503,15 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
         )
         .await
         .unwrap();
+    // A session may start one to delegate work to it, checked like the owner's.
     let response = client
         .post(&url)
         .bearer_auth(&peer.token)
-        .json(&json!({"harness":"codex","name":"cedar","workspace":workspace}))
+        .json(&json!({"harness":"codex","workspace":"relative"}))
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
     store
         .stop_chat_session(&owner, &peer.session.id)
         .await
