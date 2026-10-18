@@ -300,7 +300,7 @@ pub(crate) async fn events_of(
     }
 }
 
-fn unreadable(error: std::io::Error, cursor: u64) -> Error {
+pub(crate) fn unreadable(error: std::io::Error, cursor: u64) -> Error {
     if error.kind() == std::io::ErrorKind::NotFound {
         Error::NotFound
     } else if cursor > 0 {
@@ -376,7 +376,7 @@ async fn back(
     }
 }
 
-#[derive(Debug, Default, serde::Deserialize)]
+#[derive(Debug, Default, Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EventQuery {
     pub after: Option<u64>,

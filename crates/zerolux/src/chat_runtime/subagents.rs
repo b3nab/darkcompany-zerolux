@@ -128,45 +128,87 @@ fn said(error: anyhow::Error) -> anyhow::Error {
     }
 }
 
+/// The subagents of a session whose native record is on this computer, newest first.
+pub(crate) async fn list(row: &crate::entity::sessions::Model) -> Result<Vec<Subagent>> {
+    let path = tokio::task::spawn_blocking({
+        let row = row.clone();
+        move || crate::native_output::locate(&row)
+    })
+    .await?;
+    match row.harness.as_str() {
+        "claude-code" => Ok(match path {
+            Some(path) => tokio::task::spawn_blocking(move || claude_subagents(&path)).await?,
+            None => Vec::new(),
+        }),
+        "codex" => Ok(codex_subagents(&row.native_session_id, &homes_of(row))
+            .await?
+            .iter()
+            .filter_map(codex_subagent)
+            .collect()),
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// A subagent's events, of a session whose native record is on this computer.
+pub(crate) async fn events(
+    row: &crate::entity::sessions::Model,
+    agent: &str,
+    query: crate::native_output::EventQuery,
+) -> Result<crate::native_output::EventPage> {
+    ensure!(
+        !agent.is_empty()
+            && agent.len() <= 200
+            && agent.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
+        Error::NotFound
+    );
+    let path = tokio::task::spawn_blocking({
+        let row = row.clone();
+        move || crate::native_output::locate(&row)
+    })
+    .await?;
+    let record = match row.harness.as_str() {
+        "claude-code" => path
+            .as_deref()
+            .and_then(claude_folder)
+            .map(|folder| folder.join(format!("agent-{agent}.jsonl")))
+            .filter(|path| path.is_file()),
+        "codex" => {
+            // Only a thread spawned from this session's.
+            let ours = codex_subagents(&row.native_session_id, &homes_of(row))
+                .await?
+                .iter()
+                .any(|thread| thread["id"] == agent);
+            ensure!(ours, Error::NotFound);
+            let (agent, homes) = (agent.to_owned(), homes_of(row));
+            tokio::task::spawn_blocking(move || crate::native_output::codex_rollout(&agent, &homes))
+                .await?
+        }
+        _ => None,
+    };
+    let record = record.ok_or(Error::NotFound)?;
+    Ok(crate::native_output::events_of(&row.id, &row.harness, Some(record), query).await?)
+}
+
 impl ChatRuntime {
-    /// The session's row and native record, from this host.
+    /// The session's row, on this host.
     async fn subagent_home(
         &self,
         who: &ChatIdentity,
         id: &str,
-    ) -> Result<(crate::entity::sessions::Model, Option<std::path::PathBuf>)> {
+    ) -> Result<crate::entity::sessions::Model> {
         let row = self.store.observed_session(who, id).await?;
         ensure!(
             row.host_id.as_deref() == self.store.host(),
             "This session runs on another kernel host; read its subagents there"
         );
-        let path = tokio::task::spawn_blocking({
-            let row = row.clone();
-            move || crate::native_output::locate(&row)
-        })
-        .await?;
-        Ok((row, path))
+        Ok(row)
     }
 
     /// The subagents a session's harness started, newest first. pi starts none of its own.
     pub async fn subagents(&self, who: &ChatIdentity, id: &str) -> Result<Vec<Subagent>> {
-        self.subagents_native(who, id).await.map_err(said)
-    }
-
-    async fn subagents_native(&self, who: &ChatIdentity, id: &str) -> Result<Vec<Subagent>> {
-        let (row, path) = self.subagent_home(who, id).await?;
-        match row.harness.as_str() {
-            "claude-code" => Ok(match path {
-                Some(path) => tokio::task::spawn_blocking(move || claude_subagents(&path)).await?,
-                None => Vec::new(),
-            }),
-            "codex" => Ok(codex_subagents(&row.native_session_id, &homes_of(&row))
-                .await?
-                .iter()
-                .filter_map(codex_subagent)
-                .collect()),
-            _ => Ok(Vec::new()),
-        }
+        async { list(&self.subagent_home(who, id).await?).await }
+            .await
+            .map_err(said)
     }
 
     /// A subagent's events, read like the session's own.
@@ -177,48 +219,9 @@ impl ChatRuntime {
         agent: &str,
         query: crate::native_output::EventQuery,
     ) -> Result<crate::native_output::EventPage> {
-        self.subagent_events_native(who, id, agent, query)
+        async { events(&self.subagent_home(who, id).await?, agent, query).await }
             .await
             .map_err(said)
-    }
-
-    async fn subagent_events_native(
-        &self,
-        who: &ChatIdentity,
-        id: &str,
-        agent: &str,
-        query: crate::native_output::EventQuery,
-    ) -> Result<crate::native_output::EventPage> {
-        ensure!(
-            !agent.is_empty()
-                && agent.len() <= 200
-                && agent.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
-            Error::NotFound
-        );
-        let (row, path) = self.subagent_home(who, id).await?;
-        let record = match row.harness.as_str() {
-            "claude-code" => path
-                .as_deref()
-                .and_then(claude_folder)
-                .map(|folder| folder.join(format!("agent-{agent}.jsonl")))
-                .filter(|path| path.is_file()),
-            "codex" => {
-                // Only a thread spawned from this session's.
-                let ours = codex_subagents(&row.native_session_id, &homes_of(&row))
-                    .await?
-                    .iter()
-                    .any(|thread| thread["id"] == agent);
-                ensure!(ours, Error::NotFound);
-                let (agent, homes) = (agent.to_owned(), homes_of(&row));
-                tokio::task::spawn_blocking(move || {
-                    crate::native_output::codex_rollout(&agent, &homes)
-                })
-                .await?
-            }
-            _ => None,
-        };
-        let record = record.ok_or(Error::NotFound)?;
-        Ok(crate::native_output::events_of(&row.id, &row.harness, Some(record), query).await?)
     }
 }
 

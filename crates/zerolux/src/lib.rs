@@ -20,6 +20,7 @@ pub mod harness;
 pub mod history;
 pub mod homes;
 pub mod host_link;
+pub mod host_ops;
 pub mod hosts;
 mod integration_code;
 pub mod lease;

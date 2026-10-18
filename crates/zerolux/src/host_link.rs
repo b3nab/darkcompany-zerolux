@@ -204,14 +204,6 @@ pub async fn join(url: &str, code: &str, name: &str, data_dir: &std::path::Path)
     .save(data_dir)
 }
 
-/// What a host does when the kernel asks.
-pub async fn answer(op: &str, _params: Value) -> Result<Value> {
-    match op {
-        "ping" => Ok(json!({"version": env!("CARGO_PKG_VERSION")})),
-        other => bail!("This computer's ZeroLux does not know `{other}`; update it"),
-    }
-}
-
 /// Keeps this computer connected to its workspace, answering what the kernel asks, and
 /// connects again after a break.
 pub async fn run(config: HostConfig, mut stop: tokio::sync::watch::Receiver<bool>) -> Result<()> {
@@ -241,7 +233,7 @@ pub async fn run(config: HostConfig, mut stop: tokio::sync::watch::Receiver<bool
                             let sink = sink.clone();
                             tokio::spawn(async move {
                                 let op = request["op"].as_str().unwrap_or_default().to_owned();
-                                let reply = match answer(&op, request["params"].clone()).await {
+                                let reply = match crate::host_ops::answer(&op, request["params"].clone()).await {
                                     Ok(result) => json!({"id": request["id"], "result": result}),
                                     Err(error) => json!({"id": request["id"], "error": format!("{error:#}")}),
                                 };
@@ -251,6 +243,14 @@ pub async fn run(config: HostConfig, mut stop: tokio::sync::watch::Receiver<bool
                     }
                 }
                 tracing::warn!("The workspace's kernel closed the connection");
+            }
+            // Its secret is no longer the workspace's: trying again would never connect.
+            Err(tokio_tungstenite::tungstenite::Error::Http(response))
+                if response.status() == 401 =>
+            {
+                bail!(
+                    "This computer was removed from the workspace; join it again with a new code"
+                );
             }
             Err(error) => {
                 tracing::warn!(error = %error, "The workspace's kernel cannot be reached");

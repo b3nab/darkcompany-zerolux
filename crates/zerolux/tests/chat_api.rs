@@ -2128,6 +2128,67 @@ async fn a_computer_joins_as_a_host_and_answers_over_its_channel() {
         (laptop["joined"].clone(), laptop["online"].clone()),
         (json!(true), json!(true))
     );
+    // A session on that computer is read there: its native record and its folder.
+    let work = host_dir.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(work.join("notes.md"), "fixture").unwrap();
+    let record = work.join("session.jsonl");
+    std::fs::write(
+        &record,
+        format!(
+            "{}\n",
+            json!({"type":"message","timestamp":"2026-10-18T10:00:00Z",
+                "message":{"role":"user","content":[{"type":"text","text":"Hello from the laptop"}]}})
+        ),
+    )
+    .unwrap();
+    let owner = kernel.store.chat_identity(None).await.unwrap();
+    let issued = kernel
+        .store
+        .hire_chat_session(
+            &owner,
+            HireChatSession {
+                name: String::new(),
+                actor_id: None,
+                harness: zerolux::harness::Harness::Pi,
+                native_session_id: "laptop-session".into(),
+                title: "On the laptop".into(),
+                workspace: work.to_string_lossy().into_owned(),
+                native_locator: json!({"session_file": record}),
+                resume: false,
+            },
+        )
+        .await
+        .unwrap();
+    sea_orm::ConnectionTrait::execute_unprepared(
+        kernel.store.db(),
+        &format!(
+            "UPDATE sessions SET host_id='{host}' WHERE id='{}'",
+            issued.session.id
+        ),
+    )
+    .await
+    .unwrap();
+    let events: Value = kernel
+        .get(&format!("/sessions/{}/events", issued.session.id), None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        events["events"][0]["text"], "Hello from the laptop",
+        "{events}"
+    );
+    let files: Value = kernel
+        .get(
+            &format!("/sessions/{}/files?query=notes", issued.session.id),
+            None,
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(files["files"], json!(["notes.md"]), "{files}");
     // Removed: its channel closes and its secret no longer connects.
     kernel
         .request(Method::DELETE, &format!("/hosts/{host}"), None)
@@ -2138,8 +2199,14 @@ async fn a_computer_joins_as_a_host_and_answers_over_its_channel() {
         .unwrap();
     assert!(!runtime.hosts.online(&host).await);
     assert!(runtime.hosts.call(&host, "ping", json!({})).await.is_err());
-    stop.send_replace(true);
-    connected.await.unwrap().unwrap();
+    // It stops trying, and says why.
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(10), connected)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert!(format!("{ended:#}").contains("removed"), "{ended:#}");
+    drop(stop);
     runtime.shutdown().await.unwrap();
     livekit.shutdown().await.unwrap();
 }

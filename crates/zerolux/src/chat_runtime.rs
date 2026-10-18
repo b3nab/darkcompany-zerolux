@@ -1719,6 +1719,7 @@ mod owned;
 mod settings;
 mod subagents;
 pub use subagents::Subagent;
+pub(crate) use subagents::{events as subagent_events_of, list as subagents_of};
 
 async fn finish(task: &mut JoinHandle<Result<()>>) -> Result<()> {
     match tokio::time::timeout(Duration::from_secs(10), &mut *task).await {

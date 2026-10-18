@@ -1179,26 +1179,81 @@ struct OutputQuery {
 
 /// The agent's native session record, as the harness wrote it.
 async fn session_output(
-    State(store): State<Store>,
+    State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
     query: Result<Query<OutputQuery>, QueryRejection>,
-) -> Result<Json<crate::native_output::Page>, Error> {
-    let who = store.acting_for(&who, &id, Access::Read).await?;
+) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
     let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
-    Ok(Json(store.native_output(&who, &id, query.after).await?))
+    on_record(&state, &who, &id, "output", json!({ "after": query.after })).await
+}
+
+/// What a session's native record says, read where it is: on this kernel's host, or on the
+/// joined computer the session runs on.
+async fn on_record(
+    state: &AppState,
+    who: &ChatIdentity,
+    id: &str,
+    op: &str,
+    params: Value,
+) -> Result<Json<Value>, ApiFailure> {
+    let row = state.store.observed_session(who, id).await?;
+    let record = crate::host_ops::RecordRef::of(&row);
+    let result = match row.host_id.as_deref() {
+        host if host == state.store.host() => crate::host_ops::record(op, &record, &params).await,
+        Some(host) => {
+            runtime(state)?
+                .hosts
+                .call(
+                    host,
+                    "record",
+                    json!({"op": op, "record": record, "params": params}),
+                )
+                .await
+        }
+        None => Err(Error::NotFound.into()),
+    };
+    Ok(Json(result.map_err(said)?))
+}
+
+/// What a session's folder holds, read or done where it is.
+async fn on_folder(
+    state: &AppState,
+    who: &ChatIdentity,
+    id: &str,
+    op: &str,
+    params: Value,
+) -> Result<Json<Value>, ApiFailure> {
+    let session = state.store.chat_session(who, id).await?;
+    let folder = std::path::Path::new(&session.workspace);
+    let result = match session.host_id.as_deref() {
+        host if host == state.store.host() => crate::host_ops::folder(op, folder, &params).await,
+        Some(host) => {
+            runtime(state)?
+                .hosts
+                .call(
+                    host,
+                    "folder",
+                    json!({"op": op, "folder": session.workspace, "params": params}),
+                )
+                .await
+        }
+        None => Err(Error::NotFound.into()),
+    };
+    Ok(Json(result.map_err(said)?))
 }
 
 /// The agent's native record in the Agent Console's common model.
 async fn session_events(
-    State(store): State<Store>,
+    State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
     query: Result<Query<crate::native_output::EventQuery>, QueryRejection>,
-) -> Result<Json<crate::native_output::EventPage>, Error> {
-    let who = store.acting_for(&who, &id, Access::Read).await?;
+) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
     let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
-    Ok(Json(store.native_events(&who, &id, query).await?))
+    on_record(&state, &who, &id, "events", json!({ "query": query })).await
 }
 
 /// Stops the native turn in progress; the session stays linked.
@@ -1306,11 +1361,7 @@ async fn session_file(
     Query(input): Query<PathQuery>,
 ) -> Result<Json<Value>, ApiFailure> {
     let who = state.store.acting_for(&who, &id, Access::Read).await?;
-    let folder = session_folder(&state, &who, &id).await?;
-    let text = crate::workspace_git::file(&folder, &input.path)
-        .await
-        .map_err(runtime_error)?;
-    Ok(Json(json!({ "path": input.path, "text": text })))
+    on_folder(&state, &who, &id, "file", json!({ "path": input.path })).await
 }
 
 /// What git says has changed in the session's folder.
@@ -1320,11 +1371,7 @@ async fn session_git(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
     let who = state.store.acting_for(&who, &id, Access::Read).await?;
-    let folder = session_folder(&state, &who, &id).await?;
-    let status = crate::workspace_git::status(&folder)
-        .await
-        .map_err(runtime_error)?;
-    Ok(Json(json!(status)))
+    on_folder(&state, &who, &id, "git", json!({})).await
 }
 
 #[derive(Deserialize)]
@@ -1344,11 +1391,14 @@ async fn session_diff(
     Query(input): Query<DiffQuery>,
 ) -> Result<Json<Value>, ApiFailure> {
     let who = state.store.acting_for(&who, &id, Access::Read).await?;
-    let folder = session_folder(&state, &who, &id).await?;
-    let diff = crate::workspace_git::diff(&folder, input.path.as_deref(), input.staged)
-        .await
-        .map_err(runtime_error)?;
-    Ok(Json(json!({ "diff": diff })))
+    on_folder(
+        &state,
+        &who,
+        &id,
+        "diff",
+        json!({ "path": input.path, "staged": input.staged }),
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -1553,11 +1603,7 @@ async fn git_pull_request(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
     let who = state.store.acting_for(&who, &id, Access::Read).await?;
-    let folder = session_folder(&state, &who, &id).await?;
-    let pull_request = crate::workspace_git::pull_request(&folder)
-        .await
-        .map_err(runtime_error)?;
-    Ok(Json(json!({ "pull_request": pull_request })))
+    on_folder(&state, &who, &id, "pr", json!({})).await
 }
 
 #[derive(Deserialize)]
@@ -1593,11 +1639,14 @@ async fn session_files(
     Query(input): Query<FilesQuery>,
 ) -> Result<Json<Value>, ApiFailure> {
     let who = state.store.acting_for(&who, &id, Access::Read).await?;
-    let folder = session_folder(&state, &who, &id).await?;
-    let files = crate::workspace_files::find(&folder, &input.query, input.limit)
-        .await
-        .map_err(runtime_error)?;
-    Ok(Json(json!({ "files": files })))
+    on_folder(
+        &state,
+        &who,
+        &id,
+        "files",
+        json!({ "query": input.query, "limit": input.limit }),
+    )
+    .await
 }
 
 /// The subagents the session's harness started, newest first.
@@ -1607,11 +1656,7 @@ async fn session_subagents(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
     let who = state.store.acting_for(&who, &id, Access::Read).await?;
-    let subagents = runtime(&state)?
-        .subagents(&who, &id)
-        .await
-        .map_err(runtime_error)?;
-    Ok(Json(json!({ "subagents": subagents })))
+    on_record(&state, &who, &id, "subagents", json!({})).await
 }
 
 /// A subagent's events, paged like the session's own.
@@ -1620,14 +1665,17 @@ async fn subagent_events(
     Extension(who): Extension<ChatIdentity>,
     Path((id, agent)): Path<(String, String)>,
     query: Result<Query<crate::native_output::EventQuery>, QueryRejection>,
-) -> Result<Json<crate::native_output::EventPage>, ApiFailure> {
+) -> Result<Json<Value>, ApiFailure> {
     let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
     let who = state.store.acting_for(&who, &id, Access::Read).await?;
-    let page = runtime(&state)?
-        .subagent_events(&who, &id, &agent, query)
-        .await
-        .map_err(runtime_error)?;
-    Ok(Json(page))
+    on_record(
+        &state,
+        &who,
+        &id,
+        "subagent_events",
+        json!({ "agent": agent, "query": query }),
+    )
+    .await
 }
 
 #[derive(Deserialize)]
