@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/src/kernel";
+import { useMe } from "@/src/me";
 
 /** The chat address of an item, when it belongs to a chat. */
 const href = (place: Place) =>
@@ -49,10 +50,10 @@ export default function Tonight() {
       (session ? sessionName(session, workspace.actors) : "?")
     );
   };
-  const owner = actors.find((a) => a.kind === "human");
+  const { me } = useMe();
   const needs = needsYou(chat);
   const running = runningNow(chat);
-  const tones = actors.map((a) => memberTone(a, owner?.id, chat.sessions));
+  const tones = actors.map((a) => memberTone(a, me?.id, chat.sessions));
   const people = actors.filter((a) => a.kind === "human").length;
   const working = tones.filter((t) => t === "working").length;
   const now = new Date();
@@ -90,7 +91,7 @@ export default function Tonight() {
           </Eyebrow>
           <Text className="text-2xl leading-8 tracking-tight">
             {greeting(now.getHours())}
-            {owner ? `, ${owner.name}` : ""}.{" "}
+            {me ? `, ${me.name}` : ""}.{" "}
             <Text className="text-2xl leading-8 text-human-foreground">
               {needs.length === 0
                 ? "Nothing needs you."

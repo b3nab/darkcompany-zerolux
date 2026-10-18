@@ -1,20 +1,32 @@
-import { activeActors } from "@zerolux/chat";
+import {
+  activeActors,
+  requiresSignIn,
+  sessionAccess,
+  whoAmI,
+} from "@zerolux/chat";
+import type { ChatSession } from "@zerolux/chat";
 import { useAuthentication } from "./auth";
 import { useSession } from "./kernel";
 
 /**
- * You, as a member of the workspace, and whether you own it. The owner is the workspace's
- * first person; a kernel without sign-in has only its owner.
+ * You, as a person of the workspace, signed in on this phone, and whether you are its owner,
+ * who set it up and runs its computer. A kernel without sign-in has only its owner.
  */
 export function useMe() {
   const { workspace } = useSession();
   const auth = useAuthentication();
   const actors = activeActors(workspace?.actors ?? []);
-  const owner = actors.find((a) => a.kind === "human");
-  const id = auth?.identity ? auth.identity.actor_id : owner?.id;
+  const signIn = auth?.health ? requiresSignIn(auth.health) : true;
   return {
-    me: actors.find((a) => a.id === id),
+    ...whoAmI(auth?.identity, actors, signIn),
     email: auth?.identity?.user.email,
-    owner: Boolean(owner && id === owner.id),
   };
+}
+
+/** What you may do with a session: follow it, work in it, or everything its person does. */
+export function useAccess(session: ChatSession | undefined) {
+  const { me } = useMe();
+  return session
+    ? sessionAccess(session, me?.id)
+    : { mine: false, read: false, write: false };
 }

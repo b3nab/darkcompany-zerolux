@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "../../src/kernel";
+import { useMe } from "../../src/me";
 
 const kinds = { dm: "One agent", group: "Group" } as const;
 type Kind = keyof typeof kinds;
@@ -33,7 +34,7 @@ export default function NewChat() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const onLamp = String(useCSSVariable("--color-primary-foreground"));
-  const owner = actors.find((a) => a.kind === "human")?.id;
+  const me = useMe().me?.id;
   const agents = agentsForChat(actors, chat.sessions, picked);
   const members = kind === "dm" ? picked.slice(0, 1) : picked;
   const sessionFor = (actorId: string) => {
@@ -41,7 +42,7 @@ export default function NewChat() {
     return sessions.find((s) => s.id === chosen[actorId]) ?? sessions[0];
   };
   const ready =
-    !!owner &&
+    !!me &&
     members.length > 0 &&
     members.every((id) => sessionFor(id)) &&
     (kind === "dm" || title.trim().length > 0);
@@ -56,10 +57,10 @@ export default function NewChat() {
     );
 
   async function start() {
-    if (!ready || !owner) return;
+    if (!ready || !me) return;
     const open = (c: Conversation) => router.replace(`/chat/${c.id}`);
     const existing =
-      kind === "dm" && directChat(chat.conversations, owner, members[0]!);
+      kind === "dm" && directChat(chat.conversations, me, members[0]!);
     if (existing) return open(existing);
     setBusy(true);
     setError("");

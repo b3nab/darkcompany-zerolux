@@ -49,8 +49,9 @@ export default function Member() {
       </Screen>
     );
   const actors = activeActors(workspace.actors);
-  const owner = actors.find((a) => a.kind === "human");
-  const tone = (actor: Actor) => memberTone(actor, owner?.id, chat.sessions);
+  // The workspace's owner is the person nobody invited.
+  const owner = actors.find((a) => a.kind === "human" && !a.invited_by);
+  const tone = (actor: Actor) => memberTone(actor, me?.id, chat.sessions);
   const open = (actor: Actor) => router.push(`/member/${actor.id}`);
   const isOwner = member.id === owner?.id;
   return (

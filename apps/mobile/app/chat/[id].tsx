@@ -62,6 +62,7 @@ import { ChatList, GestureArea } from "@/components/ui/native";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "../../src/kernel";
+import { useMe } from "../../src/me";
 import { asFile, useVoice } from "../../src/voice";
 
 type Row =
@@ -108,7 +109,7 @@ export default function ChatScreen() {
     "--color-primary-foreground",
   ]).map(String);
   const conversation = chat.conversations.find((c) => c.id === id);
-  const owner = actors.find((actor) => actor.kind === "human")?.id;
+  const me = useMe().me?.id;
   const actor = (actorId: string | null) =>
     actors.find((a) => a.id === actorId);
   const thread = conversation?.kind === "thread";
@@ -316,7 +317,7 @@ export default function ChatScreen() {
   }
 
   function message(m: Message, continued: boolean, below?: Conversation) {
-    const mine = m.author_id === owner;
+    const mine = m.author_id === me;
     const author = actor(m.author_id);
     const agent = author?.kind !== "human";
     const state = receipt(m.deliveries);

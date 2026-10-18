@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/src/kernel";
+import { useMe } from "@/src/me";
 
 /** Meetings on LiveKit: start one or join a live one, then the room itself. */
 export default function Meetings() {
@@ -77,8 +78,7 @@ function Lobby({
   actor: (id: string) => Actor | undefined;
   enter: (id: string) => void;
 }) {
-  const { workspace } = useSession();
-  const owner = workspace?.actors.find((a) => a.kind === "human");
+  const { me } = useMe();
   const [title, setTitle] = useState(from?.title ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -86,7 +86,7 @@ function Lobby({
     setBusy(true);
     try {
       const meeting = await meetings.start(
-        title.trim() || from?.title || `${owner?.name ?? "Your"}'s meeting`,
+        title.trim() || from?.title || `${me?.name ?? "Your"}'s meeting`,
         from?.id ?? null,
       );
       enter(meeting.id);
