@@ -233,6 +233,10 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
             post(session_input).layer(DefaultBodyLimit::max(21 * 1024 * 1024)),
         )
         .route("/sessions/{id}/commands", get(session_commands))
+        .route(
+            "/sessions/{id}/queue/{item}",
+            axum::routing::patch(requeue).delete(unqueue),
+        )
         .route("/sessions/{id}/files", get(session_files))
         .route("/sessions/{id}/compact", post(compact_session))
         .route("/actors/{id}/name", post(rename_agent))
@@ -984,6 +988,39 @@ async fn session_files(
     .await
     .map_err(runtime_error)?;
     Ok(Json(json!({ "files": files })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QueuedChange {
+    text: String,
+}
+
+/// Rewrites one of the owner's inputs waiting in the session's queue.
+async fn requeue(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path((id, item)): Path<(String, String)>,
+    ChatJson(input): ChatJson<QueuedChange>,
+) -> Result<Json<Value>, ApiFailure> {
+    runtime(&state)?
+        .change_queued(&who, &id, &item, Some(&input.text))
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "changed": true })))
+}
+
+/// Takes one of the owner's inputs out of the session's queue.
+async fn unqueue(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path((id, item)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiFailure> {
+    runtime(&state)?
+        .change_queued(&who, &id, &item, None)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "removed": true })))
 }
 
 /// The commands and skills the session's harness offers.

@@ -133,6 +133,40 @@ impl ChatRuntime {
         }
     }
 
+    /// Takes a waiting input out of the harness's queue, or rewrites it with `text`. Codex
+    /// keeps its queue open to this; Claude Code and pi do not.
+    pub async fn change_queued(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+        item: &str,
+        text: Option<&str>,
+    ) -> Result<()> {
+        async {
+            if !who.is_owner() {
+                return Err(Error::Forbidden.into());
+            }
+            if text.is_some_and(|text| text.trim().is_empty() || text.len() > 64 * 1024) {
+                return Err(Error::Invalid("Write from 1 byte to 64 KiB".into()).into());
+            }
+            let session = self.store.chat_session(who, id).await?;
+            match self.native_control(who, &session, INPUT).await? {
+                Control::Codex(control) => match text {
+                    Some(text) => control.requeue(item, text).await,
+                    None => control.unqueue(item).await,
+                },
+                _ => bail!(
+                    "This harness keeps its queue to itself: a waiting input cannot be changed from ZeroLux"
+                ),
+            }
+        }
+        .await
+        .map_err(|error: anyhow::Error| match error.downcast::<Error>() {
+            Ok(error) => error.into(),
+            Err(error) => Error::Invalid(format!("{error:#}")).into(),
+        })
+    }
+
     /// The commands and skills the session's harness offers, as they are typed.
     pub async fn commands(&self, who: &ChatIdentity, id: &str) -> Result<Vec<SessionCommand>> {
         self.commands_native(who, id)
