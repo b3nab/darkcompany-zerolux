@@ -774,6 +774,8 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                 .open_js_links_on_click(false)
                 .build(),
         )
+        // The page's own `Notification` reaches the system's notifications.
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             workspace_action,
             crate::chrome::window_control
