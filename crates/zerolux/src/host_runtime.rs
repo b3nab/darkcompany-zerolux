@@ -31,20 +31,42 @@ pub struct HostRuntime {
     wake: broadcast::Sender<()>,
     /// What this computer tells the kernel on its own.
     notices: mpsc::UnboundedSender<Value>,
+    /// The pi and Claude Code runners of this computer's sessions.
+    #[cfg(unix)]
+    pi: crate::pi_runner::Registry,
+    #[cfg(unix)]
+    claude: crate::claude_runner::Registry,
+    #[cfg(unix)]
+    pi_pending: Mutex<HashMap<String, crate::pi_runner::RunnerLink>>,
 }
 
 impl HostRuntime {
-    pub fn new(url: String, notices: mpsc::UnboundedSender<Value>) -> Arc<Self> {
-        Self::with_codex(url, None, notices)
+    pub fn new(
+        url: String,
+        links: std::path::PathBuf,
+        notices: mpsc::UnboundedSender<Value>,
+    ) -> Arc<Self> {
+        Self::with_codex(url, links, None, notices)
     }
 
     /// With a Codex daemon of its own choosing, such as a test's.
     pub fn with_codex(
         url: String,
+        links: std::path::PathBuf,
         codex: Option<String>,
         notices: mpsc::UnboundedSender<Value>,
     ) -> Arc<Self> {
+        #[cfg(unix)]
+        let program = crate::claude_runner::RunnerProgram::default();
+        #[cfg(not(unix))]
+        let _ = links;
         Arc::new(Self {
+            #[cfg(unix)]
+            pi: crate::pi_runner::Registry::new(links.join("pi"), program.clone()),
+            #[cfg(unix)]
+            claude: crate::claude_runner::Registry::new(links.join("claude"), program),
+            #[cfg(unix)]
+            pi_pending: Mutex::default(),
             url,
             codex,
             pending: Mutex::default(),
@@ -79,8 +101,161 @@ impl HostRuntime {
                     .context("The session's Codex is not running on this computer")?;
                 control.request(&params["request"]).await
             }
+            #[cfg(unix)]
+            "pi.create" => self.pi_create(params).await,
+            #[cfg(unix)]
+            "pi.bind" => {
+                let pending = params["pending"].as_str().unwrap_or_default();
+                let link = self
+                    .pi_pending
+                    .lock()
+                    .await
+                    .remove(pending)
+                    .context("The started pi is no longer waiting")?;
+                let token = params["token"].as_str().context("Give the token")?;
+                link.bind(&self.url, token).await?;
+                Ok(json!({"bound": true}))
+            }
+            #[cfg(unix)]
+            "pi.control" => {
+                self.pi_link(&params)
+                    .await?
+                    .control(params["request"].clone())
+                    .await
+            }
+            #[cfg(unix)]
+            "pi.stop" => {
+                let session = params["session_id"].as_str().unwrap_or_default();
+                self.pi_link(&params).await?.stop(session).await?;
+                Ok(json!({"stopped": true}))
+            }
+            #[cfg(unix)]
+            "claude.launch" => self.claude_launch(params).await,
+            #[cfg(unix)]
+            "claude.bind" => {
+                let link = self.claude_link(&params).await?;
+                let executable = self.claude.executable()?;
+                link.bind(
+                    &self.url,
+                    params["token"].as_str().context("Give the token")?,
+                    params["session_id"].as_str().context("Name the session")?,
+                    &executable,
+                    params["resume"] == true,
+                )
+                .await?;
+                Ok(json!({"bound": true}))
+            }
+            #[cfg(unix)]
+            "claude.control" => {
+                let link = self.claude_link(&params).await?;
+                let given = &params["params"];
+                match params["op"].as_str().unwrap_or_default() {
+                    "request" => link.request(given.clone()).await,
+                    "describe" => link.describe().await,
+                    "settings" => {
+                        let patch: Option<AgentSettings> =
+                            serde_json::from_value(given["patch"].clone()).unwrap_or(None);
+                        Ok(json!(
+                            link.settings(
+                                given["session_id"].as_str().unwrap_or_default(),
+                                patch.as_ref(),
+                                given["check"] == true,
+                            )
+                            .await?
+                        ))
+                    }
+                    other => bail!("This computer's Claude control does not know `{other}`"),
+                }
+            }
+            #[cfg(unix)]
+            "claude.stop" => {
+                let session = params["session_id"].as_str().unwrap_or_default();
+                self.claude_link(&params).await?.stop(session).await?;
+                Ok(json!({"stopped": true}))
+            }
             other => crate::host_ops::answer(other, params).await,
         }
+    }
+
+    /// A new pi session in a folder of this computer, waiting for its token.
+    #[cfg(unix)]
+    async fn pi_create(&self, params: Value) -> Result<Value> {
+        let workspace = params["workspace"].as_str().context("Choose a folder")?;
+        ensure!(
+            std::path::Path::new(workspace).is_dir(),
+            "This folder is not on this computer"
+        );
+        let settings = &params["settings"];
+        let initial = AgentSettings {
+            model: settings["model"].as_str().map(str::to_owned),
+            effort: settings["effort"].as_str().map(str::to_owned),
+            ..AgentSettings::default()
+        };
+        let link = self
+            .pi
+            .create(workspace, &initial, &crate::homes::Homes::own())
+            .await?;
+        let target = link.target().await?;
+        let pending = uuid::Uuid::new_v4().to_string();
+        self.pi_pending.lock().await.insert(pending.clone(), link);
+        Ok(
+            json!({"pending": pending, "native_session_id": target.native_session_id,
+            "workspace": target.workspace, "native_locator": target.native_locator}),
+        )
+    }
+
+    #[cfg(unix)]
+    async fn pi_link(&self, params: &Value) -> Result<crate::pi_runner::RunnerLink> {
+        self.pi
+            .find(
+                params["native"].as_str().unwrap_or_default(),
+                params["workspace"].as_str().unwrap_or_default(),
+            )
+            .await?
+            .context("The session's pi is not running on this computer")
+    }
+
+    /// A Claude Code runner for a session the kernel has issued.
+    #[cfg(unix)]
+    async fn claude_launch(&self, params: Value) -> Result<Value> {
+        let workspace = params["workspace"].as_str().context("Choose a folder")?;
+        ensure!(
+            std::path::Path::new(workspace).is_dir(),
+            "This folder is not on this computer"
+        );
+        let mode: crate::model::ClaudePermissionMode =
+            serde_json::from_value(params["mode"].clone()).context("Invalid permission mode")?;
+        let settings = &params["settings"];
+        let initial = AgentSettings {
+            model: settings["model"].as_str().map(str::to_owned),
+            effort: settings["effort"].as_str().map(str::to_owned),
+            ..AgentSettings::default()
+        };
+        self.claude
+            .launch(
+                params["native"].as_str().context("Name the session")?,
+                workspace,
+                mode,
+                params["system_prompt"].as_str(),
+                &initial,
+                &crate::homes::Homes::own(),
+            )
+            .await?;
+        Ok(json!({"launched": true}))
+    }
+
+    #[cfg(unix)]
+    async fn claude_link(&self, params: &Value) -> Result<crate::claude_runner::RunnerLink> {
+        let mode: crate::model::ClaudePermissionMode =
+            serde_json::from_value(params["mode"].clone()).context("Invalid permission mode")?;
+        self.claude
+            .find(
+                params["native"].as_str().unwrap_or_default(),
+                params["workspace"].as_str().unwrap_or_default(),
+                mode,
+            )
+            .await?
+            .context("The session's Claude Code is not running on this computer")
     }
 
     async fn codex_endpoint(&self) -> Result<String> {

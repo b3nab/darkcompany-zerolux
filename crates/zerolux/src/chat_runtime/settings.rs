@@ -15,9 +15,9 @@ const SETTINGS: &str = "agent-settings-v1";
 
 pub(super) enum Control {
     Codex(super::remote::CodexControl),
-    Pi(sessions::PiDescriptor),
+    Pi(super::remote::PiControl),
     #[cfg(unix)]
-    Claude(crate::claude_runner::RunnerLink),
+    Claude(super::remote::ClaudeControl),
 }
 
 impl Control {
@@ -38,7 +38,7 @@ impl Control {
                 if let Some(patch) = patch {
                     request["values"] = patch.patch_json();
                 }
-                let result = sessions::control(control, request).await?;
+                let result = control.control(request).await?;
                 Ok(serde_json::from_value(result["settings"].clone())?)
             }
             #[cfg(unix)]
@@ -69,9 +69,11 @@ impl ChatRuntime {
         let actual = match control {
             Control::Codex(_) => return Ok(()),
             Control::Pi(record) => {
-                let actual = sessions::control(record, json!({"method":"describe"})).await?;
+                let actual = record.control(json!({"method":"describe"})).await?;
                 ensure!(
-                    actual["instance_id"] == record.instance_id
+                    record
+                        .instance_id()
+                        .is_none_or(|instance| actual["instance_id"] == instance)
                         && actual["native_session_id"] == session.native_session_id
                         && actual["workspace"] == session.workspace,
                     "The pi integration changed"
@@ -90,7 +92,7 @@ impl ChatRuntime {
             Control::Codex(_) => {}
             Control::Pi(record) => {
                 // Reload is cooperative and idempotently scheduled by the extension.
-                sessions::control(record, request).await?;
+                record.control(request).await?;
             }
             #[cfg(unix)]
             Control::Claude(link) => {
@@ -219,17 +221,39 @@ impl ChatRuntime {
             session.stopped_at.is_none() && session.status == "connected",
             "The native session is not connected"
         );
-        // A Codex session on a joined computer is controlled there.
+        // A session on a joined computer is controlled there.
         if let Some(host) = self.remote_host(session) {
-            ensure!(
-                session.harness == "codex",
-                "The session belongs to another kernel host"
+            let (hosts, native, workspace) = (
+                self.hosts.clone(),
+                session.native_session_id.clone(),
+                session.workspace.clone(),
             );
-            return Ok(Control::Codex(super::remote::CodexControl::There {
-                hosts: self.hosts.clone(),
-                host,
-                session: session.id.clone(),
-            }));
+            return Ok(match session.harness.as_str() {
+                "codex" => Control::Codex(super::remote::CodexControl::There {
+                    hosts,
+                    host,
+                    session: session.id.clone(),
+                }),
+                "pi" => Control::Pi(super::remote::PiControl::There {
+                    hosts,
+                    host,
+                    native,
+                    workspace,
+                }),
+                #[cfg(unix)]
+                _ => Control::Claude(super::remote::ClaudeControl::There {
+                    hosts,
+                    host,
+                    native,
+                    workspace,
+                    mode: self
+                        .owned_mode(who, &session.id)
+                        .await?
+                        .context("This native terminal does not expose this control")?,
+                }),
+                #[cfg(not(unix))]
+                _ => bail!("The session belongs to another kernel host"),
+            });
         }
         if session.harness == "codex" {
             return self
@@ -264,7 +288,7 @@ impl ChatRuntime {
                         .is_some_and(|values| values.iter().any(|value| value == capability)),
                 "The pi integration needs an update for this control"
             );
-            return Ok(Control::Pi(record));
+            return Ok(Control::Pi(super::remote::PiControl::Here(record)));
         }
         #[cfg(unix)]
         if let Some(mode) = self.owned_mode(who, &session.id).await? {
@@ -273,7 +297,7 @@ impl ChatRuntime {
                 .find(&session.native_session_id, &session.workspace, mode)
                 .await?
                 .context("The Claude runner is unavailable")?;
-            return Ok(Control::Claude(link));
+            return Ok(Control::Claude(super::remote::ClaudeControl::Here(link)));
         }
         bail!("This native terminal does not expose this control")
     }

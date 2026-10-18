@@ -1650,9 +1650,7 @@ impl ChatRuntime {
         let owner = self.store.session_person(id).await?;
         let session = self.store.chat_session(&owner, id).await?;
         if let Some(host) = self.remote_host(&session) {
-            self.hosts
-                .call(&host, "codex.stop", serde_json::json!({"session_id": id}))
-                .await?;
+            self.stop_on(&host, &session).await?;
             return Ok(None);
         }
         let agent = self.agents.lock().await.remove(id);

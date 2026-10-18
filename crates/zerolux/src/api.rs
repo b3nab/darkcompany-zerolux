@@ -678,8 +678,12 @@ async fn create_session(
         who
     };
     // On this kernel's computer, if it is open to them; on a joined computer, if it is theirs.
-    let elsewhere = matches!(&input, NewSession::Codex(codex)
-        if codex.host.as_deref().is_some_and(|host| Some(host) != state.store.host()));
+    let host = match &input {
+        NewSession::Codex(input) => input.host.as_deref(),
+        NewSession::Pi(input) => input.host.as_deref(),
+        NewSession::Claude(input) => input.host.as_deref(),
+    };
+    let elsewhere = host.is_some_and(|host| Some(host) != state.store.host());
     if !elsewhere {
         host_open(&state, &acting).await?;
     }
@@ -760,32 +764,36 @@ async fn create_pi_session(
     #[cfg(unix)]
     {
         use crate::chat_runtime::PiStartFailure;
-        let (actor, session) = runtime(&state)?
-            .create_pi(&who, input)
-            .await
-            .map_err(|error| {
-                if let Some(failure) = error.downcast_ref::<PiStartFailure>() {
-                    tracing::error!(
-                        error = format!("{error:#}"),
-                        "Pi session creation was not confirmed"
-                    );
-                    let id = match failure {
-                        PiStartFailure::Unlinked { native_session_id } => {
-                            Some(native_session_id.as_str())
-                        }
-                        PiStartFailure::Uncertain => None,
-                    };
-                    ApiFailure(Box::new(
-                        (
-                            StatusCode::BAD_GATEWAY,
-                            Json(json!({"error":failure.to_string(),"native_session_id":id})),
-                        )
-                            .into_response(),
-                    ))
-                } else {
-                    runtime_error(error)
-                }
-            })?;
+        let runtime = runtime(&state)?;
+        let created = match input.host.clone() {
+            Some(host) if Some(host.as_str()) != state.store.host() => {
+                runtime.create_pi_on(&who, input, &host).await
+            }
+            _ => runtime.create_pi(&who, input).await,
+        };
+        let (actor, session) = created.map_err(|error| {
+            if let Some(failure) = error.downcast_ref::<PiStartFailure>() {
+                tracing::error!(
+                    error = format!("{error:#}"),
+                    "Pi session creation was not confirmed"
+                );
+                let id = match failure {
+                    PiStartFailure::Unlinked { native_session_id } => {
+                        Some(native_session_id.as_str())
+                    }
+                    PiStartFailure::Uncertain => None,
+                };
+                ApiFailure(Box::new(
+                    (
+                        StatusCode::BAD_GATEWAY,
+                        Json(json!({"error":failure.to_string(),"native_session_id":id})),
+                    )
+                        .into_response(),
+                ))
+            } else {
+                runtime_error(error)
+            }
+        })?;
         Ok(Json(json!({"actor":actor,"session":session})))
     }
     #[cfg(not(unix))]
@@ -807,10 +815,17 @@ async fn create_claude_session(
     }
     #[cfg(unix)]
     {
-        let (actor, session) = runtime(&state)?
-            .create_claude(&who, input)
-            .await
-            .map_err(runtime_error)?;
+        let runtime = runtime(&state)?;
+        let (actor, session) = match input.host.clone() {
+            Some(host) if Some(host.as_str()) != state.store.host() => runtime
+                .create_claude_on(&who, input, &host)
+                .await
+                .map_err(said)?,
+            _ => runtime
+                .create_claude(&who, input)
+                .await
+                .map_err(runtime_error)?,
+        };
         Ok(Json(json!({"actor":actor,"session":session})))
     }
     #[cfg(not(unix))]
@@ -1536,11 +1551,7 @@ async fn git_stage(
     ChatJson(input): ChatJson<GitPaths>,
 ) -> Result<Json<Value>, ApiFailure> {
     let who = state.store.acting_for(&who, &id, Access::Write).await?;
-    let folder = session_folder(&state, &who, &id).await?;
-    crate::workspace_git::stage(&folder, &input.paths)
-        .await
-        .map_err(runtime_error)?;
-    session_git(State(state), Extension(who), Path(id)).await
+    on_folder(&state, &who, &id, "stage", json!({ "paths": input.paths })).await
 }
 
 async fn git_unstage(
@@ -1550,11 +1561,14 @@ async fn git_unstage(
     ChatJson(input): ChatJson<GitPaths>,
 ) -> Result<Json<Value>, ApiFailure> {
     let who = state.store.acting_for(&who, &id, Access::Write).await?;
-    let folder = session_folder(&state, &who, &id).await?;
-    crate::workspace_git::unstage(&folder, &input.paths)
-        .await
-        .map_err(runtime_error)?;
-    session_git(State(state), Extension(who), Path(id)).await
+    on_folder(
+        &state,
+        &who,
+        &id,
+        "unstage",
+        json!({ "paths": input.paths }),
+    )
+    .await
 }
 
 /// Throws away the paths' changes that are not staged.
@@ -1565,11 +1579,14 @@ async fn git_discard(
     ChatJson(input): ChatJson<GitPaths>,
 ) -> Result<Json<Value>, ApiFailure> {
     let who = state.store.acting_for(&who, &id, Access::Write).await?;
-    let folder = session_folder(&state, &who, &id).await?;
-    crate::workspace_git::discard(&folder, &input.paths)
-        .await
-        .map_err(runtime_error)?;
-    session_git(State(state), Extension(who), Path(id)).await
+    on_folder(
+        &state,
+        &who,
+        &id,
+        "discard",
+        json!({ "paths": input.paths }),
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -1585,11 +1602,14 @@ async fn git_commit(
     ChatJson(input): ChatJson<GitCommit>,
 ) -> Result<Json<Value>, ApiFailure> {
     let who = state.store.acting_for(&who, &id, Access::Write).await?;
-    let folder = session_folder(&state, &who, &id).await?;
-    let commit = crate::workspace_git::commit(&folder, &input.message)
-        .await
-        .map_err(runtime_error)?;
-    Ok(Json(json!({ "commit": commit })))
+    on_folder(
+        &state,
+        &who,
+        &id,
+        "commit",
+        json!({ "message": input.message }),
+    )
+    .await
 }
 
 async fn git_push(
@@ -1598,11 +1618,7 @@ async fn git_push(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
     let who = state.store.acting_for(&who, &id, Access::Write).await?;
-    let folder = session_folder(&state, &who, &id).await?;
-    crate::workspace_git::push(&folder)
-        .await
-        .map_err(runtime_error)?;
-    session_git(State(state), Extension(who), Path(id)).await
+    on_folder(&state, &who, &id, "push", json!({})).await
 }
 
 /// The branch's pull request with its checks, through GitHub's `gh`; null when there is none.
@@ -1632,12 +1648,14 @@ async fn git_open_pull_request(
     ChatJson(input): ChatJson<OpenPullRequest>,
 ) -> Result<Json<Value>, ApiFailure> {
     let who = state.store.acting_for(&who, &id, Access::Write).await?;
-    let folder = session_folder(&state, &who, &id).await?;
-    let url =
-        crate::workspace_git::open_pull_request(&folder, &input.title, &input.body, input.draft)
-            .await
-            .map_err(runtime_error)?;
-    Ok(Json(json!({ "url": url })))
+    on_folder(
+        &state,
+        &who,
+        &id,
+        "open_pr",
+        json!({ "title": input.title, "body": input.body, "draft": input.draft }),
+    )
+    .await
 }
 
 /// Files of the session's folder matching what the owner is typing, to mention them.

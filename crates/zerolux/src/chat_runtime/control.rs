@@ -104,8 +104,7 @@ impl ChatRuntime {
                 control.compact().await
             }
             Control::Pi(record) => {
-                sessions::control(
-                    &record,
+                record.control(
                     json!({"method":"compact","link_id":session.id,"instructions":instructions}),
                 )
                 .await?;
@@ -249,7 +248,8 @@ impl ChatRuntime {
         let listed = match self.native_control(who, &session, COMMANDS).await? {
             Control::Codex(control) => return control.commands().await,
             Control::Pi(record) => {
-                sessions::control(&record, json!({"method":"commands","link_id":session.id}))
+                record
+                    .control(json!({"method":"commands","link_id":session.id}))
                     .await?
             }
             #[cfg(unix)]
@@ -358,7 +358,7 @@ impl ChatRuntime {
                 control.input(text, mode, &paths).await
             }
             Control::Pi(record) => {
-                sessions::control(&record, request).await?;
+                record.control(request).await?;
                 Ok(())
             }
             #[cfg(unix)]
@@ -387,9 +387,9 @@ impl ChatRuntime {
         let interrupted = match self.native_control(who, &session, INTERRUPT).await? {
             Control::Codex(control) => control.interrupt().await?,
             Control::Pi(record) => {
-                let result =
-                    sessions::control(&record, json!({"method":"interrupt","link_id":session.id}))
-                        .await?;
+                let result = record
+                    .control(json!({"method":"interrupt","link_id":session.id}))
+                    .await?;
                 result["interrupted"] == true
             }
             #[cfg(unix)]
@@ -413,7 +413,7 @@ impl ChatRuntime {
 
 /// A Claude runner started before a control existed says it needs an update.
 #[cfg(unix)]
-async fn runner_offers(link: &crate::claude_runner::RunnerLink, capability: &str) -> Result<()> {
+async fn runner_offers(link: &super::remote::ClaudeControl, capability: &str) -> Result<()> {
     let actual = link.describe().await?;
     ensure!(
         actual["capabilities"]

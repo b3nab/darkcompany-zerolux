@@ -139,6 +139,119 @@ impl CodexControl {
     }
 }
 
+/// A pi session's control: its integration's socket here, or on the joined computer.
+#[derive(Clone)]
+pub(crate) enum PiControl {
+    Here(sessions::PiDescriptor),
+    There {
+        hosts: Arc<crate::host_link::Links>,
+        host: String,
+        native: String,
+        workspace: String,
+    },
+}
+
+impl PiControl {
+    pub async fn control(&self, request: Value) -> Result<Value> {
+        match self {
+            Self::Here(record) => sessions::control(record, request).await,
+            Self::There {
+                hosts,
+                host,
+                native,
+                workspace,
+            } => {
+                hosts
+                    .call(
+                        host,
+                        "pi.control",
+                        json!({"native": native, "workspace": workspace, "request": request}),
+                    )
+                    .await
+            }
+        }
+    }
+
+    /// The integration instance it was found with, here; there, the computer checks it.
+    pub fn instance_id(&self) -> Option<&str> {
+        match self {
+            Self::Here(record) => Some(&record.instance_id),
+            Self::There { .. } => None,
+        }
+    }
+}
+
+/// A Claude session's runner: here, or on the joined computer.
+#[cfg(unix)]
+#[derive(Clone)]
+pub(crate) enum ClaudeControl {
+    Here(crate::claude_runner::RunnerLink),
+    There {
+        hosts: Arc<crate::host_link::Links>,
+        host: String,
+        native: String,
+        workspace: String,
+        mode: crate::model::ClaudePermissionMode,
+    },
+}
+
+#[cfg(unix)]
+impl ClaudeControl {
+    async fn ask(&self, op: &str, params: Value) -> Result<Value> {
+        match self {
+            Self::Here(_) => unreachable!("asked only there"),
+            Self::There {
+                hosts,
+                host,
+                native,
+                workspace,
+                mode,
+            } => {
+                hosts
+                    .call(
+                        host,
+                        "claude.control",
+                        json!({"op": op, "native": native, "workspace": workspace,
+                            "mode": mode, "params": params}),
+                    )
+                    .await
+            }
+        }
+    }
+
+    pub async fn request(&self, request: Value) -> Result<Value> {
+        match self {
+            Self::Here(link) => link.request(request).await,
+            Self::There { .. } => self.ask("request", request).await,
+        }
+    }
+
+    pub async fn describe(&self) -> Result<Value> {
+        match self {
+            Self::Here(link) => link.describe().await,
+            Self::There { .. } => self.ask("describe", json!({})).await,
+        }
+    }
+
+    pub async fn settings(
+        &self,
+        session_id: &str,
+        patch: Option<&AgentSettings>,
+        check: bool,
+    ) -> Result<crate::agent_settings::NativeSettings> {
+        match self {
+            Self::Here(link) => link.settings(session_id, patch, check).await,
+            Self::There { .. } => Ok(serde_json::from_value(
+                self.ask(
+                    "settings",
+                    json!({"session_id": session_id, "patch": patch, "check": check}),
+                )
+                .await?,
+            )?),
+        }
+    }
+}
+
 impl ChatRuntime {
     /// Whether a session runs on a joined computer: its host, then.
     pub(super) fn remote_host(&self, session: &ChatSession) -> Option<String> {
@@ -227,6 +340,171 @@ impl ChatRuntime {
         }
         let session = self.store.chat_session(who, &issued.session.id).await?;
         Ok((issued.actor, session))
+    }
+
+    /// That `who` may start sessions on a joined computer: theirs, without a worktree.
+    async fn may_start_on(&self, who: &ChatIdentity, host: &str, worktree: bool) -> Result<()> {
+        if !who.is_person() {
+            return Err(Error::Forbidden.into());
+        }
+        ensure!(
+            self.store.host_person(host).await? == who.actor_id,
+            Error::Forbidden
+        );
+        ensure!(
+            !worktree,
+            "A joined computer starts sessions in a folder of its own, without a worktree"
+        );
+        ensure!(!*self.stop.borrow(), "The kernel is stopping");
+        Ok(())
+    }
+
+    /// A new pi session on one of `who`'s joined computers: the computer starts pi under its
+    /// runner, the kernel issues its token, and the runner's integration links with it.
+    #[cfg(unix)]
+    pub async fn create_pi_on(
+        &self,
+        who: &ChatIdentity,
+        input: crate::model::CreatePiSession,
+        host: &str,
+    ) -> Result<(Option<Actor>, ChatSession)> {
+        self.may_start_on(who, host, input.worktree.is_some())
+            .await?;
+        self.store
+            .check_hire(who, Harness::Pi, input.actor_id.as_deref(), &input.name)
+            .await?;
+        let started = self
+            .hosts
+            .call(
+                host,
+                "pi.create",
+                json!({"workspace": input.workspace,
+                    "settings": {"model": input.model, "effort": input.effort}}),
+            )
+            .await?;
+        let native = started["native_session_id"]
+            .as_str()
+            .context("The computer did not name the pi session")?
+            .to_owned();
+        let issued = self
+            .store
+            .hire_chat_session(
+                who,
+                HireChatSession {
+                    name: input.name,
+                    actor_id: input.actor_id,
+                    harness: Harness::Pi,
+                    native_session_id: native,
+                    title: "pi".into(),
+                    workspace: started["workspace"]
+                        .as_str()
+                        .unwrap_or(&input.workspace)
+                        .to_owned(),
+                    native_locator: started["native_locator"].clone(),
+                    resume: false,
+                },
+            )
+            .await?;
+        self.store.place_session(&issued.session.id, host).await?;
+        self.changed();
+        let bound = self
+            .hosts
+            .call(
+                host,
+                "pi.bind",
+                json!({"pending": started["pending"], "token": issued.token}),
+            )
+            .await;
+        if let Err(error) = bound {
+            self.store
+                .fail_chat_link(who, &issued.session.id, crate::chat::LINK_FAILED)
+                .await?;
+            self.changed();
+            return Err(error);
+        }
+        let session = self.store.chat_session(who, &issued.session.id).await?;
+        Ok((issued.actor, session))
+    }
+
+    /// A new Claude Code session on one of `who`'s joined computers, under a runner there.
+    #[cfg(unix)]
+    pub async fn create_claude_on(
+        &self,
+        who: &ChatIdentity,
+        input: crate::model::CreateClaudeSession,
+        host: &str,
+    ) -> Result<(Option<Actor>, ChatSession)> {
+        self.may_start_on(who, host, input.worktree.is_some())
+            .await?;
+        self.store
+            .check_hire(
+                who,
+                Harness::ClaudeCode,
+                input.actor_id.as_deref(),
+                &input.name,
+            )
+            .await?;
+        let mode = input.permission_mode.unwrap_or_default();
+        let native = uuid::Uuid::new_v4().to_string();
+        let initial = json!({"model": input.model, "effort": input.effort});
+        let issued = self
+            .store
+            .hire_chat_session(
+                who,
+                HireChatSession {
+                    name: input.name,
+                    actor_id: input.actor_id,
+                    harness: Harness::ClaudeCode,
+                    native_session_id: native.clone(),
+                    title: "Claude Code".into(),
+                    workspace: input.workspace.clone(),
+                    native_locator: json!({"kind":"claude-runner","permission_mode":mode,
+                        "system_prompt":"claude_code","initial_settings":initial}),
+                    resume: false,
+                },
+            )
+            .await?;
+        self.store.place_session(&issued.session.id, host).await?;
+        self.changed();
+        let place = json!({"native": native, "workspace": input.workspace, "mode": mode});
+        let started = async {
+            let mut launch = place.clone();
+            launch["system_prompt"] = json!("claude_code");
+            launch["settings"] = initial.clone();
+            self.hosts.call(host, "claude.launch", launch).await?;
+            let mut bind = place.clone();
+            bind["session_id"] = json!(issued.session.id);
+            bind["token"] = json!(issued.token);
+            bind["resume"] = json!(false);
+            self.hosts.call(host, "claude.bind", bind).await
+        }
+        .await;
+        if let Err(error) = started {
+            self.store
+                .fail_chat_link(who, &issued.session.id, crate::chat::LINK_FAILED)
+                .await?;
+            self.changed();
+            return Err(error);
+        }
+        let session = self.store.chat_session(who, &issued.session.id).await?;
+        Ok((issued.actor, session))
+    }
+
+    /// Stops a session on a joined computer: its adapter or runner there ends.
+    pub(super) async fn stop_on(&self, host: &str, session: &ChatSession) -> Result<()> {
+        let place = json!({"session_id": session.id, "native": session.native_session_id,
+            "workspace": session.workspace});
+        match session.harness.as_str() {
+            "codex" => self.hosts.call(host, "codex.stop", place).await?,
+            "pi" => self.hosts.call(host, "pi.stop", place).await?,
+            _ => {
+                let owner = ChatIdentity::person(&session.owner_id);
+                let mut place = place;
+                place["mode"] = json!(self.owned_mode(&owner, &session.id).await?);
+                self.hosts.call(host, "claude.stop", place).await?
+            }
+        };
+        Ok(())
     }
 
     /// The Codex sessions of a joined computer that has just connected, continued there with a

@@ -131,6 +131,32 @@ pub async fn folder(op: &str, folder: &Path, params: &Value) -> Result<Value> {
         )
         .await?}),
         "pr" => json!({"pull_request": git::pull_request(folder).await?}),
+        "stage" => {
+            git::stage(folder, &param::<Vec<String>>(params, "paths")?).await?;
+            json!(git::status(folder).await?)
+        }
+        "unstage" => {
+            git::unstage(folder, &param::<Vec<String>>(params, "paths")?).await?;
+            json!(git::status(folder).await?)
+        }
+        "discard" => {
+            git::discard(folder, &param::<Vec<String>>(params, "paths")?).await?;
+            json!(git::status(folder).await?)
+        }
+        "commit" => {
+            json!({"commit": git::commit(folder, &param::<String>(params, "message")?).await?})
+        }
+        "push" => {
+            git::push(folder).await?;
+            json!(git::status(folder).await?)
+        }
+        "open_pr" => json!({"url": git::open_pull_request(
+            folder,
+            &param::<String>(params, "title")?,
+            &param::<String>(params, "body")?,
+            param(params, "draft")?
+        )
+        .await?}),
         other => bail!("This computer's ZeroLux does not know `folder.{other}`; update it"),
     })
 }

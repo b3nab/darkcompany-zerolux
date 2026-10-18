@@ -146,7 +146,7 @@ pub async fn run() -> anyhow::Result<()> {
                     crate::server::shutdown_signal().await;
                     stop.send_replace(true);
                 });
-                crate::host_link::run(config, stopped).await?;
+                crate::host_link::run(config, &data_dir, stopped).await?;
             }
         },
         Command::Doctor => println!(

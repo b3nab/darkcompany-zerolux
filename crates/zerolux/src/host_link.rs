@@ -215,9 +215,14 @@ pub async fn join(url: &str, code: &str, name: &str, data_dir: &std::path::Path)
 
 /// Keeps this computer connected to its workspace, answering what the kernel asks, and
 /// connects again after a break.
-pub async fn run(config: HostConfig, stop: tokio::sync::watch::Receiver<bool>) -> Result<()> {
+pub async fn run(
+    config: HostConfig,
+    data_dir: &std::path::Path,
+    stop: tokio::sync::watch::Receiver<bool>,
+) -> Result<()> {
     let (tell, told) = mpsc::unbounded_channel();
-    let host = crate::host_runtime::HostRuntime::new(config.url.clone(), tell);
+    let host =
+        crate::host_runtime::HostRuntime::new(config.url.clone(), data_dir.join("links"), tell);
     run_with(config, stop, host, told).await
 }
 

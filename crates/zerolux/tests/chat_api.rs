@@ -2097,7 +2097,9 @@ async fn a_computer_joins_as_a_host_and_answers_over_its_channel() {
     assert_eq!(config.host_id, host);
     assert!(config.secret.starts_with(zerolux::host_link::SECRET_PREFIX));
     let (stop, stopped) = tokio::sync::watch::channel(false);
-    let connected = tokio::spawn(zerolux::host_link::run(config, stopped));
+    let links = host_dir.join("links");
+    let connected =
+        tokio::spawn(async move { zerolux::host_link::run(config, &links, stopped).await });
     for _ in 0..100 {
         if runtime.hosts.online(&host).await {
             break;
@@ -2267,6 +2269,7 @@ async fn a_codex_session_runs_on_a_joined_computer() {
     let (tell, told) = tokio::sync::mpsc::unbounded_channel();
     let computer = zerolux::host_runtime::HostRuntime::with_codex(
         config.url.clone(),
+        host_dir.join("links"),
         Some(native.endpoint.clone()),
         tell,
     );

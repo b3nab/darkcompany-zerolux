@@ -124,6 +124,9 @@ pub struct CreateClaudeSession {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    /// One of one's joined computers to run it on; this kernel's when omitted.
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 /// A new Codex session, started by ZeroLux in a folder. What is omitted is decided by the
@@ -167,6 +170,9 @@ pub struct CreatePiSession {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    /// One of one's joined computers to run it on; this kernel's when omitted.
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 /// Codex's own `approvalPolicy` values, as its app-server protocol names them.
