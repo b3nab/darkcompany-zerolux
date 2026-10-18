@@ -77,6 +77,8 @@ pub struct Store {
     /// The kernel host this store serves: agent sessions it creates live here, and only
     /// these are recovered and relinked by it. `None` for a store without a host (tests).
     pub(crate) host: Option<String>,
+    /// Where the people a host is open to keep their harness folders on it.
+    pub(crate) people: Option<std::path::PathBuf>,
 }
 
 pub fn now_ms() -> i64 {
@@ -175,6 +177,13 @@ impl Store {
         self.host.as_deref()
     }
 
+    /// The same store, keeping the harness folders of the people its host is open to under
+    /// `dir`.
+    pub fn with_people(mut self, dir: std::path::PathBuf) -> Self {
+        self.people = Some(dir);
+        self
+    }
+
     /// A transaction that will write. Writers take turns, as they always have on SQLite: there
     /// `BEGIN IMMEDIATE` takes the write lock at once; on PostgreSQL the transaction takes the
     /// workspace's advisory lock first. Either way a check made inside the transaction still
@@ -236,6 +245,7 @@ impl Store {
         let store = Self {
             db: crate::db::connect(location).await?,
             host: None,
+            people: None,
         };
         // The workspace and its owner are born together, by one open: both inserts in one
         // write transaction, so concurrent first opens cannot split them across two

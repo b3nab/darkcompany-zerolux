@@ -78,8 +78,8 @@ fn claude_subagents(transcript: &std::path::Path) -> Vec<Subagent> {
 }
 
 /// Codex's threads spawned from `thread`, at any depth, newest first.
-async fn codex_subagents(thread: &str) -> Result<Vec<Value>> {
-    let endpoint = sessions::ensure_codex_daemon().await?;
+async fn codex_subagents(thread: &str, homes: &crate::homes::Homes) -> Result<Vec<Value>> {
+    let endpoint = sessions::ensure_codex_daemon_in(homes).await?;
     let rpc = crate::codex::CodexRpc::connect(&endpoint).await?;
     let (mut threads, mut cursor) = (Vec::new(), None::<String>);
     loop {
@@ -112,6 +112,12 @@ fn codex_subagent(thread: &Value) -> Option<Subagent> {
         parent_id: text("parentThreadId"),
         updated_at: seconds("updatedAt").or_else(|| seconds("createdAt")),
     })
+}
+
+fn homes_of(row: &crate::entity::sessions::Model) -> crate::homes::Homes {
+    crate::homes::Homes::of_locator(
+        &serde_json::from_str(&row.native_locator_json).unwrap_or_default(),
+    )
 }
 
 /// What could not be done, said as it is.
@@ -154,7 +160,7 @@ impl ChatRuntime {
                 Some(path) => tokio::task::spawn_blocking(move || claude_subagents(&path)).await?,
                 None => Vec::new(),
             }),
-            "codex" => Ok(codex_subagents(&row.native_session_id)
+            "codex" => Ok(codex_subagents(&row.native_session_id, &homes_of(&row))
                 .await?
                 .iter()
                 .filter_map(codex_subagent)
@@ -198,14 +204,16 @@ impl ChatRuntime {
                 .filter(|path| path.is_file()),
             "codex" => {
                 // Only a thread spawned from this session's.
-                let ours = codex_subagents(&row.native_session_id)
+                let ours = codex_subagents(&row.native_session_id, &homes_of(&row))
                     .await?
                     .iter()
                     .any(|thread| thread["id"] == agent);
                 ensure!(ours, Error::NotFound);
-                let agent = agent.to_owned();
-                tokio::task::spawn_blocking(move || crate::native_output::codex_rollout(&agent))
-                    .await?
+                let (agent, homes) = (agent.to_owned(), homes_of(&row));
+                tokio::task::spawn_blocking(move || {
+                    crate::native_output::codex_rollout(&agent, &homes)
+                })
+                .await?
             }
             _ => None,
         };

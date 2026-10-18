@@ -649,7 +649,12 @@ impl ChatRuntime {
                     .context("The saved pi session has no file")?;
                 let host = self
                     .pi_runners
-                    .open(&target.native_session_id, &target.workspace, file)
+                    .open(
+                        &target.native_session_id,
+                        &target.workspace,
+                        file,
+                        &crate::homes::Homes::own(),
+                    )
                     .await?;
                 let result = async {
                     let opened = host.target().await?;
@@ -662,7 +667,10 @@ impl ChatRuntime {
                 result
             }
             #[cfg(unix)]
-            Harness::ClaudeCode => self.open_claude(who, target, name, actor_id).await,
+            Harness::ClaudeCode => {
+                self.open_claude(who, target, name, actor_id, &crate::homes::Homes::own())
+                    .await
+            }
             #[cfg(not(unix))]
             _ => bail!("Saved sessions open only on a Unix execution host"),
         }
@@ -832,15 +840,19 @@ impl ChatRuntime {
         };
         let policy = serde_json::from_value(serde_json::json!(chosen.approval_policy))?;
         let sandbox = serde_json::from_value(serde_json::json!(chosen.sandbox))?;
-        let endpoint = sessions::ensure_codex_daemon().await?;
+        // With the person's own Codex: the computer's for its person, a guest's own otherwise.
+        let homes = self.store.homes(who).await?;
+        let endpoint = sessions::ensure_codex_daemon_in(&homes).await?;
         let driver = CodexDriver::start(&endpoint, &workspace, policy, sandbox, &initial).await?;
         let thread_id = driver.thread_id().to_owned();
+        let mut native_locator = serde_json::json!({"endpoint": endpoint});
+        homes.record(&mut native_locator);
         let target = sessions::NativeSessionTarget {
             harness: Harness::Codex,
             native_session_id: thread_id.clone(),
             title: "Codex".into(),
             workspace,
-            native_locator: serde_json::json!({"endpoint": endpoint}),
+            native_locator,
         };
         let (actor, session) = self
             .bind(
@@ -884,14 +896,16 @@ impl ChatRuntime {
                 },
             )
             .await?;
+        let homes = self.store.homes(who).await?;
         let host = self
             .pi_runners
-            .create(&workspace, &initial)
+            .create(&workspace, &initial, &homes)
             .await
             .context(PiStartFailure::Uncertain)?;
         let native_session_id = host.native_id().to_owned();
         let result = async {
-            let target = host.target().await?;
+            let mut target = host.target().await?;
+            homes.record(&mut target.native_locator);
             self.link(who, target, &input.name, input.actor_id, false)
                 .await
         }
@@ -938,7 +952,10 @@ impl ChatRuntime {
             .check_hire(who, Harness::Codex, session.actor_id.as_deref(), "")
             .await?;
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
-        let endpoint = sessions::ensure_codex_daemon().await?;
+        let homes = crate::homes::Homes::of_locator(
+            &self.store.chat_session_locator(who, &session.id).await?,
+        );
+        let endpoint = sessions::ensure_codex_daemon_in(&homes).await?;
         if let Some(previous) = self.agents.lock().await.remove(&session.id) {
             previous.release().await;
         }
@@ -949,12 +966,14 @@ impl ChatRuntime {
             || async { Ok(true) },
         )
         .await?;
+        let mut native_locator = serde_json::json!({"endpoint": endpoint});
+        homes.record(&mut native_locator);
         let target = sessions::NativeSessionTarget {
             harness: Harness::Codex,
             native_session_id: session.native_session_id.clone(),
             title: session.title.clone(),
             workspace: session.workspace.clone(),
-            native_locator: serde_json::json!({"endpoint": endpoint}),
+            native_locator,
         };
         let reconnect = session.stopped_at.is_none();
         self.bind(
@@ -1067,7 +1086,7 @@ impl ChatRuntime {
         live: Option<sessions::NativeSessionTarget>,
     ) -> Result<sessions::NativeSessionTarget> {
         let saved = self.store.chat_session_locator(who, &session.id).await?;
-        let target = if let Some(target) = live {
+        let mut target = if let Some(target) = live {
             target
         } else {
             let locator = crate::pi_runner::recovery_locator(
@@ -1094,6 +1113,8 @@ impl ChatRuntime {
                 "The entrusted pi history locator changed; no other file was selected"
             );
         }
+        // Still with the person's own pi.
+        crate::homes::Homes::of_locator(&saved).record(&mut target.native_locator);
         Ok(target)
     }
 
@@ -1203,7 +1224,11 @@ impl ChatRuntime {
                 // Codex keeps its threads: one the runtime no longer holds is still this
                 // session, continued through Codex's own daemon.
                 None if session.harness == "codex" => {
-                    let endpoint = match sessions::ensure_codex_daemon().await {
+                    let homes = match self.store.chat_session_locator(&owner, &session.id).await {
+                        Ok(locator) => crate::homes::Homes::of_locator(&locator),
+                        Err(_) => continue,
+                    };
+                    let endpoint = match sessions::ensure_codex_daemon_in(&homes).await {
                         Ok(endpoint) => endpoint,
                         Err(error) => {
                             self.retried(&session.id, false);
@@ -1215,12 +1240,14 @@ impl ChatRuntime {
                             continue;
                         }
                     };
+                    let mut native_locator = serde_json::json!({"endpoint": endpoint});
+                    homes.record(&mut native_locator);
                     sessions::NativeSessionTarget {
                         harness: Harness::Codex,
                         native_session_id: session.native_session_id.clone(),
                         title: session.title.clone(),
                         workspace: session.workspace.clone(),
-                        native_locator: serde_json::json!({"endpoint": endpoint}),
+                        native_locator,
                     }
                 }
                 None => continue,
@@ -1495,6 +1522,8 @@ impl ChatRuntime {
             }
             actual.native_locator["runner"] = serde_json::json!(host.path);
             actual.native_locator["kind"] = serde_json::json!("pi-runner");
+            crate::homes::Homes::of_locator(&target.native_locator)
+                .record(&mut actual.native_locator);
             target = actual;
         }
         let owner = self.store.session_person(&session.id).await?;

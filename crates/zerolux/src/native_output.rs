@@ -68,18 +68,20 @@ pub fn with_tails(mut sessions: Vec<ChatSession>) -> Vec<ChatSession> {
 
 /// Where the session's native record is. None until the harness has written it.
 pub fn locate(session: &sessions::Model) -> Option<PathBuf> {
+    let locator: Value = serde_json::from_str(&session.native_locator_json).ok()?;
     if session.harness == "pi" {
-        let locator: Value = serde_json::from_str(&session.native_locator_json).ok()?;
         return locator["session_file"].as_str().map(PathBuf::from);
     }
     let key = format!("{}:{}", session.harness, session.native_session_id);
     if let Some(path) = FOUND.lock().ok()?.get(&key).filter(|path| path.is_file()) {
         return Some(path.clone());
     }
+    // In the harness folders the session runs with.
+    let homes = crate::homes::Homes::of_locator(&locator);
     let path = match session.harness.as_str() {
         #[cfg(unix)]
-        "claude-code" => crate::claude::transcript_path(&session.native_session_id),
-        "codex" => codex_rollout(&session.native_session_id),
+        "claude-code" => crate::claude::transcript_path_in(&session.native_session_id, &homes),
+        "codex" => codex_rollout(&session.native_session_id, &homes),
         _ => None,
     }?;
     FOUND.lock().ok()?.insert(key, path.clone());
@@ -87,10 +89,11 @@ pub fn locate(session: &sessions::Model) -> Option<PathBuf> {
 }
 
 /// `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<time>-<thread>.jsonl`, or archived.
-pub(crate) fn codex_rollout(thread: &str) -> Option<PathBuf> {
-    let root = match std::env::var_os("CODEX_HOME") {
-        Some(root) => PathBuf::from(root),
-        None => PathBuf::from(std::env::var_os("HOME")?).join(".codex"),
+pub(crate) fn codex_rollout(thread: &str, homes: &crate::homes::Homes) -> Option<PathBuf> {
+    let root = match (homes.codex(), std::env::var_os("CODEX_HOME")) {
+        (Some(root), _) => root,
+        (None, Some(root)) => PathBuf::from(root),
+        (None, None) => PathBuf::from(std::env::var_os("HOME")?).join(".codex"),
     };
     let suffix = format!("-{thread}.jsonl");
     find(&root.join("sessions"), &suffix, 3)

@@ -42,7 +42,10 @@ impl ChatRuntime {
             .collect::<String>();
         match harness {
             Harness::Codex => {
-                let endpoint = sessions::ensure_codex_daemon().await?;
+                let homes = crate::homes::Homes::of_locator(
+                    &self.store.chat_session_locator(who, id).await?,
+                );
+                let endpoint = sessions::ensure_codex_daemon_in(&homes).await?;
                 let rpc = crate::codex::CodexRpc::connect(&endpoint).await?;
                 let mut params = serde_json::json!({"threadId": session.native_session_id});
                 if let Some(turn) = &before {
@@ -58,27 +61,33 @@ impl ChatRuntime {
                     native_session_id: thread,
                     title,
                     workspace: session.workspace.clone(),
-                    native_locator: serde_json::json!({"endpoint": endpoint}),
+                    native_locator: {
+                        let mut locator = serde_json::json!({"endpoint": endpoint});
+                        homes.record(&mut locator);
+                        locator
+                    },
                 };
                 self.link(who, target, name, actor_id, false).await
             }
             #[cfg(unix)]
             Harness::Pi => {
                 let locator = self.store.chat_session_locator(who, id).await?;
+                let homes = crate::homes::Homes::of_locator(&locator);
                 let file = locator["session_file"]
                     .as_str()
                     .context("The pi session has no saved file to fork")?;
                 let (native, file) = self
                     .pi_runners
-                    .fork(file, &session.workspace, before.as_deref())
+                    .fork(file, &session.workspace, before.as_deref(), &homes)
                     .await?;
                 let host = self
                     .pi_runners
-                    .open(&native, &session.workspace, &file)
+                    .open(&native, &session.workspace, &file, &homes)
                     .await?;
                 let result = async {
                     let mut opened = host.target().await?;
                     opened.title = title;
+                    homes.record(&mut opened.native_locator);
                     self.link(who, opened, name, actor_id, false).await
                 }
                 .await;
@@ -89,12 +98,16 @@ impl ChatRuntime {
             }
             #[cfg(unix)]
             Harness::ClaudeCode => {
+                let homes = crate::homes::Homes::of_locator(
+                    &self.store.chat_session_locator(who, id).await?,
+                );
                 let native = self
                     .runners
                     .fork(
                         &session.native_session_id,
                         &session.workspace,
                         before.as_deref(),
+                        &homes,
                     )
                     .await?;
                 let target = sessions::NativeSessionTarget {
@@ -104,7 +117,7 @@ impl ChatRuntime {
                     workspace: session.workspace.clone(),
                     native_locator: serde_json::json!({}),
                 };
-                self.open_claude(who, target, name, actor_id).await
+                self.open_claude(who, target, name, actor_id, &homes).await
             }
             #[cfg(not(unix))]
             _ => bail!("Sessions fork only on a Unix execution host"),

@@ -611,9 +611,15 @@ async fn codex_candidates(endpoint: &str) -> Result<Vec<Candidate>> {
 }
 /// The control socket of the user's Codex app-server daemon, as `codex` itself finds it.
 pub fn codex_endpoint() -> Result<String> {
-    let root = match std::env::var_os("CODEX_HOME") {
-        Some(root) => PathBuf::from(root),
-        None => home()?.join(".codex"),
+    codex_endpoint_in(&crate::homes::Homes::own())
+}
+
+/// The control socket of the Codex daemon of a person's harness folders.
+pub fn codex_endpoint_in(homes: &crate::homes::Homes) -> Result<String> {
+    let root = match (homes.codex(), std::env::var_os("CODEX_HOME")) {
+        (Some(root), _) => root,
+        (None, Some(root)) => PathBuf::from(root),
+        (None, None) => home()?.join(".codex"),
     };
     let endpoint = root.join("app-server-control/app-server-control.sock");
     ensure!(endpoint.is_absolute(), "Codex home must be absolute");
@@ -624,18 +630,29 @@ pub fn codex_endpoint() -> Result<String> {
 /// only if it is not running, and never restarts or reconfigures a running one. Returns the
 /// endpoint once it answers. The daemon outlives the kernel: it is never stopped by ZeroLux.
 pub async fn ensure_codex_daemon() -> Result<String> {
-    let endpoint = codex_endpoint()?;
-    ensure_codex_daemon_with(Path::new("codex"), &endpoint).await?;
+    ensure_codex_daemon_in(&crate::homes::Homes::own()).await
+}
+
+/// The Codex daemon of a person's harness folders: a guest's runs with their own Codex home,
+/// account and threads.
+pub async fn ensure_codex_daemon_in(homes: &crate::homes::Homes) -> Result<String> {
+    let endpoint = codex_endpoint_in(homes)?;
+    ensure_codex_daemon_with(Path::new("codex"), &endpoint, homes).await?;
     Ok(endpoint)
 }
 
 /// One attempt to start, bounded; the daemon's own output never reaches the API.
-pub async fn ensure_codex_daemon_with(program: &Path, endpoint: &str) -> Result<()> {
+pub async fn ensure_codex_daemon_with(
+    program: &Path,
+    endpoint: &str,
+    homes: &crate::homes::Homes,
+) -> Result<()> {
     if CodexRpc::connect(endpoint).await.is_ok() {
         return Ok(());
     }
     let mut launcher = tokio::process::Command::new(program);
     launcher
+        .envs(homes.env())
         .args(["app-server", "daemon", "start"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())

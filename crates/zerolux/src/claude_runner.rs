@@ -217,9 +217,14 @@ impl Registry {
         native: &str,
         workspace: &str,
         up_to: Option<&str>,
+        homes: &crate::homes::Homes,
     ) -> Result<String> {
         let mut command = tokio::process::Command::new(&self.program.bun);
-        command.arg(&self.program.entry).arg("fork").arg(native);
+        command
+            .envs(homes.env())
+            .arg(&self.program.entry)
+            .arg("fork")
+            .arg(native);
         if let Some(up_to) = up_to {
             command.arg(up_to);
         }
@@ -237,6 +242,7 @@ impl Registry {
         mode: PermissionMode,
         system_prompt: Option<&str>,
         initial: &AgentSettings,
+        homes: &crate::homes::Homes,
     ) -> Result<RunnerLink> {
         ensure!(
             self.find(native_id, workspace, mode).await?.is_none(),
@@ -262,6 +268,8 @@ impl Registry {
                     .context("Claude runner entrypoint is unavailable")?,
             )
             .current_dir(workspace)
+            // A guest's Claude Code, with their account: never the computer's.
+            .envs(homes.env())
             .env("ZEROLUX_RUNNER_REGISTRY", self.path.canonicalize()?)
             .env("ZEROLUX_NATIVE_SESSION", native_id)
             .env("ZEROLUX_WORKSPACE", workspace)

@@ -84,7 +84,8 @@ impl Server {
             .context("Open the database")?;
         // This kernel's host: the agent sessions it starts live here, and only it links them.
         let host_id = host_id(&data_dir).await?;
-        let store = store.hosted(host_id);
+        let store = store.hosted(host_id).with_people(data_dir.join("people"));
+        store.register_host().await?;
         let workspace = store.workspace_info().await?;
         let base_url = format!("http://{address}");
         let auth = match &options.auth {

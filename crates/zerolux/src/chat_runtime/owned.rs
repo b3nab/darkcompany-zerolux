@@ -66,14 +66,27 @@ impl ChatRuntime {
             ..AgentSettings::default()
         }
         .patch_json();
-        let started = self.start_owned(who, HireChatSession {
-            name: input.name, actor_id: input.actor_id, harness: Harness::ClaudeCode,
-            native_session_id: native_id, title: "Claude Code".into(),
-            workspace,
-            // Started by ZeroLux with Claude Code's own system prompt, as a terminal would.
-            native_locator: json!({"kind":"claude-runner","permission_mode":mode,"system_prompt":"claude_code","initial_settings":initial}),
-            resume: false,
-        }, mode, false).await?;
+        // Started by ZeroLux with Claude Code's own system prompt, as a terminal would, and
+        // with the person's own Claude Code: the computer's for its person, a guest's own.
+        let mut native_locator = json!({"kind":"claude-runner","permission_mode":mode,"system_prompt":"claude_code","initial_settings":initial});
+        self.store.homes(who).await?.record(&mut native_locator);
+        let started = self
+            .start_owned(
+                who,
+                HireChatSession {
+                    name: input.name,
+                    actor_id: input.actor_id,
+                    harness: Harness::ClaudeCode,
+                    native_session_id: native_id,
+                    title: "Claude Code".into(),
+                    workspace,
+                    native_locator,
+                    resume: false,
+                },
+                mode,
+                false,
+            )
+            .await?;
         Ok(started)
     }
 
@@ -138,13 +151,18 @@ impl ChatRuntime {
         target: sessions::NativeSessionTarget,
         name: &str,
         actor_id: Option<String>,
+        homes: &crate::homes::Homes,
     ) -> Result<(Option<Actor>, ChatSession)> {
         self.runners
             .check_native_stopped(&target.native_session_id, &target.workspace)
             .await?;
-        let mode = crate::claude::ClaudeSession::saved_permission_mode(&target.native_session_id)
-            .await
-            .unwrap_or_default();
+        let mode =
+            crate::claude::ClaudeSession::saved_permission_mode(&target.native_session_id, homes)
+                .await
+                .unwrap_or_default();
+        let mut native_locator =
+            json!({"kind":"claude-runner","permission_mode":mode,"system_prompt":"claude_code"});
+        homes.record(&mut native_locator);
         self.start_owned(
             who,
             HireChatSession {
@@ -154,7 +172,7 @@ impl ChatRuntime {
                 native_session_id: target.native_session_id,
                 title: target.title,
                 workspace: target.workspace,
-                native_locator: json!({"kind":"claude-runner","permission_mode":mode,"system_prompt":"claude_code"}),
+                native_locator,
                 resume: false,
             },
             mode,
@@ -186,6 +204,7 @@ impl ChatRuntime {
             effort: settings["effort"].as_str().map(str::to_owned),
             ..AgentSettings::default()
         };
+        let homes = crate::homes::Homes::of_locator(&input.native_locator);
         let issued = self.store.hire_chat_session(who, input).await?;
         self.changed();
         let launched = self
@@ -196,6 +215,7 @@ impl ChatRuntime {
                 mode,
                 system_prompt.as_deref(),
                 &initial,
+                &homes,
             )
             .await;
         let link = match launched {
@@ -338,8 +358,11 @@ impl ChatRuntime {
         self.runners
             .check_terminal_stopped(&session.native_session_id, pid)
             .await?;
-        let mode =
-            crate::claude::ClaudeSession::saved_permission_mode(&session.native_session_id).await?;
+        let mode = crate::claude::ClaudeSession::saved_permission_mode(
+            &session.native_session_id,
+            &crate::homes::Homes::own(),
+        )
+        .await?;
         // Preserve the native resume mode. Missing/unsupported metadata never becomes
         // a default permission choice, and the terminal is never killed here.
         self.restore_claude(

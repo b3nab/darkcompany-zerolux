@@ -17,6 +17,8 @@ pub mod db;
 pub mod entity;
 pub mod harness;
 pub mod history;
+pub mod homes;
+pub mod hosts;
 mod integration_code;
 pub mod lease;
 pub mod live;

@@ -317,6 +317,8 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/chat/inbox", get(chat_inbox))
         .route("/chat/deliveries/{id}/dispatch", post(dispatch_delivery))
         .route("/chat/deliveries/{id}/receipt", post(delivery_receipt))
+        .route("/hosts", get(list_hosts))
+        .route("/hosts/{id}", axum::routing::patch(change_host))
         .route("/invites", get(list_invites).post(create_invite))
         .route("/invites/{id}", axum::routing::delete(revoke_invite))
         .route("/chat/approvals", get(approvals).post(create_approval))
@@ -487,16 +489,27 @@ async fn require_identity(
     }
 }
 
-/// Native sessions on this kernel's computer are its person's: the workspace's owner, who
-/// runs it. Others bring theirs on their own computers.
+/// The native sessions already on this kernel's computer are its person's: only they find
+/// and open them.
 async fn host_person(state: &AppState, who: &ChatIdentity) -> Result<(), ApiFailure> {
-    if state.store.is_workspace_owner(who).await? {
-        Ok(())
-    } else {
-        Err(failure(
+    match state.store.host_use(who).await? {
+        Some(crate::hosts::HostUse::Own) => Ok(()),
+        _ => Err(failure(
             StatusCode::FORBIDDEN,
-            "Sessions on this computer are its owner's; start yours on your own computer",
-        ))
+            "The sessions on this computer are its person's",
+        )),
+    }
+}
+
+/// New sessions on this kernel's computer: its person's, and those of the people it is open
+/// to, who run them with their own harness accounts.
+async fn host_open(state: &AppState, who: &ChatIdentity) -> Result<(), ApiFailure> {
+    match state.store.host_use(who).await? {
+        Some(_) => Ok(()),
+        None => Err(failure(
+            StatusCode::FORBIDDEN,
+            "This computer is not open to you; start your sessions on your own computer",
+        )),
     }
 }
 
@@ -633,7 +646,7 @@ async fn create_session(
     } else {
         who
     };
-    host_person(&state, &acting).await?;
+    host_open(&state, &acting).await?;
     let created = match input {
         NewSession::Claude(input) => {
             create_claude_session(State(state.clone()), Extension(acting), input).await
@@ -2489,6 +2502,26 @@ async fn create_agent(
         return Err(Error::Forbidden);
     }
     Ok((StatusCode::CREATED, Json(store.create_agent(input).await?)))
+}
+
+/// The computers that run the workspace's sessions.
+async fn list_hosts(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(json!({ "hosts": store.hosts(&who).await? })))
+}
+
+/// Its person names a host, or opens it to the others.
+async fn change_host(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(change): ChatJson<crate::hosts::HostChange>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(
+        json!({ "host": store.change_host(&who, &id, change).await? }),
+    ))
 }
 
 /// A new invitation to join the workspace: its token is in the answer only.

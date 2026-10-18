@@ -430,11 +430,14 @@ pub(crate) fn projects() -> Result<PathBuf> {
     )
 }
 
-/// The session's transcript, the same file for terminal and SDK sessions. None until the
-/// session's first turn writes it.
-pub(crate) fn transcript_path(session_id: &str) -> Option<PathBuf> {
+/// The session's transcript, in the Claude Code folder of a person's harness folders: the same
+/// file for terminal and SDK sessions. None until the session's first turn writes it.
+pub(crate) fn transcript_path_in(session_id: &str, homes: &crate::homes::Homes) -> Option<PathBuf> {
     let projects = projects_dir(
-        std::env::var_os("CLAUDE_CONFIG_DIR"),
+        homes
+            .claude()
+            .map(std::ffi::OsString::from)
+            .or_else(|| std::env::var_os("CLAUDE_CONFIG_DIR")),
         std::env::var_os("HOME"),
     )
     .ok()?;
@@ -446,12 +449,9 @@ impl ClaudeSession {
     /// stop recovery rather than silently weakening or replacing the owner's permissions.
     pub(crate) async fn saved_permission_mode(
         session_id: &str,
+        homes: &crate::homes::Homes,
     ) -> Result<crate::model::ClaudePermissionMode> {
-        let projects = projects_dir(
-            std::env::var_os("CLAUDE_CONFIG_DIR"),
-            std::env::var_os("HOME"),
-        )?;
-        let path = Transcript::locate(&projects, session_id)
+        let path = transcript_path_in(session_id, homes)
             .context("The saved Claude transcript is missing")?;
         let mut file = tokio::fs::File::open(path).await?;
         let len = file.metadata().await?.len();

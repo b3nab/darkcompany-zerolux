@@ -3154,3 +3154,66 @@ async fn a_session_waits_for_its_ci_and_only_those_who_write_to_it_set_that() {
     f.store.delete_trigger(&f.owner, &trigger.id).await.unwrap();
     assert!(f.store.triggers(&f.owner, &id).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn a_host_is_its_persons_and_open_to_others_only_with_their_own_harness_folders() {
+    use zerolux::hosts::{HostChange, HostUse};
+    let f = Fixture::new().await;
+    let people = f.dir.path().join("people");
+    let store =
+        f.db.open()
+            .await
+            .hosted("host-a".into())
+            .with_people(people.clone());
+    store.register_host().await.unwrap();
+    // Once: a second start only notes it.
+    store.register_host().await.unwrap();
+    let hosts = store.hosts(&f.owner).await.unwrap();
+    assert_eq!(hosts.len(), 1);
+    assert!(hosts[0].here && !hosts[0].open);
+    assert_eq!(Some(&hosts[0].person_id), f.owner.actor_id.as_ref());
+    let (_, token) = store.create_invite(&f.owner).await.unwrap();
+    let ada = ChatIdentity::person(&store.join(&token, "subject-a", "Ada").await.unwrap().id);
+    // Closed: the computer is its person's alone.
+    assert_eq!(store.host_use(&f.owner).await.unwrap(), Some(HostUse::Own));
+    assert_eq!(store.host_use(&ada).await.unwrap(), None);
+    assert!(matches!(store.homes(&ada).await, Err(Error::Forbidden)));
+    assert!(store.homes(&f.owner).await.unwrap().env().is_empty());
+    // Only its person opens it.
+    let open = |open| HostChange {
+        open: Some(open),
+        ..HostChange::default()
+    };
+    assert!(matches!(
+        store.change_host(&ada, "host-a", open(true)).await,
+        Err(Error::Forbidden)
+    ));
+    assert!(
+        store
+            .change_host(&f.owner, "host-a", open(true))
+            .await
+            .unwrap()
+            .open
+    );
+    // Open: Ada starts sessions with folders of her own, never the computer's.
+    assert_eq!(store.host_use(&ada).await.unwrap(), Some(HostUse::Guest));
+    let homes = store.homes(&ada).await.unwrap();
+    let root = people.join(ada.actor_id.as_deref().unwrap());
+    assert_eq!(homes.codex(), Some(root.join("codex")));
+    assert!(root.join("claude").is_dir() && root.join("pi").is_dir());
+    let named = store
+        .change_host(
+            &f.owner,
+            "host-a",
+            HostChange {
+                name: Some(" Studio ".into()),
+                ..HostChange::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(named.name, "Studio");
+    // A session is no person: it starts none of its own on a host.
+    let (_, agent) = f.hire("helper", None).await;
+    assert_eq!(store.host_use(&agent).await.unwrap(), None);
+}

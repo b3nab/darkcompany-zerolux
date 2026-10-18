@@ -99,7 +99,8 @@ impl Registry {
             .as_str()
             .context("The pi execution host configuration is missing")?;
         sessions::ensure_pi_stopped(Path::new(agent_dir), native).await?;
-        self.launch(workspace, json!({"nativeSessionId":native,"workspace":workspace,"file":file,"profile":profile,"pi":"pi"}), Some(native)).await
+        let homes = crate::homes::Homes::of_locator(locator);
+        self.launch(workspace, json!({"nativeSessionId":native,"workspace":workspace,"file":file,"profile":profile,"pi":"pi"}), Some(native), &homes).await
     }
     /// pi's own fork of a saved session, in its folder: all of it, or the path up to one of
     /// its entries. The new session's identity and file.
@@ -108,6 +109,7 @@ impl Registry {
         file: &str,
         workspace: &str,
         up_to: Option<&str>,
+        homes: &crate::homes::Homes,
     ) -> Result<(String, String)> {
         let entry = self
             .program
@@ -115,7 +117,7 @@ impl Registry {
             .as_ref()
             .context("The pi runner is not installed on this execution host")?;
         let mut command = tokio::process::Command::new(&self.program.bun);
-        command.arg(entry).arg("fork").arg(file);
+        command.envs(homes.env()).arg(entry).arg("fork").arg(file);
         if let Some(up_to) = up_to {
             command.arg(up_to);
         }
@@ -137,27 +139,36 @@ impl Registry {
         native: &str,
         workspace: &str,
         file: &str,
+        homes: &crate::homes::Homes,
     ) -> Result<RunnerLink> {
         if let Some(link) = self.find(native, workspace).await? {
             return Ok(link);
         }
-        sessions::ensure_pi_stopped(&sessions::agent_dir()?, native).await?;
+        let agent_dir = match homes.pi() {
+            Some(dir) => dir,
+            None => sessions::agent_dir()?,
+        };
+        sessions::ensure_pi_stopped(&agent_dir, native).await?;
         self.launch(
             workspace,
             json!({"nativeSessionId":native,"workspace":workspace,"file":file,"pi":"pi","opening":true}),
             Some(native),
+            homes,
         )
         .await
     }
+    /// A new pi session, with the person's own pi: the computer's for its person, a guest's own.
     pub(crate) async fn create(
         &self,
         workspace: &str,
         initial: &crate::model::AgentSettings,
+        homes: &crate::homes::Homes,
     ) -> Result<RunnerLink> {
         self.launch(
             workspace,
             json!({"workspace":workspace,"pi":"pi","creation":true,"initial":initial.patch_json()}),
             None,
+            homes,
         )
         .await
     }
@@ -166,6 +177,7 @@ impl Registry {
         workspace: &str,
         mut config: Value,
         native: Option<&str>,
+        homes: &crate::homes::Homes,
     ) -> Result<RunnerLink> {
         self.directory()?;
         let entry = self
@@ -194,6 +206,7 @@ impl Registry {
         command
             .arg(&entry)
             .current_dir(workspace)
+            .envs(homes.env())
             .env("ZEROLUX_PI_REGISTRY", self.path.canonicalize()?)
             .env("ZEROLUX_PI_CONFIG", config.to_string())
             .env_remove("ZEROLUX_TOKEN")

@@ -1921,7 +1921,7 @@ async fn the_codex_daemon_is_started_once_only_when_absent() {
     std::fs::write(
         &program,
         format!(
-            "#!/bin/sh\n[ \"$1 $2 $3\" = \"app-server daemon start\" ] || exit 9\necho start >> {marker}\n[ -e {fail} ] && exit 1\nln -s {socket} \"$(cat {endpoint})\"\n",
+            "#!/bin/sh\n[ \"$1 $2 $3\" = \"app-server daemon start\" ] || exit 9\necho \"start $CODEX_HOME\" >> {marker}\n[ -e {fail} ] && exit 1\nln -s {socket} \"$(cat {endpoint})\"\n",
             marker = marker.display(),
             fail = fail_file.display(),
             endpoint = endpoint_file.display(),
@@ -1935,7 +1935,8 @@ async fn the_codex_daemon_is_started_once_only_when_absent() {
             .unwrap_or(0)
     };
     // Already answering: nothing is run.
-    zerolux::sessions::ensure_codex_daemon_with(&program, &runtime.endpoint)
+    let own = zerolux::homes::Homes::own();
+    zerolux::sessions::ensure_codex_daemon_with(&program, &runtime.endpoint, &own)
         .await
         .unwrap();
     assert_eq!(starts(), 0);
@@ -1945,6 +1946,7 @@ async fn the_codex_daemon_is_started_once_only_when_absent() {
     zerolux::sessions::ensure_codex_daemon_with(
         &program,
         &format!("unix://{}", endpoint.display()),
+        &own,
     )
     .await
     .unwrap();
@@ -1953,6 +1955,7 @@ async fn the_codex_daemon_is_started_once_only_when_absent() {
     zerolux::sessions::ensure_codex_daemon_with(
         &program,
         &format!("unix://{}", endpoint.display()),
+        &own,
     )
     .await
     .unwrap();
@@ -1962,11 +1965,29 @@ async fn the_codex_daemon_is_started_once_only_when_absent() {
     let error = zerolux::sessions::ensure_codex_daemon_with(
         &program,
         &format!("unix://{}", dir.path().join("never.sock").display()),
+        &own,
     )
     .await
     .unwrap_err();
     assert!(format!("{error:#}").contains("did not start"), "{error:#}");
     assert_eq!(starts(), 2);
+    // A guest's daemon runs with the guest's own Codex home.
+    std::fs::remove_file(&fail_file).unwrap();
+    let guest = zerolux::homes::Homes::guest(dir.path().join("guest"));
+    let endpoint = dir.path().join("guest.sock");
+    std::fs::write(&endpoint_file, endpoint.to_string_lossy().as_bytes()).unwrap();
+    zerolux::sessions::ensure_codex_daemon_with(
+        &program,
+        &format!("unix://{}", endpoint.display()),
+        &guest,
+    )
+    .await
+    .unwrap();
+    let started = std::fs::read_to_string(&marker).unwrap();
+    assert_eq!(
+        started.lines().last().unwrap(),
+        format!("start {}", dir.path().join("guest/codex").display())
+    );
 }
 
 #[tokio::test]

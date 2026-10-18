@@ -113,6 +113,7 @@ async fn only_its_own_guarded_waiting_host_can_satisfy_a_new_launch() {
                 PermissionMode::Default,
                 None,
                 &AgentSettings::default(),
+                &crate::homes::Homes::own(),
             )
             .await;
         // Even the red test cleans up ONLY its authenticated fixture, not descriptor PID.
