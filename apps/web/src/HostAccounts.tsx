@@ -1,11 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router";
-import {
-  accountReady,
-  harnessLabels,
-  piProviders,
-  useHostAccounts,
-} from "@zerolux/chat";
+import { piProviders, useHostAccounts } from "@zerolux/chat";
 import type { DeviceCode, Host, Perform } from "@zerolux/chat";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -327,26 +321,5 @@ export function HostAccounts({
         </form>
       </Account>
     </section>
-  );
-}
-
-/** Before a guest's session: the harnesses still without an account of theirs here. */
-export function AccountsNeeded({ hostId }: { hostId: string }) {
-  const { accounts } = useHostAccounts(hostId);
-  if (!accounts) return null;
-  const missing = (["claude-code", "codex", "pi"] as const).filter(
-    (harness) => !accountReady(accounts, harness),
-  );
-  if (!missing.length) return null;
-  return (
-    <p className="rounded-md bg-attention/10 p-3 text-sm">
-      Your sessions on this computer use your own accounts.{" "}
-      {missing.map((harness) => harnessLabels[harness]).join(", ")}{" "}
-      {missing.length === 1 ? "has" : "have"} none yet:{" "}
-      <Link to="/settings" className="underline underline-offset-4">
-        connect them in Settings
-      </Link>
-      .
-    </p>
   );
 }

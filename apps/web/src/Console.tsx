@@ -48,6 +48,8 @@ import {
   sessionBlocks,
   sessionCommand,
   hitKindLabels,
+  accountReady,
+  useHostAccounts,
   useSessionSubagents,
   matchParts,
   useHistorySearch,
@@ -126,7 +128,7 @@ import { sendsOnEnter } from "./ChatView";
 import { useMe } from "./AuthGate";
 import { ChangesPanel, FilesPanel, TerminalPanel } from "./SessionCode";
 import { SubagentList, SubagentPanel } from "./SessionSubagents";
-import { AccountsNeeded } from "./HostAccounts";
+
 import { AskOnTheSide, InputActions } from "./SessionFork";
 import { SessionSchedules } from "./SessionSchedules";
 import { SessionTriggers } from "./SessionTriggers";
@@ -236,6 +238,8 @@ export function ConsoleList({
   const { me } = useMe(actors);
   const [view, setView] = useState<ListView>("live");
   const [starting, setStarting] = useState(false);
+  // A guest's sessions here run with their own accounts: one per harness, connected first.
+  const { accounts: guestAccounts } = useHostAccounts(guestOn);
   // Every word typed is in the session's title, agent, folder, harness or latest line.
   const [query, setQuery] = useState("");
   const navigate = useNavigate();
@@ -282,7 +286,6 @@ export function ConsoleList({
               here; give it an agent to bring it into your chats too.
             </DialogDescription>
           </DialogHeader>
-          {guestOn && <AccountsNeeded hostId={guestOn} />}
           <StartSession
             chat={chat}
             actors={actors}
@@ -290,6 +293,11 @@ export function ConsoleList({
             busy={busy}
             perform={perform}
             agent="none"
+            ready={
+              guestOn
+                ? (harness) => accountReady(guestAccounts, harness)
+                : undefined
+            }
             heading="New session"
             intro=""
             className="border-0 bg-transparent p-0 [&>div:first-child]:hidden"

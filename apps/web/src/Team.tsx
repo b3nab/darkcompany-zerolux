@@ -276,11 +276,14 @@ export function StartSession({
   intro,
   created,
   className,
+  ready,
 }: {
   chat: Chat;
   actors: Actor[];
   /** Folders ZeroLux has seen sessions in, offered as suggestions. */
   folders: string[];
+  /** For a guest on a computer: whether a harness has their own account there to run with. */
+  ready?: (harness: Startable) => boolean;
   busy: boolean;
   perform: Perform;
   /** Who it works for at first: no agent, or a new one. */
@@ -564,10 +567,22 @@ export function StartSession({
           Uses pi's own tools and project settings.
         </p>
       )}
+      {ready && !ready(harness) && (
+        <p className="rounded-md bg-attention/10 p-3 text-sm">
+          Your sessions on this computer use your own accounts, and{" "}
+          {harnessLabels[harness]} has none of yours yet:{" "}
+          <Link to="/settings" className="underline underline-offset-4">
+            connect it in Settings
+          </Link>
+          .
+        </p>
+      )}
       <Button
         type="submit"
         className="self-start"
-        disabled={busy || !workspace.trim()}
+        disabled={
+          busy || !workspace.trim() || (ready !== undefined && !ready(harness))
+        }
       >
         Start
       </Button>

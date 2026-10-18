@@ -1183,6 +1183,24 @@ test("starting an agent asks for a harness, an agent, a folder and how it asks p
   );
   expect(own).toMatch(/value="none"[^>]*selected="">No agent/);
   expect(own).not.toContain('id="start-name"');
+  // A guest starts only once the chosen harness has their own account on this computer.
+  const guest = renderToStaticMarkup(
+    <StartSession
+      chat={fakeChat({})}
+      actors={actors}
+      folders={["/home/owner/app"]}
+      busy={false}
+      perform={perform}
+      agent="none"
+      heading="New session"
+      intro=""
+      ready={(harness) => harness !== "claude-code"}
+    />,
+  );
+  expect(guest).toContain("Claude Code has none of yours yet");
+  expect(guest).toMatch(
+    /<button[^>]*type="submit"[^>]*disabled=""[^>]*>Start</,
+  );
   expect(own).toContain("In a new git worktree of the folder");
   expect(html).toContain("Start a new agent");
   expect(html).toContain("What you write in your chats reaches it as yours");
