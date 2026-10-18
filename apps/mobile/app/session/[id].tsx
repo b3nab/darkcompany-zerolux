@@ -10,9 +10,12 @@ import {
   SquareIcon,
 } from "lucide-react-native";
 import {
+  ActionSheetIOS,
   ActivityIndicator,
+  Alert,
   AppState,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   Switch,
@@ -44,6 +47,7 @@ import {
   sessionState,
   sessionTone,
   useArrivals,
+  useSessionCommands,
   useSessionEvents,
   useSessionLive,
   useSessionSettings,
@@ -55,6 +59,7 @@ import type {
   BlockRun,
   ChatSession,
   Density,
+  InputMode,
   LiveItem,
   PlanStep,
   SessionBlock,
@@ -305,9 +310,10 @@ function Composer({
   children?: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
-  const { chat } = useSession();
+  const { chat, url } = useSession();
   const { owner } = useMe();
   const stop = useInterrupt(session);
+  const harnessCommands = useSessionCommands(session.id, url);
   // The unsent text waits in its session while you are elsewhere in the app.
   const [draft, setDraft] = useState(() => draftOf(session.id));
   const [sending, setSending] = useState(false);
@@ -317,10 +323,11 @@ function Composer({
     "--color-primary-foreground",
     "--color-agent",
   ]).map(String);
-  const commands = commandsFor(draft);
+  const commands = commandsFor(draft, harnessCommands);
   useEffect(() => saveDraft(session.id, draft), [session.id, draft]);
   const open = owner && session.status === "connected";
-  const send = async () => {
+  // While it works, words join the turn; held, Send waits for the turn or stops it first.
+  const send = async (mode?: InputMode) => {
     const text = draft;
     if (!open || !text.trim()) return;
     setSending(true);
@@ -330,7 +337,7 @@ function Composer({
       if (command?.name === "compact") {
         await chat.compact(session.id, command.args);
         compactStarted();
-      } else await chat.input(session.id, text.trim());
+      } else await chat.input(session.id, text.trim(), mode);
       // What was typed meanwhile stays.
       setDraft((now) => (now === text ? "" : now));
     } catch (e) {
@@ -340,6 +347,32 @@ function Composer({
     }
   };
   const interrupting = !draft.trim() && stop.allowed;
+  const modes: [string, InputMode][] = [
+    ["After the turn", "queue"],
+    ["Stop and send", "interrupt"],
+  ];
+  const chooseMode = () => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    if (Platform.OS === "ios")
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: [...modes.map(([label]) => label), "Cancel"],
+          cancelButtonIndex: modes.length,
+          destructiveButtonIndex: 1,
+        },
+        (index) => {
+          if (index < modes.length) void send(modes[index]![1]);
+        },
+      );
+    else
+      Alert.alert(`Send to ${name}`, undefined, [
+        ...modes.map(([text, mode]) => ({
+          text,
+          onPress: () => void send(mode),
+        })),
+        { text: "Cancel", style: "cancel" as const },
+      ]);
+  };
   const shown = notice || error || stop.error;
   return (
     <KeyboardStickyView offset={{ closed: 0, opened: insets.bottom }}>
@@ -364,16 +397,22 @@ function Composer({
           <View className="overflow-hidden rounded-md border border-border bg-background">
             {commands.map((command) => (
               <Pressable
-                key={command.name}
+                key={command.invoke}
                 onPress={() => {
                   void Haptics.selectionAsync();
-                  setDraft(`/${command.name} `);
+                  setDraft(`${command.invoke} `);
                 }}
                 accessibilityRole="button"
                 className="flex-row items-baseline gap-2 px-3 py-2.5 active:bg-accent"
               >
                 <Text className="font-mono text-sm text-agent-foreground">
-                  /{command.name}
+                  {command.invoke}
+                  {command.hint ? (
+                    <Text className="font-mono text-xs text-faint">
+                      {" "}
+                      {command.hint}
+                    </Text>
+                  ) : null}
                 </Text>
                 <Text
                   numberOfLines={1}
@@ -433,8 +472,14 @@ function Composer({
                 )}
                 disabled={!open || !draft.trim() || sending}
                 onPress={() => void send()}
+                onLongPress={stop.allowed && open ? chooseMode : undefined}
                 accessibilityRole="button"
                 accessibilityLabel="Send"
+                accessibilityHint={
+                  stop.allowed
+                    ? "Joins the turn in progress; hold to send it after the turn, or to stop and send"
+                    : undefined
+                }
               >
                 <SendIcon color={onLamp} size={18} strokeWidth={1.75} />
               </Pressable>
@@ -445,6 +490,12 @@ function Composer({
             Only the workspace's owner writes to a session.
           </Text>
         )}
+        {owner && stop.allowed && draft.trim() && !sessionCommand(draft) ? (
+          <Text className="px-1.5 text-xs text-faint">
+            Joins the turn in progress. Hold Send to send it after the turn, or
+            to stop and send.
+          </Text>
+        ) : null}
         {owner && session.status !== "stopped" ? (
           <SettingsBar session={session} />
         ) : null}
