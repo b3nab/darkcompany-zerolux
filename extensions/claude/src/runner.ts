@@ -2,6 +2,7 @@ import { mkdir, realpath } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { basename, join } from "node:path";
 import {
+  forkSession,
   getSessionInfo,
   query,
   type PermissionMode,
@@ -672,8 +673,29 @@ function isMusl(): boolean {
   return !report?.header?.glibcVersionRuntime;
 }
 
+/**
+ * A copy of a saved session to go on from on its own: all of it, or up to one of its
+ * messages. Claude Code's own fork, in the session's folder; prints the new session's ID.
+ */
+export async function fork(session: string, folder: string, upTo?: string) {
+  const { sessionId } = await forkSession(session, {
+    dir: folder,
+    ...(upTo ? { upToMessageId: upTo } : {}),
+  });
+  return sessionId;
+}
+
 if (import.meta.main && process.argv[2] === "exec") waitAndExec("Claude Code");
-else if (import.meta.main) {
+else if (import.meta.main && process.argv[2] === "fork") {
+  const [session, upTo] = process.argv.slice(3);
+  fork(session!, process.cwd(), upTo || undefined).then(
+    (id) => console.log(JSON.stringify({ session_id: id })),
+    (error: unknown) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    },
+  );
+} else if (import.meta.main) {
   const managed = process.env.ZEROLUX_CLAUDE_MANAGED === "1";
   // Resolve the installed executable once for this managed host.
   let pinned: string | undefined;
