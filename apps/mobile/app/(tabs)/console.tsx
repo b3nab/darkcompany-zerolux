@@ -1,13 +1,14 @@
 import { useState } from "react";
-import { Pressable, View } from "react-native";
+import { Pressable, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
-import { SquarePenIcon } from "lucide-react-native";
+import { SearchIcon, SquarePenIcon, XIcon } from "lucide-react-native";
 import { useCSSVariable } from "uniwind";
 import { LegendList } from "@legendapp/list/react-native";
 import {
   attentionInbox,
   attentionLabels,
   consoleSessions,
+  sessionMatches,
   sessionOutputAt,
   useSeen,
 } from "@zerolux/chat";
@@ -49,9 +50,18 @@ export default function Console() {
   const { workspace, chat } = useSession();
   const router = useRouter();
   const ink = String(useCSSVariable("--color-foreground"));
+  const faint = String(useCSSVariable("--color-faint"));
   const [shown, setShown] = useState<Shown>("live");
+  const [query, setQuery] = useState("");
   const seen = useSeen();
-  const sessions = consoleSessions(chat.sessions);
+  const actors = workspace?.actors ?? [];
+  // What is typed narrows each list, and its count.
+  const sessions = Object.fromEntries(
+    Object.entries(consoleSessions(chat.sessions)).map(([list, all]) => [
+      list,
+      all.filter((session) => sessionMatches(session, actors, query)),
+    ]),
+  ) as Record<Shown, typeof chat.sessions>;
   const rows = attentionInbox(
     sessions[shown].map((session) => ({
       ...session,
@@ -82,6 +92,30 @@ export default function Console() {
         </Pressable>
       }
     >
+      <View className="mx-5 mb-2.5 flex-row items-center gap-2 rounded-md bg-muted px-2.5">
+        <SearchIcon color={faint} size={16} strokeWidth={1.75} />
+        <TextInput
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Search sessions"
+          placeholderTextColor={faint}
+          autoCorrect={false}
+          autoCapitalize="none"
+          returnKeyType="search"
+          accessibilityLabel="Search sessions"
+          className="flex-1 py-2 font-sans text-[15px] text-foreground"
+        />
+        {query ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Clear search"
+            onPress={() => setQuery("")}
+            hitSlop={8}
+          >
+            <XIcon color={faint} size={16} strokeWidth={1.75} />
+          </Pressable>
+        ) : null}
+      </View>
       <View className="mx-5 mb-2 flex-row self-start rounded-sm border border-border bg-sidebar p-0.5">
         {(Object.keys(shownLabels) as Shown[]).map((value) => (
           <Pressable
@@ -114,9 +148,12 @@ export default function Console() {
         keyExtractor={({ session }) => session.id}
         estimatedItemSize={60}
         contentContainerStyle={{ paddingBottom: 16 }}
+        keyboardDismissMode="on-drag"
         ListEmptyComponent={
           <Text className="p-5 text-base leading-6 text-faint">
-            {empty[shown]}
+            {query.trim()
+              ? `No ${shownLabels[shown].toLowerCase()} session matches "${query.trim()}".`
+              : empty[shown]}
           </Text>
         }
         renderItem={({ item, index }) => {
@@ -142,7 +179,7 @@ export default function Console() {
               ) : null}
               <SessionRow
                 session={session}
-                agent={workspace?.actors.find((a) => a.id === session.actor_id)}
+                agent={actors.find((a) => a.id === session.actor_id)}
                 attention={attention}
                 asks={chat.approvals.find(
                   (a) => a.session_id === session.id && a.status === "pending",
