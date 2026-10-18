@@ -93,6 +93,7 @@ import { ActorMark, Fact } from "@/components/member";
 import { Screen } from "@/components/screen";
 import { Segmented } from "@/components/segmented";
 import { SessionCard, useInterrupt, useOrganize } from "@/components/session";
+import { Schedules } from "@/components/schedules";
 import { ForkSession, useInputActions } from "@/components/session-fork";
 import { SettingSelect } from "@/components/setting-select";
 import { Button } from "@/components/ui/button";
@@ -862,6 +863,7 @@ function About({
         </View>
         <Organize session={session} />
         <ForkSession session={session} close={close} />
+        <Schedules session={session} />
         <UsageFacts sessionId={session.id} />
         <SessionCard session={session} name={name} facts />
       </ScrollView>
