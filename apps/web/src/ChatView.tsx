@@ -350,7 +350,9 @@ export function ChatView({
     chat.conversations.find((c) => c.id === id)?.title;
   const agents = agentMembers(conversation, actors);
   const actor = (id: string) => actors.find((a) => a.id === id);
-  const name = (id: string) => actor(id)?.name ?? "Former member";
+  // Sessions in a chat work for its agents; a session without one reads as the owner's.
+  const name = (id: string | null) =>
+    id ? (actor(id)?.name ?? "Former member") : "Your session";
   const working = conversation.members.some(
     (m) =>
       chat.sessions.find((s) => s.id === m.session_id)?.activity === "working",

@@ -8,6 +8,7 @@ import {
   needsYou,
   runningNow,
   useMeetings,
+  sessionName,
 } from "@zerolux/chat";
 import type { Chat, MemberTone, Perform, Place } from "@zerolux/chat";
 import { activeActors } from "./api";
@@ -26,7 +27,7 @@ import { ActorMark, Eyebrow } from "@/components/presence";
 
 /** The web address of something the home lists. */
 const to = (place: Place) =>
-  "chat" in place ? `/chats/${place.chat}` : "/team";
+  "chat" in place ? `/chats/${place.chat}` : `/console/${place.session}`;
 
 /** The home: what waits for the owner, what runs now, who is in. */
 export function Tonight({
@@ -46,7 +47,15 @@ export function Tonight({
 }) {
   const live = useMeetings(capabilities.includes("meetings-v1")).meetings;
   const actors = activeActors(workspace.actors);
-  const actor = (id: string) => workspace.actors.find((a) => a.id === id);
+  const actor = (id: string | null) =>
+    workspace.actors.find((a) => a.id === id);
+  // Who an item is about: its agent, or the session itself when it has none.
+  const who = (item: { actorId: string | null; sessionId: string }) => {
+    const session = chat.sessions.find((s) => s.id === item.sessionId);
+    return session
+      ? sessionName(session, workspace.actors)
+      : (actor(item.actorId)?.name ?? "unknown");
+  };
   const needs = needsYou(chat);
   const running = runningNow(chat);
   const tones = actors.map((a) => memberTone(a, owner.id, chat.sessions));
@@ -137,7 +146,7 @@ export function Tonight({
                 >
                   <ActorMark
                     kind={actor(need.actorId)?.kind ?? "agent"}
-                    name={actor(need.actorId)?.name ?? "?"}
+                    name={who(need)}
                   />
                   <Link
                     to={to(need.place)}
@@ -149,7 +158,7 @@ export function Tonight({
                         .join(" · ")}{" "}
                       · from{" "}
                       <span className="font-mono text-agent-foreground">
-                        {actor(need.actorId)?.name ?? "unknown"}
+                        {who(need)}
                       </span>
                     </span>
                     <span className="text-sm font-medium text-pretty">
@@ -219,11 +228,11 @@ export function Tonight({
                   >
                     <ActorMark
                       kind="agent"
-                      name={actor(run.actorId)?.name ?? "?"}
+                      name={who(run)}
                       className="size-6"
                     />
                     <span className="truncate font-mono text-sm text-agent-foreground">
-                      {actor(run.actorId)?.name ?? "unknown"}
+                      {who(run)}
                     </span>
                     <span className="truncate text-sm">{run.what}</span>
                     <span className="font-mono text-xs text-faint">
