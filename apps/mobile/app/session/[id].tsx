@@ -3,17 +3,20 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   ChevronDownIcon,
+  ImagePlusIcon,
   ChevronRightIcon,
   ListChecksIcon,
   PanelRightIcon,
   SendIcon,
   SquareIcon,
+  XIcon,
 } from "lucide-react-native";
 import {
   ActionSheetIOS,
   ActivityIndicator,
   Alert,
   AppState,
+  Image,
   Modal,
   Platform,
   Pressable,
@@ -32,6 +35,8 @@ import {
   errorMessage,
   folderName,
   harnessLabels,
+  inputImagesError,
+  MAX_INPUT_IMAGES,
   saveDraft,
   agentSettingFields,
   blockRuns,
@@ -80,6 +85,8 @@ import { setDensity, useDensity } from "../../src/density";
 import { useSession } from "../../src/kernel";
 import { useMe } from "../../src/me";
 import { dismissNotice } from "../../src/notices";
+import { pickPhotos } from "../../src/photos";
+import type { Photo } from "../../src/photos";
 
 /** What the stream lists: the session's own blocks and the requests it made. */
 type Item = SessionBlock | ApprovalItem;
@@ -318,10 +325,14 @@ function Composer({
   const [draft, setDraft] = useState(() => draftOf(session.id));
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
-  const [faint, onLamp, agent] = useCSSVariable([
+  // Photos go with the words, or alone; they wait here until sent.
+  const [photos, setPhotos] = useState<Photo[]>([]);
+  const [picking, setPicking] = useState(false);
+  const [faint, onLamp, agent, muted] = useCSSVariable([
     "--color-faint",
     "--color-primary-foreground",
     "--color-agent",
+    "--color-muted-foreground",
   ]).map(String);
   const commands = commandsFor(draft, harnessCommands);
   useEffect(() => saveDraft(session.id, draft), [session.id, draft]);
@@ -329,24 +340,72 @@ function Composer({
   // While it works, words join the turn; held, Send waits for the turn or stops it first.
   const send = async (mode?: InputMode) => {
     const text = draft;
-    if (!open || !text.trim()) return;
+    const sent = photos;
+    if (!open || (!text.trim() && !sent.length)) return;
+    const command = sessionCommand(text);
+    const refused = command
+      ? sent.length
+        ? "Send the photos without a command"
+        : undefined
+      : inputImagesError(
+          sent.map((photo) => ({ type: photo.media_type, size: photo.size })),
+        );
+    if (refused) return setError(refused);
     setSending(true);
     setError("");
     try {
-      const command = sessionCommand(text);
       if (command?.name === "compact") {
         await chat.compact(session.id, command.args);
         compactStarted();
-      } else await chat.input(session.id, text.trim(), mode);
-      // What was typed meanwhile stays.
+      } else
+        await chat.input(
+          session.id,
+          text.trim(),
+          mode,
+          sent.map(({ media_type, data }) => ({ media_type, data })),
+        );
+      // What was typed or picked meanwhile stays.
       setDraft((now) => (now === text ? "" : now));
+      setPhotos((now) => now.filter((photo) => !sent.includes(photo)));
     } catch (e) {
       setError(errorMessage(e));
     } finally {
       setSending(false);
     }
   };
-  const interrupting = !draft.trim() && stop.allowed;
+  const filled = Boolean(draft.trim() || photos.length);
+  const interrupting = !filled && stop.allowed;
+  const room = MAX_INPUT_IMAGES - photos.length;
+  const pick = (from: "library" | "camera") => {
+    setPicking(true);
+    setError("");
+    pickPhotos(from, room)
+      .then((picked) =>
+        setPhotos((now) => [...now, ...picked].slice(0, MAX_INPUT_IMAGES)),
+      )
+      .catch((e: unknown) => setError(errorMessage(e)))
+      .finally(() => setPicking(false));
+  };
+  const attach = () => {
+    void Haptics.selectionAsync();
+    if (Platform.OS === "ios")
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: ["Photo library", "Take photo", "Cancel"],
+          cancelButtonIndex: 2,
+        },
+        (index) => {
+          if (index === 0) pick("library");
+          else if (index === 1) pick("camera");
+        },
+      );
+    else
+      Alert.alert("Attach a photo", undefined, [
+        { text: "Photo library", onPress: () => pick("library") },
+        { text: "Take photo", onPress: () => pick("camera") },
+        { text: "Cancel", style: "cancel" },
+      ]);
+  };
   // Claude Code in a terminal only takes words into the running turn.
   const choosable = !(
     session.harness === "claude-code" && session.origin !== "owned"
@@ -431,8 +490,53 @@ function Composer({
         {shown ? (
           <Text className="px-1.5 text-sm text-destructive">{shown}</Text>
         ) : null}
+        {photos.length ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerClassName="gap-2 px-0.5"
+          >
+            {photos.map((photo, i) => (
+              <View key={photo.uri} className="relative">
+                <Image
+                  source={{ uri: photo.uri }}
+                  accessibilityLabel={`Photo ${i + 1} of ${photos.length}`}
+                  className="size-14 rounded-md border border-border"
+                />
+                <Pressable
+                  onPress={() =>
+                    setPhotos((now) => now.filter((other) => other !== photo))
+                  }
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove photo ${i + 1}`}
+                  hitSlop={8}
+                  className="absolute -top-1.5 -right-1.5 size-5 items-center justify-center rounded-full border border-border bg-card"
+                >
+                  <XIcon color={muted} size={11} strokeWidth={2.5} />
+                </Pressable>
+              </View>
+            ))}
+          </ScrollView>
+        ) : null}
         {owner ? (
           <View className="flex-row items-end gap-1.5">
+            <Pressable
+              onPress={attach}
+              disabled={!open || picking || room <= 0}
+              accessibilityRole="button"
+              accessibilityLabel="Attach a photo"
+              hitSlop={4}
+              className={cn(
+                "size-10 items-center justify-center rounded-sm active:bg-accent",
+                (!open || room <= 0) && "opacity-40",
+              )}
+            >
+              {picking ? (
+                <ActivityIndicator size="small" color={muted} />
+              ) : (
+                <ImagePlusIcon color={muted} size={20} strokeWidth={1.5} />
+              )}
+            </Pressable>
             <View className="min-h-10 flex-1 flex-row items-end rounded-md border border-input bg-background">
               <TextInput
                 className={cn(
@@ -472,9 +576,9 @@ function Composer({
               <Pressable
                 className={cn(
                   "size-10 items-center justify-center rounded-sm bg-primary active:opacity-80",
-                  (!open || !draft.trim() || sending) && "opacity-40",
+                  (!open || !filled || sending) && "opacity-40",
                 )}
-                disabled={!open || !draft.trim() || sending}
+                disabled={!open || !filled || sending}
                 onPress={() => void send()}
                 onLongPress={
                   stop.allowed && open && choosable ? chooseMode : undefined
@@ -496,7 +600,7 @@ function Composer({
             Only the workspace's owner writes to a session.
           </Text>
         )}
-        {owner && stop.allowed && draft.trim() && !sessionCommand(draft) ? (
+        {owner && stop.allowed && filled && !sessionCommand(draft) ? (
           <Text className="px-1.5 text-xs text-faint">
             {choosable
               ? "Joins the turn in progress. Hold Send to send it when the turn ends, or to stop the turn and send."
