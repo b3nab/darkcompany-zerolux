@@ -19,6 +19,8 @@ mod tests;
 pub(crate) struct CodexSettings {
     pub rpc: CodexRpc,
     pub thread_id: String,
+    /// The thread's folder, where its skills are found.
+    pub workspace: String,
     pub state: watch::Sender<Value>,
     pub turn: watch::Sender<Option<String>>,
     pub ready: watch::Sender<bool>,
@@ -53,13 +55,29 @@ impl CodexSettings {
         }
     }
 
-    /// The owner's own input, typed into the thread from ZeroLux: it joins the running turn,
-    /// or waits in Codex's queue and starts the next one. An unconfirmed send is never
-    /// repeated.
-    pub async fn input(&self, text: &str) -> Result<()> {
-        let input = json!([{"type": "text", "text": text}]);
+    /// The owner's own input, typed into the thread from ZeroLux. Steered, it joins the
+    /// running turn; queued, it waits in Codex's queue and starts the next one; with
+    /// interrupt, the running turn stops first. `$name` names one of the thread's skills.
+    /// An unconfirmed send is never repeated.
+    pub async fn input(&self, text: &str, mode: crate::model::InputMode) -> Result<()> {
+        let mut input = vec![json!({"type": "text", "text": text})];
+        if text.contains('$') {
+            for skill in self.skills().await? {
+                let named = format!("${}", skill["name"].as_str().unwrap_or_default());
+                if text
+                    .split(|c: char| c.is_whitespace())
+                    .any(|word| word == named)
+                {
+                    input.push(json!({"type":"skill","name":skill["name"],"path":skill["path"]}));
+                }
+            }
+        }
+        let input = Value::Array(input);
+        if mode == crate::model::InputMode::Interrupt {
+            self.interrupt().await?;
+        }
         let running = self.turn.borrow().clone();
-        if let Some(turn) = running {
+        if let Some(turn) = running.filter(|_| mode == crate::model::InputMode::Steer) {
             match self
                 .rpc
                 .request(
@@ -92,6 +110,45 @@ impl CodexSettings {
             .await
             .context("Codex did not confirm the input; it was not sent again")?;
         Ok(())
+    }
+
+    /// The thread's skills, enabled, for its folder.
+    async fn skills(&self) -> Result<Vec<Value>> {
+        let listed = self
+            .rpc
+            .request("skills/list", json!({"cwds": [self.workspace]}))
+            .await
+            .context("Codex did not list its skills")?;
+        Ok(listed["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|entry| entry["skills"].as_array().cloned().unwrap_or_default())
+            .filter(|skill| skill["enabled"] != false && skill["name"].is_string())
+            .collect())
+    }
+
+    /// Codex's skills, as what the owner types to use them.
+    pub async fn commands(&self) -> Result<Vec<crate::model::SessionCommand>> {
+        Ok(self
+            .skills()
+            .await?
+            .into_iter()
+            .map(|skill| {
+                let name = skill["name"].as_str().unwrap_or_default().to_owned();
+                crate::model::SessionCommand {
+                    invoke: format!("${name}"),
+                    description: skill["interface"]["shortDescription"]
+                        .as_str()
+                        .or(skill["shortDescription"].as_str())
+                        .or(skill["description"].as_str())
+                        .unwrap_or_default()
+                        .to_owned(),
+                    argument_hint: None,
+                    name,
+                }
+            })
+            .collect())
     }
 
     /// Stops the running turn, whoever started it. No turn running: nothing to stop.

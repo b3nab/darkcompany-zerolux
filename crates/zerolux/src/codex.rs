@@ -647,6 +647,10 @@ impl CodexDriver {
         let native_settings = crate::codex_settings::CodexSettings {
             rpc: rpc.clone(),
             thread_id: thread_id.clone(),
+            workspace: settings["thread"]["cwd"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
             state: watch::channel(settings.clone()).0,
             turn: watch::channel(None).0,
             ready: watch::channel(false).0,

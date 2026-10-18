@@ -278,6 +278,28 @@ impl FromQueryResult for ChatSession {
     }
 }
 
+/// How the owner's input reaches a session that is working: into the running turn (steer),
+/// after it (queue), or in place of it (interrupt). An idle session starts a turn with it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InputMode {
+    #[default]
+    Steer,
+    Queue,
+    Interrupt,
+}
+
+/// A command or skill the session's harness offers, and what to type to use it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionCommand {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub argument_hint: Option<String>,
+    /// What runs it at the start of the input: `/name` or, for a Codex skill, `$name`.
+    pub invoke: String,
+}
+
 /// What the owner changes about a session; what is omitted stays.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]

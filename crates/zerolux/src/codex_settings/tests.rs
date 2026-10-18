@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::InputMode;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::{Arc, Mutex};
 use tokio::{net::TcpListener, task::JoinHandle};
@@ -67,6 +68,10 @@ impl Fixture {
                     "thread/compact/start" => json!({}),
                     "turn/steer" => json!({"turnId":"turn"}),
                     "thread/queue/add" => json!({"queuedSubmission":{"id":"q"}}),
+                    "skills/list" => json!({"data":[{"cwd":"/fixture","errors":[],"skills":[
+                        {"name":"review","description":"Review the change in depth","enabled":true,"path":"/fixture/.codex/skills/review/SKILL.md","scope":"repo",
+                         "interface":{"shortDescription":"Review the change"}},
+                        {"name":"off","description":"Disabled","enabled":false,"path":"/fixture/off/SKILL.md","scope":"user"}]}]}),
                     other => panic!("Unexpected native method: {other}"),
                 };
                 if socket
@@ -85,6 +90,7 @@ impl Fixture {
         let control = CodexSettings {
             rpc,
             thread_id: "thread".into(),
+            workspace: "/fixture".into(),
             state: watch::channel(initial).0,
             turn: watch::channel(active.then(|| "turn".to_owned())).0,
             ready: watch::channel(true).0,
@@ -238,7 +244,7 @@ async fn compaction_waits_for_the_running_turn() {
 #[tokio::test]
 async fn input_joins_the_running_turn_or_waits_for_the_next() {
     let busy = Fixture::new(true, false, "applied").await;
-    busy.control.input("look").await.unwrap();
+    busy.control.input("look", InputMode::Steer).await.unwrap();
     let steered = busy.calls("turn/steer");
     assert_eq!(steered.len(), 1);
     assert_eq!(steered[0]["params"]["expectedTurnId"], "turn");
@@ -248,7 +254,61 @@ async fn input_joins_the_running_turn_or_waits_for_the_next() {
     );
     assert!(busy.calls("thread/queue/add").is_empty());
     let idle = Fixture::new(false, false, "applied").await;
-    idle.control.input("start").await.unwrap();
+    idle.control.input("start", InputMode::Steer).await.unwrap();
     assert_eq!(idle.calls("thread/queue/add").len(), 1);
     assert!(idle.calls("turn/steer").is_empty());
+}
+
+#[tokio::test]
+async fn queued_input_waits_and_interrupting_input_replaces_the_turn() {
+    let busy = Fixture::new(true, false, "applied").await;
+    busy.control.input("later", InputMode::Queue).await.unwrap();
+    assert!(busy.calls("turn/steer").is_empty());
+    assert!(busy.calls("turn/interrupt").is_empty());
+    assert_eq!(busy.calls("thread/queue/add").len(), 1);
+    let busy = Fixture::new(true, false, "applied").await;
+    busy.control
+        .input("instead", InputMode::Interrupt)
+        .await
+        .unwrap();
+    assert_eq!(busy.calls("turn/interrupt").len(), 1);
+    assert!(busy.calls("turn/steer").is_empty());
+    assert_eq!(busy.calls("thread/queue/add").len(), 1);
+}
+
+#[tokio::test]
+async fn skills_are_listed_for_the_folder_and_named_ones_go_with_the_input() {
+    let idle = Fixture::new(false, false, "applied").await;
+    let commands = idle.control.commands().await.unwrap();
+    assert_eq!(
+        commands,
+        vec![crate::model::SessionCommand {
+            name: "review".into(),
+            description: "Review the change".into(),
+            argument_hint: None,
+            invoke: "$review".into(),
+        }]
+    );
+    assert_eq!(
+        idle.calls("skills/list")[0]["params"],
+        json!({"cwds":["/fixture"]})
+    );
+    idle.control
+        .input("$review the parser", InputMode::Steer)
+        .await
+        .unwrap();
+    assert_eq!(
+        idle.calls("thread/queue/add")[0]["params"]["input"],
+        json!([{"type":"text","text":"$review the parser"},
+            {"type":"skill","name":"review","path":"/fixture/.codex/skills/review/SKILL.md"}])
+    );
+    // A disabled or unknown skill is only text.
+    idle.control
+        .input("$off $nope", InputMode::Steer)
+        .await
+        .unwrap();
+    assert_eq!(
+        idle.calls("thread/queue/add")[1]["params"]["input"],
+        json!([{"type":"text","text":"$off $nope"}])
+    );
 }
