@@ -1125,20 +1125,22 @@ function Organize({ session }: { session: ChatSession }) {
       </View>
       <View className="gap-2">
         <Text className="text-sm text-faint">Budget</Text>
-        <View className="flex-row items-center gap-2">
-          <Text className="font-mono text-base text-muted-foreground">$</Text>
-          <Input
-            value={budget}
-            onChangeText={setBudget}
-            onSubmitEditing={saveBudget}
-            onBlur={saveBudget}
-            placeholder="No limit"
-            keyboardType="decimal-pad"
-            returnKeyType="done"
-            accessibilityLabel="Budget in dollars"
-            className="flex-1 font-mono"
-          />
-        </View>
+        {session.harness === "codex" ? null : (
+          <View className="flex-row items-center gap-2">
+            <Text className="font-mono text-base text-muted-foreground">$</Text>
+            <Input
+              value={budget}
+              onChangeText={setBudget}
+              onSubmitEditing={saveBudget}
+              onBlur={saveBudget}
+              placeholder="No limit"
+              keyboardType="decimal-pad"
+              returnKeyType="done"
+              accessibilityLabel="Budget in dollars"
+              className="flex-1 font-mono"
+            />
+          </View>
+        )}
         <Text className="text-xs text-faint">{spent}</Text>
       </View>
     </View>
