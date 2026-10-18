@@ -37,6 +37,8 @@ export interface Actor extends CreationDate {
   name: string;
   kind: "human" | "agent";
   owner_id: string | null;
+  /** For a person who joined by invitation, who invited them; null for the workspace's owner. */
+  invited_by: string | null;
   harness: Harness | null;
   model: string | null;
   effort: string | null;

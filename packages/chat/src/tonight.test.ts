@@ -13,6 +13,7 @@ const owner: Actor = {
   name: "Owner",
   kind: "human",
   owner_id: null,
+  invited_by: null,
   harness: null,
   model: null,
   effort: null,

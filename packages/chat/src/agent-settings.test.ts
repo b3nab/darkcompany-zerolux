@@ -14,6 +14,7 @@ const actor: Actor = {
   name: "Agent",
   kind: "agent",
   owner_id: "fixture-owner",
+  invited_by: null,
   harness: "claude-code",
   model: "fixture-model",
   effort: null,

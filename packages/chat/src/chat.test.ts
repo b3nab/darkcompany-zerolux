@@ -34,6 +34,7 @@ const actor = (
   name,
   kind,
   owner_id: kind === "agent" ? "owner" : null,
+  invited_by: null,
   harness: kind === "agent" ? "claude-code" : null,
   model: null,
   effort: null,
