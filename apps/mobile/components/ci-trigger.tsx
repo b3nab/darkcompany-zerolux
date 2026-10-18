@@ -123,7 +123,10 @@ export function CiTrigger({ session }: { session: ChatSession }) {
         <Button
           variant="outline"
           disabled={busy}
-          onPress={() => void act(() => triggers.create())}
+          // Like the web app: only failures, and asked to fix them.
+          onPress={() =>
+            void act(() => triggers.create({ prompt: "Fix what failed." }))
+          }
         >
           <Text>Tell it when CI ends</Text>
         </Button>
