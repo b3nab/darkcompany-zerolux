@@ -28,7 +28,7 @@ import type {
   QuestionAnswer,
 } from "./chat";
 import { liveNotice, liveResync } from "./live";
-import type { LiveState } from "./live";
+import type { LiveRead } from "./live";
 import { connectRealtime } from "./realtime";
 import type { RealtimeStatus } from "./realtime";
 
@@ -361,7 +361,7 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     },
     /** What a session is producing right now, before its native record has it. */
     live: (sessionId: string) =>
-      api<LiveState>(`/sessions/${encodeURIComponent(sessionId)}/live`),
+      api<LiveRead>(`/sessions/${encodeURIComponent(sessionId)}/live`),
     /** The native sessions on this computer, running and saved, that ZeroLux can open. */
     discover: () => api<Discovery>("/sessions/discover"),
     /**
