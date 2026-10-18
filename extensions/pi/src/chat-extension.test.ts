@@ -1320,9 +1320,23 @@ while IFS= read -r line; do :; done
       sessionManager: {
         getSessionId: () => "11111111-1111-4111-8111-111111111111",
         getSessionName: () => "fixture",
+        getEntries: () => [
+          {
+            type: "message",
+            message: {
+              role: "assistant",
+              usage: { totalTokens: 1_500, cost: { total: 0.02 } },
+            },
+          },
+        ],
       },
       isIdle: () => !busy,
       hasPendingMessages: () => busy,
+      getContextUsage: () => ({
+        tokens: 42_000,
+        contextWindow: 200_000,
+        percent: 21,
+      }),
       abort() {},
       ui: { setStatus() {}, notify() {} },
     };
@@ -1381,7 +1395,7 @@ while IFS= read -r line; do :; done
       await output("two\n"); // pi keeps the end of long output: shown whole.
       await handlers.get("tool_execution_end")!({ toolCallId: "call" }, ctx);
       await handlers.get("agent_settled")!({}, ctx);
-      for (let i = 0; i < 100 && live.length < 5; i++) await Bun.sleep(20);
+      for (let i = 0; i < 100 && live.length < 6; i++) await Bun.sleep(20);
       const item = (live[0] as { item: string }).item;
       expect(live).toEqual([
         { type: "append", item, kind: "thinking", text: "Hmm" },
@@ -1389,6 +1403,13 @@ while IFS= read -r line; do :; done
         { type: "set", item: "call", kind: "output", text: "two\n" },
         { type: "done", item: "call" },
         { type: "clear" },
+        {
+          type: "usage",
+          context_tokens: 42_000,
+          context_window: 200_000,
+          total_tokens: 1_500,
+          cost_usd: 0.02,
+        },
       ]);
       // An input waiting in pi's queue shows as waiting until it enters the context.
       busy = true;
@@ -1400,8 +1421,8 @@ while IFS= read -r line; do :; done
         mode: "queue",
       });
       expect(queued.ok).toBe(true);
-      for (let i = 0; i < 100 && live.length < 6; i++) await Bun.sleep(20);
-      expect(live[5]).toMatchObject({
+      for (let i = 0; i < 100 && live.length < 7; i++) await Bun.sleep(20);
+      expect(live[6]).toMatchObject({
         type: "queue",
         items: [{ text: "then the docs" }],
       });
@@ -1409,8 +1430,8 @@ while IFS= read -r line; do :; done
         { message: { role: "user", content: "then the docs" } },
         ctx,
       );
-      for (let i = 0; i < 100 && live.length < 7; i++) await Bun.sleep(20);
-      expect(live[6]).toEqual({ type: "queue", items: [] });
+      for (let i = 0; i < 100 && live.length < 8; i++) await Bun.sleep(20);
+      expect(live[7]).toEqual({ type: "queue", items: [] });
     } finally {
       await command?.handler("off", ctx);
       await handlers.get("session_shutdown")?.({}, ctx);

@@ -973,6 +973,31 @@ export default function chatExtension(pi: ExtensionAPI) {
         );
     }
   });
+  /** How full the context is, and what the session has cost, as pi counts them. */
+  const reportUsage = () => {
+    // Reading pi's counts never gets in the way of the turn's end.
+    try {
+      const usage = context?.getContextUsage();
+      let cost = 0;
+      let tokens = 0;
+      for (const entry of context?.sessionManager.getEntries() ?? []) {
+        const message = (entry as { message?: { role?: string; usage?: any } })
+          .message;
+        if (message?.role !== "assistant") continue;
+        cost += Number(message.usage?.cost?.total) || 0;
+        tokens += Number(message.usage?.totalTokens) || 0;
+      }
+      live({
+        type: "usage",
+        context_tokens: usage?.tokens ?? null,
+        context_window: usage?.contextWindow ?? null,
+        total_tokens: tokens || null,
+        cost_usd: cost || null,
+      });
+    } catch {
+      /* Without pi's counts there is nothing to show. */
+    }
+  };
   /** The owner's inputs waiting in pi's queue, oldest first. */
   const ownerQueue: { id: string; text: string; expanded: boolean }[] = [];
   const reportQueue = () =>
@@ -1079,6 +1104,7 @@ export default function chatExtension(pi: ExtensionAPI) {
     streaming = undefined;
     toolOutput.clear();
     live({ type: "clear" });
+    reportUsage();
     // Nothing waits once pi has settled with an empty queue.
     if (ownerQueue.length && !context?.hasPendingMessages()) {
       ownerQueue.length = 0;
