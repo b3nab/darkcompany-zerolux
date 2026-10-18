@@ -3087,3 +3087,70 @@ async fn a_person_joins_by_invitation_and_sees_only_their_own_and_shared_session
     assert_eq!(room.members.len(), 3);
     assert_eq!(f.store.conversations(&f.owner).await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn a_session_waits_for_its_ci_and_only_those_who_write_to_it_set_that() {
+    use zerolux::triggers::{NewTrigger, TriggerChange};
+    let f = Fixture::new().await;
+    let (session, agent) = f.hire("", None).await;
+    let id = session.session.id.clone();
+    assert!(matches!(
+        f.store
+            .create_trigger(
+                &f.owner,
+                &id,
+                NewTrigger {
+                    event: "push".into(),
+                    failures_only: true,
+                    prompt: String::new(),
+                }
+            )
+            .await,
+        Err(Error::Invalid(_))
+    ));
+    let trigger = f
+        .store
+        .create_trigger(
+            &f.owner,
+            &id,
+            NewTrigger {
+                event: "ci".into(),
+                failures_only: true,
+                prompt: "Fix what failed".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(trigger.enabled && trigger.failures_only);
+    // Not the session's own, nor a person it is not shared with.
+    assert!(matches!(
+        f.store.triggers(&agent, &id).await,
+        Err(Error::Forbidden)
+    ));
+    let (_, token) = f.store.create_invite(&f.owner).await.unwrap();
+    let ada = ChatIdentity::person(&f.store.join(&token, "subject-a", "Ada").await.unwrap().id);
+    assert!(matches!(
+        f.store
+            .change_trigger(&ada, &trigger.id, TriggerChange::default())
+            .await,
+        Err(Error::Forbidden)
+    ));
+    let changed = f
+        .store
+        .change_trigger(
+            &f.owner,
+            &trigger.id,
+            TriggerChange {
+                failures_only: Some(false),
+                enabled: Some(false),
+                ..TriggerChange::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!changed.enabled && !changed.failures_only);
+    assert_eq!(changed.prompt, "Fix what failed");
+    assert_eq!(f.store.triggers(&f.owner, &id).await.unwrap().len(), 1);
+    f.store.delete_trigger(&f.owner, &trigger.id).await.unwrap();
+    assert!(f.store.triggers(&f.owner, &id).await.unwrap().is_empty());
+}

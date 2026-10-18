@@ -62,6 +62,24 @@ async fn git(folder: &Path, args: &[&str]) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
+/// The commit checked out.
+pub async fn head(folder: &Path) -> Result<String> {
+    Ok(
+        String::from_utf8_lossy(&git(folder, &["rev-parse", "HEAD"]).await?)
+            .trim()
+            .to_owned(),
+    )
+}
+
+/// The branch checked out, or `HEAD` when it is detached.
+pub async fn branch(folder: &Path) -> Result<String> {
+    Ok(
+        String::from_utf8_lossy(&git(folder, &["rev-parse", "--abbrev-ref", "HEAD"]).await?)
+            .trim()
+            .to_owned(),
+    )
+}
+
 /// What git says about the folder's repository.
 pub async fn status(folder: &Path) -> Result<Status> {
     // Each untracked file on its own, never a folder of them.
@@ -285,7 +303,7 @@ pub async fn push(folder: &Path) -> Result<()> {
 }
 
 /// `gh` in `folder`, bounded; its output, or its own message on failure.
-async fn gh(folder: &Path, args: &[&str]) -> Result<std::process::Output> {
+pub(crate) async fn gh(folder: &Path, args: &[&str]) -> Result<std::process::Output> {
     tokio::time::timeout(
         std::time::Duration::from_secs(60),
         tokio::process::Command::new("gh")

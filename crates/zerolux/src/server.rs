@@ -218,6 +218,18 @@ impl Server {
                     }
                 }
             });
+            // Triggers: a session hears when the CI runs of its commit end.
+            let watch = runtime.clone();
+            let watcher = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(60));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    interval.tick().await;
+                    if let Err(error) = watch.run_triggers().await {
+                        tracing::warn!(error = format!("{error:#}"), "Triggers did not run");
+                    }
+                }
+            });
             // People whose sign-in ended while connected to the notice room are disconnected.
             let sweep = runtime.clone();
             let sweeper = tokio::spawn(async move {
@@ -258,6 +270,8 @@ impl Server {
             sweeper.abort();
             scheduler.abort();
             let _ = scheduler.await;
+            watcher.abort();
+            let _ = watcher.await;
             settings_observer.abort();
             let _ = relinker.await;
             let _ = sweeper.await;

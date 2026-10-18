@@ -495,6 +495,64 @@ impl ChatRuntime {
         Ok(())
     }
 
+    /// Triggers whose event happened: their session receives what happened, with their words,
+    /// queued after its turn, once. Only this host's running sessions are watched; one that is
+    /// not running is told when it runs again, if its commit's runs are still the latest.
+    pub async fn run_triggers(&self) -> Result<()> {
+        for trigger in self.store.enabled_triggers().await? {
+            let owner = self.store.session_person(&trigger.session_id).await?;
+            let Ok(session) = self.store.chat_session(&owner, &trigger.session_id).await else {
+                continue;
+            };
+            if session.host_id.as_deref() != self.store.host()
+                || session.stopped_at.is_some()
+                || session.status != "connected"
+            {
+                continue;
+            }
+            let ended = match crate::triggers::ci(std::path::Path::new(&session.workspace)).await {
+                Ok(Some(ended)) if trigger.last_seen.as_ref() != Some(&ended.seen) => ended,
+                Ok(_) => continue,
+                Err(error) => {
+                    let error = format!("{error:#}");
+                    if trigger.last_error.as_ref() != Some(&error) {
+                        self.store
+                            .trigger_saw(&trigger.id, None, None, Some(error))
+                            .await?;
+                    }
+                    continue;
+                }
+            };
+            if trigger.failures_only && !ended.failed {
+                self.store
+                    .trigger_saw(&trigger.id, Some(ended.seen), None, None)
+                    .await?;
+                continue;
+            }
+            let text = if trigger.prompt.trim().is_empty() {
+                ended.report.clone()
+            } else {
+                format!("{}\n\n{}", ended.report, trigger.prompt.trim())
+            };
+            let sent = self
+                .input(
+                    &owner,
+                    &session.id,
+                    &text,
+                    crate::model::InputMode::Queue,
+                    &[],
+                )
+                .await;
+            // Never sent twice: input whose delivery is uncertain is not tried again.
+            let error = sent.err().map(|error| format!("{error:#}"));
+            let told = error.is_none().then(crate::store::now_ms);
+            self.store
+                .trigger_saw(&trigger.id, Some(ended.seen), told, error)
+                .await?;
+        }
+        Ok(())
+    }
+
     /// What a session is producing right now.
     pub fn live_state(&self, id: &str) -> crate::live::State {
         self.live.state(id)

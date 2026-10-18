@@ -230,6 +230,14 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         )
         .route("/schedules", get(all_schedules))
         .route(
+            "/sessions/{id}/triggers",
+            get(session_triggers).post(create_trigger),
+        )
+        .route(
+            "/triggers/{trigger}",
+            axum::routing::patch(change_trigger).delete(delete_trigger),
+        )
+        .route(
             "/schedules/{schedule}",
             axum::routing::patch(change_schedule).delete(delete_schedule),
         )
@@ -896,6 +904,47 @@ async fn delete_schedule(
     Path(schedule): Path<String>,
 ) -> Result<Json<Value>, Error> {
     store.delete_schedule(&who, &schedule).await?;
+    Ok(Json(json!({ "deleted": true })))
+}
+
+async fn session_triggers(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(
+        json!({ "triggers": store.triggers(&who, &id).await? }),
+    ))
+}
+
+async fn create_trigger(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<crate::triggers::NewTrigger>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(
+        json!({ "trigger": store.create_trigger(&who, &id, input).await? }),
+    ))
+}
+
+async fn change_trigger(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(trigger): Path<String>,
+    ChatJson(input): ChatJson<crate::triggers::TriggerChange>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(
+        json!({ "trigger": store.change_trigger(&who, &trigger, input).await? }),
+    ))
+}
+
+async fn delete_trigger(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(trigger): Path<String>,
+) -> Result<Json<Value>, Error> {
+    store.delete_trigger(&who, &trigger).await?;
     Ok(Json(json!({ "deleted": true })))
 }
 
