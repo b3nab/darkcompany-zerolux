@@ -48,6 +48,7 @@ import {
   sessionBlocks,
   sessionCommand,
   hitKindLabels,
+  matchParts,
   useHistorySearch,
   sessionAccess,
   sessionMatches,
@@ -1052,19 +1053,13 @@ export function SessionView({
 
 /** The words searched, as they stand out in a match's text. */
 export function Marked({ text, query }: { text: string; query: string }) {
-  const words = query.trim().split(/\s+/).filter(Boolean);
-  if (!words.length) return text;
-  const pattern = new RegExp(
-    `(${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,
-    "gi",
-  );
-  return text.split(pattern).map((part, i) =>
-    i % 2 ? (
+  return matchParts(text, query).map((part, i) =>
+    part.match ? (
       <mark key={i} className="rounded-xs bg-primary/25 text-foreground">
-        {part}
+        {part.text}
       </mark>
     ) : (
-      part
+      part.text
     ),
   );
 }
