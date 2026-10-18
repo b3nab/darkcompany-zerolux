@@ -513,8 +513,7 @@ export function SessionView({
   busy: boolean;
   perform: Perform;
 }) {
-  // A joined computer runs it: its images, terminals, forks and rewinds stay there, and so do
-  // Codex's settings.
+  // A joined computer runs it: its images, terminals, forks and rewinds stay there.
   const computer = sessionComputer(session, hosts);
   const away = computer !== undefined;
   const name = sessionName(session, actors);
@@ -1663,10 +1662,8 @@ function SessionInput({
           </div>
         )}
       </div>
-      {/* On a joined computer, Codex's own settings are changed there. */}
-      {open && !(away && session.harness === "codex") && (
-        <SessionSettings session={session} perform={perform} />
-      )}
+      {/* Shown where the kernel reads them: not yet Codex's on a joined computer. */}
+      {open && <SessionSettings session={session} perform={perform} />}
       <div className="mx-auto flex w-full max-w-3xl items-center gap-3 font-mono text-[11px] text-faint">
         <p className="min-w-0 flex-1">
           {tooLong
