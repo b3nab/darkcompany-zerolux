@@ -84,6 +84,10 @@ test("registry commands are restricted to the packaged manager, not workspace pa
     "core:window:allow-is-fullscreen",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
+    // The page's own notifications: shown and asked for, nothing else of the plugin.
+    "notification:allow-is-permission-granted",
+    "notification:allow-request-permission",
+    "notification:allow-notify",
   ]);
   expect(capabilities[1].remote).toBeUndefined();
   expect(config.bundle.macOS.minimumSystemVersion).toBe("14.0");
