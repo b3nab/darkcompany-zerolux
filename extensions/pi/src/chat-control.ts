@@ -43,6 +43,8 @@ export interface ControlHost {
   interrupt?(linkId: string): Promise<{ interrupted: boolean }>;
   /** The owner's own input for a link's session: native user input, not a chat message. */
   input?(linkId: string, text: string): Promise<void>;
+  /** Starts pi's own compaction of a link's session; the session records how it went. */
+  compact?(linkId: string, instructions?: string): Promise<void>;
   /**
    * Whose work the running turn is, across every link of this pi: the delivery of the one
    * chat feeding it and that link's ID, or no delivery. Asked by a host that routes pi's
@@ -97,6 +99,20 @@ export class ChatControl extends LocalControl {
             )
               throw new Error("Invalid input request");
             await host.input(request.link_id, request.text);
+            return {};
+          }
+          if (method === "compact" && host.compact) {
+            if (
+              typeof request.link_id !== "string" ||
+              !request.link_id ||
+              (request.instructions != null &&
+                typeof request.instructions !== "string")
+            )
+              throw new Error("Invalid compact request");
+            await host.compact(
+              request.link_id,
+              (request.instructions as string | null) ?? undefined,
+            );
             return {};
           }
           if (method === "interrupt" && host.interrupt) {

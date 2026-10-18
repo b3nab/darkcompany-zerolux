@@ -38,6 +38,7 @@ async function fixture() {
   const pairs: unknown[] = [],
     stops: string[] = [],
     interrupts: string[] = [],
+    compactions: [string, string | undefined][] = [],
     inputs: [string, string][] = [];
   const description = {
     native_session_id: "native",
@@ -71,6 +72,9 @@ async function fixture() {
     input: async (id, text) => {
       inputs.push([id, text]);
     },
+    compact: async (id, instructions) => {
+      compactions.push([id, instructions]);
+    },
   });
   await control.start();
   const path = join(registry, (await readdir(registry))[0]!);
@@ -84,6 +88,7 @@ async function fixture() {
     pairs,
     stops,
     interrupts,
+    compactions,
     inputs,
     description,
     call: (body: unknown) =>
@@ -214,6 +219,27 @@ test("a live pi lists the machine's pi sessions for the kernel, only with its cr
     // Listing never pairs, stops or starts anything.
     expect(f.pairs).toHaveLength(0);
     expect(f.stops).toHaveLength(0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("the kernel starts a link's compaction, and only names a link to do it", async () => {
+  const f = await fixture();
+  try {
+    for (const instructions of [null, "Keep the plan"])
+      expect(
+        await f.call({ method: "compact", link_id: "link", instructions }),
+      ).toMatchObject({ ok: true });
+    expect((await f.call({ method: "compact" })).ok).toBe(false);
+    expect(
+      (await f.call({ method: "compact", link_id: "link", instructions: 1 }))
+        .ok,
+    ).toBe(false);
+    expect(f.compactions).toEqual([
+      ["link", undefined],
+      ["link", "Keep the plan"],
+    ]);
   } finally {
     await f.close();
   }
