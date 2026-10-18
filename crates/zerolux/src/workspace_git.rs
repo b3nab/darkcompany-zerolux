@@ -64,7 +64,18 @@ async fn git(folder: &Path, args: &[&str]) -> Result<Vec<u8>> {
 
 /// What git says about the folder's repository.
 pub async fn status(folder: &Path) -> Result<Status> {
-    let out = git(folder, &["status", "--porcelain=v2", "--branch", "-z"]).await?;
+    // Each untracked file on its own, never a folder of them.
+    let out = git(
+        folder,
+        &[
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "--untracked-files=all",
+            "-z",
+        ],
+    )
+    .await?;
     Ok(parse_status(&String::from_utf8_lossy(&out)))
 }
 
@@ -413,9 +424,19 @@ mod tests {
         .unwrap();
         std::fs::write(folder.join("a.txt"), "one\ntwo\n").unwrap();
         std::fs::write(folder.join("b.txt"), "new\n").unwrap();
+        std::fs::create_dir(folder.join("new")).unwrap();
+        std::fs::write(folder.join("new/c.txt"), "deep\n").unwrap();
         let status = status(folder).await.unwrap();
         assert_eq!(status.branch.as_deref(), Some("main"));
-        assert_eq!(status.changes.len(), 2);
+        assert_eq!(status.changes.len(), 3);
+        assert!(status.changes.iter().any(|c| c.path == "new/c.txt"));
+        assert!(
+            diff(folder, Some("new/c.txt"), false)
+                .await
+                .unwrap()
+                .contains("+deep")
+        );
+        std::fs::remove_dir_all(folder.join("new")).unwrap();
         let changed = diff(folder, Some("a.txt"), false).await.unwrap();
         assert!(changed.contains("+two"));
         let added = diff(folder, Some("b.txt"), false).await.unwrap();
