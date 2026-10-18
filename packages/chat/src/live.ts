@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
+import type { SessionGoal } from "./goal";
 
 /** What a session is producing right now, before its harness writes it to the native record. */
 export type LiveKind = "text" | "thinking" | "output";
@@ -33,7 +34,9 @@ export type LiveChange =
   /** The whole queue as it is now. */
   | { type: "queue"; items: QueuedInput[] }
   /** The latest usage, in place of the one before. */
-  | ({ type: "usage" } & Partial<SessionUsage>);
+  | ({ type: "usage" } & Partial<SessionUsage>)
+  /** The goal as it is now; null once cleared. */
+  | { type: "goal"; goal: SessionGoal | null };
 
 /** What is in progress and what waits, and the number of the last change it includes. */
 export interface LiveState {
@@ -41,6 +44,8 @@ export interface LiveState {
   items: LiveItem[];
   queue: QueuedInput[];
   usage: SessionUsage | null;
+  /** What it works toward on its own: Codex's goal. */
+  goal: SessionGoal | null;
 }
 
 /** The kernel's notice of a session's changes, numbered from `first`. */
@@ -51,7 +56,13 @@ export interface LiveNotice {
   changes: LiveChange[];
 }
 
-export const noLive: LiveState = { seq: 0, items: [], queue: [], usage: null };
+export const noLive: LiveState = {
+  seq: 0,
+  items: [],
+  queue: [],
+  usage: null,
+  goal: null,
+};
 
 /** What the kernel sends of a usage: what is missing is unknown. */
 const usageOf = (usage: Partial<SessionUsage>): SessionUsage => ({
@@ -82,12 +93,14 @@ export function applyLive(
   let items = state.items;
   let queue = state.queue;
   let usage = state.usage;
+  let goal = state.goal;
   notice.changes.forEach((change, n) => {
     if (notice.first + n <= state.seq) return;
     // The turn's end leaves the queue: what waits starts the next one.
     if (change.type === "clear") items = [];
     else if (change.type === "queue") queue = change.items;
     else if (change.type === "usage") usage = usageOf(change);
+    else if (change.type === "goal") goal = change.goal;
     else if (change.type === "done")
       items = items.map((open) =>
         open.id === change.item ? { ...open, done: true } : open,
@@ -113,6 +126,7 @@ export function applyLive(
     items,
     queue,
     usage,
+    goal,
   };
 }
 
@@ -146,6 +160,7 @@ function reread(sessionId: string) {
         items: read.items.map(({ id, kind, text }) => ({ id, kind, text })),
         queue: read.queue ?? [],
         usage: read.usage ? usageOf(read.usage) : null,
+        goal: read.goal ?? null,
       };
       for (const notice of waiting) state = state && applyLive(state, notice);
       if (state) publish(entry, state);
@@ -251,4 +266,19 @@ export function useSessionUsage(
   );
   const snapshot = () => liveState(sessionId);
   return useSyncExternalStore(subscribe, snapshot, snapshot).usage;
+}
+
+/** The goal the session works toward on its own, as its harness last reported. */
+export function useSessionGoal(
+  sessionId: string,
+  read: Read,
+): SessionGoal | null {
+  const subscribe = useCallback(
+    (listener: () => void) => watchLive(sessionId, read, listener),
+    // The reader stays the same for a session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionId],
+  );
+  const snapshot = () => liveState(sessionId);
+  return useSyncExternalStore(subscribe, snapshot, snapshot).goal;
 }

@@ -33,7 +33,15 @@ test("changes build what is in progress, in order, each applied once", () => {
     ],
     queue: [],
     usage: null,
+    goal: null,
   });
+  const goal = {
+    objective: "Ship the release",
+    status: "active" as const,
+    token_budget: 500_000,
+    tokens_used: 1_200,
+    time_used_seconds: 30,
+  };
   // A notice already applied in part: only what follows seq counts.
   state = applyLive(state!, {
     first: 3,
@@ -44,6 +52,7 @@ test("changes build what is in progress, in order, each applied once", () => {
       { type: "done", item: "t" },
       { type: "queue", items: [{ id: "q1", text: "then run the tests" }] },
       { type: "usage", context_tokens: 42_000, context_window: 200_000 },
+      { type: "goal", goal },
     ],
   });
   const usage = {
@@ -53,7 +62,7 @@ test("changes build what is in progress, in order, each applied once", () => {
     cost_usd: null,
   };
   expect(state).toEqual({
-    seq: 8,
+    seq: 9,
     items: [
       { id: "t", kind: "thinking", text: "Let me look", done: true },
       { id: "m", kind: "text", text: "Hello" },
@@ -61,19 +70,21 @@ test("changes build what is in progress, in order, each applied once", () => {
     ],
     queue: [{ id: "q1", text: "then run the tests" }],
     usage,
+    goal,
   });
-  // The turn's end leaves what waits for the next one, and what it used.
-  expect(applyLive(state!, { first: 9, changes: [{ type: "clear" }] })).toEqual(
-    {
-      seq: 9,
-      items: [],
-      queue: [{ id: "q1", text: "then run the tests" }],
-      usage,
-    },
-  );
-  // A missing change: the state is read again.
+  // The turn's end leaves what waits for the next one, what it used and its goal.
   expect(
     applyLive(state!, { first: 10, changes: [{ type: "clear" }] }),
+  ).toEqual({
+    seq: 10,
+    items: [],
+    queue: [{ id: "q1", text: "then run the tests" }],
+    usage,
+    goal,
+  });
+  // A missing change: the state is read again.
+  expect(
+    applyLive(state!, { first: 11, changes: [{ type: "clear" }] }),
   ).toBeUndefined();
 });
 
@@ -114,6 +125,7 @@ test("a followed session reads its state, then follows the notices", async () =>
     items: [],
     queue: [{ id: "q1", text: "next" }],
     usage: null,
+    goal: null,
   });
   // So does a reconnection.
   liveResync();
