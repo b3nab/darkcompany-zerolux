@@ -391,7 +391,13 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     /** The owner renames, pins or archives a session; what is left out stays. */
     async updateSession(
       sessionId: string,
-      change: { title?: string; pinned?: boolean; archived?: boolean },
+      /** `budget_usd` 0 takes the budget away. */
+      change: {
+        title?: string;
+        pinned?: boolean;
+        archived?: boolean;
+        budget_usd?: number;
+      },
     ) {
       await order.run(
         "sessions",

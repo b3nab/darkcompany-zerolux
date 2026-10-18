@@ -139,6 +139,7 @@ test("any live session of an agent may join any chat", () => {
     created_at: 1,
     pinned_at: null,
     archived_at: null,
+    budget_usd: null,
     activity: "idle",
   });
   const sessions = [
@@ -455,6 +456,7 @@ test("the activity bubble shows only agents whose current turn serves this chat"
     created_at: 1,
     pinned_at: null,
     archived_at: null,
+    budget_usd: null,
     activity,
     activity_conversation_id,
   });
@@ -591,6 +593,7 @@ test("the team lists live sessions, ones needing attention, and the latest stopp
     created_at: 1,
     pinned_at: null,
     archived_at: null,
+    budget_usd: null,
     origin,
   });
   const listed = listedSessions([

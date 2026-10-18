@@ -28,6 +28,7 @@ const session = (
   created_at: 1,
   pinned_at: null,
   archived_at: null,
+  budget_usd: null,
 });
 
 test("the console lists live sessions working first, and keeps the stopped ones apart", () => {

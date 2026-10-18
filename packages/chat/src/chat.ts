@@ -50,6 +50,8 @@ export interface ChatSession {
   pinned_at: number | null;
   /** Put away by the owner: out of the Console's lists, still readable. */
   archived_at: number | null;
+  /** What it may cost, in US dollars: its work stops there until the owner raises it. */
+  budget_usd: number | null;
   /** When its native record last grew, in ms. */
   output_at?: number | null;
   /** How its last turn ended; null while one runs or before the first. */
