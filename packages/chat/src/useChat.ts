@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { errorMessage, kernelUrl, request } from "./client";
-import type { ClaudeMode, CodexApprovalPolicy, CodexSandbox } from "./client";
+import type { Actor } from "./client";
 import {
   PAGE,
   freshness,
@@ -20,9 +20,12 @@ import type {
   Member,
   Message,
   MessagePage,
+  NewSession,
   Outgoing,
   QuestionAnswer,
 } from "./chat";
+import { liveNotice, liveResync } from "./live";
+import type { LiveState } from "./live";
 import { connectRealtime } from "./realtime";
 import type { RealtimeStatus } from "./realtime";
 
@@ -32,6 +35,8 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
   const [server] = useState(kernel);
   const api = <T>(path: string, body?: unknown) =>
     request<T>(server, path, body);
+  const patch = <T>(path: string, body: unknown) =>
+    request<T>(server, path, body, undefined, "PATCH");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
@@ -135,7 +140,7 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
   const listSessions = () =>
     order.run(
       "sessions",
-      () => api<{ sessions: ChatSession[] }>("/chat/sessions"),
+      () => api<{ sessions: ChatSession[] }>("/sessions"),
       ({ sessions }) => setSessions(sessions),
     );
   const listApprovals = () =>
@@ -195,11 +200,21 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
         return void background(listConversations());
       case "approval.changed":
         return void background(listApprovals());
-      case "session.output":
-        return setOutputs((all) => ({
+      case "session.live":
+        return liveNotice(event);
+      case "session.output": {
+        const { session_id, end, type: _, event_id: __, ...tail } = event;
+        setOutputs((all) => ({
           ...all,
-          [event.session_id]: { end: event.end, at: Date.now() },
+          [session_id]: { end, at: Date.now() },
         }));
+        // How the record now ends rides on the notice: the session updates in place.
+        if (Object.keys(tail).length)
+          setSessions((ss) =>
+            ss.map((s) => (s.id === session_id ? { ...s, ...tail } : s)),
+          );
+        return;
+      }
     }
   }
 
@@ -209,7 +224,11 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     return connectRealtime({
       kernel: server,
       event: onEvent,
-      sync: () => void background(sync()),
+      sync: () => {
+        // Notices may have been missed meanwhile: live state is read again too.
+        liveResync();
+        void background(sync());
+      },
       status: setRealtime,
     });
     // Handlers only use refs and state setters.
@@ -335,51 +354,53 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     async rename(actorId: string, name: string) {
       await api(`/actors/${actorId}/name`, { name });
     },
-    discover: () => api<Discovery>("/sessions"),
-    async hire(discovered_session_id: string, name: string, actor_id?: string) {
-      await api("/chat/hire", { discovered_session_id, name, actor_id });
+    /** What a session is producing right now, before its native record has it. */
+    live: (sessionId: string) =>
+      api<LiveState>(`/sessions/${encodeURIComponent(sessionId)}/live`),
+    /** The native sessions on this computer, running and saved, that ZeroLux can open. */
+    discover: () => api<Discovery>("/sessions/discover"),
+    /**
+     * Opens a found session in ZeroLux: for an agent (`actor_id`, or a new one by `name`),
+     * or as the owner's own with neither.
+     */
+    async attach(
+      discovered_session_id: string,
+      agent: { name?: string; actor_id?: string } = {},
+    ) {
+      const opened = await api<{ actor: Actor | null; session: ChatSession }>(
+        "/sessions/attach",
+        { discovered_session_id, ...agent },
+      );
       await listSessions();
+      return opened;
     },
-    /** A new Claude Code session ZeroLux runs in a folder: a new agent, or another of one. */
-    async startClaude(input: {
-      name: string;
-      workspace: string;
-      permission_mode: ClaudeMode;
-      model?: string;
-      effort?: string;
-      actor_id?: string;
-    }) {
-      await api("/chat/claude-sessions", input);
+    /** A new session ZeroLux runs in a folder, with or without an agent. */
+    async createSession(input: NewSession) {
+      const created = await api<{ actor: Actor | null; session: ChatSession }>(
+        "/sessions",
+        input,
+      );
       await listSessions();
+      return created;
     },
-    /** A new Codex session ZeroLux starts in a folder, through the user's own Codex. */
-    async startCodex(input: {
-      name: string;
-      workspace: string;
-      approval_policy?: CodexApprovalPolicy;
-      sandbox?: CodexSandbox;
-      model?: string;
-      effort?: string;
-      actor_id?: string;
-    }) {
-      await api("/chat/codex-sessions", input);
-      await listSessions();
-    },
-    /** A new native pi identity using its own configuration, without an initial prompt. */
-    async startPi(input: {
-      name: string;
-      workspace: string;
-      model?: string;
-      effort?: string;
-      actor_id?: string;
-    }) {
-      await api("/chat/pi-sessions", input);
-      await listSessions();
+    /** The owner renames, pins or archives a session; what is left out stays. */
+    async updateSession(
+      sessionId: string,
+      change: { title?: string; pinned?: boolean; archived?: boolean },
+    ) {
+      await order.run(
+        "sessions",
+        () => patch<{ session: ChatSession }>(`/sessions/${sessionId}`, change),
+        ({ session }) =>
+          setSessions((ss) =>
+            replace(ss, { ...ss.find((s) => s.id === session.id), ...session }),
+          ),
+      );
     },
     /** Cooperatively closes an idle terminal pi; recovery preserves its native identity. */
     async takeoverPi(sessionId: string) {
       try {
-        await api(`/chat/sessions/${sessionId}/takeover`, {});
+        await api(`/sessions/${sessionId}/takeover`, {});
       } finally {
         // A lost acknowledgement is not retried; show the authoritative session state.
         await listSessions().catch(() => {});
@@ -387,7 +408,7 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     },
     /** Resumes a session ZeroLux runs: the same session, in the same permission mode. */
     async resume(sessionId: string) {
-      await api(`/chat/sessions/${sessionId}/resume`, {});
+      await api(`/sessions/${sessionId}/resume`, {});
       await listSessions();
     },
     /**
@@ -397,7 +418,7 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     async interrupt(sessionId: string) {
       try {
         const { interrupted } = await api<{ interrupted: boolean }>(
-          `/chat/sessions/${sessionId}/interrupt`,
+          `/sessions/${sessionId}/interrupt`,
           {},
         );
         return interrupted;
@@ -410,13 +431,22 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
      * new turn when idle, joining the running turn otherwise. The session's events show it.
      */
     async input(sessionId: string, text: string) {
-      await api(`/chat/sessions/${sessionId}/input`, { text });
+      await api(`/sessions/${sessionId}/input`, { text });
+    },
+    /**
+     * Starts the harness's own compaction of a session's history, to give its context room
+     * again, with what the summary should keep. The session's events show the summary, or
+     * why it failed.
+     */
+    async compact(sessionId: string, instructions?: string) {
+      await api(`/sessions/${sessionId}/compact`, {
+        instructions: instructions || null,
+      });
     },
     async stop(sessionId: string) {
       await order.run(
         "sessions",
-        () =>
-          api<{ session: ChatSession }>(`/chat/sessions/${sessionId}/stop`, {}),
+        () => api<{ session: ChatSession }>(`/sessions/${sessionId}/stop`, {}),
         ({ session }) => setSessions((ss) => replace(ss, session)),
       );
     },
