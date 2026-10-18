@@ -247,6 +247,11 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/sessions/{id}/output", get(session_output))
         .route("/sessions/{id}/live", get(session_live))
         .route("/sessions/{id}/events", get(session_events))
+        .route("/sessions/{id}/subagents", get(session_subagents))
+        .route(
+            "/sessions/{id}/subagents/{agent}/events",
+            get(subagent_events),
+        )
         .route("/sessions/{id}/interrupt", post(interrupt_session))
         .route(
             "/sessions/{id}/input",
@@ -1549,6 +1554,36 @@ async fn session_files(
         .await
         .map_err(runtime_error)?;
     Ok(Json(json!({ "files": files })))
+}
+
+/// The subagents the session's harness started, newest first.
+async fn session_subagents(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
+    let subagents = runtime(&state)?
+        .subagents(&who, &id)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "subagents": subagents })))
+}
+
+/// A subagent's events, paged like the session's own.
+async fn subagent_events(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path((id, agent)): Path<(String, String)>,
+    query: Result<Query<crate::native_output::EventQuery>, QueryRejection>,
+) -> Result<Json<crate::native_output::EventPage>, ApiFailure> {
+    let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
+    let page = runtime(&state)?
+        .subagent_events(&who, &id, &agent, query)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(page))
 }
 
 #[derive(Deserialize)]

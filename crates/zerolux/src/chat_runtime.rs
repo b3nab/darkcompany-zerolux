@@ -1647,6 +1647,8 @@ mod fork;
 #[cfg(unix)]
 mod owned;
 mod settings;
+mod subagents;
+pub use subagents::Subagent;
 
 async fn finish(task: &mut JoinHandle<Result<()>>) -> Result<()> {
     match tokio::time::timeout(Duration::from_secs(10), &mut *task).await {

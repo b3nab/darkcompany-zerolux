@@ -612,6 +612,22 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
     assert_eq!(forked.actor_id, None);
     assert!(forked.title.ends_with("(fork)"));
     assert_eq!(runtime.count("thread/fork"), 1);
+    // Its subagents are the threads Codex spawned from it.
+    let subagents = chat_runtime.subagents(&owner, &first.id).await.unwrap();
+    assert_eq!(subagents.len(), 1);
+    assert_eq!(subagents[0].id, "fixture-subagent");
+    assert_eq!(subagents[0].name.as_deref(), Some("Ada"));
+    assert_eq!(
+        subagents[0].parent_id.as_deref(),
+        Some(first.native_session_id.as_str())
+    );
+    // Nothing else is read as one of them.
+    assert!(
+        chat_runtime
+            .subagent_events(&owner, &first.id, "../other", Default::default())
+            .await
+            .is_err()
+    );
     wait_for(&store, |sessions| {
         sessions
             .iter()

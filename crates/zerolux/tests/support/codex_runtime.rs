@@ -205,6 +205,11 @@ fn native_response(state: &mut NativeState, request: &Value) -> Option<Value> {
             }
             json!({"thread":thread})
         }
+        // A thread's subagents: one reviewer, spawned from it.
+        "thread/list" if request["params"]["ancestorThreadId"].is_string() => json!({"data":[{
+            "id":"fixture-subagent","agentNickname":"Ada","agentRole":"reviewer",
+            "preview":"Review the change","parentThreadId":request["params"]["ancestorThreadId"],
+            "updatedAt":7}],"nextCursor":null}),
         "thread/list" => json!({"data":[current["thread"]],"nextCursor":null}),
         "thread/loaded/list" => {
             let mut loaded = Vec::new();

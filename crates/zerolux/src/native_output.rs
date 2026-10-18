@@ -87,7 +87,7 @@ pub fn locate(session: &sessions::Model) -> Option<PathBuf> {
 }
 
 /// `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<time>-<thread>.jsonl`, or archived.
-fn codex_rollout(thread: &str) -> Option<PathBuf> {
+pub(crate) fn codex_rollout(thread: &str) -> Option<PathBuf> {
     let root = match std::env::var_os("CODEX_HOME") {
         Some(root) => PathBuf::from(root),
         None => PathBuf::from(std::env::var_os("HOME")?).join(".codex"),
@@ -243,43 +243,56 @@ impl Store {
             return Err(Error::Invalid("Read after or before, not both".into()));
         }
         let (session, path) = self.native_record(who, id).await?;
-        let page = |events, first, next, end| EventPage {
-            session_id: session.id.clone(),
-            harness: session.harness.clone(),
-            events,
-            first,
-            next,
-            end,
+        events_of(&session.id, &session.harness, path, query).await
+    }
+}
+
+/// The events of a native record at `path`, of `harness`, as `native_events` reads them; for a
+/// session's own record or one of its subagents'.
+pub(crate) async fn events_of(
+    session: &str,
+    harness: &str,
+    path: Option<PathBuf>,
+    query: EventQuery,
+) -> Result<EventPage> {
+    if query.after.is_some() && query.before.is_some() {
+        return Err(Error::Invalid("Read after or before, not both".into()));
+    }
+    let page = |events, first, next, end| EventPage {
+        session_id: session.to_owned(),
+        harness: harness.to_owned(),
+        events,
+        first,
+        next,
+        end,
+    };
+    let Some(path) = path else {
+        return if query.after.unwrap_or(0) == 0 {
+            Ok(page(Vec::new(), 0, 0, 0))
+        } else {
+            Err(Error::NotFound)
         };
-        let Some(path) = path else {
-            return if query.after.unwrap_or(0) == 0 {
-                Ok(page(Vec::new(), 0, 0, 0))
-            } else {
-                Err(Error::NotFound)
-            };
-        };
-        let harness = session.harness.as_str();
-        let chat = query.chat.as_deref();
-        match query.before {
-            None => {
-                let after = query.after.unwrap_or(0);
-                let (records, next, end) =
-                    read(&path, after).await.map_err(|e| unreadable(e, after))?;
-                let mut events = project(harness, &records);
-                if let Some(chat) = chat {
-                    let opened = opening_chat(&path, harness, after)
-                        .await
-                        .map_err(|e| unreadable(e, after))?;
-                    events = of_chat(events, chat, opened);
-                }
-                Ok(page(events, after, next, end))
-            }
-            Some(before) => {
-                let (events, first, stop, end) = back(&path, harness, before, chat, PAGE_BYTES)
+    };
+    let chat = query.chat.as_deref();
+    match query.before {
+        None => {
+            let after = query.after.unwrap_or(0);
+            let (records, next, end) =
+                read(&path, after).await.map_err(|e| unreadable(e, after))?;
+            let mut events = project(harness, &records);
+            if let Some(chat) = chat {
+                let opened = opening_chat(&path, harness, after)
                     .await
-                    .map_err(|e| unreadable(e, before))?;
-                Ok(page(events, first, stop, end))
+                    .map_err(|e| unreadable(e, after))?;
+                events = of_chat(events, chat, opened);
             }
+            Ok(page(events, after, next, end))
+        }
+        Some(before) => {
+            let (events, first, stop, end) = back(&path, harness, before, chat, PAGE_BYTES)
+                .await
+                .map_err(|e| unreadable(e, before))?;
+            Ok(page(events, first, stop, end))
         }
     }
 }
