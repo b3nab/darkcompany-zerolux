@@ -1483,6 +1483,8 @@ test("the console's column is an inbox: what needs you first, each state once, n
     />,
   );
   expect(html).toMatch(/Live<span[^>]*>2</);
+  // Sessions are found by what is typed: title, agent, folder, harness or latest line.
+  expect(html).toContain('aria-label="Find a session"');
   expect(html.indexOf('href="/console/s-birch"')).toBeLessThan(
     html.indexOf('href="/console/s-aspen"'),
   );
