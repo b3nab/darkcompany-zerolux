@@ -10,6 +10,7 @@ import {
   consoleSessions,
   ago,
   hitKindLabels,
+  matchParts,
   sessionMatches,
   sessionOutputAt,
   useHistorySearch,
@@ -255,7 +256,15 @@ function HistoryResults({ query, kernel }: { query: string; kernel: string }) {
             ) : null}
           </View>
           <Text numberOfLines={2} className="text-[13px] text-muted-foreground">
-            {hit.snippet}
+            {matchParts(hit.snippet, query).map((part, i) =>
+              part.match ? (
+                <Text key={i} className="bg-primary/25 text-foreground">
+                  {part.text}
+                </Text>
+              ) : (
+                part.text
+              ),
+            )}
           </Text>
         </Pressable>
       ))}

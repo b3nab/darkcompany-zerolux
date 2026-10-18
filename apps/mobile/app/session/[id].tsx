@@ -193,6 +193,13 @@ export default function SessionPage() {
   const list = useRef<LegendListRef>(null);
   const target = place === undefined ? undefined : Number(place);
   const [reached, setReached] = useState<number>();
+  // The row it opened at, marked for a moment.
+  const [marked, setMarked] = useState<string>();
+  useEffect(() => {
+    if (!marked) return;
+    const timer = setTimeout(() => setMarked(undefined), 2500);
+    return () => clearTimeout(timer);
+  }, [marked]);
   useEffect(() => {
     if (target === undefined || reached === target || !events.length) return;
     if (events[0]!.at > target && more) return earlier();
@@ -202,11 +209,12 @@ export default function SessionPage() {
     });
     if (index < 0) return;
     setReached(target);
+    setMarked(rows[index]!.key);
     requestAnimationFrame(() =>
       list.current?.scrollToIndex({
         index,
         animated: false,
-        viewPosition: 0.2,
+        viewPosition: 0.5,
       }),
     );
     // `earlier` reads the page before; the rows say when the place is in.
@@ -329,35 +337,42 @@ export default function SessionPage() {
           (item as Row).kind === "live" ? (
             <LiveItemView item={(item as LiveRow).item} />
           ) : (
-            <SessionRunView
-              run={item as BlockRun<Item>}
-              fresh={fresh}
-              chatTitle={chatTitle}
-              inputMenu={access.read ? inputs.open : undefined}
-              renderApproval={(approval: Approval) =>
-                // Its requests are its person's to decide; others see them wait.
-                approval.status === "pending" && access.mine ? (
-                  <ApprovalCard
-                    approval={approval}
-                    agent={name}
-                    busy={busy}
-                    decide={(decision, options) =>
-                      void act(() =>
-                        chat.decide(approval.id, decision, options),
-                      )
-                    }
-                    answer={(answer) =>
-                      void act(() => chat.answer(approval.id, answer))
-                    }
-                  />
-                ) : (
-                  <ApprovalReceipt
-                    approval={approval}
-                    waitingFor={access.mine ? undefined : person}
-                  />
-                )
-              }
-            />
+            <View
+              className={cn(
+                "rounded-md",
+                marked === (item as Row).key && "bg-primary/10",
+              )}
+            >
+              <SessionRunView
+                run={item as BlockRun<Item>}
+                fresh={fresh}
+                chatTitle={chatTitle}
+                inputMenu={access.read ? inputs.open : undefined}
+                renderApproval={(approval: Approval) =>
+                  // Its requests are its person's to decide; others see them wait.
+                  approval.status === "pending" && access.mine ? (
+                    <ApprovalCard
+                      approval={approval}
+                      agent={name}
+                      busy={busy}
+                      decide={(decision, options) =>
+                        void act(() =>
+                          chat.decide(approval.id, decision, options),
+                        )
+                      }
+                      answer={(answer) =>
+                        void act(() => chat.answer(approval.id, answer))
+                      }
+                    />
+                  ) : (
+                    <ApprovalReceipt
+                      approval={approval}
+                      waitingFor={access.mine ? undefined : person}
+                    />
+                  )
+                }
+              />
+            </View>
           )
         }
         contentContainerClassName="gap-3 px-3 pt-3 pb-3"
