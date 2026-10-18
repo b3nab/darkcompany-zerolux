@@ -60,7 +60,12 @@ import {
   useSessionEvents,
   useSessionFiles,
   useSessionQueue,
+  useSessionUsage,
   withMention,
+  contextShare,
+  percent,
+  tokenCount,
+  usdCost,
   useSessionLive,
   useSessionSettings,
 } from "@zerolux/chat";
@@ -74,6 +79,7 @@ import type {
   InputMode,
   LiveItem,
   QueuedInput,
+  SessionUsage,
   PlanStep,
   SessionBlock,
 } from "@zerolux/chat";
@@ -333,6 +339,7 @@ function Composer({
   const stop = useInterrupt(session);
   const harnessCommands = useSessionCommands(session.id, url);
   const queue = useSessionQueue(session.id, chat.live);
+  const usage = useSessionUsage(session.id, chat.live);
   // The unsent text waits in its session while you are elsewhere in the app.
   const [draft, setDraft] = useState(() => draftOf(session.id));
   const box = useRef<TextInputInstance>(null);
@@ -678,9 +685,21 @@ function Composer({
               : "Joins the turn in progress."}
           </Text>
         ) : null}
-        {owner && session.status !== "stopped" ? (
-          <SettingsBar session={session} />
-        ) : null}
+        <View className="flex-row items-start gap-2">
+          <View className="flex-1">
+            {owner && session.status !== "stopped" ? (
+              <SettingsBar session={session} />
+            ) : null}
+          </View>
+          <ContextMeter
+            usage={usage}
+            compact={
+              owner && open
+                ? () => setDraft((now) => now || "/compact ")
+                : undefined
+            }
+          />
+        </View>
       </View>
     </KeyboardStickyView>
   );
@@ -794,6 +813,7 @@ function About({
           />
         </View>
         <Organize session={session} />
+        <UsageFacts sessionId={session.id} />
         <SessionCard session={session} name={name} facts />
       </ScrollView>
     </View>
@@ -953,6 +973,95 @@ function QueueCard({
         </View>
       ) : null}
       {error ? <Text className="text-xs text-destructive">{error}</Text> : null}
+    </View>
+  );
+}
+
+/**
+ * How full the session's context is, as its harness last said: a short bar by the box that
+ * warms as it fills. For the owner, a tap starts `/compact` in the box.
+ */
+function ContextMeter({
+  usage,
+  compact,
+}: {
+  usage: SessionUsage | null;
+  compact?: () => void;
+}) {
+  const share = contextShare(usage);
+  if (share === undefined) return null;
+  const tone =
+    share >= 0.95
+      ? "bg-destructive"
+      : share >= 0.8
+        ? "bg-attention"
+        : "bg-agent";
+  return (
+    <Pressable
+      onPress={compact}
+      disabled={!compact}
+      accessibilityRole={compact ? "button" : "text"}
+      accessibilityLabel={`Context ${percent(share)} full`}
+      accessibilityHint={compact ? "Writes /compact in the box" : undefined}
+      hitSlop={6}
+      className="mt-1.5 flex-row items-center gap-1.5 active:opacity-70"
+    >
+      <View className="h-1 w-10 overflow-hidden rounded-full bg-border">
+        <View
+          className={cn("h-1 rounded-full", tone)}
+          style={{ width: `${Math.max(4, share * 100)}%` }}
+        />
+      </View>
+      <Text
+        className={cn(
+          "font-mono text-[11px] text-faint",
+          share >= 0.8 && "text-attention",
+          share >= 0.95 && "text-destructive",
+        )}
+      >
+        {percent(share)}
+      </Text>
+    </Pressable>
+  );
+}
+
+/** What the session has used, as its harness reports it; what it does not say stays out. */
+function UsageFacts({ sessionId }: { sessionId: string }) {
+  const { chat } = useSession();
+  const usage = useSessionUsage(sessionId, chat.live);
+  const share = contextShare(usage);
+  if (
+    !usage ||
+    (usage.context_tokens === null &&
+      usage.total_tokens === null &&
+      usage.cost_usd === null)
+  )
+    return null;
+  return (
+    <View className="border-b border-border pb-4">
+      {usage.context_tokens !== null ? (
+        <Fact label="Context">
+          <Text className="font-mono text-sm">
+            {tokenCount(usage.context_tokens)}
+            {usage.context_window !== null
+              ? ` of ${tokenCount(usage.context_window)}`
+              : ""}
+            {share !== undefined ? ` · ${percent(share)}` : ""}
+          </Text>
+        </Fact>
+      ) : null}
+      {usage.total_tokens !== null ? (
+        <Fact label="Tokens">
+          <Text className="font-mono text-sm">
+            {tokenCount(usage.total_tokens)}
+          </Text>
+        </Fact>
+      ) : null}
+      {usage.cost_usd !== null ? (
+        <Fact label="Cost">
+          <Text className="font-mono text-sm">{usdCost(usage.cost_usd)}</Text>
+        </Fact>
+      ) : null}
     </View>
   );
 }
