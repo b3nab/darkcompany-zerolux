@@ -168,13 +168,14 @@ function fixture() {
     consumed,
     result,
     options: () => options,
+    emitRaw: (message: unknown) => emit(message as SDKMessage),
     loseApprovalReceipt: () => {
       loseApprovalReceipt = true;
     },
     interrupts: () => interrupts,
-    async start(resume = false) {
+    async start(resume = false, chat = true) {
       await agent.bridge.connect();
-      void agent.run(start, { permissionMode: "default" }, resume);
+      void agent.run(start, { permissionMode: "default" }, resume, chat);
       await agent.bridge.ready();
       await agent.refresh();
       await tick();
@@ -231,6 +232,13 @@ test("a session ZeroLux owns starts in its folder, with its ID, mode and permiss
   await g.start(true);
   expect(g.options().resume).toBe("native");
   expect(g.options().sessionId).toBeUndefined();
+});
+
+test("a session without an agent has no chat tools", async () => {
+  const f = fixture();
+  await f.start(false, false);
+  expect(f.options().mcpServers).toBeUndefined();
+  expect(typeof f.options().canUseTool).toBe("function");
 });
 
 test("a message is read when a turn consumes it, and activity follows the session's state", async () => {
@@ -712,4 +720,60 @@ test("the owner's own input reaches the session as native user input, not a chat
   expect(f.inputs.length).toBe(before + 1);
   expect(f.inputs.at(-1)!.message.content).toBe("look at the logs");
   expect(f.calls.some((c) => c.path.includes("/chat/deliveries"))).toBe(false);
+});
+
+test("the session's text and reasoning stream to ZeroLux while a subagent's stay in its card", async () => {
+  const f = fixture();
+  await f.start();
+  const event = (event: unknown, parent: string | null = null) =>
+    f.emitRaw({
+      type: "stream_event",
+      event,
+      parent_tool_use_id: parent,
+      uuid: crypto.randomUUID(),
+      session_id: "native",
+    });
+  f.state("running");
+  event({ type: "message_start", message: { id: "msg" } });
+  event({
+    type: "content_block_start",
+    index: 0,
+    content_block: { type: "thinking", thinking: "" },
+  });
+  event({
+    type: "content_block_delta",
+    index: 0,
+    delta: { type: "thinking_delta", thinking: "Planning" },
+  });
+  event({ type: "content_block_stop", index: 0 });
+  event({
+    type: "content_block_start",
+    index: 1,
+    content_block: { type: "text", text: "" },
+  });
+  event({
+    type: "content_block_delta",
+    index: 1,
+    delta: { type: "text_delta", text: "Done" },
+  });
+  event(
+    {
+      type: "content_block_delta",
+      index: 1,
+      delta: { type: "text_delta", text: "subagent words" },
+    },
+    "task-tool",
+  );
+  f.state("idle");
+  await tick();
+  const live = f.calls
+    .filter((c) => c.path === "/chat/sessions/link/live")
+    .flatMap((c) => c.body.changes);
+  expect(live).toEqual([
+    { type: "append", item: "msg:0", kind: "thinking", text: "Planning" },
+    { type: "done", item: "msg:0" },
+    { type: "append", item: "msg:1", kind: "text", text: "Done" },
+    { type: "clear" },
+  ]);
+  expect(f.options().includePartialMessages).toBe(true);
 });

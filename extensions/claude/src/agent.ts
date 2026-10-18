@@ -131,8 +131,11 @@ export class ClaudeAgent {
     );
   }
 
-  /** Runs the session until its input closes. `resume` continues its saved transcript. */
-  async run(start: StartQuery, options: Options, resume: boolean) {
+  /**
+   * Runs the session until its input closes. `resume` continues its saved transcript; `chat`
+   * gives an agent's session its chat tools.
+   */
+  async run(start: StartQuery, options: Options, resume: boolean, chat = true) {
     this.query = start({
       prompt: this.input,
       options: {
@@ -143,7 +146,8 @@ export class ClaudeAgent {
           : { sessionId: this.session.nativeSessionId }),
         canUseTool: this.canUseTool,
         onElicitation: this.onElicitation,
-        mcpServers: { zerolux: this.tools() },
+        includePartialMessages: true,
+        ...(chat ? { mcpServers: { zerolux: this.tools() } } : {}),
       },
     });
     for await (const message of this.query) this.handle(message);
@@ -257,8 +261,45 @@ export class ClaudeAgent {
       : "None.";
   }
 
+  /** The message being streamed, and the kind of each of its blocks. */
+  private streaming?: { id: string; kinds: Map<number, "text" | "thinking"> };
+
+  /** The session's own text and reasoning as they stream; a subagent's stay in its card. */
+  private stream(message: SDKMessage) {
+    if (message.type !== "stream_event" || message.parent_tool_use_id) return;
+    const event = message.event;
+    if (event.type === "message_start")
+      this.streaming = { id: event.message.id, kinds: new Map() };
+    if (!this.streaming) return;
+    const item = (index: number) => `${this.streaming!.id}:${index}`;
+    if (event.type === "content_block_start") {
+      const type = event.content_block.type;
+      if (type === "text" || type === "thinking")
+        this.streaming.kinds.set(event.index, type);
+    } else if (event.type === "content_block_delta") {
+      const kind = this.streaming.kinds.get(event.index);
+      const text =
+        event.delta.type === "text_delta"
+          ? event.delta.text
+          : event.delta.type === "thinking_delta"
+            ? event.delta.thinking
+            : undefined;
+      if (kind && text)
+        this.bridge.live({
+          type: "append",
+          item: item(event.index),
+          kind,
+          text,
+        });
+    } else if (event.type === "content_block_stop") {
+      if (this.streaming.kinds.delete(event.index))
+        this.bridge.live({ type: "done", item: item(event.index) });
+    }
+  }
+
   private handle(message: SDKMessage) {
     this.settings.observe(message);
+    this.stream(message);
     if (
       message.type === "system" &&
       message.subtype === "session_state_changed"
@@ -268,6 +309,8 @@ export class ClaudeAgent {
       if (was === "idle" && message.state !== "idle")
         this.bridge.agentStarted();
       if (message.state === "idle") {
+        this.streaming = undefined;
+        this.bridge.live({ type: "clear" });
         this.turnDelivery = undefined; // The next turn asks about its own message.
         // Input this chat wrote and no turn took yet runs next: the turn's chat holds until
         // then. The session drops queued input only when it ends, and so does this run.

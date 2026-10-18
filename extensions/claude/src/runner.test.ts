@@ -61,7 +61,7 @@ function fixture(
   const revoked = new Set<string>();
   const approvals: { id: string; status: string; decision: string | null }[] =
     [];
-  const sessions = new Map<string, typeof session>();
+  const sessions = new Map<string, Inbox["session"]>();
   let hold: Promise<void> | undefined;
   let savedGate: Promise<void> | undefined;
   /** The kernel revokes the token at this request, as at a claim refused midway. */

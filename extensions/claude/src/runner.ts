@@ -67,7 +67,7 @@ export class Runner {
    * The ZeroLux session the first bind named: every later bind must name it again. Its ID is
    * the link's, so the kernel can prepare or stop it even after a lost answer.
    */
-  private identity?: { id: string; actor_id: string };
+  private identity?: { id: string; actor_id: string | null };
   /** The kernel and token in use: the same bind again changes nothing. */
   private credentials?: string;
   /** Control operations run one at a time, in the order they arrive. */
@@ -414,6 +414,7 @@ export class Runner {
                 : {}),
             },
             resume,
+            this.identity.actor_id !== null,
           )
           .catch((error: unknown) =>
             console.error(
