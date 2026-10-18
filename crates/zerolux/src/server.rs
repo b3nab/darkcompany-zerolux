@@ -206,6 +206,18 @@ impl Server {
                     }
                 }
             });
+            // The owner's schedules: each one's input reaches its session when its time comes.
+            let schedule = runtime.clone();
+            let scheduler = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(20));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    interval.tick().await;
+                    if let Err(error) = schedule.run_schedules().await {
+                        tracing::warn!(error = format!("{error:#}"), "Schedules did not run");
+                    }
+                }
+            });
             // People whose sign-in ended while connected to the notice room are disconnected.
             let sweep = runtime.clone();
             let sweeper = tokio::spawn(async move {
@@ -244,6 +256,8 @@ impl Server {
             }
             relinker.abort();
             sweeper.abort();
+            scheduler.abort();
+            let _ = scheduler.await;
             settings_observer.abort();
             let _ = relinker.await;
             let _ = sweeper.await;

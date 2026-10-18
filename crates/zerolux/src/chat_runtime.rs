@@ -472,6 +472,28 @@ impl ChatRuntime {
         Ok(())
     }
 
+    /// The schedules whose time has come: each one's words reach its session as the owner's
+    /// input, after the turn in progress. A session that is not running misses the run, and
+    /// the schedule says why.
+    pub async fn run_schedules(&self) -> Result<()> {
+        let owner = self.store.chat_identity(None).await?;
+        let now = crate::store::now_ms();
+        for schedule in self.store.due_schedules(now).await? {
+            let sent = self
+                .input(
+                    &owner,
+                    &schedule.session_id,
+                    &schedule.prompt,
+                    crate::model::InputMode::Queue,
+                    &[],
+                )
+                .await;
+            let error = sent.err().map(|error| format!("{error:#}"));
+            self.store.schedule_ran(&schedule.id, now, error).await?;
+        }
+        Ok(())
+    }
+
     /// What a session is producing right now.
     pub fn live_state(&self, id: &str) -> crate::live::State {
         self.live.state(id)
