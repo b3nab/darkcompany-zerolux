@@ -9,12 +9,15 @@ import {
 } from "react";
 import {
   activeActors,
+  ApiError,
   AuthConnection,
   errorMessage,
   requiresSignIn,
+  whoAmI,
   type Actor,
   type AuthHealth,
   type AuthIdentity,
+  type Invitation,
 } from "@zerolux/chat";
 import {
   desktopConnection,
@@ -41,14 +44,23 @@ const AuthenticationContext = createContext<Authentication | null>(null);
 export const useAuthentication = () => useContext(AuthenticationContext);
 
 /**
- * Whether you own the workspace: its first person. A kernel without sign-in has only its owner.
- * Writing into a session and interrupting it are the owner's.
+ * Who is using the app: the person signed in (`me`), and whether they own the workspace. A
+ * kernel without sign-in has only its owner.
  */
-export function useOwner(actors: Actor[]) {
+export function useMe(actors: Actor[]) {
   const authentication = useAuthentication();
-  const owner = activeActors(actors).find((a) => a.kind === "human");
-  return !authentication || authentication.identity.actor_id === owner?.id;
+  return whoAmI(
+    authentication?.identity,
+    activeActors(actors),
+    authentication !== null,
+  );
 }
+
+/** The invitation a join link carries: `/join?invite=…`. */
+const invited = () =>
+  globalThis.location?.pathname === "/join"
+    ? new URLSearchParams(location.search).get("invite")
+    : null;
 
 /** Domain UI is mounted only for a verified, bound human identity. */
 export function AuthGate({ children }: { children: ReactNode }) {
@@ -86,6 +98,22 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
+  // Joining by invitation: what it says, or why it can no longer be used.
+  const [invite] = useState(invited);
+  const [invitation, setInvitation] = useState<Invitation>();
+  const [invitationError, setInvitationError] = useState("");
+  useEffect(() => {
+    if (!invite || !health) return;
+    client
+      .invitation(invite)
+      .then(setInvitation, (failed: unknown) =>
+        setInvitationError(
+          failed instanceof ApiError && failed.status === 410
+            ? "This invitation can no longer be used: it was used, withdrawn or has expired. Ask for a new one."
+            : errorMessage(failed),
+        ),
+      );
+  }, [client, invite, health]);
 
   const load = useCallback(async () => {
     const version = ++loadVersion.current;
@@ -172,13 +200,18 @@ export function AuthGate({ children }: { children: ReactNode }) {
     setError("");
     try {
       let next: AuthIdentity;
-      if (identity) next = await client.claim();
-      else if (health?.auth.setup_required && !existing)
-        next = await client.signUp(name, email, password);
+      // With an invitation, the account joins as a new person; without, it is the owner's.
+      const joining = invitation && invite ? invite : undefined;
+      if (identity) next = await client.claim(joining);
+      else if (creating)
+        next = await client.signUp(name, email, password, joining);
       else {
         next = await client.signIn(email, password);
-        if (!next.actor_id && next.setup_required) next = await client.claim();
+        if (!next.actor_id && (next.setup_required || joining))
+          next = await client.claim(joining);
       }
+      // In, the join link has done its work.
+      if (joining && next.actor_id) history.replaceState(null, "", "/");
       if (live.current) {
         setIdentity(next);
         setPassword("");
@@ -204,7 +237,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (health && !requiresSignIn(health)) return children;
 
   const enrolling =
-    identity?.setup_required ?? health?.auth.setup_required === true;
+    !!invitation ||
+    (identity?.setup_required ?? health?.auth.setup_required === true);
   const creating = enrolling && !existing && !identity;
   const blocked =
     busy ||
@@ -236,15 +270,22 @@ export function AuthGate({ children }: { children: ReactNode }) {
         <h1 className="text-3xl font-semibold tracking-tight">
           {loading
             ? "Checking your workspace…"
-            : creating
-              ? "Create account"
-              : identity && enrolling
-                ? "Connect account"
-                : "Sign in"}
+            : invitation
+              ? `Join ${invitation.workspace}`
+              : creating
+                ? "Create account"
+                : identity && enrolling
+                  ? "Connect account"
+                  : "Sign in"}
         </h1>
         {error && (
           <p role="alert" className="text-sm text-destructive">
             {error}
+          </p>
+        )}
+        {invitationError && (
+          <p role="alert" className="text-sm text-destructive">
+            {invitationError}
           </p>
         )}
         {loading ? (
@@ -277,11 +318,19 @@ export function AuthGate({ children }: { children: ReactNode }) {
         ) : (
           <>
             <p className="text-sm text-muted-foreground">
-              {creating
-                ? "Create your account to become this workspace’s owner. Its people and history stay unchanged."
-                : enrolling
-                  ? "Connect your account to the workspace’s owner. Its people and history stay unchanged."
-                  : "Use your account for this workspace."}
+              {invitation
+                ? `${invitation.invited_by} invited you. ${
+                    identity
+                      ? "Join with this account"
+                      : existing
+                        ? "Sign in to join"
+                        : "Create your account to join"
+                  }: you bring your own agents and sessions, and share the workspace’s chats and meetings.`
+                : creating
+                  ? "Create your account to become this workspace’s owner. Its people and history stay unchanged."
+                  : enrolling
+                    ? "Connect your account to the workspace’s owner. Its people and history stay unchanged."
+                    : "Use your account for this workspace."}
             </p>
             <form
               className="flex flex-col gap-3"
@@ -367,11 +416,17 @@ export function AuthGate({ children }: { children: ReactNode }) {
               <Button type="submit" className="self-start" disabled={blocked}>
                 {busy
                   ? "Please wait…"
-                  : identity
-                    ? "Connect account"
-                    : creating
-                      ? "Create account"
-                      : "Sign in"}
+                  : invitation
+                    ? identity
+                      ? "Join"
+                      : creating
+                        ? "Create account and join"
+                        : "Sign in and join"
+                    : identity
+                      ? "Connect account"
+                      : creating
+                        ? "Create account"
+                        : "Sign in"}
               </Button>
             </form>
             {enrolling && !identity && (
