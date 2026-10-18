@@ -139,6 +139,8 @@ test("the last page starts 100 sequences before the end", () => {
 test("any live session of an agent may join any chat", () => {
   const session = (id: string, status: ChatSession["status"]): ChatSession => ({
     id,
+    owner_id: "owner",
+    shared: null,
     actor_id: id.split("-")[1]!,
     host_id: null,
     harness: "claude-code",
@@ -457,6 +459,8 @@ test("the activity bubble shows only agents whose current turn serves this chat"
     activity_conversation_id?: string | null,
   ): ChatSession => ({
     id,
+    owner_id: "owner",
+    shared: null,
     actor_id: id.slice(2),
     host_id: null,
     harness: "claude-code",
@@ -595,6 +599,8 @@ test("the team lists live sessions, ones needing attention, and the latest stopp
     attention_reason: string | null = null,
   ): ChatSession => ({
     id,
+    owner_id: "owner",
+    shared: null,
     actor_id: "agent",
     host_id: null,
     harness: "claude-code",

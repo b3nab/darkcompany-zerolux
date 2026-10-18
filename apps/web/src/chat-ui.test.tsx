@@ -90,6 +90,8 @@ const session = (
   status: ChatSession["status"] = "connected",
 ): ChatSession => ({
   id,
+  owner_id: "owner",
+  shared: null,
   actor_id,
   host_id: null,
   harness: "claude-code",

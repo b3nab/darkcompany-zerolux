@@ -26,8 +26,14 @@ export interface Discovery {
   sessions: DiscoveredSession[];
   errors: { harness: Harness; message: string }[];
 }
+/** Who else may follow a session: nobody, the workspace's people to read, or to work in it. */
+export type SessionShare = null | "read" | "write";
 export interface ChatSession {
   id: string;
+  /** Its person: who started it, or the person of the session that delegated it. */
+  owner_id: string;
+  /** Private while null; shared with the workspace's people by its person. */
+  shared: SessionShare;
   /** The agent it works for; null for a session of the owner's own. */
   actor_id: string | null;
   /** The kernel host serving this native session, when known. */

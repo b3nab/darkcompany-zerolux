@@ -24,6 +24,8 @@ const owner: Actor = {
 };
 const session = (id: string, patch: Partial<ChatSession>): ChatSession => ({
   id,
+  owner_id: "owner",
+  shared: null,
   actor_id: "lin",
   host_id: null,
   harness: "pi",

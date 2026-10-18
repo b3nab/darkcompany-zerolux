@@ -19,6 +19,8 @@ const session = (
   activity: ChatSession["activity"] = null,
 ): ChatSession => ({
   id,
+  owner_id: "owner",
+  shared: null,
   actor_id: "aspen",
   host_id: null,
   harness: "pi",

@@ -26,6 +26,7 @@ import type {
   NewSession,
   FilesRewind,
   SessionFork,
+  SessionShare,
   Outgoing,
   QuestionAnswer,
 } from "./chat";
@@ -412,12 +413,13 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     /** The owner renames, pins or archives a session; what is left out stays. */
     async updateSession(
       sessionId: string,
-      /** `budget_usd` 0 takes the budget away. */
+      /** `budget_usd` 0 takes the budget away; `shared` only its person changes. */
       change: {
         title?: string;
         pinned?: boolean;
         archived?: boolean;
         budget_usd?: number;
+        shared?: SessionShare;
       },
     ) {
       await order.run(
