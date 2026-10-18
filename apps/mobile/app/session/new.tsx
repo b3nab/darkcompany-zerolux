@@ -11,6 +11,9 @@ import {
   harnessLabels,
   recentFolders,
   useSessionCatalog,
+  accountReady,
+  useHostAccounts,
+  useHosts,
 } from "@zerolux/chat";
 import type {
   ClaudeMode,
@@ -25,6 +28,7 @@ import { Text } from "@/components/ui/text";
 import { Choice } from "@/components/choice";
 import { SettingSelect } from "@/components/setting-select";
 import { useSession } from "../../src/kernel";
+import { useMe } from "../../src/me";
 
 /** The harnesses the kernel can start a session of. */
 const startable = {
@@ -43,6 +47,11 @@ const NEW = "new";
  */
 export default function NewSessionScreen() {
   const { chat, actors, url } = useSession();
+  // On a computer open to you, sessions run with your own accounts: they come first.
+  const { me } = useMe();
+  const here = useHosts(url).hosts?.find((h) => h.here);
+  const guest = here && here.person_id !== me?.id ? here : undefined;
+  const accounts = useHostAccounts(guest?.id, url);
   const router = useRouter();
   const params = useLocalSearchParams<{ agent?: string }>();
   const [harness, setHarness] = useState<Startable>("claude-code");
@@ -69,7 +78,10 @@ export default function NewSessionScreen() {
   ).slice(0, 2);
   const folders = recentFolders(chat.sessions);
   const label = harnessLabels[harness];
-  const ready = workspace.trim().length > 0;
+  const unconnected = Boolean(
+    guest && accounts.accounts && !accountReady(accounts.accounts, harness),
+  );
+  const ready = workspace.trim().length > 0 && !unconnected;
 
   async function start() {
     if (!ready) return;
@@ -265,6 +277,22 @@ export default function NewSessionScreen() {
         )}
         {error ? (
           <Text className="text-sm text-destructive">{error}</Text>
+        ) : null}
+        {unconnected && guest ? (
+          <View className="gap-2 rounded-md border border-attention/40 bg-attention/5 px-3.5 py-3">
+            <Text className="text-sm">
+              On {guest.name}, {label} runs with your own account. Connect it
+              first.
+            </Text>
+            <Button
+              size="sm"
+              variant="outline"
+              className="self-start"
+              onPress={() => router.push(`/accounts/${guest.id}`)}
+            >
+              <Text>Your accounts</Text>
+            </Button>
+          </View>
         ) : null}
         <Button size="lg" disabled={busy || !ready} onPress={start}>
           <Text>{busy ? "Starting…" : "Start"}</Text>

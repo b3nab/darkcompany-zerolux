@@ -70,6 +70,7 @@ function Navigator() {
         <Stack.Screen name="files/[id]" />
         <Stack.Screen name="file/[id]" />
         <Stack.Screen name="subagent/[id]" />
+        <Stack.Screen name="accounts/[id]" />
       </Stack.Protected>
       <Stack.Protected guard={Boolean(url) && !authorized}>
         <Stack.Screen name="auth" />

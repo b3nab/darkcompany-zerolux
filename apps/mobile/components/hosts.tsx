@@ -1,3 +1,4 @@
+import { useRouter } from "expo-router";
 import { useState } from "react";
 import { Alert, Platform, Pressable, Switch, View } from "react-native";
 import { ago, errorMessage, useHosts } from "@zerolux/chat";
@@ -14,6 +15,7 @@ export function Hosts() {
   const { workspace, url } = useSession();
   const { me } = useMe();
   const hosts = useHosts(url);
+  const router = useRouter();
   const [error, setError] = useState("");
   const change = (id: string, next: { name?: string; open?: boolean }) => {
     setError("");
@@ -60,6 +62,17 @@ export function Hosts() {
                 {!mine && host.open ? " · open to you" : ""}
               </Text>
             </Pressable>
+            {!mine && host.here && host.open ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => router.push(`/accounts/${host.id}`)}
+                hitSlop={6}
+              >
+                <Text className="text-[13px] font-medium text-human-foreground">
+                  Your accounts
+                </Text>
+              </Pressable>
+            ) : null}
             {mine ? (
               <Switch
                 accessibilityLabel={`Open ${host.name} to people`}
