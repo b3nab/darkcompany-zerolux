@@ -1139,6 +1139,87 @@ export function HireForm({
   );
 }
 
+/** What a session may cost against what it has cost; the owner sets, changes or removes it. */
+function BudgetField({
+  budget,
+  cost,
+  busy,
+  set,
+}: {
+  budget: number | null;
+  cost: number | null;
+  busy: boolean;
+  set?: (usd: number) => Promise<boolean>;
+}) {
+  const [draft, setDraft] = useState<string>();
+  // A decimal comma is read as a point, as many keyboards type it.
+  const usd = Number(draft?.trim().replace(",", "."));
+  const valid = !!draft?.trim() && usd > 0 && usd <= 1_000_000;
+  if (draft !== undefined && set)
+    return (
+      <form
+        className="flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (valid)
+            void set(Math.round(usd * 100) / 100).then(
+              (done) => done && setDraft(undefined),
+            );
+        }}
+      >
+        <Input
+          aria-label="Budget in US dollars"
+          inputMode="decimal"
+          placeholder="5.00"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          autoFocus
+          className="h-7 w-28"
+        />
+        <Button type="submit" size="sm" disabled={busy || !valid}>
+          Save
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => setDraft(undefined)}
+        >
+          Cancel
+        </Button>
+      </form>
+    );
+  return (
+    <span className="flex flex-wrap items-baseline gap-x-3">
+      {budget
+        ? `${cost != null ? `${usdCost(cost)} of ` : ""}${usdCost(budget)}`
+        : "None"}
+      {set && (
+        <Button
+          variant="link"
+          size="sm"
+          className="h-auto p-0"
+          disabled={busy}
+          onClick={() => setDraft(budget ? String(budget) : "")}
+        >
+          {budget ? "Change" : "Set a budget"}
+        </Button>
+      )}
+      {set && !!budget && (
+        <Button
+          variant="link"
+          size="sm"
+          className="h-auto p-0"
+          disabled={busy}
+          onClick={() => void set(0)}
+        >
+          Remove
+        </Button>
+      )}
+    </span>
+  );
+}
+
 /** One session of an agent: where it runs, its state, and what can be done with it. */
 export function SessionCard({
   session,
@@ -1150,6 +1231,7 @@ export function SessionCard({
   resume,
   takeover,
   usage,
+  budget,
 }: {
   session: ChatSession;
   name: string;
@@ -1157,6 +1239,8 @@ export function SessionCard({
   facts: boolean;
   /** How full its context is and what it has used, where its harness says. */
   usage?: SessionUsage | null;
+  /** The owner sets what it may cost, where its harness reports cost; 0 takes it away. */
+  budget?: (usd: number) => Promise<boolean>;
   busy: boolean;
   stop: () => Promise<boolean>;
   /** Stops the turn it is working on; the session stays. */
@@ -1211,6 +1295,16 @@ export function SessionCard({
           )}
           {usage?.cost_usd != null && (
             <Fact label="Cost">{usdCost(usage.cost_usd)}</Fact>
+          )}
+          {(budget || !!session.budget_usd) && (
+            <Fact label="Budget">
+              <BudgetField
+                budget={session.budget_usd}
+                cost={usage?.cost_usd ?? null}
+                busy={busy}
+                set={budget}
+              />
+            </Fact>
           )}
         </Facts>
       )}

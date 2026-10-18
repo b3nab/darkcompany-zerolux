@@ -105,6 +105,7 @@ const session = (
   created_at: 0,
   pinned_at: null,
   archived_at: null,
+  budget_usd: null,
 });
 const group: Conversation = {
   id: "c-group",
@@ -1809,6 +1810,22 @@ test("how full a session's context is shows beside its box, and what it has used
   expect(about).toContain("170k of 200k · 85%");
   expect(about).toContain("1.2M");
   expect(about).toContain("$0.50");
+  // With a budget, what it has cost of it; the owner changes or removes it.
+  const budgeted = renderToStaticMarkup(
+    <SessionCard
+      session={{ ...session("s-aspen", ASPEN), budget_usd: 5 }}
+      name="aspen"
+      facts
+      busy={false}
+      stop={perform}
+      usage={{ ...usage, cost_usd: 1.2 }}
+      budget={perform}
+    />,
+  );
+  expect(budgeted).toContain("$1.20 of $5.00");
+  expect(budgeted).toContain(">Change<");
+  expect(budgeted).toContain(">Remove<");
+  expect(about).not.toContain("Budget");
   // What the harness does not report is left out.
   expect(
     renderToStaticMarkup(

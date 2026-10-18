@@ -96,12 +96,17 @@ test("a session opens without an agent, and the owner pins, renames or archives 
   await chat.removeQueued("s-1", "q/1");
   expect(requests.at(-1)!.init.method).toBe("DELETE");
   expect(requests.at(-1)!.init.body).toBeUndefined();
-  await chat.updateSession("s-1", { pinned: true, title: "Release" });
+  await chat.updateSession("s-1", {
+    pinned: true,
+    title: "Release",
+    budget_usd: 5,
+  });
   const change = requests.at(-1)!;
   expect(change.url).toBe("https://fixture.example.test/api/sessions/s-1");
   expect(change.init.method).toBe("PATCH");
   expect(JSON.parse(change.init.body as string)).toEqual({
     pinned: true,
     title: "Release",
+    budget_usd: 5,
   });
 });

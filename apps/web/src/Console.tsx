@@ -616,6 +616,15 @@ export function SessionView({
               name={name}
               facts
               usage={usage}
+              // Codex reports no cost: a budget there would never be reached.
+              budget={
+                owner && session.harness !== "codex"
+                  ? (usd) =>
+                      perform(() =>
+                        chat.updateSession(session.id, { budget_usd: usd }),
+                      )
+                  : undefined
+              }
               busy={busy}
               stop={() => perform(() => chat.stop(session.id))}
               resume={
