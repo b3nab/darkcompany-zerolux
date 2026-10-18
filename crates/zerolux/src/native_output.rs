@@ -23,8 +23,8 @@ use tokio::{
 use crate::{
     entity::{actors, sessions},
     livekit::LiveKit,
-    model::ChatIdentity,
-    native_events::{Event, Item, of_chat, project},
+    model::{ChatIdentity, ChatSession},
+    native_events::{Event, Item, Tail, of_chat, project, tail},
     store::{Error, Result, Store},
 };
 
@@ -53,6 +53,18 @@ pub struct Page {
 
 /// Paths found by searching, per harness and native identity.
 static FOUND: LazyLock<Mutex<HashMap<String, PathBuf>>> = LazyLock::new(Default::default);
+/// How each running session's record ends, kept by the watcher as the record grows.
+static TAILS: LazyLock<Mutex<HashMap<String, Tail>>> = LazyLock::new(Default::default);
+
+/// Sessions with how their records end, as far as the watcher has read them.
+pub fn with_tails(mut sessions: Vec<ChatSession>) -> Vec<ChatSession> {
+    if let Ok(tails) = TAILS.lock() {
+        for session in &mut sessions {
+            session.tail = tails.get(&session.id).cloned().unwrap_or_default();
+        }
+    }
+    sessions
+}
 
 /// Where the session's native record is. None until the harness has written it.
 pub fn locate(session: &sessions::Model) -> Option<PathBuf> {
@@ -369,8 +381,23 @@ pub struct EventPage {
     pub end: u64,
 }
 
-/// Tells the people in the workspace when an agent's native record grows. The notice has
-/// no content: clients read the new records over HTTP.
+/// How a native record ends, from its last page: unreadable reads as nothing known.
+async fn read_tail(path: &Path, harness: &str) -> Tail {
+    let output_at = tokio::fs::metadata(path)
+        .await
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| since.as_millis() as i64);
+    let records = read_back(path, u64::MAX, PAGE_BYTES)
+        .await
+        .map(|(records, ..)| records)
+        .unwrap_or_default();
+    tail(&project(harness, &records), output_at)
+}
+
+/// Tells the people in the workspace when an agent's native record grows, with how it now
+/// ends; clients read the new records over HTTP.
 pub async fn run_watcher(store: Store, livekit: Arc<LiveKit>, mut stop: watch::Receiver<bool>) {
     let mut sizes = HashMap::new();
     while !*stop.borrow() {
@@ -406,6 +433,7 @@ async fn watch_once(
         (sessions, people)
     };
     let mut seen = HashMap::new();
+    let mut tails = HashMap::new();
     for session in sessions
         .into_iter()
         .filter(|s| s.host_id.as_deref() == store.host())
@@ -422,13 +450,27 @@ async fn watch_once(
             continue;
         };
         let end = meta.len();
-        if sizes.get(&session.id).is_some_and(|last| *last != end) {
-            let notice = json!({"type": "session.output", "session_id": session.id, "end": end});
+        let last = sizes.get(&session.id).copied();
+        let current = TAILS.lock().ok().and_then(|t| t.get(&session.id).cloned());
+        let ending = match current {
+            Some(ending) if last == Some(end) => ending,
+            // Read again only when the record grew, or at first sight.
+            _ => read_tail(&path, &session.harness).await,
+        };
+        if last.is_some_and(|last| last != end) {
+            let mut notice = serde_json::to_value(&ending)?;
+            notice["type"] = json!("session.output");
+            notice["session_id"] = json!(session.id);
+            notice["end"] = json!(end);
             livekit.notify(&notice, &people).await?;
         }
+        tails.insert(session.id.clone(), ending);
         seen.insert(session.id, end);
     }
     *sizes = seen;
+    if let Ok(mut all) = TAILS.lock() {
+        *all = tails;
+    }
     Ok(())
 }
 
@@ -575,6 +617,28 @@ mod tests {
         assert_eq!(
             opening_chat(&path, "pi", middle).await.unwrap().as_deref(),
             Some("b")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_tail_comes_from_the_end_of_the_record_and_its_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pi.jsonl");
+        let lines = [
+            json!({"type":"message","message":{"role":"assistant","content":[
+                {"type":"text","text":"Reading the tests"}],"stopReason":"toolUse"}}),
+            json!({"type":"message","message":{"role":"assistant","content":[
+                {"type":"text","text":"All green."}],"stopReason":"stop"}}),
+        ];
+        let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::write(&path, body).unwrap();
+        let ending = read_tail(&path, "pi").await;
+        assert_eq!(ending.last_turn.as_deref(), Some("completed"));
+        assert_eq!(ending.summary.as_deref(), Some("All green."));
+        assert!(ending.output_at.is_some_and(|at| at > 0));
+        assert_eq!(
+            read_tail(&dir.path().join("missing.jsonl"), "pi").await,
+            Tail::default()
         );
     }
 

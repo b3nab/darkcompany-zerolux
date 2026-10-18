@@ -240,6 +240,9 @@ pub struct ChatSession {
     pub created_at: i64,
     pub pinned_at: Option<i64>,
     pub archived_at: Option<i64>,
+    /// How its native record ends, from this kernel host's watcher.
+    #[serde(flatten)]
+    pub tail: crate::native_events::Tail,
 }
 
 /// A `sessions` row with its `waiting` count; the locator is read only for its origin
@@ -270,6 +273,7 @@ impl FromQueryResult for ChatSession {
             created_at: row.try_get(pre, "created_at")?,
             pinned_at: row.try_get(pre, "pinned_at")?,
             archived_at: row.try_get(pre, "archived_at")?,
+            tail: Default::default(),
         })
     }
 }
