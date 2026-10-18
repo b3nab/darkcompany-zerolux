@@ -186,9 +186,10 @@ export const sessionFile = (
 /**
  * What git sees in the session's folder, read again whenever `revision` changes (as when the
  * session's record grows); and the owner's actions on it, each answered with the new state.
+ * Nothing is read without a session, as for someone who is not its owner.
  */
 export function useSessionGit(
-  sessionId: string,
+  sessionId: string | undefined,
   revision: unknown,
   kernel = kernelUrl(),
 ) {
@@ -199,20 +200,22 @@ export function useSessionGit(
   }>();
   const session = `${kernel}\n${sessionId}`;
   const reload = useCallback(
-    () =>
-      request<GitStatus>(kernel, `${at(sessionId)}/git`).then(
-        (status) => setRead({ session, status }),
-        (error: unknown) =>
-          setRead((was) => ({
-            ...(was?.session === session ? was : { session }),
-            error: errorMessage(error),
-          })),
-      ),
+    async () =>
+      sessionId === undefined
+        ? undefined
+        : request<GitStatus>(kernel, `${at(sessionId)}/git`).then(
+            (status) => setRead({ session, status }),
+            (error: unknown) =>
+              setRead((was) => ({
+                ...(was?.session === session ? was : { session }),
+                error: errorMessage(error),
+              })),
+          ),
     [kernel, sessionId, session],
   );
   useEffect(() => void reload(), [reload, revision]);
   const act = (action: string, body: unknown) =>
-    request<GitStatus>(kernel, `${at(sessionId)}/git/${action}`, body).then(
+    request<GitStatus>(kernel, `${at(sessionId!)}/git/${action}`, body).then(
       (status) => setRead({ session, status }),
     );
   const current = read?.session === session ? read : undefined;
@@ -227,7 +230,7 @@ export function useSessionGit(
     async commit(message: string) {
       const { commit } = await request<{ commit: string }>(
         kernel,
-        `${at(sessionId)}/git/commit`,
+        `${at(sessionId!)}/git/commit`,
         { message },
       );
       await reload();
@@ -272,7 +275,8 @@ export function useSessionDiff(
     );
     return () => controller.abort();
   }, [kernel, sessionId, path, staged, key, revision]);
-  return read?.key === key ? read : {};
+  const current = read?.key === key ? read : undefined;
+  return { diff: current?.diff, error: current?.error };
 }
 
 /** How often a pull request with checks still running is read again. */
@@ -280,10 +284,11 @@ const CHECKS_MS = 30_000;
 
 /**
  * The branch's pull request with its checks, through `gh` on the kernel's host: null when there
- * is none. Read again when `revision` changes, and while checks are still running.
+ * is none. Read again when `revision` changes, and while checks are still running; nothing
+ * without a session.
  */
 export function useSessionPullRequest(
-  sessionId: string,
+  sessionId: string | undefined,
   revision: unknown,
   kernel = kernelUrl(),
 ) {
@@ -294,14 +299,18 @@ export function useSessionPullRequest(
   }>();
   const session = `${kernel}\n${sessionId}`;
   const reload = useCallback(
-    () =>
-      request<{ pull_request: PullRequest | null }>(
-        kernel,
-        `${at(sessionId)}/git/pr`,
-      ).then(
-        ({ pull_request }) => setRead({ session, pullRequest: pull_request }),
-        (error: unknown) => setRead({ session, error: errorMessage(error) }),
-      ),
+    async () =>
+      sessionId === undefined
+        ? undefined
+        : request<{ pull_request: PullRequest | null }>(
+            kernel,
+            `${at(sessionId)}/git/pr`,
+          ).then(
+            ({ pull_request }) =>
+              setRead({ session, pullRequest: pull_request }),
+            (error: unknown) =>
+              setRead({ session, error: errorMessage(error) }),
+          ),
     [kernel, sessionId, session],
   );
   useEffect(() => void reload(), [reload, revision]);
@@ -322,7 +331,7 @@ export function useSessionPullRequest(
     async open(input: { title: string; body: string; draft: boolean }) {
       const { url } = await request<{ url: string }>(
         kernel,
-        `${at(sessionId)}/git/pr`,
+        `${at(sessionId!)}/git/pr`,
         input,
       );
       await reload();
