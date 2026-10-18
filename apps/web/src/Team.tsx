@@ -12,7 +12,7 @@ import {
   canApplyAgentSettings,
   agentModelOption,
   useAgentSettings,
-  useModelCatalog,
+  useSessionCatalog,
   setAgentSettings,
   ago,
   byProject,
@@ -20,6 +20,7 @@ import {
   codexApprovalPolicies,
   codexSandboxes,
   folderName,
+  recentFolders,
   sessionState,
 } from "@zerolux/chat";
 import type {
@@ -30,11 +31,13 @@ import type {
   CodexSandbox,
   DiscoveredSession,
   Discovery,
+  NewSession,
   Tone,
 } from "@zerolux/chat";
 import type { Chat, Perform } from "@zerolux/chat";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import {
   NativeSelect,
@@ -68,7 +71,7 @@ export function Hire({
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
   const [hiring, setHiring] = useState<string>();
-  const name = (id: string) => actors.find((a) => a.id === id)?.name;
+  const name = (id: string | null) => actors.find((a) => a.id === id)?.name;
   async function search() {
     setSearching(true);
     try {
@@ -119,7 +122,9 @@ export function Hire({
           </div>
           {session ? (
             <Presence tone="connected">
-              Hired as {name(session.actor_id)}
+              {session.actor_id
+                ? `Hired as ${name(session.actor_id)}`
+                : "Open in the Console"}
             </Presence>
           ) : d.availability === "attention" ? (
             <Presence tone="attention" className="max-w-sm">
@@ -134,16 +139,16 @@ export function Hire({
         {hiring === d.id && !session && (
           <HireForm
             session={d}
-            previous={linked(d, true)?.actor_id}
+            previous={linked(d, true)?.actor_id ?? undefined}
             agents={actors.filter(
               (a) =>
                 a.kind === "agent" && !a.archived && a.harness === d.harness,
             )}
             busy={busy}
             cancel={() => setHiring(undefined)}
-            hire={(label, actorId) =>
+            hire={(agent) =>
               perform(async () => {
-                await chat.hire(d.id, label, actorId);
+                await chat.attach(d.id, agent);
                 setHiring(undefined);
               })
             }
@@ -187,15 +192,17 @@ export function Hire({
           Hire an agent.
         </h1>
       </div>
-      <StartAgent
+      <StartSession
         chat={chat}
         actors={actors}
         folders={[
-          ...chat.sessions.map((s) => s.workspace),
+          ...recentFolders(chat.sessions),
           ...found.map((d) => d.workspace),
         ]}
         busy={busy}
         perform={perform}
+        heading="Start a new agent"
+        intro="ZeroLux runs it in the folder you choose. What you write in your chats reaches it as yours."
       />
       <div className="flex flex-col gap-2">
         <h2 className="text-base font-semibold">
@@ -244,17 +251,26 @@ export function Hire({
   );
 }
 
-/** Starts a new Claude Code session ZeroLux runs in a folder. */
 /** A new native identity; recovery continues existing sessions instead. */
 const startable = ["claude-code", "codex", "pi"] as const;
 type Startable = (typeof startable)[number];
+const NO_AGENT = "none";
 
-export function StartAgent({
+/**
+ * Starts a session ZeroLux runs in a folder: the owner's own, or for an agent, new or
+ * existing. What is left blank, the harness decides with its own settings.
+ */
+export function StartSession({
   chat,
   actors,
   folders,
   busy,
   perform,
+  agent: initial = "new",
+  heading,
+  intro,
+  created,
+  className,
 }: {
   chat: Chat;
   actors: Actor[];
@@ -262,23 +278,33 @@ export function StartAgent({
   folders: string[];
   busy: boolean;
   perform: Perform;
+  /** Who it works for at first: no agent, or a new one. */
+  agent?: "none" | "new";
+  heading: string;
+  intro: string;
+  /** The session just started, e.g. to open it. */
+  created?: (session: ChatSession) => void;
+  className?: string;
 }) {
   const [harness, setHarness] = useState<Startable>("claude-code");
   const agents = actors.filter(
     (a) => a.kind === "agent" && !a.archived && a.harness === harness,
   );
-  // The chosen agent by its place in the list: no IDs in the page.
-  const [pick, setPick] = useState("");
-  const actorId = pick ? agents[Number(pick)]?.id : undefined;
+  // NO_AGENT, "" for a new agent, or an agent by its place in the list: no IDs in the page.
+  const [pick, setPick] = useState(initial === "none" ? NO_AGENT : "");
+  const actorId =
+    pick && pick !== NO_AGENT ? agents[Number(pick)]?.id : undefined;
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
+  const [worktree, setWorktree] = useState(false);
+  const [branch, setBranch] = useState("");
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
   const [mode, setMode] = useState<ClaudeMode>("default");
   // Codex: unset means Codex's own settings, never a choice made for the owner.
   const [policy, setPolicy] = useState<CodexApprovalPolicy | "">("");
   const [sandbox, setSandbox] = useState<CodexSandbox | "">("");
-  const catalog = useModelCatalog(harness);
+  const catalog = useSessionCatalog(harness);
   const launchFields = agentSettingFields(
     harness,
     catalog.data?.models ?? [],
@@ -288,41 +314,52 @@ export function StartAgent({
   async function submit(event: SubmitEvent) {
     event.preventDefault();
     const common = {
-      name: name.trim() || label,
       workspace: workspace.trim(),
+      ...(worktree ? { worktree: branch.trim() } : {}),
       ...agentLaunchSettings(model, effort),
-      ...(actorId ? { actor_id: actorId } : {}),
+      ...(pick === NO_AGENT
+        ? {}
+        : actorId
+          ? { actor_id: actorId }
+          : { name: name.trim() || label }),
     };
-    const started = await perform(() =>
+    const input: NewSession =
       harness === "claude-code"
-        ? chat.startClaude({ ...common, permission_mode: mode })
+        ? { harness, ...common, permission_mode: mode }
         : harness === "pi"
-          ? chat.startPi(common)
-          : chat.startCodex({
+          ? { harness, ...common }
+          : {
+              harness,
               ...common,
               ...(policy ? { approval_policy: policy } : {}),
               ...(sandbox ? { sandbox } : {}),
-            }),
-    );
-    if (started) {
+            };
+    let session: ChatSession | undefined;
+    const started = await perform(async () => {
+      session = (await chat.createSession(input)).session;
+    });
+    if (started && session) {
       setName("");
       setWorkspace("");
+      setWorktree(false);
+      setBranch("");
       setModel("");
       setEffort("");
+      created?.(session);
     }
   }
   return (
     <form
-      aria-label="Start an agent"
-      className="flex flex-col gap-4 rounded-xl border bg-card p-4"
+      aria-label={heading}
+      className={cn(
+        "flex flex-col gap-4 rounded-xl border bg-card p-4",
+        className,
+      )}
       onSubmit={(e) => void submit(e)}
     >
       <div className="flex flex-col gap-1">
-        <h2 className="text-base font-semibold">Start a new agent</h2>
-        <p className="text-sm text-muted-foreground">
-          ZeroLux runs it in the folder you choose. What you write in your chats
-          reaches it as yours.
-        </p>
+        <h2 className="text-base font-semibold">{heading}</h2>
+        <p className="text-sm text-muted-foreground">{intro}</p>
       </div>
       <div className="flex flex-col gap-2">
         <Label htmlFor="start-harness">Harness</Label>
@@ -332,7 +369,7 @@ export function StartAgent({
           value={harness}
           onChange={(e) => {
             setHarness(e.target.value as Startable);
-            setPick("");
+            if (pick !== NO_AGENT) setPick("");
             setModel("");
             setEffort("");
             setMode("default");
@@ -347,32 +384,34 @@ export function StartAgent({
           ))}
         </NativeSelect>
       </div>
-      {agents.length > 0 && (
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="start-agent">Agent</Label>
-          <NativeSelect
-            id="start-agent"
-            className="w-full"
-            value={pick}
-            onChange={(e) => {
-              const pick = e.target.value;
-              const agent = pick ? agents[Number(pick)] : undefined;
-              setPick(pick);
-              setMode((agent?.permission_mode as ClaudeMode) || "default");
-              setPolicy((agent?.approval_policy as CodexApprovalPolicy) || "");
-              setSandbox((agent?.sandbox as CodexSandbox) || "");
-            }}
-          >
-            <NativeSelectOption value="">A new agent</NativeSelectOption>
-            {agents.map((a, i) => (
-              <NativeSelectOption key={a.id} value={String(i)}>
-                Another session of {a.name}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
-        </div>
-      )}
-      {!actorId && (
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="start-agent">Agent</Label>
+        <NativeSelect
+          id="start-agent"
+          className="w-full"
+          value={pick}
+          onChange={(e) => {
+            const pick = e.target.value;
+            const agent =
+              pick && pick !== NO_AGENT ? agents[Number(pick)] : undefined;
+            setPick(pick);
+            setMode((agent?.permission_mode as ClaudeMode) || "default");
+            setPolicy((agent?.approval_policy as CodexApprovalPolicy) || "");
+            setSandbox((agent?.sandbox as CodexSandbox) || "");
+          }}
+        >
+          <NativeSelectOption value={NO_AGENT}>
+            No agent: only in the Console
+          </NativeSelectOption>
+          <NativeSelectOption value="">A new agent</NativeSelectOption>
+          {agents.map((a, i) => (
+            <NativeSelectOption key={a.id} value={String(i)}>
+              Another session of {a.name}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+      {pick === "" && (
         <div className="flex flex-col gap-2">
           <Label htmlFor="start-name">Agent name</Label>
           <Input
@@ -401,6 +440,25 @@ export function StartAgent({
           ))}
         </datalist>
       </div>
+      <div className="flex flex-col gap-2">
+        <Label className="font-normal">
+          <Checkbox
+            checked={worktree}
+            onCheckedChange={(checked) => setWorktree(checked)}
+          />
+          In a new git worktree of the folder
+        </Label>
+        {worktree && (
+          <Input
+            aria-label="Branch"
+            value={branch}
+            onChange={(e) => setBranch(e.target.value)}
+            placeholder="Branch: ZeroLux names one if empty"
+            maxLength={200}
+            className="font-mono"
+          />
+        )}
+      </div>
       <div className="grid gap-3 sm:grid-cols-2">
         {launchFields.map(({ key, label, options }) => (
           <div key={key} className="flex flex-col gap-2">
@@ -419,7 +477,9 @@ export function StartAgent({
               }}
             >
               <NativeSelectOption value="">
-                Agent or harness choice
+                {pick === NO_AGENT
+                  ? "Harness choice"
+                  : "Agent or harness choice"}
               </NativeSelectOption>
               {Object.entries(options).map(([value, label]) => (
                 <NativeSelectOption key={value} value={value}>
@@ -786,11 +846,6 @@ export function AgentProfile({
         key={agent.id}
         agent={agent}
         busy={busy}
-        revision={sessions
-          .map(
-            (session) => `${session.id}:${session.status}:${session.activity}`,
-          )
-          .join("|")}
         save={async (settings) => {
           let actor: Actor | undefined;
           const ok = await perform(async () => {
@@ -850,7 +905,7 @@ export function AgentProfile({
   );
 }
 
-/** Native choices and confirmed current values; Apply changes the connected sessions. */
+/** The agent's defaults for its new sessions, among its harness's native choices. */
 export function AgentSettingsForm({
   agent,
   busy,
@@ -935,7 +990,7 @@ export function AgentSettingsForm({
               <NativeSelectOption value="" disabled>
                 {changes.model && key === "effort"
                   ? "Native choice"
-                  : "Not reported or varies by session"}
+                  : "The harness's own default"}
               </NativeSelectOption>
               {value && !Object.hasOwn(options, value) && (
                 <NativeSelectOption value={value} disabled>
@@ -951,27 +1006,9 @@ export function AgentSettingsForm({
           </div>
         );
       })}
-      {native.data?.sessions.map(
-        (session) =>
-          session.error && (
-            <p
-              key={session.id}
-              role="status"
-              className="text-xs text-attention"
-            >
-              {session.error}
-            </p>
-          ),
-      )}
-      {native.data &&
-        agent.harness === "codex" &&
-        native.data.sessions.length > 0 &&
-        !native.data.editable.includes("sandbox") &&
-        !native.data.sessions.some((session) => session.error) && (
-          <p className="text-xs text-muted-foreground">
-            Codex allows approval and sandbox changes between turns.
-          </p>
-        )}
+      <p className="text-xs text-muted-foreground">
+        For its new sessions; each session changes its own in the Console.
+      </p>
       {native.error && (
         <p role="alert" className="text-sm text-destructive">
           {native.error}
@@ -1017,43 +1054,52 @@ export function HireForm({
   previous?: string;
   agents: Actor[];
   busy: boolean;
-  hire: (name: string, actorId?: string) => Promise<boolean>;
+  /** For an agent (an existing one, or a new one by name), or as the owner's own session. */
+  hire: (agent: { name?: string; actor_id?: string }) => Promise<boolean>;
   cancel: () => void;
 }) {
   const [name, setName] = useState("");
+  // "" is a new agent, NO_AGENT the owner's own session, else an agent's ID.
   const [actorId, setActorId] = useState(
     agents.some((a) => a.id === previous) ? previous! : "",
   );
   const label = harnessLabels[session.harness] ?? session.harness;
   function submit(event: SubmitEvent) {
     event.preventDefault();
-    void hire(name.trim() || label, actorId || undefined);
+    void hire(
+      actorId === NO_AGENT
+        ? {}
+        : actorId
+          ? { actor_id: actorId }
+          : { name: name.trim() || label },
+    );
   }
   return (
     <form
       className="flex flex-col gap-3 rounded-lg bg-muted/50 p-3"
       onSubmit={submit}
     >
-      {agents.length > 0 && (
-        <div className="flex flex-col gap-2">
-          <Label htmlFor={`hire-as-${session.id}`}>Hire as</Label>
-          <NativeSelect
-            id={`hire-as-${session.id}`}
-            className="w-full"
-            value={actorId}
-            onChange={(e) => setActorId(e.target.value)}
-          >
-            <NativeSelectOption value="">A new agent</NativeSelectOption>
-            {agents.map((a) => (
-              <NativeSelectOption key={a.id} value={a.id}>
-                {a.id === previous
-                  ? `${a.name} again, back in their chats`
-                  : `Another session of ${a.name}`}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
-        </div>
-      )}
+      <div className="flex flex-col gap-2">
+        <Label htmlFor={`hire-as-${session.id}`}>Hire as</Label>
+        <NativeSelect
+          id={`hire-as-${session.id}`}
+          className="w-full"
+          value={actorId}
+          onChange={(e) => setActorId(e.target.value)}
+        >
+          <NativeSelectOption value="">A new agent</NativeSelectOption>
+          {agents.map((a) => (
+            <NativeSelectOption key={a.id} value={a.id}>
+              {a.id === previous
+                ? `${a.name} again, back in their chats`
+                : `Another session of ${a.name}`}
+            </NativeSelectOption>
+          ))}
+          <NativeSelectOption value={NO_AGENT}>
+            No agent: only in the Console
+          </NativeSelectOption>
+        </NativeSelect>
+      </div>
       {!actorId && (
         <div className="flex flex-col gap-2">
           <Label htmlFor={`agent-name-${session.id}`}>Agent name</Label>
@@ -1076,16 +1122,18 @@ export function HireForm({
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
-        {actorId
-          ? agents.find((a) => a.id === actorId)?.name
-          : name.trim() || label}{" "}
-        will be able to reply and resume this session until you press Stop.
+        {actorId === NO_AGENT
+          ? "It opens in the Console: you follow and steer it there, no agent joins your chats."
+          : `${
+              actorId
+                ? agents.find((a) => a.id === actorId)?.name
+                : name.trim() || label
+            } will be able to reply and resume this session until you press Stop.`}
       </p>
     </form>
   );
 }
 
-/** One session of an agent: where and how it runs, its state, and stop, resume or take over. */
 /** One session of an agent: where it runs, its state, and what can be done with it. */
 export function SessionCard({
   session,
