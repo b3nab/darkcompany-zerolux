@@ -3,63 +3,51 @@ import { EnrichedMarkdownText } from "react-native-enriched-markdown";
 import type { MarkdownStyle } from "react-native-enriched-markdown";
 import { useCSSVariable } from "uniwind";
 import Mermaid from "@/components/mermaid";
+import { segments } from "../src/markdown";
 import { useTheme } from "../src/theme";
-
-type Segment = { kind: "markdown" | "mermaid"; text: string };
-
-const MERMAID =
-  /^(?: {0,3})(`{3,}|~{3,}) *mermaid[^\n]*\n([\s\S]*?)\n(?: {0,3})\1[ \t]*$/gim;
-const IMAGE = /!\[([^\]]*)\]\([^)]*\)/g;
-
-/**
- * Chat text as the author wrote it: Markdown with tables, code, links and lists, and Mermaid
- * diagrams drawn. An image becomes its alt text; links open as http(s) or mailto.
- */
-export function segments(text: string): Segment[] {
-  const result: Segment[] = [];
-  let last = 0;
-  for (const match of text.matchAll(MERMAID)) {
-    const start = match.index ?? 0;
-    if (start > last)
-      result.push({ kind: "markdown", text: text.slice(last, start) });
-    result.push({ kind: "mermaid", text: match[2] });
-    last = start + match[0].length;
-  }
-  if (last < text.length)
-    result.push({ kind: "markdown", text: text.slice(last) });
-  return result
-    .map((s) =>
-      s.kind === "markdown"
-        ? {
-            ...s,
-            text: s.text.replace(
-              IMAGE,
-              (_, alt: string) => `[image: ${alt || "image"}]`,
-            ),
-          }
-        : s,
-    )
-    .filter((s) => s.text.trim() !== "");
-}
 
 const SAFE = /^(https?:|mailto:)/i;
 
+/**
+ * Code colors on a light page, as the web's GitHub light theme; on a dark one the library's
+ * own GitHub dark colors stay.
+ */
+const lightCode = {
+  keyword: "#cf222e",
+  string: "#0a3069",
+  number: "#0550ae",
+  constant: "#0550ae",
+  comment: "#6e7781",
+  function: "#8250df",
+  type: "#953800",
+  property: "#0550ae",
+  tag: "#116329",
+  attribute: "#0550ae",
+};
+
+/**
+ * Chat text as the author wrote it: Markdown with tables, code, links and lists, and Mermaid
+ * diagrams drawn. Links open as http(s) or mailto.
+ */
 export function MessageBody({ text }: { text: string }) {
   const { resolved } = useTheme();
-  const [foreground, muted, link, card, border, accent] = useCSSVariable([
-    "--color-foreground",
-    "--color-muted-foreground",
-    "--color-human-foreground",
-    "--color-card",
-    "--color-border",
-    "--color-accent",
-  ]);
+  const [foreground, muted, link, card, border, accent, background] =
+    useCSSVariable([
+      "--color-foreground",
+      "--color-muted-foreground",
+      "--color-human-foreground",
+      "--color-card",
+      "--color-border",
+      "--color-accent",
+      "--color-background",
+    ]);
   const color = (value: string | number | undefined, fallback: string) =>
     typeof value === "string" ? value : fallback;
   const ink = color(foreground, "#edece8");
   // Chivo speaks for people, Chivo Mono for code.
   const sans = "Chivo";
   const mono = "Chivo Mono";
+  // Every color from the theme: the library's own are for a white page.
   const style: MarkdownStyle = {
     paragraph: {
       color: ink,
@@ -99,6 +87,7 @@ export function MessageBody({ text }: { text: string }) {
     blockquote: {
       color: color(muted, "#a6a9af"),
       borderColor: color(border, "#1e2126"),
+      backgroundColor: "transparent",
       fontFamily: sans,
       fontSize: 16,
       lineHeight: 22,
@@ -109,6 +98,7 @@ export function MessageBody({ text }: { text: string }) {
       fontSize: 16,
       lineHeight: 22,
       bulletColor: color(muted, "#a6a9af"),
+      markerColor: color(muted, "#a6a9af"),
     },
     codeBlock: {
       color: ink,
@@ -116,16 +106,37 @@ export function MessageBody({ text }: { text: string }) {
       borderColor: color(border, "#1e2126"),
       fontFamily: mono,
       fontSize: 13,
+      ...(resolved === "dark" ? {} : { syntaxColors: lightCode }),
     },
     code: {
       color: ink,
       fontFamily: mono,
       backgroundColor: color(accent, "#1b1e23"),
+      borderColor: color(border, "#1e2126"),
+    },
+    underline: { color: ink },
+    strikethrough: { color: color(muted, "#a6a9af") },
+    thematicBreak: { color: color(border, "#1e2126") },
+    math: { color: ink, backgroundColor: color(card, "#121417") },
+    inlineMath: { color: ink },
+    taskList: {
+      checkedColor: color(link, "#ffc95c"),
+      borderColor: color(muted, "#a6a9af"),
+      checkmarkColor: color(background, "#0a0b0d"),
+      checkedTextColor: color(muted, "#a6a9af"),
     },
     link: { color: color(link, "#ffc95c") },
     table: {
-      borderColor: color(border, "#1e2126"),
+      color: ink,
+      fontFamily: sans,
+      fontSize: 14,
+      lineHeight: 20,
+      headerFontFamily: sans,
+      headerTextColor: ink,
       headerBackgroundColor: color(card, "#121417"),
+      rowEvenBackgroundColor: color(background, "#0a0b0d"),
+      rowOddBackgroundColor: color(card, "#121417"),
+      borderColor: color(border, "#1e2126"),
     },
   };
   return (
