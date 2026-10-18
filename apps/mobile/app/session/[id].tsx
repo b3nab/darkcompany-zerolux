@@ -100,6 +100,7 @@ import {
   useInterrupt,
   useOrganize,
 } from "@/components/session";
+import { CiTrigger } from "@/components/ci-trigger";
 import { GoalSection } from "@/components/goal";
 import { Schedules } from "@/components/schedules";
 import { ForkSession, useInputActions } from "@/components/session-fork";
@@ -930,6 +931,7 @@ function About({
         <GoalSection session={session} />
         <ForkSession session={session} close={close} />
         <Schedules session={session} />
+        <CiTrigger session={session} />
         <UsageFacts sessionId={session.id} />
         <SessionCard session={session} name={name} facts />
       </ScrollView>
