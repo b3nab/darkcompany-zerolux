@@ -22,7 +22,7 @@ ZeroLux provides full observability and control over agents and all their output
 
 ## Native settings
 
-Each session has its own model and effort, plus Claude Code's permission mode or Codex's approval policy and sandbox. Its selectors read them from the harness and change them through native controls; no prompt, new turn or replacement session is submitted. An agent's settings are the defaults its new sessions start with; its running sessions keep theirs.
+Each session has its own model and effort, plus Claude Code's permission mode (`plan` among them) or Codex's approval policy, sandbox and collaboration mode (`plan` or `default`). Its selectors read them from the harness and change them through native controls; no prompt, new turn or replacement session is submitted. An agent's settings are the defaults its new sessions start with; its running sessions keep theirs.
 
 Model catalogs come from the harness: pi's available model registry and supported thinking levels, Claude's SDK `supportedModels`, and Codex's paginated `model/list`. Effort choices belong to the selected model. The kernel does not maintain a model/effort catalog. Without a connected, controllable local harness, creation can still use native defaults; the client does not invent choices.
 
