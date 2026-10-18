@@ -26,19 +26,19 @@ import { TimeField } from "@/components/time-field";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "../src/kernel";
-import { useMe } from "../src/me";
+import { useAccess } from "../src/me";
 
 /**
- * In About, for the owner: the words the session receives on a schedule, each with when it
+ * In About, for whoever works in the session: the words it receives on a schedule, each with when it
  * runs next and how the last run went, on or off with a switch; a tap changes one.
  */
 export function Schedules({ session }: { session: ChatSession }) {
   const { url } = useSession();
-  const { owner } = useMe();
-  const schedules = useSessionSchedules(owner ? session.id : undefined, url);
+  const { write } = useAccess(session);
+  const schedules = useSessionSchedules(write ? session.id : undefined, url);
   const [editing, setEditing] = useState<Schedule | "new">();
   const [error, setError] = useState("");
-  if (!owner) return null;
+  if (!write) return null;
   const act = (work: Promise<unknown>) => {
     setError("");
     work.catch((e: unknown) => setError(errorMessage(e)));

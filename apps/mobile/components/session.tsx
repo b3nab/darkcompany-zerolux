@@ -13,14 +13,24 @@ import {
   sessionName,
   sessionState,
   sessionTone,
+  shareChoice,
+  sharedAs,
+  shareLabels,
 } from "@zerolux/chat";
-import type { Actor, Approval, Attention, ChatSession } from "@zerolux/chat";
+import type {
+  Actor,
+  Approval,
+  Attention,
+  ChatSession,
+  ShareChoice,
+} from "@zerolux/chat";
 import { ActorMark, Fact, Lamp } from "@/components/member";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/src/kernel";
-import { useMe } from "@/src/me";
+import { Segmented } from "@/components/segmented";
+import { useAccess } from "@/src/me";
 
 /** Pin, archive, rename and budget a session, keeping the kernel's reason when it refuses. */
 export function useOrganize(session: ChatSession) {
@@ -181,6 +191,57 @@ export function SessionRow({
   );
 }
 
+const shareHints: Record<ShareChoice, string> = {
+  private: "Only you see it.",
+  read: "The workspace's people follow it: its work, its code and its requests.",
+  write:
+    "The workspace's people also work in it, as you do. Its title, budget, sharing, forks and requests stay yours.",
+};
+
+/**
+ * In About: who sees the session. Its person keeps it private or shares it with the
+ * workspace's people, to read or to work in it; the others see how it was shared with them.
+ */
+export function Sharing({ session }: { session: ChatSession }) {
+  const { workspace, chat } = useSession();
+  const { mine } = useAccess(session);
+  const [error, setError] = useState("");
+  const person =
+    workspace?.actors.find((a) => a.id === session.owner_id)?.name ??
+    "Its person";
+  if (!mine)
+    return (
+      <View className="gap-1">
+        <Text className="text-sm text-faint">Shared</Text>
+        <Text className="text-[15px]">
+          {person} shared it with you to{" "}
+          {session.shared === "write" ? "work in" : "read"}.
+        </Text>
+      </View>
+    );
+  const choice = shareChoice(session.shared);
+  return (
+    <View className="gap-2">
+      <Text className="text-sm text-faint">Share</Text>
+      <Segmented<ShareChoice>
+        options={Object.entries(shareLabels) as [ShareChoice, string][]}
+        value={choice}
+        choose={(next) => {
+          setError("");
+          chat
+            .updateSession(session.id, { shared: sharedAs(next) })
+            .catch((e: unknown) => setError(errorMessage(e)));
+        }}
+      />
+      <Text
+        className={cn("text-xs", error ? "text-destructive" : "text-faint")}
+      >
+        {error || shareHints[choice]}
+      </Text>
+    </View>
+  );
+}
+
 /**
  * In About: the session that started this one, and the sessions this one started to work
  * for it, the latest first; a tap opens one.
@@ -244,16 +305,16 @@ export function Delegation({
 }
 
 /**
- * Stopping the turn the session is working on; the session stays linked. Only the owner may,
+ * Stopping the turn the session is working on; the session stays linked. Whoever works in it may,
  * and only while it works. The kernel says why when it cannot, and that reason is kept as it is.
  */
 export function useInterrupt(session: ChatSession) {
   const { chat } = useSession();
-  const { owner } = useMe();
+  const { write } = useAccess(session);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   return {
-    allowed: owner && sessionTone(session) === "working",
+    allowed: write && sessionTone(session) === "working",
     busy,
     error,
     async interrupt() {

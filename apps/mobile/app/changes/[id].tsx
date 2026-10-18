@@ -40,6 +40,7 @@ import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "../../src/kernel";
+import { useAccess } from "../../src/me";
 
 /** A change's letter in its color: added green, deleted red, a conflict loud, the rest amber. */
 const letterTone = (letter: string) =>
@@ -74,6 +75,8 @@ export default function ChangesPage() {
   const faint = String(useCSSVariable("--color-faint"));
   const muted = String(useCSSVariable("--color-muted-foreground"));
   const session = chat.sessions.find((s) => s.id === id);
+  // Following a shared session shows its code; working in it changes it.
+  const { write } = useAccess(session);
   const git = useSessionGit(id, session?.output_at, url);
   const pr = useSessionPullRequest(id, session?.output_at, url);
   const [message, setMessage] = useState("");
@@ -207,7 +210,9 @@ export default function ChangesPage() {
                     : "Not pushed yet"}
                 </Text>
               </View>
-              {status.branch && (status.ahead > 0 || !status.upstream) ? (
+              {write &&
+              status.branch &&
+              (status.ahead > 0 || !status.upstream) ? (
                 <Button
                   size="sm"
                   variant="outline"
@@ -221,6 +226,7 @@ export default function ChangesPage() {
             <PullRequestView
               pullRequest={pr.pullRequest}
               error={pr.error}
+              write={write}
               canOpen={Boolean(status.branch && status.upstream)}
               open={() => setOpening(true)}
             />
@@ -237,13 +243,17 @@ export default function ChangesPage() {
           <Section
             title="Staged"
             count={staged.length}
-            actions={[
-              {
-                label: "Unstage all",
-                run: () =>
-                  void act(() => git.unstage(staged.map((c) => c.path))),
-              },
-            ]}
+            actions={
+              write
+                ? [
+                    {
+                      label: "Unstage all",
+                      run: () =>
+                        void act(() => git.unstage(staged.map((c) => c.path))),
+                    },
+                  ]
+                : []
+            }
             busy={busy}
           >
             {staged.map((change) => (
@@ -254,8 +264,12 @@ export default function ChangesPage() {
                 staged
                 busy={busy}
                 open={() => diff(change, true)}
-                toggle={() => void act(() => git.unstage([change.path]))}
-                menu={() => menu(change, true)}
+                toggle={
+                  write
+                    ? () => void act(() => git.unstage([change.path]))
+                    : undefined
+                }
+                menu={write ? () => menu(change, true) : undefined}
               />
             ))}
           </Section>
@@ -264,22 +278,26 @@ export default function ChangesPage() {
           <Section
             title="Not staged"
             count={unstaged.length}
-            actions={[
-              {
-                label: "Discard all",
-                destructive: true,
-                run: () =>
-                  discard(
-                    unstaged.map((c) => c.path),
-                    `all ${unstaged.length} changes`,
-                  ),
-              },
-              {
-                label: "Stage all",
-                run: () =>
-                  void act(() => git.stage(unstaged.map((c) => c.path))),
-              },
-            ]}
+            actions={
+              write
+                ? [
+                    {
+                      label: "Discard all",
+                      destructive: true,
+                      run: () =>
+                        discard(
+                          unstaged.map((c) => c.path),
+                          `all ${unstaged.length} changes`,
+                        ),
+                    },
+                    {
+                      label: "Stage all",
+                      run: () =>
+                        void act(() => git.stage(unstaged.map((c) => c.path))),
+                    },
+                  ]
+                : []
+            }
             busy={busy}
           >
             {unstaged.map((change) => (
@@ -290,14 +308,18 @@ export default function ChangesPage() {
                 staged={false}
                 busy={busy}
                 open={() => diff(change, false)}
-                toggle={() => void act(() => git.stage([change.path]))}
-                menu={() => menu(change, false)}
+                toggle={
+                  write
+                    ? () => void act(() => git.stage([change.path]))
+                    : undefined
+                }
+                menu={write ? () => menu(change, false) : undefined}
               />
             ))}
           </Section>
         ) : null}
       </ScrollView>
-      {status ? (
+      {status && write ? (
         <KeyboardStickyView offset={{ closed: 0, opened: insets.bottom }}>
           <View
             className="flex-row items-end gap-2 border-t border-border bg-background px-3 pt-2"
@@ -404,8 +426,9 @@ function ChangeRow({
   staged: boolean;
   busy: boolean;
   open: () => void;
-  toggle: () => void;
-  menu: () => void;
+  /** Stages or unstages it; none for who only follows the session. */
+  toggle?: () => void;
+  menu?: () => void;
 }) {
   const muted = String(useCSSVariable("--color-muted-foreground"));
   const folder = folderOf(change.path);
@@ -438,20 +461,22 @@ function ChangeRow({
           </Text>
         ) : null}
       </View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={staged ? "Unstage" : "Stage"}
-        disabled={busy}
-        onPress={toggle}
-        hitSlop={6}
-        className="size-9 items-center justify-center rounded-sm active:bg-accent"
-      >
-        {staged ? (
-          <MinusIcon color={muted} size={18} strokeWidth={1.5} />
-        ) : (
-          <PlusIcon color={muted} size={18} strokeWidth={1.5} />
-        )}
-      </Pressable>
+      {toggle ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={staged ? "Unstage" : "Stage"}
+          disabled={busy}
+          onPress={toggle}
+          hitSlop={6}
+          className="size-9 items-center justify-center rounded-sm active:bg-accent"
+        >
+          {staged ? (
+            <MinusIcon color={muted} size={18} strokeWidth={1.5} />
+          ) : (
+            <PlusIcon color={muted} size={18} strokeWidth={1.5} />
+          )}
+        </Pressable>
+      ) : null}
     </Pressable>
   );
 }
@@ -475,11 +500,14 @@ const reviewWords: Record<PullRequest["reviewDecision"], string> = {
 function PullRequestView({
   pullRequest,
   error,
+  write,
   canOpen,
   open,
 }: {
   pullRequest: PullRequest | null | undefined;
   error: string;
+  /** Whether the viewer works in the session, and so may open one. */
+  write: boolean;
   canOpen: boolean;
   open: () => void;
 }) {
@@ -487,7 +515,7 @@ function PullRequestView({
   if (error) return <Text className="text-xs text-faint">{error}</Text>;
   if (pullRequest === undefined) return null;
   if (!pullRequest)
-    return canOpen ? (
+    return !write ? null : canOpen ? (
       <Button size="sm" variant="outline" onPress={open}>
         <Text>Open a pull request</Text>
       </Button>

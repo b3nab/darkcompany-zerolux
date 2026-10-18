@@ -12,6 +12,7 @@ import { ChatList } from "@/components/ui/native";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "../../src/kernel";
+import { useAccess } from "../../src/me";
 
 /**
  * A file of a session's folder as it is now, line by line with its numbers, read again as the
@@ -23,6 +24,8 @@ export default function FilePage() {
   const { chat, url } = useSession();
   const insets = useSafeAreaInsets();
   const session = chat.sessions.find((s) => s.id === id);
+  // Following a shared session shows its files; working in it comments on them.
+  const { write } = useAccess(session);
   const [read, setRead] = useState<{ text?: string; error?: string }>({});
   useEffect(() => {
     let current = true;
@@ -69,6 +72,7 @@ export default function FilePage() {
         keyExtractor={(_, index) => String(index)}
         renderItem={({ item, index }) => (
           <Pressable
+            disabled={!write}
             onPress={() => pick.pick(index)}
             accessibilityRole="button"
             accessibilityState={{ selected: pick.has(index) }}

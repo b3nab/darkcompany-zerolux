@@ -22,7 +22,7 @@ import { useCSSVariable } from "uniwind";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { useSession } from "../src/kernel";
-import { useMe } from "../src/me";
+import { useAccess } from "../src/me";
 
 export type InputBlock = Extract<SessionBlock, { kind: "input" }>;
 
@@ -245,7 +245,7 @@ function ForkEditor({
 }
 
 /**
- * In About, for the owner: a fork that goes on from all of this session's work, and a side
+ * In About, for the session's person: a fork that goes on from all of its work, and a side
  * chat, a fork asked a question there, so this one is not touched.
  */
 export function ForkSession({
@@ -256,13 +256,13 @@ export function ForkSession({
   close: () => void;
 }) {
   const { chat } = useSession();
-  const { owner } = useMe();
+  const { mine } = useAccess(session);
   const router = useRouter();
   const forkWith = useForkWith();
   const [asking, setAsking] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  if (!owner) return null;
+  if (!mine) return null;
   const open = (id: string) => {
     close();
     router.push(`/session/${id}`);

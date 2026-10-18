@@ -11,6 +11,7 @@ import { ChatList } from "@/components/ui/native";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "../../src/kernel";
+import { useAccess } from "../../src/me";
 
 /** A line's number in the file as it is now; a removed line has only the one it had. */
 const lineNumber = (line: GitDiffLine) => line.new ?? line.old;
@@ -31,6 +32,8 @@ export default function DiffPage() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const session = chat.sessions.find((s) => s.id === id);
+  // Following a shared session shows the diff; working in it stages and comments.
+  const { write } = useAccess(session);
   const { diff, error: readError } = useSessionDiff(
     id,
     path,
@@ -65,14 +68,16 @@ export default function DiffPage() {
           : path
       }
       action={
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy}
-          onPress={() => void move()}
-        >
-          <Text>{inIndex ? "Unstage" : "Stage"}</Text>
-        </Button>
+        write ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onPress={() => void move()}
+          >
+            <Text>{inIndex ? "Unstage" : "Stage"}</Text>
+          </Button>
+        ) : undefined
       }
     >
       <ChatList
@@ -82,7 +87,7 @@ export default function DiffPage() {
           <DiffRow
             line={item as GitDiffLine}
             picked={pick.has(index)}
-            pick={() => pick.pick(index)}
+            pick={write ? () => pick.pick(index) : undefined}
           />
         )}
         contentContainerClassName="py-2"
@@ -130,7 +135,8 @@ function DiffRow({
 }: {
   line: GitDiffLine;
   picked: boolean;
-  pick: () => void;
+  /** Picks the line to comment on; none for who only follows the session. */
+  pick?: () => void;
 }) {
   if (line.kind === "hunk")
     return (
@@ -143,6 +149,7 @@ function DiffRow({
     );
   return (
     <Pressable
+      disabled={!pick}
       onPress={pick}
       accessibilityRole="button"
       accessibilityState={{ selected: picked }}

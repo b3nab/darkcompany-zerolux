@@ -94,6 +94,7 @@ import { Screen } from "@/components/screen";
 import { Segmented } from "@/components/segmented";
 import {
   Delegation,
+  Sharing,
   SessionCard,
   useInterrupt,
   useOrganize,
@@ -110,7 +111,7 @@ import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { setDensity, useDensity } from "../../src/density";
 import { useSession } from "../../src/kernel";
-import { useMe } from "../../src/me";
+import { useAccess } from "../../src/me";
 import { dismissNotice } from "../../src/notices";
 import { pickPhotos } from "../../src/photos";
 import type { Photo } from "../../src/photos";
@@ -131,14 +132,18 @@ export default function SessionPage() {
   const { workspace, chat, url } = useSession();
   const [about, setAbout] = useState(false);
   const router = useRouter();
-  const { owner } = useMe();
   const muted = String(useCSSVariable("--color-muted-foreground"));
   const insets = useSafeAreaInsets();
   const session = chat.sessions.find((s) => s.id === id);
+  // Its person does everything; others follow it, or work in it, as it is shared.
+  const access = useAccess(session);
+  const person = workspace?.actors.find(
+    (a) => a.id === session?.owner_id,
+  )?.name;
   const inputs = useInputActions(session);
-  // How many files it changed, on the Changes button: read for the owner only.
+  // How many files it changed, on the Changes button: for whoever may follow it.
   const changed =
-    useSessionGit(owner ? id : undefined, session?.output_at, url).status
+    useSessionGit(access.read ? id : undefined, session?.output_at, url).status
       ?.changes.length ?? 0;
   // Read from the start, then again from where it stopped at each session.output notice.
   const {
@@ -239,7 +244,7 @@ export default function SessionPage() {
       }
       action={
         <View className="flex-row">
-          {owner ? (
+          {access.read ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={
@@ -259,7 +264,7 @@ export default function SessionPage() {
               ) : null}
             </Pressable>
           ) : null}
-          {owner ? (
+          {access.write ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Terminal"
@@ -293,9 +298,10 @@ export default function SessionPage() {
               run={item as BlockRun<Item>}
               fresh={fresh}
               chatTitle={chatTitle}
-              inputMenu={owner ? inputs.open : undefined}
+              inputMenu={access.mine ? inputs.open : undefined}
               renderApproval={(approval: Approval) =>
-                approval.status === "pending" ? (
+                // Its requests are its person's to decide; others see them wait.
+                approval.status === "pending" && access.mine ? (
                   <ApprovalCard
                     approval={approval}
                     agent={name}
@@ -310,7 +316,10 @@ export default function SessionPage() {
                     }
                   />
                 ) : (
-                  <ApprovalReceipt approval={approval} />
+                  <ApprovalReceipt
+                    approval={approval}
+                    waitingFor={access.mine ? undefined : person}
+                  />
                 )
               }
             />
@@ -389,7 +398,7 @@ function Composer({
 }) {
   const insets = useSafeAreaInsets();
   const { chat, url } = useSession();
-  const { owner } = useMe();
+  const { write } = useAccess(session);
   const stop = useInterrupt(session);
   const harnessCommands = useSessionCommands(session.id, url);
   const queue = useSessionQueue(session.id, chat.live);
@@ -424,7 +433,7 @@ function Composer({
     );
   };
   useEffect(() => saveDraft(session.id, draft), [session.id, draft]);
-  const open = owner && session.status === "connected";
+  const open = write && session.status === "connected";
   // While it works, words join the turn; held, Send waits for the turn or stops it first.
   const send = async (mode?: InputMode) => {
     const text = draft;
@@ -644,7 +653,7 @@ function Composer({
             ))}
           </ScrollView>
         ) : null}
-        {owner ? (
+        {write ? (
           <View className="flex-row items-end gap-1.5">
             {choosable ? (
               <Pressable
@@ -729,10 +738,10 @@ function Composer({
           </View>
         ) : (
           <Text className="px-1.5 pb-1 text-xs text-muted-foreground">
-            Only the workspace's owner writes to a session.
+            Shared with you to read: its person works in it.
           </Text>
         )}
-        {owner && stop.allowed && filled && !sessionCommand(draft) ? (
+        {write && stop.allowed && filled && !sessionCommand(draft) ? (
           <Text className="px-1.5 text-xs text-faint">
             {choosable
               ? "Joins the turn in progress. Hold Send to send it when the turn ends, or to stop the turn and send."
@@ -741,16 +750,14 @@ function Composer({
         ) : null}
         <View className="flex-row items-start gap-2">
           <View className="flex-1">
-            {owner && session.status !== "stopped" ? (
+            {write && session.status !== "stopped" ? (
               <SettingsBar session={session} />
             ) : null}
           </View>
           <ContextMeter
             usage={usage}
             compact={
-              owner && open
-                ? () => setDraft((now) => now || "/compact ")
-                : undefined
+              open ? () => setDraft((now) => now || "/compact ") : undefined
             }
           />
         </View>
@@ -824,6 +831,7 @@ function About({
   name: string;
   close: () => void;
 }) {
+  const access = useAccess(session);
   const router = useRouter();
   const faint = String(useCSSVariable("--color-faint"));
   const density = useDensity();
@@ -866,8 +874,9 @@ function About({
             choose={setDensity}
           />
         </View>
+        <Sharing session={session} />
         <Delegation session={session} close={close} />
-        <Organize session={session} />
+        {access.mine ? <Organize session={session} /> : null}
         <ForkSession session={session} close={close} />
         <Schedules session={session} />
         <UsageFacts sessionId={session.id} />

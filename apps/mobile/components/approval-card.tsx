@@ -125,7 +125,14 @@ export function ApprovalCard({
 }
 
 /** An answered request as it stays in the session's work: what was asked and what you said. */
-export function ApprovalReceipt({ approval }: { approval: Approval }) {
+export function ApprovalReceipt({
+  approval,
+  waitingFor,
+}: {
+  approval: Approval;
+  /** Who decides it while it waits, when that is not you: its session's person. */
+  waitingFor?: string;
+}) {
   const human = String(useCSSVariable("--color-human"));
   const permission = approval.kind === "permission";
   const answer = answerSummary(approval);
@@ -154,7 +161,9 @@ export function ApprovalReceipt({ approval }: { approval: Approval }) {
           approval.status === "uncertain" && "text-attention",
         )}
       >
-        {approvalLabels[approval.status]}
+        {approval.status === "pending" && waitingFor
+          ? `Waiting for ${waitingFor}`
+          : approvalLabels[approval.status]}
       </Text>
     </View>
   );
