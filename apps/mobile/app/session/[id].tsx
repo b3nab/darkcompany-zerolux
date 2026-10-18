@@ -61,6 +61,7 @@ import {
   useSessionCommands,
   useSessionEvents,
   useSessionFiles,
+  useSessionGit,
   useSessionQueue,
   useSessionUsage,
   withMention,
@@ -119,7 +120,7 @@ type Row = BlockRun<Item> | LiveRow;
  */
 export default function SessionPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { workspace, chat } = useSession();
+  const { workspace, chat, url } = useSession();
   const [about, setAbout] = useState(false);
   const router = useRouter();
   const { owner } = useMe();
@@ -127,6 +128,10 @@ export default function SessionPage() {
   const insets = useSafeAreaInsets();
   const session = chat.sessions.find((s) => s.id === id);
   const inputs = useInputActions(session);
+  // How many files it changed, on the Changes button: read for the owner only.
+  const changed =
+    useSessionGit(owner ? id : undefined, session?.output_at, url).status
+      ?.changes.length ?? 0;
   // Read from the start, then again from where it stopped at each session.output notice.
   const {
     events,
@@ -229,12 +234,21 @@ export default function SessionPage() {
           {owner ? (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Changes"
+              accessibilityLabel={
+                changed ? `Changes, ${changed} files` : "Changes"
+              }
               onPress={() => router.push(`/changes/${id}`)}
               hitSlop={6}
               className="size-10 items-center justify-center rounded-sm active:bg-accent"
             >
               <FileDiffIcon color={muted} size={20} strokeWidth={1.5} />
+              {changed ? (
+                <View className="absolute top-0.5 right-0 min-w-4 items-center rounded-full bg-primary px-1">
+                  <Text className="font-mono text-[10px] leading-4 text-primary-foreground">
+                    {changed}
+                  </Text>
+                </View>
+              ) : null}
             </Pressable>
           ) : null}
           {owner ? (
