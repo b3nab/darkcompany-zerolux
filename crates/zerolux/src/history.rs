@@ -129,15 +129,14 @@ fn scan(
             .expect("a literal pattern")
     });
     let mut file = std::fs::File::open(path)?;
+    let mut chunk = vec![0; CHUNK];
     let (mut found, mut data, mut base) = (Vec::new(), Vec::new(), 0u64);
     loop {
         if Instant::now() > deadline {
             return Ok((found, true));
         }
-        let kept = data.len();
-        data.resize(kept + CHUNK, 0);
-        let read = file.read(&mut data[kept..])?;
-        data.truncate(kept + read);
+        let read = file.read(&mut chunk)?;
+        data.extend_from_slice(&chunk[..read]);
         // Whole lines only: one still being written waits.
         let Some(last) = memchr::memrchr(b'\n', &data) else {
             if read == 0 {
@@ -219,7 +218,8 @@ impl Store {
         }
         let lower: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
         let deadline = Instant::now() + BUDGET;
-        let (mut results, mut truncated) = (Vec::new(), false);
+        // Every session's record at once, each on its own thread.
+        let mut scans = Vec::new();
         for session in self.sessions(who).await? {
             if session.host_id.as_deref() != self.host() {
                 continue;
@@ -227,12 +227,17 @@ impl Store {
             let row = self.observed_session(who, &session.id).await?;
             let lower = lower.clone();
             let harness = session.harness.clone();
-            let scanned = tokio::task::spawn_blocking(move || {
+            let scan = tokio::task::spawn_blocking(move || {
                 let path = locate(&row)?;
                 scan(&path, &harness, &lower, deadline).ok()
-            })
-            .await
-            .map_err(|error| Error::Invalid(format!("The search stopped: {error}")))?;
+            });
+            scans.push((session, scan));
+        }
+        let (mut results, mut truncated) = (Vec::new(), false);
+        for (session, scan) in scans {
+            let scanned = scan
+                .await
+                .map_err(|error| Error::Invalid(format!("The search stopped: {error}")))?;
             let Some((found, cut)) = scanned else {
                 continue;
             };
@@ -246,9 +251,6 @@ impl Store {
                 kind,
                 snippet,
             }));
-            if cut {
-                break;
-            }
         }
         results.sort_by(|a, b| b.time.cmp(&a.time));
         results.truncate(limit.clamp(1, 200));
