@@ -146,8 +146,7 @@ pub(crate) enum PiControl {
     There {
         hosts: Arc<crate::host_link::Links>,
         host: String,
-        native: String,
-        workspace: String,
+        session: String,
     },
 }
 
@@ -158,14 +157,13 @@ impl PiControl {
             Self::There {
                 hosts,
                 host,
-                native,
-                workspace,
+                session,
             } => {
                 hosts
                     .call(
                         host,
                         "pi.control",
-                        json!({"native": native, "workspace": workspace, "request": request}),
+                        json!({"session_id": session, "request": request}),
                     )
                     .await
             }
@@ -407,14 +405,28 @@ impl ChatRuntime {
             .await?;
         self.store.place_session(&issued.session.id, host).await?;
         self.changed();
-        let bound = self
-            .hosts
-            .call(
-                host,
-                "pi.bind",
-                json!({"pending": started["pending"], "token": issued.token}),
-            )
-            .await;
+        let workspace = self.store.workspace_info().await?;
+        let bound = async {
+            let bound = self
+                .hosts
+                .call(
+                    host,
+                    "pi.bind",
+                    json!({"pending": started["pending"], "token": issued.token,
+                        "session_id": issued.session.id, "workspace_id": workspace.id}),
+                )
+                .await?;
+            // Where its record is, there, for reading it through the computer.
+            self.store
+                .remember_pi_locator(
+                    &issued.session.id,
+                    &issued.session.native_session_id,
+                    &bound["native_locator"],
+                )
+                .await?;
+            anyhow::Ok(())
+        }
+        .await;
         if let Err(error) = bound {
             self.store
                 .fail_chat_link(who, &issued.session.id, crate::chat::LINK_FAILED)

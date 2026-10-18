@@ -811,6 +811,10 @@ pub struct PiLink {
     link_id: String,
 }
 impl PiLink {
+    /// A control request to the paired pi integration.
+    pub async fn control(&self, request: Value) -> Result<Value> {
+        control(&self.descriptor, request).await
+    }
     pub async fn shutdown(self) -> Result<()> {
         control(
             &self.descriptor,

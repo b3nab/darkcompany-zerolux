@@ -532,3 +532,140 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
         inputs
     );
 }
+
+/// A pi session on a person's computer joined to the workspace: that computer starts pi under
+/// its own runner, with its own pi, and the runner's integration links to the kernel.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pi_session_runs_on_a_joined_computer() {
+    let temporary = tempfile::Builder::new()
+        .prefix("zph-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    for name in ["home", "laptop", "work", "bin"] {
+        fs::create_dir_all(root.join(name)).unwrap();
+    }
+    for name in ["bun", "livekit-server"] {
+        symlink(executable(name), root.join("bin").join(name)).unwrap();
+    }
+    script(&root.join("bin/claude"), "#!/bin/sh\nprintf '[]\\n'\n");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../extensions/pi/src/fixtures/rpc-harness.ts")
+        .canonicalize()
+        .unwrap();
+    script(
+        &root.join("bin/pi"),
+        &format!(
+            "#!/bin/sh\nexec '{}' '{}' \"$@\"\n",
+            executable("bun").display(),
+            fixture.display()
+        ),
+    );
+    let _hosts = Hosts(root.join("joined/links/pi"));
+    let _diagnostics = Diagnostics(root.clone());
+    let _joined = Diagnostics(root.join("joined"));
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let base = format!("http://127.0.0.1:{port}");
+    let plain = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(65))
+        .build()
+        .unwrap();
+    let _kernel = start(&root, port);
+    ready(&plain, &base).await;
+    let client = owner::client(&base, Duration::from_secs(65)).await;
+    let linked = api(&client, &base, "/hosts/link", Some(json!({}))).await;
+    let host = linked["host"]["id"].as_str().unwrap().to_owned();
+    // The computer runs as its own user would: its own home, its own pi.
+    let computer = |args: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_zerolux"));
+        command
+            .arg("host")
+            .arg("--data-dir")
+            .arg(root.join("joined"))
+            .args(args)
+            .env_clear()
+            .env("HOME", root.join("laptop"))
+            .env("TMPDIR", &root)
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}:/usr/bin:/bin",
+                    root.join("bin").display(),
+                    owner::bun_dir().display()
+                ),
+            )
+            .current_dir(root.join("work"))
+            .process_group(0)
+            .stdin(Stdio::null());
+        command
+    };
+    let joined = computer(&["join", &base, linked["code"].as_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(joined.status.success(), "{joined:?}");
+    let log = fs::File::create(root.join("joined.log")).unwrap();
+    let _running = Kernel(
+        computer(&["run"])
+            .stdout(Stdio::from(log.try_clone().unwrap()))
+            .stderr(Stdio::from(log))
+            .spawn()
+            .unwrap(),
+    );
+    let mut online = false;
+    for _ in 0..200 {
+        let hosts = api(&client, &base, "/hosts", None).await;
+        if hosts["hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|h| h["id"] == host && h["online"] == true)
+        {
+            online = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        online,
+        "{}",
+        fs::read_to_string(root.join("joined.log")).unwrap()
+    );
+    let created = api(
+        &client,
+        &base,
+        "/sessions",
+        Some(json!({"harness":"pi","workspace":root.join("work"),"host":host})),
+    )
+    .await;
+    let native = created["session"]["native_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(created["session"]["host_id"], host);
+    // Started with the computer's own pi, not the kernel's.
+    assert!(starts(&root).is_empty());
+    assert_eq!(
+        fs::read_to_string(root.join("laptop/native-starts.jsonl"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    let session = connected(&client, &base, &native).await;
+    let id = session["id"].as_str().unwrap();
+    // Its record is read on the computer, where pi keeps it.
+    let events = api(&client, &base, &format!("/sessions/{id}/events"), None).await;
+    assert!(events["events"].is_array(), "{events}");
+    api(
+        &client,
+        &base,
+        &format!("/sessions/{id}/stop"),
+        Some(json!({})),
+    )
+    .await;
+}

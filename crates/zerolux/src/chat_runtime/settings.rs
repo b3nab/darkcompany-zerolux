@@ -237,8 +237,7 @@ impl ChatRuntime {
                 "pi" => Control::Pi(super::remote::PiControl::There {
                     hosts,
                     host,
-                    native,
-                    workspace,
+                    session: session.id.clone(),
                 }),
                 #[cfg(unix)]
                 _ => Control::Claude(super::remote::ClaudeControl::There {

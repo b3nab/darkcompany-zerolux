@@ -328,10 +328,6 @@ impl RunnerLink {
         );
         Ok(value)
     }
-    /// A control request to the pi it runs.
-    pub(crate) async fn control(&self, request: Value) -> Result<Value> {
-        sessions::control(&self.record, request).await
-    }
     pub(crate) async fn bind(&self, base: &str, token: &str) -> Result<i32> {
         let reply = sessions::control(&self.record, json!({"method":"bind","base_url":base,"token":token,"native_session_id":self.record.native_session_id,"workspace":self.record.workspace})).await?;
         reply["native_pid"]

@@ -38,6 +38,9 @@ pub struct HostRuntime {
     claude: crate::claude_runner::Registry,
     #[cfg(unix)]
     pi_pending: Mutex<HashMap<String, crate::pi_runner::RunnerLink>>,
+    /// The integrations of this computer's pi sessions, paired with the kernel.
+    #[cfg(unix)]
+    pi_links: Mutex<HashMap<String, sessions::PiLink>>,
 }
 
 impl HostRuntime {
@@ -67,6 +70,8 @@ impl HostRuntime {
             claude: crate::claude_runner::Registry::new(links.join("claude"), program),
             #[cfg(unix)]
             pi_pending: Mutex::default(),
+            #[cfg(unix)]
+            pi_links: Mutex::default(),
             url,
             codex,
             pending: Mutex::default(),
@@ -104,28 +109,22 @@ impl HostRuntime {
             #[cfg(unix)]
             "pi.create" => self.pi_create(params).await,
             #[cfg(unix)]
-            "pi.bind" => {
-                let pending = params["pending"].as_str().unwrap_or_default();
-                let link = self
-                    .pi_pending
-                    .lock()
-                    .await
-                    .remove(pending)
-                    .context("The started pi is no longer waiting")?;
-                let token = params["token"].as_str().context("Give the token")?;
-                link.bind(&self.url, token).await?;
-                Ok(json!({"bound": true}))
-            }
+            "pi.bind" => self.pi_bind(params).await,
             #[cfg(unix)]
             "pi.control" => {
-                self.pi_link(&params)
-                    .await?
-                    .control(params["request"].clone())
-                    .await
+                let session = params["session_id"].as_str().unwrap_or_default();
+                let links = self.pi_links.lock().await;
+                let paired = links
+                    .get(session)
+                    .context("The session's pi is not linked on this computer")?;
+                paired.control(params["request"].clone()).await
             }
             #[cfg(unix)]
             "pi.stop" => {
                 let session = params["session_id"].as_str().unwrap_or_default();
+                if let Some(paired) = self.pi_links.lock().await.remove(session) {
+                    paired.shutdown().await?;
+                }
                 self.pi_link(&params).await?.stop(session).await?;
                 Ok(json!({"stopped": true}))
             }
@@ -202,6 +201,55 @@ impl HostRuntime {
             json!({"pending": pending, "native_session_id": target.native_session_id,
             "workspace": target.workspace, "native_locator": target.native_locator}),
         )
+    }
+
+    /// The runner takes the session's token, and its pi integration pairs with the kernel as
+    /// it does on the kernel's computer. The locator the kernel keeps for it, as it is here.
+    #[cfg(unix)]
+    async fn pi_bind(&self, params: Value) -> Result<Value> {
+        let pending = params["pending"].as_str().unwrap_or_default();
+        let link = self
+            .pi_pending
+            .lock()
+            .await
+            .remove(pending)
+            .context("The started pi is no longer waiting")?;
+        let token = params["token"].as_str().context("Give the token")?;
+        let session = params["session_id"].as_str().context("Name the session")?;
+        let workspace_id = params["workspace_id"]
+            .as_str()
+            .context("Name the workspace")?;
+        let native = link.native_id().to_owned();
+        let pid = link.bind(&self.url, token).await?;
+        let description = link.describe().await?;
+        let folder = description["workspace"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let durable = crate::pi_runner::recovery_locator(
+            &native,
+            &folder,
+            json!({"session_file":description["session_file"],"profile":description["profile"]}),
+        )
+        .await?;
+        let agent = std::path::Path::new(
+            durable["agent_dir"]
+                .as_str()
+                .context("Missing pi host directory")?,
+        );
+        let mut actual = sessions::running_pi(agent, &native, pid).await?;
+        for key in ["session_file", "profile", "agent_dir"] {
+            actual.native_locator[key] = durable[key].clone();
+        }
+        actual.native_locator["runner"] = json!(link.path);
+        actual.native_locator["kind"] = json!("pi-runner");
+        let paired =
+            sessions::pair_pi(&actual, &self.url, workspace_id, token.to_owned(), false).await?;
+        self.pi_links
+            .lock()
+            .await
+            .insert(session.to_owned(), paired);
+        Ok(json!({"native_locator": actual.native_locator}))
     }
 
     #[cfg(unix)]
