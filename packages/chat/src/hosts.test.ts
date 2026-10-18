@@ -18,5 +18,7 @@ test("sessions start on the kernel's computer for its person, or for all when it
   expect(startsHere([host("owner", true)], "birch")).toBe(true);
   // Another computer of one's own is not where the kernel runs.
   expect(startsHere([host("birch", false, false)], "birch")).toBe(false);
+  // Hosts not known yet, or a kernel without them: the fallback says.
   expect(startsHere(undefined, "owner")).toBe(false);
+  expect(startsHere(undefined, "owner", true)).toBe(true);
 });

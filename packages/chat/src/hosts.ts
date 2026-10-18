@@ -16,11 +16,19 @@ export interface Host {
   here: boolean;
 }
 
-/** Whether a person may start sessions on the kernel's own computer: theirs, or open to them. */
-export const startsHere = (hosts: Host[] | undefined, me: string | undefined) =>
-  Boolean(
-    hosts?.some((host) => host.here && (host.person_id === me || host.open)),
-  );
+/**
+ * Whether a person may start sessions on the kernel's own computer: theirs, or open to them.
+ * Until the hosts are known (or from a kernel without them), `fallback` says, as whether the
+ * person is the workspace's owner.
+ */
+export const startsHere = (
+  hosts: Host[] | undefined,
+  me: string | undefined,
+  fallback = false,
+) =>
+  hosts
+    ? hosts.some((host) => host.here && (host.person_id === me || host.open))
+    : fallback;
 
 /** The workspace's hosts, and the changes their persons make, each answered with the list. */
 export function useHosts(kernel = kernelUrl()) {
