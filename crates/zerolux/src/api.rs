@@ -222,6 +222,15 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         )
         .route("/sessions/{id}/resume", post(resume_session))
         .route("/sessions/{id}/fork", post(fork_session))
+        .route(
+            "/sessions/{id}/schedules",
+            get(session_schedules).post(create_schedule),
+        )
+        .route("/schedules", get(all_schedules))
+        .route(
+            "/schedules/{schedule}",
+            axum::routing::patch(change_schedule).delete(delete_schedule),
+        )
         .route("/sessions/{id}/rewind-files", post(rewind_files))
         .route("/sessions/{id}/takeover", post(takeover_pi_session))
         .route("/sessions/{id}/stop", post(stop_session))
@@ -776,6 +785,57 @@ async fn rewind_files(
         .await
         .map_err(runtime_error)?;
     Ok(Json(json!({ "result": result })))
+}
+
+async fn all_schedules(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(
+        json!({ "schedules": store.schedules(&who, None).await? }),
+    ))
+}
+
+async fn session_schedules(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(
+        json!({ "schedules": store.schedules(&who, Some(&id)).await? }),
+    ))
+}
+
+/// Words the session receives on a schedule, as the owner's input.
+async fn create_schedule(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<crate::schedules::NewSchedule>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(
+        json!({ "schedule": store.create_schedule(&who, &id, input).await? }),
+    ))
+}
+
+async fn change_schedule(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(schedule): Path<String>,
+    ChatJson(input): ChatJson<crate::schedules::ScheduleChange>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(
+        json!({ "schedule": store.change_schedule(&who, &schedule, input).await? }),
+    ))
+}
+
+async fn delete_schedule(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(schedule): Path<String>,
+) -> Result<Json<Value>, Error> {
+    store.delete_schedule(&who, &schedule).await?;
+    Ok(Json(json!({ "deleted": true })))
 }
 
 async fn list_sessions(

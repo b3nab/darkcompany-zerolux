@@ -565,6 +565,73 @@ async fn livekit_tickets_are_scoped_to_the_authenticated_actor_and_restart_requi
     let raised = budget(5.0).await.unwrap().json::<Value>().await.unwrap();
     assert_eq!(raised["session"]["status"], "connected");
     assert_ne!(before.status, "stopped");
+    // Words the session receives on a schedule; a run it cannot take says why.
+    let created = kernel
+        .client
+        .post(format!("{url}/api/sessions/{}/schedules", agent.session.id))
+        .json(&json!({"cron":"*/5 * * * *","prompt":"Check the build"}))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let schedule = created["schedule"]["id"].as_str().unwrap().to_owned();
+    assert!(created["schedule"]["next_run_at"].as_i64().unwrap() > 0);
+    assert_eq!(
+        kernel
+            .client
+            .post(format!("{url}/api/sessions/{}/schedules", agent.session.id))
+            .json(&json!({"cron":"whenever","prompt":"x"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    sea_orm::ConnectionTrait::execute_raw(
+        kernel.store.db(),
+        sea_orm::Statement::from_string(
+            sea_orm::ConnectionTrait::get_database_backend(kernel.store.db()),
+            format!("UPDATE schedules SET next_run_at=1 WHERE id='{schedule}'"),
+        ),
+    )
+    .await
+    .unwrap();
+    runtime.run_schedules().await.unwrap();
+    let listed = kernel
+        .client
+        .get(format!("{url}/api/schedules"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let ran = &listed["schedules"][0];
+    assert!(ran["last_run_at"].as_i64().is_some());
+    assert!(ran["last_error"].as_str().is_some());
+    assert!(ran["next_run_at"].as_i64().unwrap() > 1);
+    let paused = kernel
+        .client
+        .patch(format!("{url}/api/schedules/{schedule}"))
+        .json(&json!({"enabled":false}))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(paused["schedule"]["enabled"], false);
+    assert!(paused["schedule"]["next_run_at"].is_null());
+    kernel
+        .client
+        .delete(format!("{url}/api/schedules/{schedule}"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
     // A terminal in the session's folder, for the owner.
     let opened = kernel
         .client
