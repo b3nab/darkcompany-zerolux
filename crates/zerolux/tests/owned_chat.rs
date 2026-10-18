@@ -440,7 +440,7 @@ async fn managed_claude_bootstrap_lifecycle() {
         })
         .await;
 
-    // A peer's message reaches the inbox tool, not the SDK's owner-message stream.
+    // A peer's message reaches the session at once, its envelope naming it a peer.
     let owner = kernel.store.chat_identity(None).await.unwrap();
     let peer = kernel
         .store
@@ -490,7 +490,7 @@ async fn managed_claude_bootstrap_lifecycle() {
         .await
         .unwrap();
     kernel.runtime.as_ref().unwrap().changed();
-    let trace = fixture.wait_trace(|rows| count(rows, "inbox") == 1).await;
+    let trace = fixture.wait_trace(|rows| count(rows, "peer") == 1).await;
     assert_eq!(
         trace
             .iter()

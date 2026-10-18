@@ -13,7 +13,7 @@ import { launch, type Runner } from "../runner.ts";
 /**
  * The real runner with a scripted model instead of Claude, for the kernel's end-to-end tests.
  * Same environment as the runner. An owner message: a turn that asks for `fixture_operation`
- * and, once allowed, answers it in its chat. A wake: the turn reads the inbox. Every step goes
+ * and, once allowed, answers it in its chat. Another agent's message: a turn that reads it. Every step goes
  * to `<workspace>/runner-trace.jsonl`, with IDs only, never message text.
  */
 const workspace = process.env.ZEROLUX_WORKSPACE ?? ".";
@@ -27,7 +27,6 @@ const trace = (event: string, fields: Record<string, unknown> = {}) =>
     `${JSON.stringify({ event, pid: process.pid, at: Date.now(), ...fields })}\n`,
   );
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
-const WAKE = "[ZeroLux] Peer messages waiting";
 
 let runner!: Runner;
 
@@ -109,8 +108,9 @@ function scripted(
       if (closed) return;
       const uuid = String(input.uuid);
       const text = String(input.message.content);
-      const owner = !text.startsWith(WAKE);
-      trace("input", { kind: owner ? "owner" : "wake", uuid });
+      // Another agent's message: its envelope marks the author a peer.
+      const owner = !text.includes('" (peer)');
+      trace("input", { kind: owner ? "owner" : "peer", uuid });
       state("running");
       emit({
         type: "assistant",
@@ -143,10 +143,7 @@ function scripted(
           );
           trace("reply", { chat, reply_to: replyTo, outcome });
         }
-      } else {
-        const inbox = runner.agent.readInbox();
-        trace("inbox", { batches: inbox.split("[ZeroLux]").length - 1 });
-      }
+      } else trace("peer", { batches: text.split("[ZeroLux]").length - 1 });
       emit({
         type: "result",
         subtype: "success",

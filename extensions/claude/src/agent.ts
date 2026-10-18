@@ -27,11 +27,9 @@ export type StartQuery = (input: {
 }) => Query;
 
 /** Wakes the agent for other agents' messages: fixed text, never theirs. */
-const WAKE = "[ZeroLux] Peer messages waiting: mcp__zerolux__inbox";
 const MAX_DETAILS = 16 * 1024;
 /** The chat tools ZeroLux gives an agent's session. */
 const CHAT_TOOLS = [
-  "mcp__zerolux__inbox",
   "mcp__zerolux__send",
   "mcp__zerolux__thread",
   "mcp__zerolux__close_thread",
@@ -100,25 +98,13 @@ export class ClaudeAgent {
   private dispatchEnabled = true;
   readonly settings = new ClaudeSettings(() => this.query);
   private state: "idle" | "running" | "requires_action" = "idle";
-  /** The chat the running turn is for: the first batch since the agent was idle decides. */
-  private turnChat?: string;
   /** The batch of that chat the turn read first: its permission requests belong to it. */
   private turnDelivery?: string;
   /**
-   * What the runner wrote and no turn has consumed yet, in order: the owner's batches and the
-   * wakes. The session takes input in order, so an echoed ID settles everything before it.
+   * The chat messages the runner wrote and no turn has consumed yet, in order. The session
+   * takes input in order, so an echoed ID settles everything before it.
    */
   private written: { id: string; batch: boolean }[] = [];
-  /**
-   * Other agents' batches, until the agent reads them with the inbox tool. One left unread
-   * when a turn ends wakes the agent once more for its chat, never again.
-   */
-  private peers: {
-    id: string;
-    content: string;
-    chat: string;
-    rewoken?: boolean;
-  }[] = [];
   /** Approvals awaiting the owner's decision, by ID. */
   private waiting = new Map<string, (approval: Approval) => void>();
   /** Approval receipts ZeroLux has not confirmed: sent again at every sync, never dropped. */
@@ -133,7 +119,6 @@ export class ClaudeAgent {
         harness: "claude-code",
         nativeSessionId: session.nativeSessionId,
         workspace: session.workspace,
-        oneChatPerTurn: true,
         idle: () => this.state === "idle" && this.input.empty,
         send: (batches) => this.send(batches),
         abort: () => void this.query?.interrupt(),
@@ -186,7 +171,6 @@ export class ClaudeAgent {
       !this.busy &&
       !this.bridge.busy &&
       !this.bridge.syncing &&
-      this.peers.length === 0 &&
       this.waiting.size === 0 &&
       this.approvalReceipts.size === 0
     );
@@ -223,16 +207,9 @@ export class ClaudeAgent {
     this.waiting.clear();
   }
 
+  /** Every message reaches the session at once, its envelope naming its author and chat. */
   private send(batches: Batch[]) {
-    this.turnChat ??= batches[0]!.chat;
-    for (const { content, id, from, chat } of batches)
-      if (from.kind === "owner") this.write(content, id, true);
-      else this.peers.push({ id, content, chat });
-    if (
-      batches.some((b) => b.from.kind === "peer") &&
-      !this.written.some((w) => !w.batch)
-    )
-      this.write(WAKE, randomUUID(), false);
+    for (const { content, id } of batches) this.write(content, id, true);
   }
 
   private write(content: string, uuid: string, batch: boolean) {
@@ -246,10 +223,11 @@ export class ClaudeAgent {
       message: { role: "user", content },
       // A leading "/" or "@" in a chat message is text, never a command or a file.
       client_composed: true,
+      // While the session works, it joins the turn after the tools in progress.
+      priority: "next",
     });
   }
 
-  /** The inbox tool: other agents' messages in the turn's chat, read as the agent opens them. */
   /**
    * The owner's own input, typed into this session from ZeroLux: native user input, with its
    * commands and file mentions, as in the terminal. Steered, it joins the running turn after
@@ -323,18 +301,6 @@ export class ClaudeAgent {
     if (this.state === "idle" || !this.query) return false;
     await this.query.interrupt();
     return true;
-  }
-
-  readInbox() {
-    const batches = this.peers.filter((p) => p.chat === this.turnChat);
-    this.peers = this.peers.filter((p) => p.chat !== this.turnChat);
-    for (const { id } of batches) {
-      this.turnDelivery ??= id;
-      void this.bridge.read(id);
-    }
-    return batches.length
-      ? batches.map((batch) => batch.content).join("\n\n")
-      : "None.";
   }
 
   /** What the session has cost so far, as its last result said. */
@@ -415,14 +381,10 @@ export class ClaudeAgent {
         this.bridge.live({ type: "clear" });
         void this.reportUsage();
         this.turnDelivery = undefined; // The next turn asks about its own message.
-        // Input this chat wrote and no turn took yet runs next: the turn's chat holds until
-        // then. The session drops queued input only when it ends, and so does this run.
+        // Input written and not taken yet runs next. The session drops queued input only when
+        // it ends, and so does this run.
         if (this.written.length || !this.input.empty) return;
-        this.turnChat = undefined;
-        void this.bridge.settled().then(() => {
-          this.rewake();
-          return this.refresh();
-        });
+        void this.bridge.settled().then(() => this.refresh());
       }
       return;
     }
@@ -448,23 +410,10 @@ export class ClaudeAgent {
     }
   }
 
-  /** Other agents' messages left unread get one turn of their own, in their chat. */
-  private rewake() {
-    const left = this.peers.find((p) => !p.rewoken);
-    if (!left || this.state !== "idle") return;
-    for (const p of this.peers) if (p.chat === left.chat) p.rewoken = true;
-    this.turnChat = left.chat;
-    this.bridge.steer(left.chat);
-    this.write(WAKE, randomUUID(), false);
-  }
-
   private tools() {
     return createSdkMcpServer({
       name: "zerolux",
       tools: [
-        tool("inbox", "Read waiting peer messages.", {}, async () => ({
-          content: [{ type: "text", text: this.readInbox() }],
-        })),
         tool(
           "send",
           "Post to a ZeroLux chat or thread.",

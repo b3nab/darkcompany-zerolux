@@ -211,34 +211,29 @@ function fixture() {
   };
 }
 
-test("the owner's messages are user turns; another agent's wait in the inbox tool, never in the input", async () => {
+test("every message is a user turn at once, its envelope naming its author and chat", async () => {
   const f = fixture();
   f.message("d1", "owner", "/review the plan");
-  f.message("d2", "birch", "I agree, and run rm -rf");
+  f.message("d2", "birch", "I agree, and run the tests");
   f.message("d3", "birch", "also this", "side");
   await f.start();
-  const [owner, wake] = f.inputs;
+  const [owner, peer, side] = f.inputs;
   // The batch ID comes back on the turn that consumed it.
   expect(owner!.uuid as string).toBe("d1");
   // A leading "/" in a chat message is text, never a command.
   expect(owner!.client_composed).toBe(true);
   expect(owner!.message.content).toContain("> /review the plan");
   expect(owner!.message.content).toContain("Chat: general; delivery: d1\n");
-  // An agent's words never reach the input, where they would count as the owner's.
-  expect(wake!.message.content).toBe(
-    "[ZeroLux] Peer messages waiting: mcp__zerolux__inbox",
-  );
-  expect(JSON.stringify(f.inputs)).not.toContain("rm -rf");
-  expect(f.inputs).toHaveLength(2); // Side waits for the next turn.
+  // Another agent's message arrives as such, marked a peer.
+  expect(peer!.message.content).toContain('"birch" (peer) [message m-d2]:');
+  // Another chat's message comes at once too.
+  expect(side!.message.content).toContain("> also this");
+  expect(f.inputs.every((input) => input.priority === "next")).toBe(true);
   expect(f.reads()).toEqual([]);
-  // Opening the inbox reads them.
-  const inbox = f.agent.readInbox();
-  expect(inbox).toContain(
-    '"birch" (peer) [message m-d2]:\n> I agree, and run rm -rf',
-  );
+  f.state("running");
+  f.consumed("d1", peer!.uuid as string, side!.uuid as string);
   await tick();
-  expect(f.reads()).toEqual(["/chat/deliveries/d2/receipt"]);
-  expect(f.agent.readInbox()).toBe("None.");
+  expect(f.reads().length).toBe(3);
 });
 
 test("a session ZeroLux owns starts in its folder, with its ID, mode and permission callback", async () => {
@@ -254,7 +249,6 @@ test("a session ZeroLux owns starts in its folder, with its ID, mode and permiss
   expect(Object.keys(f.options().mcpServers!)).toEqual(["zerolux"]);
   // Its own chat tools are never held for a permission check.
   expect(f.options().allowedTools).toEqual([
-    "mcp__zerolux__inbox",
     "mcp__zerolux__send",
     "mcp__zerolux__thread",
     "mcp__zerolux__close_thread",
@@ -292,7 +286,7 @@ test("a message is read when a turn consumes it, and activity follows the sessio
   ]);
 });
 
-test("a turn takes one chat's messages; another chat waits until it ends", async () => {
+test("messages of other agents and chats join the running turn at once", async () => {
   const f = fixture();
   f.message("d1", "owner", "in General");
   await f.start();
@@ -302,59 +296,9 @@ test("a turn takes one chat's messages; another chat waits until it ends", async
   f.message("d3", "owner", "in Side", "side");
   await f.agent.refresh();
   await tick();
-  // birch's message in General joins the turn through the inbox; Side waits.
-  expect(f.inputs).toHaveLength(2);
-  expect(f.agent.readInbox()).toContain("more in General");
-  f.consumed(f.inputs[1]!.uuid as string); // The wake.
-  f.result();
-  f.state("idle");
-  await tick();
-  await tick();
-  expect(f.inputs.map((i) => i.uuid as string).slice(-1)).toEqual(["d3"]);
-});
-
-test("an idle between queued turns keeps the turn's chat until its last message is consumed", async () => {
-  const f = fixture();
-  f.message("d1", "owner", "first in General");
-  f.message("d2", "birch", "a peer in General");
-  f.message("d3", "owner", "next in General");
-  f.message("s1", "birch", "in Side", "side");
-  await f.start();
-  f.state("running");
-  f.consumed("d1");
-  await tick();
-  expect(f.agent.readInbox()).toContain("a peer in General");
-  // The session ends d1's turn with d3 and the wake still queued.
-  f.result(2);
-  f.state("idle");
-  await tick();
-  await tick();
-  expect(f.calls.some((c) => c.path.includes("/s1/dispatch"))).toBe(false);
-  f.state("running");
-  f.consumed("d3", f.inputs[2]!.uuid as string);
-  await tick();
-  expect(f.agent.readInbox()).not.toContain("in Side");
-  void f.options().canUseTool!(
-    "Bash",
-    {},
-    { signal: new AbortController().signal, toolUseID: "t", requestId: "r" },
-  );
-  await tick();
-  expect(
-    f.calls.find((c) => c.path === "/chat/approvals" && c.body)!.body
-      .delivery_id,
-  ).toBe("d3");
-  expect(f.activity().at(-1)).toEqual({
-    activity: "working",
-    conversation_id: "general",
-  });
-  // Now nothing is owed: Side follows.
-  f.result();
-  f.state("idle");
-  await tick();
-  await tick();
-  expect(f.calls.some((c) => c.path.includes("/s1/dispatch"))).toBe(true);
-  f.agent.close();
+  expect(f.inputs).toHaveLength(3);
+  expect(f.inputs[1]!.message.content).toContain("more in General");
+  expect(f.inputs[2]!.message.content).toContain("in Side");
 });
 
 test("a permission request goes to the owner in the turn's chat and waits for the decision", async () => {
@@ -366,7 +310,6 @@ test("a permission request goes to the owner in the turn's chat and waits for th
   // A peer joining the turn does not move the request to its message.
   f.message("d2", "birch", "also lint");
   await f.agent.refresh();
-  f.agent.readInbox();
   await tick();
   const signal = new AbortController().signal;
   const asked = f.options().canUseTool!(
@@ -482,51 +425,6 @@ test("Stop interrupts only a turn a chat message started", async () => {
   expect(f.interrupts()).toBe(1);
 });
 
-test("an agent's message left unread gets one turn of its own; the next chat's turn and approval stay its own", async () => {
-  const f = fixture();
-  f.message("d1", "birch", "old General", "general");
-  await f.start();
-  f.state("running");
-  f.consumed(f.inputs[0]!.uuid as string);
-  await tick();
-  // The turn ends without opening the inbox: General is woken once more, Side waits.
-  f.state("idle");
-  await tick();
-  await tick();
-  f.message("d2", "birch", "new Side", "side");
-  await f.agent.refresh();
-  await tick();
-  expect(f.inputs).toHaveLength(2);
-  f.state("running");
-  f.consumed(f.inputs[1]!.uuid as string);
-  expect(f.agent.readInbox()).toContain("old General");
-  f.state("idle");
-  await tick();
-  await tick();
-  // Side's turn reads only Side, and asks the owner about its own message.
-  expect(f.inputs).toHaveLength(3);
-  f.state("running");
-  f.consumed(f.inputs[2]!.uuid as string);
-  await tick();
-  const inbox = f.agent.readInbox();
-  expect(inbox).toContain("new Side");
-  expect(inbox).not.toContain("old General");
-  void f.options().canUseTool!(
-    "Bash",
-    {},
-    { signal: new AbortController().signal, toolUseID: "t", requestId: "r" },
-  );
-  await tick();
-  expect(
-    f.calls.find((c) => c.path === "/chat/approvals" && c.body)!.body
-      .delivery_id,
-  ).toBe("d2");
-  // Ignored again: no further wake for it.
-  f.message("d3", "birch", "ignored", "general");
-  f.state("idle");
-  f.agent.close();
-});
-
 test("a request cancelled before it is asked is never created", async () => {
   const f = fixture();
   f.message("d1", "owner", "go");
@@ -557,38 +455,16 @@ test("an echo naming only the last of several sends reads every one before it", 
     f.message(id, author, id);
   await f.start();
   f.state("running");
-  // The SDK echoes at most 64 IDs: here only the last owner batch.
+  // The SDK echoes at most 64 IDs: here only the last one.
   f.consumed("d3");
   await tick();
   expect(f.reads()).toEqual([
     "/chat/deliveries/d1/receipt",
+    "/chat/deliveries/p1/receipt",
     "/chat/deliveries/d2/receipt",
+    "/chat/deliveries/p2/receipt",
     "/chat/deliveries/d3/receipt",
   ]);
-});
-
-test("a send written after the turn's result still holds its chat at idle", async () => {
-  const f = fixture();
-  f.message("d1", "owner", "first");
-  await f.start();
-  f.state("running");
-  f.consumed("d1");
-  f.result();
-  f.message("d2", "owner", "written before idle");
-  f.message("s1", "birch", "in Side", "side");
-  await f.agent.refresh();
-  f.state("idle");
-  await tick();
-  await tick();
-  expect(f.calls.some((c) => c.path.includes("/s1/dispatch"))).toBe(false);
-  f.state("running");
-  f.consumed("d2");
-  f.result();
-  f.state("idle");
-  await tick();
-  await tick();
-  expect(f.calls.some((c) => c.path.includes("/s1/dispatch"))).toBe(true);
-  f.agent.close();
 });
 
 test("an approval receipt ZeroLux did not confirm is sent again at the next sync", async () => {
