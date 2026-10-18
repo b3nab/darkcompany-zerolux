@@ -37,6 +37,9 @@ pub struct Model {
     pub archived_at: Option<i64>,
     /// What the session may cost, in cents: at the limit its work stops for the owner.
     pub budget_cents: Option<i64>,
+    /// The session that started this one to delegate work to it, which may follow and steer it.
+    #[sea_orm(column_type = "Text")]
+    pub parent_session_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
