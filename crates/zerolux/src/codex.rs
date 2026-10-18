@@ -94,7 +94,17 @@ impl CodexRpc {
             {
                 #[cfg(unix)]
                 {
-                    let stream = tokio::net::UnixStream::connect(path)
+                    // A socket's address is short: a long path reaches it through the short
+                    // one Codex links it to.
+                    let path = if path.len() > 100 {
+                        std::fs::canonicalize(path).map_or_else(
+                            |_| path.to_owned(),
+                            |real| real.to_string_lossy().into_owned(),
+                        )
+                    } else {
+                        path.to_owned()
+                    };
+                    let stream = tokio::net::UnixStream::connect(&path)
                         .await
                         .context("Cannot connect to the existing Codex runtime")?;
                     let (socket, _) = tokio_tungstenite::client_async("ws://localhost/", stream)

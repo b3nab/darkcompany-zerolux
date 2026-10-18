@@ -1935,6 +1935,19 @@ async fn the_codex_daemon_is_started_once_only_when_absent() {
             .unwrap_or(0)
     };
     // Already answering: nothing is run.
+    // A socket path too long for an address is reached through the short one it links to,
+    // as Codex links a long Codex home's.
+    let long = dir
+        .path()
+        .join("people-of-the-workspace".repeat(4))
+        .join("codex/app-server-control");
+    std::fs::create_dir_all(&long).unwrap();
+    let long = long.join("app-server-control.sock");
+    std::os::unix::fs::symlink(&socket, &long).unwrap();
+    assert!(long.to_string_lossy().len() > 104);
+    zerolux::codex::CodexRpc::connect(&format!("unix://{}", long.display()))
+        .await
+        .unwrap();
     let own = zerolux::homes::Homes::own();
     zerolux::sessions::ensure_codex_daemon_with(&program, &runtime.endpoint, &own)
         .await
