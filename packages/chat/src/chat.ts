@@ -211,6 +211,35 @@ export type NewSession = {
 );
 /** How the owner's input joins a working session: into its turn, after it, or instead of it. */
 export type InputMode = "steer" | "queue" | "interrupt";
+/** An image sent with the owner's input, as the kernel takes it: its type and base64 bytes. */
+export interface InputImage {
+  media_type: string;
+  data: string;
+}
+export const inputImageTypes = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+] as const;
+export const MAX_INPUT_IMAGES = 10;
+export const MAX_INPUT_IMAGE_BYTES = 15 * 1024 * 1024;
+/** Why these images cannot go with one input, as the kernel says it; nothing when they can. */
+export function inputImagesError(
+  images: { type: string; size: number }[],
+): string | undefined {
+  if (images.length > MAX_INPUT_IMAGES) return "Send up to 10 images at a time";
+  if (
+    images.some(
+      (image) => !(inputImageTypes as readonly string[]).includes(image.type),
+    )
+  )
+    return "Send PNG, JPEG, GIF or WebP images";
+  if (
+    images.reduce((sum, image) => sum + image.size, 0) > MAX_INPUT_IMAGE_BYTES
+  )
+    return "Images up to 15 MiB in all";
+}
 /** A session's name: its agent's, or its own title when it has none. */
 export const sessionName = (session: ChatSession, actors: Actor[]) =>
   actors.find((a) => a.id === session.actor_id)?.name ??

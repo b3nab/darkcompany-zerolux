@@ -14,6 +14,7 @@ import {
   refreshesSessions,
   pageBefore,
   parseEvent,
+  inputImagesError,
   isThread,
   listedSessions,
   liveSessions,
@@ -648,4 +649,23 @@ test("a session's output notice is an event even without an ID, and repeats of i
   });
   expect(parseEvent(notice(120))?.event_id).toBe(first?.event_id);
   expect(parseEvent(notice(240))?.event_id).not.toBe(first?.event_id);
+});
+
+test("images go with an input when the kernel would take them", () => {
+  const png = { type: "image/png", size: 1024 };
+  expect(inputImagesError([png, { type: "image/webp", size: 2048 }])).toBe(
+    undefined,
+  );
+  expect(inputImagesError(Array(11).fill(png))).toBe(
+    "Send up to 10 images at a time",
+  );
+  expect(inputImagesError([{ type: "image/svg+xml", size: 10 }])).toBe(
+    "Send PNG, JPEG, GIF or WebP images",
+  );
+  expect(
+    inputImagesError([
+      { type: "image/jpeg", size: 8 * 1024 * 1024 },
+      { type: "image/jpeg", size: 8 * 1024 * 1024 },
+    ]),
+  ).toBe("Images up to 15 MiB in all");
 });
