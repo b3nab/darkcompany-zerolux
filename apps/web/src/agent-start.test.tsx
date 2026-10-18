@@ -76,6 +76,14 @@ test("a session opens without an agent, and the owner pins, renames or archives 
   expect(JSON.parse(requests[2]!.init.body as string)).toEqual({
     discovered_session_id: "found-1",
   });
+  await chat.input("s-1", "Then the docs", "queue");
+  expect(requests.at(-1)!.url).toBe(
+    "https://fixture.example.test/api/sessions/s-1/input",
+  );
+  expect(JSON.parse(requests.at(-1)!.init.body as string)).toEqual({
+    text: "Then the docs",
+    mode: "queue",
+  });
   await chat.updateSession("s-1", { pinned: true, title: "Release" });
   const change = requests.at(-1)!;
   expect(change.url).toBe("https://fixture.example.test/api/sessions/s-1");
