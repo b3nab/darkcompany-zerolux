@@ -1,7 +1,7 @@
 import { Link, useRouter } from "expo-router";
 import { useState } from "react";
 import { Alert, Platform, Pressable, View } from "react-native";
-import { ChevronRightIcon, PinIcon } from "lucide-react-native";
+import { ChevronRightIcon, PinIcon, UsersIcon } from "lucide-react-native";
 import { useCSSVariable } from "uniwind";
 import {
   ago,
@@ -30,7 +30,7 @@ import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/src/kernel";
 import { Segmented } from "@/components/segmented";
-import { useAccess } from "@/src/me";
+import { useAccess, useMe } from "@/src/me";
 
 /** Pin, archive, rename and budget a session, keeping the kernel's reason when it refuses. */
 export function useOrganize(session: ChatSession) {
@@ -74,6 +74,13 @@ export function SessionRow({
   const unseen = attention === "unseen";
   // A session another started works for it: the row says which.
   const parent = delegatedBy(session, chat.sessions);
+  // Another person's session, shared with you: the row says whose.
+  const { me } = useMe();
+  const person =
+    session.owner_id !== me?.id
+      ? (workspace?.actors.find((a) => a.id === session.owner_id)?.name ??
+        "another person")
+      : undefined;
   // Why it stopped and waits for you, as the kernel says: a budget reached, a lost link.
   const stopped =
     session.status === "attention" && session.attention_reason
@@ -122,10 +129,22 @@ export function SessionRow({
               >
                 {agent?.name ?? title}
               </Text>
-              <Text className="font-mono text-[11px] text-faint">
+              <Text
+                numberOfLines={1}
+                className="shrink font-mono text-[11px] text-faint"
+              >
                 {harnessLabels[session.harness] ?? session.harness}
+                {person ? ` · by ${person}` : ""}
               </Text>
               <View className="ml-auto flex-row items-center gap-1">
+                {session.shared ? (
+                  <UsersIcon
+                    accessibilityLabel={`Shared to ${session.shared}`}
+                    color={faint}
+                    size={11}
+                    strokeWidth={2}
+                  />
+                ) : null}
                 {organize.pinned ? (
                   <PinIcon color={faint} size={11} strokeWidth={2} />
                 ) : null}

@@ -19,6 +19,7 @@ import { Segmented } from "@/components/segmented";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/src/kernel";
+import { useMe } from "@/src/me";
 
 type Mode = "everyone" | "people" | "agents" | "shift";
 const views: Record<Mode, { label: string; note: string }> = {
@@ -50,7 +51,8 @@ export default function Org() {
   const [view, setView] = useState<Mode>("everyone");
   const ink = String(useCSSVariable("--color-foreground"));
   // Starting an agent commands the kernel: it runs on the kernel's computer, not here.
-  const newAgent = (
+  const { owner } = useMe();
+  const newAgent = owner ? (
     <Pressable
       onPress={() => router.push("/session/new?agent=new")}
       accessibilityRole="button"
@@ -60,7 +62,7 @@ export default function Org() {
     >
       <BotIcon color={ink} size={22} strokeWidth={1.5} />
     </Pressable>
-  );
+  ) : undefined;
   if (!workspace)
     return (
       <Screen title="Org" action={newAgent}>

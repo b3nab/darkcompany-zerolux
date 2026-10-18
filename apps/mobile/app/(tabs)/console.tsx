@@ -18,6 +18,7 @@ import { SessionRow } from "@/components/session";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "../../src/kernel";
+import { useMe } from "../../src/me";
 
 /** How each state reads in the inbox: what needs you stands out, the rest stays quiet. */
 const attentionTones: Record<Attention, string> = {
@@ -48,6 +49,7 @@ const empty: Record<Shown, string> = {
  */
 export default function Console() {
   const { workspace, chat } = useSession();
+  const { owner } = useMe();
   const router = useRouter();
   const ink = String(useCSSVariable("--color-foreground"));
   const faint = String(useCSSVariable("--color-faint"));
@@ -81,15 +83,18 @@ export default function Console() {
     <Screen
       title="Console"
       action={
-        <Pressable
-          onPress={() => router.push("/session/new")}
-          accessibilityRole="button"
-          accessibilityLabel="New session"
-          hitSlop={8}
-          className="size-10 items-center justify-center rounded-sm active:bg-accent"
-        >
-          <SquarePenIcon color={ink} size={22} strokeWidth={1.5} />
-        </Pressable>
+        // Sessions start on the kernel's computer, which is its owner's.
+        owner ? (
+          <Pressable
+            onPress={() => router.push("/session/new")}
+            accessibilityRole="button"
+            accessibilityLabel="New session"
+            hitSlop={8}
+            className="size-10 items-center justify-center rounded-sm active:bg-accent"
+          >
+            <SquarePenIcon color={ink} size={22} strokeWidth={1.5} />
+          </Pressable>
+        ) : undefined
       }
     >
       <View className="mx-5 mb-2.5 flex-row items-center gap-2 rounded-md bg-muted px-2.5">
@@ -153,7 +158,9 @@ export default function Console() {
           <Text className="p-5 text-base leading-6 text-faint">
             {query.trim()
               ? `No ${shownLabels[shown].toLowerCase()} session matches "${query.trim()}".`
-              : empty[shown]}
+              : shown === "live" && !owner
+                ? "No live sessions. Those shared with you appear here."
+                : empty[shown]}
           </Text>
         }
         renderItem={({ item, index }) => {

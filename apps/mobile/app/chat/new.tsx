@@ -34,7 +34,8 @@ export default function NewChat() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const onLamp = String(useCSSVariable("--color-primary-foreground"));
-  const me = useMe().me?.id;
+  const { me: self, owner } = useMe();
+  const me = self?.id;
   const agents = agentsForChat(actors, chat.sessions, picked);
   const members = kind === "dm" ? picked.slice(0, 1) : picked;
   const sessionFor = (actorId: string) => {
@@ -95,12 +96,15 @@ export default function NewChat() {
             Start a new one here, or hire the sessions you already use from
             ZeroLux on your computer; they appear here.
           </Text>
-          <Button
-            className="self-start"
-            onPress={() => router.replace("/session/new?agent=new")}
-          >
-            <Text>New agent</Text>
-          </Button>
+          {/* Agents start on the kernel's computer, which is its owner's. */}
+          {owner ? (
+            <Button
+              className="self-start"
+              onPress={() => router.replace("/session/new?agent=new")}
+            >
+              <Text>New agent</Text>
+            </Button>
+          ) : null}
         </View>
       ) : (
         <ScrollView
