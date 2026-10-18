@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import {
   agentSettingFields,
+  planMode,
   ago,
   attentionInbox,
   attentionLabels,
@@ -87,6 +88,7 @@ import { Reveal } from "@/components/reveal";
 import { setDensity, useDensity } from "@/components/density";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Toggle } from "@/components/ui/toggle";
 import {
   Dialog,
   DialogContent,
@@ -1449,6 +1451,8 @@ function SessionSettings({
   const models = settings.data?.models ?? [];
   const editable = settings.data?.editable ?? [];
   const fields = agentSettingFields(session.harness, models, values.model);
+  // Plan first, in each harness's own setting: Codex's mode, Claude Code's permissions.
+  const plan = planMode(session.harness, values, editable);
   if (!settings.data || !editable.length) return null;
   // One field at a time; the harness confirms it, or says why not.
   const change = (key: keyof AgentSettings, value: string) =>
@@ -1493,6 +1497,22 @@ function SessionSettings({
           </NativeSelect>
         );
       })}
+      {plan && (
+        <Toggle
+          size="sm"
+          variant="outline"
+          pressed={plan.on}
+          title={plan.on ? "It plans before it acts" : "Plan before acting"}
+          onPressedChange={(on) =>
+            void perform(
+              async () => void (await settings.apply(plan.change(on))),
+            )
+          }
+        >
+          <ListChecksIcon />
+          Plan
+        </Toggle>
+      )}
       {settings.error && (
         <span className="text-xs text-attention">{settings.error}</span>
       )}
