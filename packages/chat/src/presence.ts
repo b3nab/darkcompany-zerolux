@@ -1,5 +1,6 @@
 import { listedSessions, liveSessions, sessionState } from "./chat";
 import type { Approval, ChatSession } from "./chat";
+import { harnessLabels } from "./client";
 import type { Actor } from "./client";
 import type { Chat } from "./useChat";
 
@@ -44,6 +45,30 @@ export function consoleSessions(sessions: ChatSession[]) {
       .filter((s) => s.archived_at)
       .sort((a, b) => b.archived_at! - a.archived_at!),
   };
+}
+
+/**
+ * Whether a session is one the owner is looking for: each word typed is in its title, agent,
+ * folder, harness or latest summary, whatever the case. Nothing typed finds them all.
+ */
+export function sessionMatches(
+  session: ChatSession,
+  actors: Actor[],
+  query: string,
+) {
+  const known = [
+    session.title,
+    actors.find((a) => a.id === session.actor_id)?.name,
+    session.workspace,
+    harnessLabels[session.harness],
+    session.summary,
+  ]
+    .join("\n")
+    .toLowerCase();
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .every((word) => known.includes(word));
 }
 
 /**

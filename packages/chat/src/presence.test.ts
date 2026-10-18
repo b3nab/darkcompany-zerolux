@@ -1,11 +1,13 @@
 import { expect, test } from "bun:test";
 import type { Approval, ChatSession } from "./chat";
+import type { Actor } from "./client";
 import {
   attentionInbox,
   consoleSessions,
   noticeText,
   sessionAttention,
   sessionAttentions,
+  sessionMatches,
   sessionNotices,
 } from "./presence";
 
@@ -40,6 +42,20 @@ test("the console lists live sessions working first, and keeps the stopped ones 
   ]);
   expect(live.map((s) => s.id)).toEqual(["busy", "idle", "starting"]);
   expect(stopped.map((s) => s.id)).toEqual(["done"]);
+});
+
+test("a session is found by each word typed: its title, agent, folder, harness or summary", () => {
+  const release = {
+    ...session("release", "connected"),
+    title: "Release check",
+    summary: "The tests pass on main",
+  };
+  const actors = [{ id: "aspen", name: "Aspen" }] as Actor[];
+  expect(sessionMatches(release, actors, "")).toBe(true);
+  expect(sessionMatches(release, actors, "aspen  RELEASE")).toBe(true);
+  expect(sessionMatches(release, actors, "work pi")).toBe(true);
+  expect(sessionMatches(release, actors, "tests main")).toBe(true);
+  expect(sessionMatches(release, actors, "release birch")).toBe(false);
 });
 
 const request = (
