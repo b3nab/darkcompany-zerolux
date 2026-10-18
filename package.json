@@ -15,7 +15,7 @@
     "desktop:dev": "bun run --cwd apps/desktop dev",
     "desktop:build": "bun run --cwd apps/desktop build",
     "typecheck": "bun run --cwd packages/theme typecheck && bun run --cwd packages/chat typecheck && bun run --cwd packages/bridge typecheck && bun run --cwd apps/web typecheck && bun run --cwd apps/mobile typecheck && bun run --cwd extensions/pi typecheck && bun run --cwd extensions/claude typecheck && bun run --cwd apps/desktop typecheck && bun run --cwd services/auth typecheck",
-    "test": "bun run --cwd apps/web renderer && bun test packages/theme packages/chat packages/bridge apps/web apps/desktop extensions/pi extensions/claude services/auth scripts",
+    "test": "bun run --cwd apps/web renderer && bun test packages/theme packages/chat packages/bridge apps/web apps/desktop apps/mobile/src extensions/pi extensions/claude services/auth scripts",
     "format": "bun x --bun oxfmt",
     "format:check": "bun x --bun oxfmt --check",
     "check": "bun scripts/require-test-postgres.ts && livekit-server --version && bun run --cwd apps/desktop assets && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && bun scripts/test-rust.ts && bun run format:check && bun run typecheck && bun run test && bun run build"
@@ -23,5 +23,8 @@
   "devDependencies": {
     "oxfmt": "^0.72.0"
   },
-  "packageManager": "bun@1.4.2"
+  "packageManager": "bun@1.4.2",
+  "trustedDependencies": [
+    "react-native-enriched-markdown"
+  ]
 }
