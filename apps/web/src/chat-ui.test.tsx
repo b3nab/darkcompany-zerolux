@@ -1214,6 +1214,7 @@ test("starting an agent asks for a harness, an agent, a folder and how it asks p
   expect(away).toMatch(/value="h-studio"[^>]*selected="">Studio</);
   expect(away).not.toContain("The workspace&#x27;s computer");
   expect(away).toContain(">Codex</option>");
+  expect(away).toContain(">pi</option>");
   expect(away).not.toContain(">Claude Code</option>");
   expect(away).not.toContain("git worktree");
   // A session there says so, and leaves on it what stays on it.
@@ -1960,6 +1961,18 @@ test("a session delegated to by another names it, in the Console and in About", 
     />,
   );
   expect(about).toMatch(/Started by<\/dt><dd[^>]*>aspen</);
+  // A session ZeroLux started says so, whatever its harness.
+  expect(
+    renderToStaticMarkup(
+      <SessionCard
+        session={{ ...session("s-aspen", ASPEN), created: true }}
+        name="aspen"
+        facts
+        busy={false}
+        stop={perform}
+      />,
+    ),
+  ).toMatch(/Started by<\/dt><dd[^>]*>ZeroLux</);
 });
 
 test("how full a session's context is shows beside its box, and what it has used in About", () => {

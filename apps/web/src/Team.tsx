@@ -338,6 +338,7 @@ export function StartSession({
     const common = {
       workspace: workspace.trim(),
       ...(worktree && !away ? { worktree: branch.trim() } : {}),
+      ...(away ? { host: where } : {}),
       ...agentLaunchSettings(model, effort),
       ...(pick === NO_AGENT
         ? {}
@@ -355,7 +356,6 @@ export function StartSession({
               ...common,
               ...(policy ? { approval_policy: policy } : {}),
               ...(sandbox ? { sandbox } : {}),
-              ...(away ? { host: where } : {}),
             };
     let session: ChatSession | undefined;
     const started = await perform(async () => {
@@ -406,8 +406,8 @@ export function StartSession({
           </NativeSelect>
           {away && (
             <p className="text-xs text-muted-foreground">
-              On your computer, with its own {harnessLabels.codex}: its folders,
-              accounts and settings.
+              On your computer, with its own harnesses: its folders, accounts
+              and settings.
             </p>
           )}
         </div>
@@ -1352,7 +1352,9 @@ export function SessionCard({
           {computer && <Fact label="Computer">{computer}</Fact>}
           <Fact label="Started by">
             {delegatedBy ??
-              (session.origin === "owned" ? "ZeroLux" : "You, then hired")}
+              (session.created || session.origin === "owned"
+                ? "ZeroLux"
+                : "You, then hired")}
           </Fact>
           {usage?.context_tokens != null && (
             <Fact label="Context">
