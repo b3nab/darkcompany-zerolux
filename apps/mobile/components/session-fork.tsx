@@ -12,7 +12,13 @@ import {
   View,
 } from "react-native";
 import { errorMessage, saveDraft } from "@zerolux/chat";
-import type { ChatSession, FilesRewind, SessionBlock } from "@zerolux/chat";
+import type {
+  ChatSession,
+  FilesRewind,
+  SessionBlock,
+  SessionFork,
+} from "@zerolux/chat";
+import { useCSSVariable } from "uniwind";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { useSession } from "../src/kernel";
@@ -44,9 +50,8 @@ const fileList = (rewind: FilesRewind) => {
 export function useInputActions(session: ChatSession | undefined) {
   const { chat } = useSession();
   const router = useRouter();
+  const forkWith = useForkWith();
   const [editing, setEditing] = useState<{ block: InputBlock; text: string }>();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
   const failed = (title: string) => (e: unknown) =>
     Alert.alert(title, errorMessage(e));
   const rewind = async (session: ChatSession, block: InputBlock) => {
@@ -93,10 +98,7 @@ export function useInputActions(session: ChatSession | undefined) {
     const actions = [
       {
         label: "Edit and resend",
-        run: () => {
-          setError("");
-          setEditing({ block, text: block.text });
-        },
+        run: () => setEditing({ block, text: block.text }),
       },
       // Only Claude Code keeps checkpoints; the others' files come back through their changes.
       ...(session.harness === "claude-code"
@@ -132,46 +134,86 @@ export function useInputActions(session: ChatSession | undefined) {
         { cancelable: true },
       );
   };
-  const resend = async () => {
-    if (!editing || !session) return;
-    const text = editing.text.trim();
-    setBusy(true);
-    setError("");
-    try {
-      const { session: fork } = await chat.forkSession(session.id, {
-        at: editing.block.at,
-      });
-      // The fork is there either way: words it did not take wait in its box.
-      await chat.input(fork.id, text).catch(() => saveDraft(fork.id, text));
-      setEditing(undefined);
-      router.push(`/session/${fork.id}`);
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
   const sheet = (
+    <ForkEditor
+      title="Edit and resend"
+      caption="A new session goes on from before this message, with your new words. This one stays as it is."
+      text={editing?.text}
+      setText={(text) =>
+        setEditing((current) => current && { ...current, text })
+      }
+      send={async (text) => {
+        const id = await forkWith(session!, { at: editing!.block.at }, text);
+        setEditing(undefined);
+        router.push(`/session/${id}`);
+      }}
+      close={() => setEditing(undefined)}
+    />
+  );
+  return { open, sheet };
+}
+
+/**
+ * A fork that starts with the owner's words: it is opened once they are in, and words it did
+ * not take wait in its box. Its ID.
+ */
+function useForkWith() {
+  const { chat } = useSession();
+  return async (session: ChatSession, fork: SessionFork, text: string) => {
+    const { session: forked } = await chat.forkSession(session.id, fork);
+    await chat.input(forked.id, text).catch(() => saveDraft(forked.id, text));
+    return forked.id;
+  };
+}
+
+/** The words a fork starts with, in a sheet: shown while there is `text`. */
+function ForkEditor({
+  title,
+  caption,
+  placeholder,
+  text,
+  setText,
+  send,
+  close,
+}: {
+  title: string;
+  caption: string;
+  placeholder?: string;
+  text: string | undefined;
+  setText: (text: string) => void;
+  send: (text: string) => Promise<void>;
+  close: () => void;
+}) {
+  const faint = String(useCSSVariable("--color-faint"));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const cancel = () => {
+    setError("");
+    close();
+  };
+  return (
     <Modal
-      visible={Boolean(editing)}
+      visible={text !== undefined}
       animationType="slide"
       presentationStyle="pageSheet"
-      onRequestClose={() => setEditing(undefined)}
+      onRequestClose={cancel}
     >
       <View className="flex-1 bg-background">
         <View className="flex-row items-center justify-between border-b border-border px-5 py-3">
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => setEditing(undefined)}
-            hitSlop={12}
-          >
+          <Pressable accessibilityRole="button" onPress={cancel} hitSlop={12}>
             <Text className="text-base text-muted-foreground">Cancel</Text>
           </Pressable>
-          <Text className="text-[17px] font-semibold">Edit and resend</Text>
+          <Text className="text-[17px] font-semibold">{title}</Text>
           <Pressable
             accessibilityRole="button"
-            disabled={busy || !editing?.text.trim()}
-            onPress={() => void resend()}
+            disabled={busy || !text?.trim()}
+            onPress={() => {
+              setBusy(true);
+              setError("");
+              send(text!.trim())
+                .catch((e: unknown) => setError(errorMessage(e)))
+                .finally(() => setBusy(false));
+            }}
             hitSlop={12}
             className="disabled:opacity-40"
           >
@@ -181,18 +223,15 @@ export function useInputActions(session: ChatSession | undefined) {
           </Pressable>
         </View>
         <View className="gap-3 px-5 py-4">
-          <Text className="text-sm text-muted-foreground">
-            A new session goes on from before this message, with your new words.
-            This one stays as it is.
-          </Text>
+          <Text className="text-sm text-muted-foreground">{caption}</Text>
           <TextInput
-            value={editing?.text ?? ""}
-            onChangeText={(text) =>
-              setEditing((current) => current && { ...current, text })
-            }
+            value={text ?? ""}
+            onChangeText={setText}
             multiline
             autoFocus
             editable={!busy}
+            placeholder={placeholder}
+            placeholderTextColor={faint}
             className="min-h-32 rounded-md border border-input bg-card px-3 py-2.5 text-[15px] leading-[21px] text-foreground"
             textAlignVertical="top"
           />
@@ -203,10 +242,12 @@ export function useInputActions(session: ChatSession | undefined) {
       </View>
     </Modal>
   );
-  return { open, sheet };
 }
 
-/** In About: a new session that goes on from all of this one, which stays as it is. */
+/**
+ * In About, for the owner: a fork that goes on from all of this session's work, and a side
+ * chat, a fork asked a question there, so this one is not touched.
+ */
 export function ForkSession({
   session,
   close,
@@ -217,35 +258,62 @@ export function ForkSession({
   const { chat } = useSession();
   const { owner } = useMe();
   const router = useRouter();
+  const forkWith = useForkWith();
+  const [asking, setAsking] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   if (!owner) return null;
+  const open = (id: string) => {
+    close();
+    router.push(`/session/${id}`);
+  };
   return (
     <View className="gap-2">
-      <Button
-        variant="outline"
-        disabled={busy}
-        onPress={() => {
-          setBusy(true);
-          setError("");
-          chat
-            .forkSession(session.id)
-            .then(({ session: fork }) => {
-              close();
-              router.push(`/session/${fork.id}`);
-            })
-            .catch((e: unknown) => setError(errorMessage(e)))
-            .finally(() => setBusy(false));
-        }}
-      >
-        <Text>Fork</Text>
-      </Button>
+      <View className="flex-row gap-2">
+        <Button
+          variant="outline"
+          className="flex-1"
+          disabled={busy}
+          onPress={() => {
+            setBusy(true);
+            setError("");
+            chat
+              .forkSession(session.id)
+              .then(({ session: fork }) => open(fork.id))
+              .catch((e: unknown) => setError(errorMessage(e)))
+              .finally(() => setBusy(false));
+          }}
+        >
+          <Text>Fork</Text>
+        </Button>
+        <Button
+          variant="outline"
+          className="flex-1"
+          disabled={busy}
+          onPress={() => setAsking("")}
+        >
+          <Text>Side chat</Text>
+        </Button>
+      </View>
       <Text
         className={error ? "text-xs text-destructive" : "text-xs text-faint"}
       >
         {error ||
-          "A new session goes on from all of this one's work. This one stays as it is."}
+          "Both go on from all of this session's work in a new one, a side chat with your question. This one stays as it is."}
       </Text>
+      <ForkEditor
+        title="Side chat"
+        caption="Your question goes to a new session with all of this one's work. This one stays as it is."
+        placeholder="Ask about this session"
+        text={asking}
+        setText={setAsking}
+        send={async (text) => {
+          const id = await forkWith(session, {}, text);
+          setAsking(undefined);
+          open(id);
+        }}
+        close={() => setAsking(undefined)}
+      />
     </View>
   );
 }
