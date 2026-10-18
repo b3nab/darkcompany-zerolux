@@ -5,6 +5,7 @@ import {
   agentLaunchSettings,
   agentSettingFields,
   canApplyAgentSettings,
+  planMode,
   setAgentSettings,
 } from "./workspace";
 
@@ -169,4 +170,21 @@ test("blank launch fields omit overrides rather than clearing the agent's saved 
     model: "fixture-model",
   });
   expect(agentLaunchSettings("", "low")).toEqual({ effort: "low" });
+});
+
+test("plan mode uses each harness's own setting, where it can change", () => {
+  const codex = planMode("codex", { collaboration_mode: "plan" }, [
+    "model",
+    "collaboration_mode",
+  ]);
+  expect(codex?.on).toBe(true);
+  expect(codex?.change(false)).toEqual({ collaboration_mode: "default" });
+  const claude = planMode("claude-code", { permission_mode: "acceptEdits" }, [
+    "permission_mode",
+  ]);
+  expect(claude?.on).toBe(false);
+  expect(claude?.change(true)).toEqual({ permission_mode: "plan" });
+  // pi has none; a harness that cannot change it now offers none.
+  expect(planMode("pi", {}, ["model"])).toBeUndefined();
+  expect(planMode("codex", {}, ["model"])).toBeUndefined();
 });

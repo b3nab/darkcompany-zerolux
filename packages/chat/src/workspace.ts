@@ -47,6 +47,8 @@ export interface AgentSettings {
   permission_mode?: string;
   approval_policy?: string;
   sandbox?: string;
+  /** Codex's way of working: `plan` plans before changing anything, `default` works. */
+  collaboration_mode?: string;
 }
 
 export interface AgentModelOption {
@@ -78,8 +80,9 @@ export function agentModelOption(
   );
 }
 
+/** What the selectors set: plan mode is a switch of its own, for a session only. */
 export interface AgentSettingField {
-  key: keyof AgentSettings;
+  key: Exclude<keyof AgentSettings, "collaboration_mode">;
   label: string;
   options: Record<string, string>;
 }
@@ -131,6 +134,31 @@ export function agentSettingFields(
           ]
         : []),
   ];
+}
+
+/**
+ * A session's plan mode, where its harness has one and lets it change now: whether it is on,
+ * and the change that turns it on or off. Codex has a collaboration mode of its own; Claude
+ * Code plans as a permission mode, and leaves it for `default`, as Shift+Tab does. pi has none.
+ */
+export function planMode(
+  harness: Actor["harness"],
+  values: SessionSettingsView["values"],
+  editable: (keyof AgentSettings)[],
+) {
+  const key =
+    harness === "codex"
+      ? "collaboration_mode"
+      : harness === "claude-code"
+        ? "permission_mode"
+        : undefined;
+  if (!key || !editable.includes(key)) return undefined;
+  return {
+    on: values[key] === "plan",
+    change: (plan: boolean): AgentSettings => ({
+      [key]: plan ? "plan" : "default",
+    }),
+  };
 }
 
 /** A retained draft cannot be applied after its choices or live capabilities disappear. */
