@@ -178,25 +178,33 @@ function Claude({
         method === "api_key"
           ? "Connected with your API key."
           : method === "oauth_token"
-            ? "Connected with your Claude token."
-            : "Not connected: an API key, or the token `claude setup-token` gives on your own computer."
+            ? "Connected with your subscription token."
+            : "Not connected: an API key, or a subscription token."
       }
     >
       <Segmented<"api_key" | "oauth_token">
         options={[
           ["api_key", "API key"],
-          ["oauth_token", "Claude token"],
+          ["oauth_token", "Subscription token"],
         ]}
         value={kind}
         choose={setKind}
       />
       <SecretField
-        placeholder={kind === "api_key" ? "sk-ant-…" : "Token"}
+        placeholder={
+          kind === "api_key" ? "sk-ant-…" : "From claude setup-token"
+        }
         busy={busy}
         save={(value) =>
           save(kind === "api_key" ? { api_key: value } : { oauth_token: value })
         }
       />
+      {kind === "oauth_token" ? (
+        <Text className="text-xs text-attention">
+          Anthropic's terms limit using claude.ai subscriptions through other
+          products; an API key is always within them.
+        </Text>
+      ) : null}
       {method !== null ? (
         <Pressable
           accessibilityRole="button"
