@@ -89,6 +89,33 @@ async fn terminal_notices(
     }
 }
 
+/// What joined computers tell about their sessions, published to whoever may read each.
+async fn host_notices_task(
+    store: Store,
+    livekit: Arc<LiveKit>,
+    mut told: mpsc::UnboundedReceiver<(String, Value)>,
+) {
+    while let Some((host, notice)) = told.recv().await {
+        let Some(session) = notice["session_id"].as_str() else {
+            continue;
+        };
+        // Only about the host's own sessions.
+        let Ok(row) =
+            <crate::entity::sessions::Entity as sea_orm::EntityTrait>::find_by_id(session)
+                .one(store.db())
+                .await
+        else {
+            continue;
+        };
+        if row.is_none_or(|row| row.host_id.as_deref() != Some(host.as_str())) {
+            continue;
+        }
+        if let Ok(people) = store.readers(session).await {
+            let _ = livekit.notify(&notice, &people).await;
+        }
+    }
+}
+
 /// `git` in `dir`, bounded; its own message on failure.
 async fn git(dir: &std::path::Path, args: &[&str]) -> Result<String> {
     let output = tokio::time::timeout(
@@ -243,6 +270,11 @@ pub struct ChatRuntime {
     /// Terminals the owner opened in sessions' folders.
     pub terminals: Arc<crate::terminals::Terminals>,
     terminal_notices: Mutex<Option<JoinHandle<()>>>,
+    /// The people's computers joined to the workspace and connected now.
+    pub hosts: Arc<crate::host_link::Links>,
+    /// What those computers tell, to publish to whoever may read it.
+    pub host_notices: mpsc::UnboundedSender<(String, Value)>,
+    host_notice_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl ChatRuntime {
@@ -292,6 +324,9 @@ impl ChatRuntime {
             heard,
         ));
         let attachments = links.with_file_name("attachments");
+        let (host_notices, told) = mpsc::unbounded_channel();
+        let host_notice_task =
+            tokio::spawn(host_notices_task(store.clone(), livekit.clone(), told));
         let (stop, stopped) = watch::channel(false);
         let changed = Arc::new(Notify::new());
         let (wake, _) = broadcast::channel(16);
@@ -356,6 +391,9 @@ impl ChatRuntime {
             budgets_reached: std::sync::Mutex::new(HashMap::new()),
             terminals,
             terminal_notices: Mutex::new(Some(terminal_notices)),
+            hosts: Arc::default(),
+            host_notices,
+            host_notice_task: Mutex::new(Some(host_notice_task)),
         }))
     }
 
@@ -1635,6 +1673,9 @@ impl ChatRuntime {
     pub async fn shutdown(&self) -> Result<()> {
         self.stop.send_replace(true);
         let mut error = None;
+        if let Some(notices) = self.host_notice_task.lock().await.take() {
+            notices.abort();
+        }
         if let Some(notices) = self.terminal_notices.lock().await.take() {
             notices.abort();
             let _ = notices.await;

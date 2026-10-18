@@ -2040,3 +2040,106 @@ async fn errors_are_json_and_loopback_boundary_is_unchanged() {
         .unwrap();
     assert_eq!(host.status(), StatusCode::FORBIDDEN);
 }
+
+/// A person's computer joins the workspace with a one-time code, keeps a channel to the
+/// kernel, answers what the kernel asks over it, and is gone once removed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_joins_as_a_host_and_answers_over_its_channel() {
+    if std::process::Command::new("livekit-server")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("livekit-server not installed: skipped");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let host_dir = dir.path().join("laptop");
+    let database = db::TestDatabase::new(dir.path().join("kernel.db")).await;
+    let store = database.open().await;
+    store
+        .set_owner_name(SetOwnerName {
+            name: "Owner".into(),
+        })
+        .await
+        .unwrap();
+    let livekit = Arc::new(
+        LiveKit::start(LiveKitConfig {
+            url: None,
+            api_key: None,
+            api_secret: None,
+            data_dir: dir.path().join("livekit"),
+        })
+        .await
+        .unwrap(),
+    );
+    let (kernel, runtime) = Kernel::serve(dir, database, store, Some(livekit.clone())).await;
+    let runtime = runtime.unwrap();
+    let linked: Value = kernel
+        .post("/hosts/link", None, json!({"name": "Laptop"}))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let code = linked["code"].as_str().unwrap().to_owned();
+    let host = linked["host"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(linked["host"]["joined"], false);
+    zerolux::host_link::join(&kernel.url, &code, "Ada's laptop", &host_dir)
+        .await
+        .unwrap();
+    // The code works once.
+    assert!(
+        zerolux::host_link::join(&kernel.url, &code, "Again", &host_dir.join("again"))
+            .await
+            .is_err()
+    );
+    let config = zerolux::host_link::HostConfig::load(&host_dir).unwrap();
+    assert_eq!(config.host_id, host);
+    assert!(config.secret.starts_with(zerolux::host_link::SECRET_PREFIX));
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let connected = tokio::spawn(zerolux::host_link::run(config, stopped));
+    for _ in 0..100 {
+        if runtime.hosts.online(&host).await {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let pong = runtime.hosts.call(&host, "ping", json!({})).await.unwrap();
+    assert_eq!(pong["version"], env!("CARGO_PKG_VERSION"));
+    let unknown = runtime
+        .hosts
+        .call(&host, "nothing", json!({}))
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{unknown:#}").contains("does not know"),
+        "{unknown:#}"
+    );
+    let hosts: Value = kernel.get("/hosts", None).await.json().await.unwrap();
+    let laptop = hosts["hosts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["id"] == host)
+        .unwrap()
+        .clone();
+    assert_eq!(laptop["name"], "Ada's laptop");
+    assert_eq!(
+        (laptop["joined"].clone(), laptop["online"].clone()),
+        (json!(true), json!(true))
+    );
+    // Removed: its channel closes and its secret no longer connects.
+    kernel
+        .request(Method::DELETE, &format!("/hosts/{host}"), None)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert!(!runtime.hosts.online(&host).await);
+    assert!(runtime.hosts.call(&host, "ping", json!({})).await.is_err());
+    stop.send_replace(true);
+    connected.await.unwrap().unwrap();
+    runtime.shutdown().await.unwrap();
+    livekit.shutdown().await.unwrap();
+}

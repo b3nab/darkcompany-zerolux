@@ -52,6 +52,29 @@ enum Command {
     Doctor,
     /// Receive chat invalidations for an attached harness over a private stdin/stdout channel.
     AgentLink,
+    /// This computer as a host of a workspace whose kernel runs elsewhere.
+    Host {
+        #[command(subcommand)]
+        action: HostAction,
+        /// Where this computer keeps what joining gave it and its sessions' links.
+        #[arg(long, env = "ZEROLUX_DATA_DIR", default_value = ".zerolux/host")]
+        data_dir: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum HostAction {
+    /// Join with the code made in ZeroLux, under Computers, by this computer's person.
+    Join {
+        /// The workspace's kernel, as `http(s)://address:port`.
+        url: String,
+        code: String,
+        /// This computer's name in the workspace.
+        #[arg(long, default_value = "")]
+        name: String,
+    },
+    /// Stay connected to the workspace and run its sessions here.
+    Run,
 }
 
 pub fn init_logging() {
@@ -111,6 +134,21 @@ pub async fn run() -> anyhow::Result<()> {
             .await?;
         }
         Command::AgentLink => crate::agent_link::cli().await?,
+        Command::Host { action, data_dir } => match action {
+            HostAction::Join { url, code, name } => {
+                crate::host_link::join(&url, &code, &name, &data_dir).await?;
+                println!("Joined. Run `zerolux host run` to connect this computer.");
+            }
+            HostAction::Run => {
+                let config = crate::host_link::HostConfig::load(&data_dir)?;
+                let (stop, stopped) = tokio::sync::watch::channel(false);
+                tokio::spawn(async move {
+                    crate::server::shutdown_signal().await;
+                    stop.send_replace(true);
+                });
+                crate::host_link::run(config, stopped).await?;
+            }
+        },
         Command::Doctor => println!(
             "{}",
             serde_json::to_string_pretty(&crate::harness::doctor().await)?

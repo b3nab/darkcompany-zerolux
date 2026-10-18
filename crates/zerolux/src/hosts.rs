@@ -8,8 +8,11 @@ use serde::{Deserialize, Serialize};
 use crate::{
     entity::{actors, hosts},
     model::ChatIdentity,
-    store::{Error, Result, Store, now_ms, text},
+    store::{Error, Result, Store, now_ms, random_token, text, token_hash},
 };
+
+/// How long a code to join a computer lasts.
+const LINK_MS: i64 = 10 * 60 * 1000;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Host {
@@ -21,6 +24,10 @@ pub struct Host {
     pub seen_at: i64,
     /// The kernel that answers this request runs on it.
     pub here: bool,
+    /// False while it waits for its computer to join with its code.
+    pub joined: bool,
+    /// Connected to this kernel now, for a computer joined to it.
+    pub online: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -54,6 +61,8 @@ impl Store {
     fn host_of(&self, row: hosts::Model) -> Host {
         Host {
             here: self.host() == Some(row.id.as_str()),
+            joined: row.link_hash.is_none(),
+            online: false,
             id: row.id,
             name: row.name,
             person_id: row.person_id,
@@ -98,6 +107,9 @@ impl Store {
                     open: Set(false),
                     created_at: Set(now),
                     seen_at: Set(now),
+                    secret_hash: Set(None),
+                    link_hash: Set(None),
+                    link_expires_at: Set(None),
                 }
                 .insert(&tx)
                 .await?;
@@ -173,6 +185,106 @@ impl Store {
             }
             None => Err(Error::Forbidden),
         }
+    }
+
+    /// A new host for one of `who`'s computers, and the one-time code it joins with, valid for
+    /// ten minutes.
+    pub async fn link_host(
+        &self,
+        who: &ChatIdentity,
+        name: Option<&str>,
+    ) -> Result<(Host, String)> {
+        if !who.is_person() {
+            return Err(Error::Forbidden);
+        }
+        let name = match name {
+            Some(name) => text(name, "Host name", 200, true)?,
+            None => "New computer".into(),
+        };
+        let code = random_token();
+        let now = now_ms();
+        let row = hosts::ActiveModel {
+            id: Set(uuid::Uuid::new_v4().to_string()),
+            name: Set(name),
+            person_id: Set(who.actor()?.to_owned()),
+            open: Set(false),
+            created_at: Set(now),
+            seen_at: Set(now),
+            secret_hash: Set(None),
+            link_hash: Set(Some(token_hash(&code))),
+            link_expires_at: Set(Some(now + LINK_MS)),
+        }
+        .insert(self.db())
+        .await?;
+        Ok((self.host_of(row), code))
+    }
+
+    /// A computer joins with its code, once: its host and the secret it connects with from then
+    /// on, given only here.
+    pub async fn join_host(&self, code: &str, name: &str) -> Result<(String, String)> {
+        let secret = format!("{}{}", crate::host_link::SECRET_PREFIX, random_token());
+        let tx = self.write().await?;
+        let row = hosts::Entity::find()
+            .filter(hosts::Column::LinkHash.eq(token_hash(code)))
+            .filter(hosts::Column::LinkExpiresAt.gt(now_ms()))
+            .one(&tx)
+            .await?
+            .ok_or(Error::NotFound)?;
+        let mut update = hosts::ActiveModel {
+            id: Set(row.id.clone()),
+            secret_hash: Set(Some(token_hash(&secret))),
+            link_hash: Set(None),
+            link_expires_at: Set(None),
+            seen_at: Set(now_ms()),
+            ..Default::default()
+        };
+        let name = name.trim();
+        if !name.is_empty() {
+            update.name = Set(text(name, "Host name", 200, true)?);
+        }
+        update.update(&tx).await?;
+        tx.commit().await?;
+        Ok((row.id, secret))
+    }
+
+    /// The joined host a secret belongs to.
+    pub async fn host_by_secret(&self, secret: &str) -> Result<Option<String>> {
+        Ok(hosts::Entity::find()
+            .filter(hosts::Column::SecretHash.eq(token_hash(secret)))
+            .one(self.db())
+            .await?
+            .map(|row| row.id))
+    }
+
+    /// A joined host connected again.
+    pub async fn host_seen(&self, id: &str) -> Result<()> {
+        hosts::ActiveModel {
+            id: Set(id.to_owned()),
+            seen_at: Set(now_ms()),
+            ..Default::default()
+        }
+        .update(self.db())
+        .await?;
+        Ok(())
+    }
+
+    /// Its person removes a joined computer; its secret stops working at once. A kernel serving
+    /// the workspace's database is not removed this way.
+    pub async fn remove_host(&self, who: &ChatIdentity, id: &str) -> Result<()> {
+        let row = hosts::Entity::find_by_id(id)
+            .one(self.db())
+            .await?
+            .ok_or(Error::NotFound)?;
+        if !who.is_person() || who.actor_id.as_ref() != Some(&row.person_id) {
+            return Err(Error::Forbidden);
+        }
+        if row.secret_hash.is_none() && row.link_hash.is_none() {
+            return Err(Error::Invalid(
+                "This computer runs a kernel of the workspace; stop that kernel instead".into(),
+            ));
+        }
+        hosts::Entity::delete_by_id(id).exec(self.db()).await?;
+        Ok(())
     }
 
     /// How `who` may start sessions on this kernel's host, if at all.

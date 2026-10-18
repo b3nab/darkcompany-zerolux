@@ -11,7 +11,7 @@ use axum::{
         ConnectInfo, DefaultBodyLimit, FromRef, FromRequest, Path, Query, Request, State,
         rejection::QueryRejection,
     },
-    http::{Method, StatusCode, header},
+    http::{HeaderMap, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -318,7 +318,11 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/chat/deliveries/{id}/dispatch", post(dispatch_delivery))
         .route("/chat/deliveries/{id}/receipt", post(delivery_receipt))
         .route("/hosts", get(list_hosts))
-        .route("/hosts/{id}", axum::routing::patch(change_host))
+        .route("/hosts/link", post(link_host))
+        .route(
+            "/hosts/{id}",
+            axum::routing::patch(change_host).delete(remove_host),
+        )
         .route("/hosts/{id}/accounts", get(host_accounts))
         .route(
             "/hosts/{id}/accounts/claude-code",
@@ -346,6 +350,8 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/auth/identity", get(auth_identity))
         .route("/auth/claim", post(auth_claim))
         .route("/auth/invites/{token}", get(invitation))
+        .route("/hosts/join", post(join_host))
+        .route("/hosts/channel", get(host_channel))
         .route("/auth/{*rest}", axum::routing::any(auth_proxy));
     let api = open
         .merge(domain)
@@ -415,6 +421,10 @@ async fn identify(State(state): State<AppState>, mut request: Request, next: Nex
         }
     };
     let identity = match (&state.auth, token.as_deref()) {
+        // A joined computer's secret: its channel checks it, and it is nobody else.
+        (_, Some(token)) if token.starts_with(crate::host_link::SECRET_PREFIX) => {
+            Identity::Anonymous
+        }
         (None, token) => match state.store.chat_identity(token).await {
             Ok(identity) => Identity::Known(identity, None),
             Err(error) => return error.into_response(),
@@ -2525,12 +2535,96 @@ async fn create_agent(
     Ok((StatusCode::CREATED, Json(store.create_agent(input).await?)))
 }
 
-/// The computers that run the workspace's sessions.
+/// The computers that run the workspace's sessions, and which joined ones are connected now.
 async fn list_hosts(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+) -> Result<Json<Value>, ApiFailure> {
+    let mut hosts = state.store.hosts(&who).await?;
+    if let Some(runtime) = &state.runtime {
+        for host in &mut hosts {
+            host.online = host.here || runtime.hosts.online(&host.id).await;
+        }
+    }
+    Ok(Json(json!({ "hosts": hosts })))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct LinkHost {
+    name: Option<String>,
+}
+
+/// A host for one of one's computers, with the one-time code it joins with: shown only here.
+async fn link_host(
     State(store): State<Store>,
     Extension(who): Extension<ChatIdentity>,
+    ChatJson(input): ChatJson<LinkHost>,
 ) -> Result<Json<Value>, Error> {
-    Ok(Json(json!({ "hosts": store.hosts(&who).await? })))
+    let (host, code) = store.link_host(&who, input.name.as_deref()).await?;
+    Ok(Json(json!({ "host": host, "code": code })))
+}
+
+async fn remove_host(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    state.store.remove_host(&who, &id).await?;
+    if let Some(runtime) = &state.runtime {
+        runtime.hosts.disconnect(&id).await;
+    }
+    Ok(Json(json!({ "removed": true })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JoinHost {
+    code: String,
+    #[serde(default)]
+    name: String,
+}
+
+/// A computer joins with the code its person made: its host and the secret it connects with.
+async fn join_host(
+    State(store): State<Store>,
+    ChatJson(input): ChatJson<JoinHost>,
+) -> Result<Json<Value>, ApiFailure> {
+    match store.join_host(input.code.trim(), &input.name).await {
+        Ok((host_id, secret)) => Ok(Json(json!({ "host_id": host_id, "secret": secret }))),
+        Err(Error::NotFound) => Err(failure(
+            StatusCode::GONE,
+            "This code was used or has expired; make a new one",
+        )),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// A joined computer's channel to this kernel, with its secret.
+async fn host_channel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    upgrade: axum::extract::ws::WebSocketUpgrade,
+) -> Result<Response, ApiFailure> {
+    let secret = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|secret| secret.starts_with(crate::host_link::SECRET_PREFIX))
+        .ok_or(Error::Unauthorized)?;
+    let host = state
+        .store
+        .host_by_secret(secret)
+        .await?
+        .ok_or(Error::Unauthorized)?;
+    let runtime = runtime(&state)?.clone();
+    state.store.host_seen(&host).await?;
+    Ok(upgrade.on_upgrade(move |socket| async move {
+        let links = runtime.hosts.clone();
+        links
+            .serve(host, socket, runtime.host_notices.clone())
+            .await;
+    }))
 }
 
 /// Its person names a host, or opens it to the others.
