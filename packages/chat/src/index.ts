@@ -19,5 +19,6 @@ export * from "./requests";
 export * from "./capabilities";
 export * from "./session-events";
 export * from "./live";
+export * from "./files";
 export * from "./tool-view";
 export * from "./commands";
