@@ -76,6 +76,7 @@ async fn single_bootstrap_preserves_identity_history_settings_and_stops_on_reope
         activity: Set(Some("idle".into())),
         host_id: Set(Some("fixture-host".into())),
         created_at: Set(2),
+        owner_id: Set(owner.id.clone()),
         ..Default::default()
     }
     .insert(&db)
@@ -236,7 +237,7 @@ fn exported_entities_include_state_constraints_for_both_dialects() {
     ] {
         let sql = zerolux::entity::schema::sql(backend);
         for name in [
-            "one_bootstrap_owner",
+            "one_workspace_owner",
             "one_actor_per_subject",
             "idx-sessions-native_session",
             "one_open_thread_per_root",

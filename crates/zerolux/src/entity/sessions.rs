@@ -40,6 +40,12 @@ pub struct Model {
     /// The session that started this one to delegate work to it, which may follow and steer it.
     #[sea_orm(column_type = "Text")]
     pub parent_session_id: Option<String>,
+    /// The person whose session it is.
+    #[sea_orm(column_type = "Text")]
+    pub owner_id: String,
+    /// Private when none; otherwise the workspace's people may `read` it, or `write` to it too.
+    #[sea_orm(column_type = "Text")]
+    pub shared: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -58,6 +64,13 @@ pub enum Relation {
         fk_name = "sessions_activity_conversation_id_fkey"
     )]
     ActivityConversation,
+    #[sea_orm(
+        belongs_to = "super::actors::Entity",
+        from = "Column::OwnerId",
+        to = "super::actors::Column::Id",
+        fk_name = "sessions_owner_id_fkey"
+    )]
+    Owner,
 }
 
 impl ActiveModelBehavior for ActiveModel {}
@@ -77,6 +90,7 @@ impl super::schema::Definition for Entity {
             "stopped",
         ]));
         table.check(Expr::col(Column::Activity).is_in(["working", "idle"]));
+        table.check(Expr::col(Column::Shared).is_in(["read", "write"]));
         table.check(
             Expr::col(Column::Status)
                 .eq("stopped")

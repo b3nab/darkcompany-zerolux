@@ -34,6 +34,9 @@ pub struct Model {
     pub approval_policy: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub sandbox: Option<String>,
+    /// For a person who joined by invitation, who invited them; none for the workspace's owner.
+    #[sea_orm(column_type = "Text")]
+    pub invited_by: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -72,11 +75,12 @@ impl super::schema::Definition for Entity {
         }
         indexes.push(
             Index::create()
-                .name("one_bootstrap_owner")
+                .name("one_workspace_owner")
                 .table(Entity)
                 .col(Column::Kind)
                 .unique()
                 .and_where(Expr::col(Column::Kind).eq("human"))
+                .and_where(Expr::col(Column::InvitedBy).is_null())
                 .take(),
         );
         indexes.push(
