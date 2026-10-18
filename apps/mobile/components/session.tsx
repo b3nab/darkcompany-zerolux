@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 import { useSession } from "@/src/kernel";
 import { useMe } from "@/src/me";
 
-/** Pin, archive and rename a session, keeping the kernel's reason when it refuses. */
+/** Pin, archive, rename and budget a session, keeping the kernel's reason when it refuses. */
 export function useOrganize(session: ChatSession) {
   const { chat } = useSession();
   const change = (update: Parameters<typeof chat.updateSession>[1]) =>
@@ -32,6 +32,8 @@ export function useOrganize(session: ChatSession) {
     pin: () => change({ pinned: !session.pinned_at }),
     archive: () => change({ archived: !session.archived_at }),
     rename: (title: string) => change({ title: title.trim() }),
+    /** Stops the session's turns at this cost in dollars; 0 lifts it. */
+    budget: (usd: number) => change({ budget_usd: usd }),
   };
 }
 

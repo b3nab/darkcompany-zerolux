@@ -1066,13 +1066,41 @@ function UsageFacts({ sessionId }: { sessionId: string }) {
   );
 }
 
-/** Its own title, pinned at the top of the Console, or archived out of it. */
+/**
+ * Its own title, pinned at the top of the Console, or archived out of it, and the budget
+ * that stops its turns once its harness reports that much spent.
+ */
 function Organize({ session }: { session: ChatSession }) {
+  const { chat } = useSession();
   const organize = useOrganize(session);
+  const usage = useSessionUsage(session.id, chat.live);
   const [title, setTitle] = useState(session.title);
+  const [budget, setBudget] = useState(
+    session.budget_usd ? String(session.budget_usd) : "",
+  );
   const save = () => {
     if (title.trim() && title.trim() !== session.title) organize.rename(title);
   };
+  // A phone in Italian writes 1,50: the comma is the decimal point.
+  const saveBudget = () => {
+    const usd = budget.trim() ? Number(budget.replace(",", ".")) : 0;
+    if (!Number.isFinite(usd) || usd < 0) {
+      setBudget(session.budget_usd ? String(session.budget_usd) : "");
+      return;
+    }
+    if (usd !== (session.budget_usd ?? 0)) organize.budget(usd);
+  };
+  const cost = usage?.cost_usd ?? null;
+  const spent =
+    session.harness === "codex"
+      ? "Codex does not report its cost, so a budget cannot stop it."
+      : cost === null
+        ? session.budget_usd
+          ? "The harness has not reported a cost yet."
+          : "No limit. Set one, and the session stops when its cost reaches it."
+        : session.budget_usd
+          ? `${usdCost(cost)} of ${usdCost(session.budget_usd)}`
+          : `${usdCost(cost)} so far, no limit`;
   return (
     <View className="gap-3 border-b border-border pb-4">
       <View className="gap-2">
@@ -1094,6 +1122,24 @@ function Organize({ session }: { session: ChatSession }) {
       <View className="flex-row items-center gap-3">
         <Text className="flex-1 text-sm">Archived</Text>
         <Switch value={organize.archived} onValueChange={organize.archive} />
+      </View>
+      <View className="gap-2">
+        <Text className="text-sm text-faint">Budget</Text>
+        <View className="flex-row items-center gap-2">
+          <Text className="font-mono text-base text-muted-foreground">$</Text>
+          <Input
+            value={budget}
+            onChangeText={setBudget}
+            onSubmitEditing={saveBudget}
+            onBlur={saveBudget}
+            placeholder="No limit"
+            keyboardType="decimal-pad"
+            returnKeyType="done"
+            accessibilityLabel="Budget in dollars"
+            className="flex-1 font-mono"
+          />
+        </View>
+        <Text className="text-xs text-faint">{spent}</Text>
       </View>
     </View>
   );
