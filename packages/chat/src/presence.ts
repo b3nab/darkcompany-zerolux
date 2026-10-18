@@ -1,5 +1,5 @@
 import { listedSessions, liveSessions, sessionState } from "./chat";
-import type { ChatSession } from "./chat";
+import type { Approval, ChatSession } from "./chat";
 import type { Actor } from "./client";
 import type { Chat } from "./useChat";
 
@@ -27,9 +27,12 @@ const consoleOrder: Record<Tone, number> = {
   connecting: 3,
   stopped: 4,
 };
-/** The Agent Console's sessions: the live ones, working first, and the stopped ones apart. */
+/**
+ * The Agent Console's sessions: the live ones, working first, the stopped ones apart, and
+ * the ones the owner archived in a list of their own.
+ */
 export function consoleSessions(sessions: ChatSession[]) {
-  const listed = listedSessions(sessions);
+  const listed = listedSessions(sessions).filter((s) => !s.archived_at);
   return {
     live: listed
       .filter((s) => s.status !== "stopped")
@@ -37,6 +40,9 @@ export function consoleSessions(sessions: ChatSession[]) {
         (a, b) => consoleOrder[sessionTone(a)] - consoleOrder[sessionTone(b)],
       ),
     stopped: listed.filter((s) => s.status === "stopped"),
+    archived: sessions
+      .filter((s) => s.archived_at)
+      .sort((a, b) => b.archived_at! - a.archived_at!),
   };
 }
 
@@ -116,5 +122,147 @@ export function agentWork(
         c.members.some((m) => m.actor_id === agent.owner_id),
     ),
     waiting: sessions.reduce((sum, s) => sum + s.waiting, 0),
+  };
+}
+
+/**
+ * What a session asks of you, one state each, most pressing first: a permission to grant, a
+ * question to answer, work going on, a failure, results you have not seen, or nothing.
+ */
+export type Attention =
+  | "approval"
+  | "input"
+  | "working"
+  | "failed"
+  | "unseen"
+  | "idle";
+
+export const attentionLabels: Record<Attention, string> = {
+  approval: "Needs approval",
+  input: "Needs input",
+  working: "Working",
+  failed: "Failed",
+  unseen: "New",
+  idle: "Idle",
+};
+
+export const attentionOrder: Attention[] = [
+  "approval",
+  "input",
+  "working",
+  "failed",
+  "unseen",
+  "idle",
+];
+
+/** A session's state for you; `seenAt` is when you last looked at it, in ms. */
+export function sessionAttention(
+  session: ChatSession,
+  approvals: Approval[],
+  seenAt?: number,
+): Attention {
+  const pending = approvals.filter(
+    (a) => a.session_id === session.id && a.status === "pending",
+  );
+  if (pending.some((a) => a.kind === "permission")) return "approval";
+  if (pending.length) return "input";
+  if (session.status === "connected" && session.activity === "working")
+    return "working";
+  if (session.status === "attention" || session.last_turn === "error")
+    return "failed";
+  if (session.output_at && session.output_at > (seenAt ?? 0)) return "unseen";
+  return "idle";
+}
+
+/** Sessions as an inbox: pinned ones first, then what needs you, the most recent within each. */
+export function attentionInbox(
+  sessions: ChatSession[],
+  approvals: Approval[],
+  seen: Record<string, number>,
+) {
+  return sessions
+    .map((session) => ({
+      session,
+      attention: sessionAttention(session, approvals, seen[session.id]),
+    }))
+    .sort(
+      (a, b) =>
+        Number(!!b.session.pinned_at) - Number(!!a.session.pinned_at) ||
+        attentionOrder.indexOf(a.attention) -
+          attentionOrder.indexOf(b.attention) ||
+        (b.session.output_at ?? 0) - (a.session.output_at ?? 0),
+    );
+}
+
+/** When a session's native output last grew: as the kernel lists it, or as it noticed it live. */
+export const sessionOutputAt = (
+  chat: Pick<Chat, "outputs">,
+  session: ChatSession,
+): number | undefined => session.output_at ?? chat.outputs[session.id]?.at;
+
+/** What a session tells you without being asked: it needs you, it failed, or it finished. */
+export type SessionNotice = "approval" | "input" | "failed" | "finished";
+
+/** Each running session's state, whatever you have seen of it: what notices compare. */
+export const sessionAttentions = (
+  sessions: ChatSession[],
+  approvals: Approval[],
+): Record<string, Attention> =>
+  Object.fromEntries(
+    sessions
+      .filter((session) => session.status !== "stopped")
+      .map((session) => [session.id, sessionAttention(session, approvals)]),
+  );
+
+/**
+ * What changed for you between two looks: a session that starts needing you or fails, or
+ * stops working. A session met for the first time tells nothing.
+ */
+export function sessionNotices(
+  before: Record<string, Attention>,
+  after: Record<string, Attention>,
+): { id: string; notice: SessionNotice }[] {
+  const notices: { id: string; notice: SessionNotice }[] = [];
+  for (const [id, attention] of Object.entries(after)) {
+    const was = before[id];
+    if (was === undefined || was === attention) continue;
+    if (
+      attention === "approval" ||
+      attention === "input" ||
+      attention === "failed"
+    )
+      notices.push({ id, notice: attention });
+    else if (was === "working" && attention !== "working")
+      notices.push({ id, notice: "finished" });
+  }
+  return notices;
+}
+
+const noticeVerbs: Record<SessionNotice, string> = {
+  approval: "asks for approval",
+  input: "asks you",
+  failed: "needs attention",
+  finished: "finished",
+};
+
+/** A notice as a notification says it: who and what in the title, the gist below. */
+export function noticeText(
+  notice: SessionNotice,
+  session: ChatSession,
+  approvals: Approval[],
+  name: string,
+): { title: string; body: string } {
+  const asks = approvals.find(
+    (a) => a.session_id === session.id && a.status === "pending",
+  );
+  const body =
+    notice === "approval" || notice === "input"
+      ? asks?.summary
+      : notice === "failed"
+        ? (session.attention_reason ?? undefined)
+        : (session.summary ?? undefined);
+  return {
+    title: `${name} ${noticeVerbs[notice]}`,
+    body: body || session.title || "",
   };
 }
