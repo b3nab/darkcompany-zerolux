@@ -130,6 +130,7 @@ export default function NewSessionScreen() {
       workspace: workspace.trim(),
       ...agentLaunchSettings(model, effort),
       ...(worktree !== undefined ? { worktree: worktree.trim() } : {}),
+      ...(elsewhere ? { host: elsewhere.id } : {}),
       ...(existing
         ? { actor_id: existing.id }
         : agent === NEW
@@ -146,7 +147,6 @@ export default function NewSessionScreen() {
               ...common,
               ...(policy ? { approval_policy: policy } : {}),
               ...(sandbox ? { sandbox } : {}),
-              ...(elsewhere ? { host: elsewhere.id } : {}),
             };
     try {
       const { session } = await chat.createSession(input);
@@ -184,8 +184,9 @@ export default function NewSessionScreen() {
             />
             {elsewhere ? (
               <Text className="text-xs text-muted-foreground">
-                Only Codex runs on your other computers so far, with their own
-                Codex and its settings.
+                {joinedHarnesses.map((h) => startable[h]).join(" and ")} run on
+                your other computers so far, with that computer's own accounts
+                and settings.
               </Text>
             ) : null}
           </View>

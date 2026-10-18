@@ -502,7 +502,7 @@ export function SessionCard({
           ) : null}
           <Fact label="Started by">
             <Text className="text-sm">
-              {session.origin === "owned" ? "ZeroLux" : "You, then hired"}
+              {session.created ? "ZeroLux" : "You, then hired"}
             </Text>
           </Fact>
         </View>
