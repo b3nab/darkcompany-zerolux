@@ -26,3 +26,4 @@ export * from "./commands";
 export * from "./usage";
 export * from "./git";
 export * from "./schedules";
+export * from "./people";
