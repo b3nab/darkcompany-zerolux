@@ -12,15 +12,24 @@ export interface LiveItem {
   done?: boolean;
 }
 
+/** An input of the owner's, waiting in the harness's queue for the turn to end. */
+export interface QueuedInput {
+  id: string;
+  text: string;
+}
+
 export type LiveChange =
   | { type: "append" | "set"; item: string; kind: LiveKind; text: string }
   | { type: "done"; item: string }
-  | { type: "clear" };
+  | { type: "clear" }
+  /** The whole queue as it is now. */
+  | { type: "queue"; items: QueuedInput[] };
 
-/** What is in progress, and the number of the last change it includes. */
+/** What is in progress and what waits, and the number of the last change it includes. */
 export interface LiveState {
   seq: number;
   items: LiveItem[];
+  queue: QueuedInput[];
 }
 
 /** The kernel's notice of a session's changes, numbered from `first`. */
@@ -31,7 +40,7 @@ export interface LiveNotice {
   changes: LiveChange[];
 }
 
-export const noLive: LiveState = { seq: 0, items: [] };
+export const noLive: LiveState = { seq: 0, items: [], queue: [] };
 
 /** How long a complete item stays, at most, while the record shown catches up. */
 export const SETTLE_MS = 2000;
@@ -46,9 +55,12 @@ export function applyLive(
 ): LiveState | undefined {
   if (notice.first > state.seq + 1) return undefined;
   let items = state.items;
+  let queue = state.queue;
   notice.changes.forEach((change, n) => {
     if (notice.first + n <= state.seq) return;
+    // The turn's end leaves the queue: what waits starts the next one.
     if (change.type === "clear") items = [];
+    else if (change.type === "queue") queue = change.items;
     else if (change.type === "done")
       items = items.map((open) =>
         open.id === change.item ? { ...open, done: true } : open,
@@ -72,10 +84,13 @@ export function applyLive(
   return {
     seq: Math.max(state.seq, notice.first + notice.changes.length - 1),
     items,
+    queue,
   };
 }
 
-type Read = (sessionId: string) => Promise<LiveState>;
+/** The kernel's `/sessions/{id}/live`: a kernel without a queue leaves it out. */
+export type LiveRead = Pick<LiveState, "seq" | "items"> & Partial<LiveState>;
+type Read = (sessionId: string) => Promise<LiveRead>;
 interface Watched {
   state: LiveState;
   read: Read;
@@ -101,6 +116,7 @@ function reread(sessionId: string) {
       let state: LiveState | undefined = {
         seq: read.seq,
         items: read.items.map(({ id, kind, text }) => ({ id, kind, text })),
+        queue: read.queue ?? [],
       };
       for (const notice of waiting) state = state && applyLive(state, notice);
       if (state) publish(entry, state);
@@ -179,4 +195,16 @@ export function useSessionLive(
   const snapshot = () => liveState(sessionId);
   useEffect(() => settle(sessionId), [sessionId, record]);
   return useSyncExternalStore(subscribe, snapshot, snapshot).items;
+}
+
+/** The owner's inputs waiting in the session's queue, in order, to show above the box. */
+export function useSessionQueue(sessionId: string, read: Read): QueuedInput[] {
+  const subscribe = useCallback(
+    (listener: () => void) => watchLive(sessionId, read, listener),
+    // The reader stays the same for a session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionId],
+  );
+  const snapshot = () => liveState(sessionId);
+  return useSyncExternalStore(subscribe, snapshot, snapshot).queue;
 }

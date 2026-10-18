@@ -7,7 +7,7 @@ import {
   noLive,
   watchLive,
 } from "./live";
-import type { LiveNotice, LiveState } from "./live";
+import type { LiveNotice, LiveRead, LiveState } from "./live";
 
 const notice = (
   first: number,
@@ -30,6 +30,7 @@ test("changes build what is in progress, in order, each applied once", () => {
       { id: "t", kind: "thinking", text: "Let me look" },
       { id: "m", kind: "text", text: "Hello" },
     ],
+    queue: [],
   });
   // A notice already applied in part: only what follows seq counts.
   state = applyLive(state!, {
@@ -39,28 +40,31 @@ test("changes build what is in progress, in order, each applied once", () => {
       { type: "set", item: "cmd", kind: "output", text: "line 1\n" },
       { type: "set", item: "cmd", kind: "output", text: "line 2\n" },
       { type: "done", item: "t" },
+      { type: "queue", items: [{ id: "q1", text: "then run the tests" }] },
     ],
   });
   expect(state).toEqual({
-    seq: 6,
+    seq: 7,
     items: [
       { id: "t", kind: "thinking", text: "Let me look", done: true },
       { id: "m", kind: "text", text: "Hello" },
       { id: "cmd", kind: "output", text: "line 2\n" },
     ],
+    queue: [{ id: "q1", text: "then run the tests" }],
   });
-  expect(applyLive(state!, { first: 7, changes: [{ type: "clear" }] })).toEqual(
-    { seq: 7, items: [] },
+  // The turn's end leaves what waits for the next one.
+  expect(applyLive(state!, { first: 8, changes: [{ type: "clear" }] })).toEqual(
+    { seq: 8, items: [], queue: [{ id: "q1", text: "then run the tests" }] },
   );
   // A missing change: the state is read again.
   expect(
-    applyLive(state!, { first: 8, changes: [{ type: "clear" }] }),
+    applyLive(state!, { first: 9, changes: [{ type: "clear" }] }),
   ).toBeUndefined();
 });
 
 test("a followed session reads its state, then follows the notices", async () => {
   const reads: string[] = [];
-  let answer: LiveState = {
+  let answer: LiveRead = {
     seq: 4,
     items: [{ id: "m", kind: "text", text: "Hel" }],
   };
@@ -82,13 +86,19 @@ test("a followed session reads its state, then follows the notices", async () =>
   expect(liveState("aspen").items).toEqual([
     { id: "m", kind: "text", text: "Hello" },
   ]);
+  // A kernel without a queue reads as an empty one.
+  expect(liveState("aspen").queue).toEqual([]);
   expect(liveState("aspen").seq).toBe(5);
   // A gap reads it again.
-  answer = { seq: 9, items: [] };
+  answer = { seq: 9, items: [], queue: [{ id: "q1", text: "next" }] };
   liveNotice(notice(8, [{ type: "clear" }]));
   await Promise.resolve();
   await Promise.resolve();
-  expect(liveState("aspen")).toEqual({ seq: 9, items: [] });
+  expect(liveState("aspen")).toEqual({
+    seq: 9,
+    items: [],
+    queue: [{ id: "q1", text: "next" }],
+  });
   // So does a reconnection.
   liveResync();
   await Promise.resolve();
