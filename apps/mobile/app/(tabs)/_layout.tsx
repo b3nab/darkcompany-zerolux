@@ -1,8 +1,9 @@
 import { Redirect } from "expo-router";
 import { NativeTabs } from "expo-router/native-tabs";
-import { homeLabel, unreadIn, waitingChats } from "@zerolux/chat";
+import { homeLabel, requestsFor, unreadIn, waitingChats } from "@zerolux/chat";
 import { useCSSVariable } from "uniwind";
 import { useKernel, useSession } from "../../src/kernel";
+import { useMe } from "../../src/me";
 import { useSessionNotices } from "../../src/notices";
 
 export default function TabsLayout() {
@@ -23,9 +24,11 @@ const badge = (count: number) =>
  */
 function Connected() {
   const { chat } = useSession();
+  const { me } = useMe();
   useSessionNotices();
   const tint = String(useCSSVariable("--color-human-foreground"));
-  const pending = chat.approvals.filter((a) => a.status === "pending").length;
+  // The requests waiting for you: those of your sessions.
+  const pending = requestsFor(chat, me?.id).length;
   const unread = chat.conversations.filter(
     (c) => c.kind !== "thread" && unreadIn(c, chat.seen) > 0,
   ).length;

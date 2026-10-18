@@ -9,6 +9,7 @@ import {
   sessionNotices,
 } from "@zerolux/chat";
 import type { Attention } from "@zerolux/chat";
+import { useMe } from "./me";
 import { useSession } from "./kernel";
 import { preference } from "./saved";
 
@@ -49,8 +50,13 @@ export const dismissNotice = (sessionId: string) =>
  */
 export function useSessionNotices() {
   const { workspace, chat } = useSession();
+  const { me } = useMe();
   const pathname = usePathname();
-  const attentions = sessionAttentions(chat.sessions, chat.approvals);
+  // Only your sessions: one shared with you needs its person, not you.
+  const attentions = sessionAttentions(
+    chat.sessions.filter((s) => s.owner_id === me?.id),
+    chat.approvals,
+  );
   const before = useRef<Record<string, Attention>>(undefined);
   const changed = JSON.stringify(attentions);
   useEffect(() => {

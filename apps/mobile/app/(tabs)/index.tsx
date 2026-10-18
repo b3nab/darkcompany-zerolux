@@ -51,7 +51,7 @@ export default function Tonight() {
     );
   };
   const { me } = useMe();
-  const needs = needsYou(chat);
+  const needs = needsYou(chat, me?.id);
   const running = runningNow(chat);
   const tones = actors.map((a) => memberTone(a, me?.id, chat.sessions));
   const people = actors.filter((a) => a.kind === "human").length;
