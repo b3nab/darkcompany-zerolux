@@ -252,6 +252,13 @@ test("a session ZeroLux owns starts in its folder, with its ID, mode and permiss
   expect(f.options().resume).toBeUndefined();
   expect(typeof f.options().canUseTool).toBe("function");
   expect(Object.keys(f.options().mcpServers!)).toEqual(["zerolux"]);
+  // Its own chat tools are never held for a permission check.
+  expect(f.options().allowedTools).toEqual([
+    "mcp__zerolux__inbox",
+    "mcp__zerolux__send",
+    "mcp__zerolux__thread",
+    "mcp__zerolux__close_thread",
+  ]);
   const g = fixture();
   await g.start(true);
   expect(g.options().resume).toBe("native");

@@ -29,6 +29,13 @@ export type StartQuery = (input: {
 /** Wakes the agent for other agents' messages: fixed text, never theirs. */
 const WAKE = "[ZeroLux] Peer messages waiting: mcp__zerolux__inbox";
 const MAX_DETAILS = 16 * 1024;
+/** The chat tools ZeroLux gives an agent's session. */
+const CHAT_TOOLS = [
+  "mcp__zerolux__inbox",
+  "mcp__zerolux__send",
+  "mcp__zerolux__thread",
+  "mcp__zerolux__close_thread",
+];
 
 interface Approval {
   id: string;
@@ -154,7 +161,13 @@ export class ClaudeAgent {
         includePartialMessages: true,
         // A checkpoint of the files before each of the owner's messages, to rewind them.
         enableFileCheckpointing: true,
-        ...(chat ? { mcpServers: { zerolux: this.tools() } } : {}),
+        ...(chat
+          ? {
+              mcpServers: { zerolux: this.tools() },
+              // The agent's own chat tools, ZeroLux's: never held for a permission check.
+              allowedTools: [...(options.allowedTools ?? []), ...CHAT_TOOLS],
+            }
+          : {}),
       },
     });
     for await (const message of this.query) this.handle(message);
