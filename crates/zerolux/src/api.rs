@@ -232,6 +232,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/chat/sessions/{id}/events", get(session_events))
         .route("/chat/sessions/{id}/interrupt", post(interrupt_session))
         .route("/chat/sessions/{id}/input", post(session_input))
+        .route("/chat/sessions/{id}/compact", post(compact_session))
         .route(
             "/conversations",
             get(conversations).post(create_conversation),
@@ -787,6 +788,27 @@ async fn interrupt_session(
         .await
         .map_err(runtime_error)?;
     Ok(Json(json!({ "interrupted": interrupted })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompactRequest {
+    /// What the summary should keep, as `/compact <instructions>`.
+    instructions: Option<String>,
+}
+
+/// Starts the harness's own compaction of the session's history; the record shows the result.
+async fn compact_session(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(request): ChatJson<CompactRequest>,
+) -> Result<Json<Value>, ApiFailure> {
+    runtime(&state)?
+        .compact(&who, &id, request.instructions.as_deref())
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "started": true })))
 }
 
 #[derive(Deserialize)]

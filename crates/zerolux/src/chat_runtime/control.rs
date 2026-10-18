@@ -5,6 +5,7 @@ use serde_json::json;
 
 const INTERRUPT: &str = "interrupt-v1";
 const INPUT: &str = "input-v1";
+const COMPACT: &str = "compact-v1";
 
 impl ChatRuntime {
     /// Stops the native turn in progress, whoever started it. The session stays linked and
@@ -29,6 +30,85 @@ impl ChatRuntime {
                 Ok(error) => error.into(),
                 Err(error) => Error::Invalid(format!("{error:#}")).into(),
             })
+    }
+
+    /// Summarizes the session's older history so its context has room again, with the
+    /// harness's own compaction, as `/compact [instructions]` does in its terminal. Accepted
+    /// means started: the summary, or why it failed, arrives in the session's native record.
+    pub async fn compact(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+        instructions: Option<&str>,
+    ) -> Result<()> {
+        self.compact_native(who, id, instructions)
+            .await
+            .map_err(|error| match error.downcast::<Error>() {
+                Ok(error) => error.into(),
+                Err(error) => Error::Invalid(format!("{error:#}")).into(),
+            })
+    }
+
+    async fn compact_native(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+        instructions: Option<&str>,
+    ) -> Result<()> {
+        if !who.is_owner() {
+            return Err(Error::Forbidden.into());
+        }
+        let instructions = instructions.map(str::trim).filter(|text| !text.is_empty());
+        if instructions.is_some_and(|text| text.len() > 16 * 1024) {
+            return Err(Error::Invalid("Instructions up to 16 KiB".into()).into());
+        }
+        let session = self
+            .store
+            .chat_sessions(who)
+            .await?
+            .into_iter()
+            .find(|session| session.id == id)
+            .ok_or(Error::NotFound)?;
+        #[cfg(unix)]
+        if session.harness == "claude-code" && self.owned_mode(who, id).await?.is_none() {
+            bail!("Claude Code in a terminal compacts there, with /compact");
+        }
+        match self.native_control(who, &session, COMPACT).await? {
+            Control::Codex(control) => {
+                ensure!(
+                    instructions.is_none(),
+                    "Codex compacts without instructions"
+                );
+                control.compact().await
+            }
+            Control::Pi(record) => {
+                sessions::control(
+                    &record,
+                    json!({"method":"compact","link_id":session.id,"instructions":instructions}),
+                )
+                .await?;
+                Ok(())
+            }
+            // Claude Code runs its own /compact command when it arrives as user input,
+            // after the turn in progress.
+            #[cfg(unix)]
+            Control::Claude(link) => {
+                let actual = link.describe().await?;
+                ensure!(
+                    actual["capabilities"]
+                        .as_array()
+                        .is_some_and(|values| values.iter().any(|value| value == INPUT)),
+                    "The Claude runner needs an update for this control"
+                );
+                let text = match instructions {
+                    Some(instructions) => format!("/compact {instructions}"),
+                    None => "/compact".into(),
+                };
+                link.request(json!({"method":"input","link_id":session.id,"text":text}))
+                    .await?;
+                Ok(())
+            }
+        }
     }
 
     async fn input_native(&self, who: &ChatIdentity, id: &str, text: &str) -> Result<()> {
