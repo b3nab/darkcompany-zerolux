@@ -1,17 +1,10 @@
-import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
-import { Pressable, TextInput, View } from "react-native";
-import { KeyboardStickyView } from "react-native-keyboard-controller";
+import { Pressable } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useCSSVariable } from "uniwind";
-import {
-  errorMessage,
-  lineComment,
-  useSessionDiff,
-  useSessionGit,
-} from "@zerolux/chat";
+import { errorMessage, useSessionDiff, useSessionGit } from "@zerolux/chat";
 import type { GitDiffLine } from "@zerolux/chat";
+import { LineComment, useLinePick } from "@/components/line-comment";
 import { Screen } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import { ChatList } from "@/components/ui/native";
@@ -37,7 +30,6 @@ export default function DiffPage() {
   const { chat, url } = useSession();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const faint = String(useCSSVariable("--color-faint"));
   const session = chat.sessions.find((s) => s.id === id);
   const { diff, error: readError } = useSessionDiff(
     id,
@@ -47,44 +39,10 @@ export default function DiffPage() {
     url,
   );
   const git = useSessionGit(id, session?.output_at, url);
-  // The lines picked, by their place in the diff: from the first tapped to the last.
-  const [picked, setPicked] = useState<{ from: number; to: number }>();
-  const [note, setNote] = useState("");
+  const lines = diff?.lines ?? [];
+  const pick = useLinePick();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const lines = diff?.lines ?? [];
-  const pick = (index: number) => {
-    void Haptics.selectionAsync();
-    setPicked((was) =>
-      !was || was.from !== was.to
-        ? { from: index, to: index }
-        : was.from === index
-          ? undefined
-          : {
-              from: Math.min(was.from, index),
-              to: Math.max(was.from, index),
-            },
-    );
-  };
-  const span = picked && {
-    from: lineNumber(lines[picked.from]!) ?? 0,
-    to: lineNumber(lines[picked.to]!) ?? 0,
-  };
-  const send = async () => {
-    if (!span) return;
-    setBusy(true);
-    setError("");
-    try {
-      await chat.input(id, lineComment(path, span.from, span.to, note));
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setPicked(undefined);
-      setNote("");
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
   const move = async () => {
     setBusy(true);
     setError("");
@@ -123,15 +81,18 @@ export default function DiffPage() {
         renderItem={({ item, index }) => (
           <DiffRow
             line={item as GitDiffLine}
-            picked={
-              picked !== undefined && index >= picked.from && index <= picked.to
-            }
-            pick={() => pick(index)}
+            picked={pick.has(index)}
+            pick={() => pick.pick(index)}
           />
         )}
         contentContainerClassName="py-2"
         keyboardDismissMode="interactive"
         keyboardOffset={insets.bottom}
+        ListHeaderComponent={
+          error ? (
+            <Text className="px-4 pb-2 text-sm text-destructive">{error}</Text>
+          ) : null
+        }
         ListEmptyComponent={
           <Text
             className={cn(
@@ -148,52 +109,14 @@ export default function DiffPage() {
           </Text>
         }
       />
-      {span ? (
-        <KeyboardStickyView offset={{ closed: 0, opened: insets.bottom }}>
-          <View
-            className="gap-1.5 border-t border-border bg-background px-3 pt-2"
-            style={{ paddingBottom: 8 + insets.bottom }}
-          >
-            <View className="flex-row items-center justify-between">
-              <Text className="font-mono text-xs text-muted-foreground">
-                {span.from === span.to
-                  ? `Line ${span.from}`
-                  : `Lines ${span.from}-${span.to}`}
-              </Text>
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => setPicked(undefined)}
-                hitSlop={8}
-              >
-                <Text className="text-[13px] text-muted-foreground">
-                  Cancel
-                </Text>
-              </Pressable>
-            </View>
-            {error ? (
-              <Text className="text-sm text-destructive">{error}</Text>
-            ) : null}
-            <View className="flex-row items-end gap-2">
-              <TextInput
-                value={note}
-                onChangeText={setNote}
-                multiline
-                autoFocus
-                editable={!busy}
-                placeholder="Comment for the agent"
-                placeholderTextColor={faint}
-                accessibilityLabel="Comment on the lines"
-                className="max-h-28 flex-1 rounded-md border border-input bg-card px-3 py-2 font-sans text-[15px] text-foreground"
-              />
-              <Button
-                disabled={busy || !note.trim()}
-                onPress={() => void send()}
-              >
-                <Text>Send</Text>
-              </Button>
-            </View>
-          </View>
-        </KeyboardStickyView>
+      {pick.picked ? (
+        <LineComment
+          sessionId={id}
+          path={path}
+          from={lineNumber(lines[pick.picked.from]!) ?? 0}
+          to={lineNumber(lines[pick.picked.to]!) ?? 0}
+          done={pick.clear}
+        />
       ) : null}
     </Screen>
   );
