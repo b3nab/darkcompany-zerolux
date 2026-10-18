@@ -30,3 +30,5 @@ export * from "./people";
 export * from "./goal";
 export * from "./history";
 export * from "./triggers";
+export * from "./subagents";
+export * from "./hosts";
