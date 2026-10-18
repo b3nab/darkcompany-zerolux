@@ -513,7 +513,7 @@ export function SessionView({
   busy: boolean;
   perform: Perform;
 }) {
-  // A joined computer runs it: its settings, images, terminals, forks, git and CI stay there.
+  // A joined computer runs it: its settings, images, terminals, forks and git stay there.
   const computer = sessionComputer(session, hosts);
   const away = computer !== undefined;
   const name = sessionName(session, actors);
@@ -978,7 +978,7 @@ export function SessionView({
                   perform={perform}
                 />
               )}
-              {about && access.write && !away && (
+              {about && access.write && (
                 <SessionTriggers
                   session={session}
                   revision={at}
