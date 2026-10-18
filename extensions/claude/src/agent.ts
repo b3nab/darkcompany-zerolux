@@ -230,16 +230,33 @@ export class ClaudeAgent {
   }
 
   /** The inbox tool: other agents' messages in the turn's chat, read as the agent opens them. */
-  /** The owner's own input, typed into this session from ZeroLux: native user input. */
-  say(text: string) {
+  /**
+   * The owner's own input, typed into this session from ZeroLux: native user input, with its
+   * commands and file mentions, as in the terminal. Steered, it joins the running turn after
+   * the tools in progress; queued, it waits for the turn to end; interrupting, it follows the
+   * turn it stops.
+   */
+  async say(text: string, mode: "steer" | "queue" | "interrupt" = "steer") {
+    if (mode === "interrupt") await this.interrupt();
     this.input.push({
       type: "user",
       uuid: randomUUID() as SDKUserMessage["uuid"],
       session_id: "",
       parent_tool_use_id: null,
       message: { role: "user", content: text },
-      client_composed: true,
+      priority: mode === "queue" ? "later" : "next",
     });
+  }
+
+  /** Claude Code's commands and skills, as the owner types them. */
+  async commands() {
+    if (!this.query) return [];
+    return (await this.query.supportedCommands()).map((command) => ({
+      name: command.name,
+      description: command.description,
+      argument_hint: command.argumentHint || null,
+      invoke: `/${command.name}`,
+    }));
   }
 
   /** Stops the turn in progress, whoever started it; the session and its context stay. */

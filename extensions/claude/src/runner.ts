@@ -114,6 +114,8 @@ export class Runner {
         "agent-settings-v1",
         "interrupt-v1",
         "input-v1",
+        "input-v2",
+        "commands-v1",
         ...(this.config.managed && this.deps.code && this.deps.execution
           ? ["integration-update-v1"]
           : []),
@@ -204,10 +206,20 @@ export class Runner {
     if (method === "input") {
       if (this.stopRequested || !this.transport.bound)
         throw new Error("The session is not connected");
-      if (typeof request.text !== "string" || !request.text.trim())
+      const mode = request.mode ?? "steer";
+      if (
+        typeof request.text !== "string" ||
+        !request.text.trim() ||
+        (mode !== "steer" && mode !== "queue" && mode !== "interrupt")
+      )
         throw new Error("Invalid input request");
-      this.agent.say(request.text);
+      await this.agent.say(request.text, mode);
       return {};
+    }
+    if (method === "commands") {
+      if (this.stopRequested || !this.transport.bound)
+        throw new Error("The session is not connected");
+      return { commands: await this.agent.commands() };
     }
     if (method === "interrupt") {
       if (this.stopRequested || !this.transport.bound)

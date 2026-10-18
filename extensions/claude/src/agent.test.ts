@@ -122,6 +122,18 @@ function fixture() {
       }
     }
     return Object.assign(stream(), {
+      supportedCommands: async () => [
+        {
+          name: "review",
+          description: "Review a change",
+          argumentHint: "<path>",
+        },
+        {
+          name: "compact",
+          description: "Summarize the conversation",
+          argumentHint: "",
+        },
+      ],
       interrupt: async () => {
         interrupts++;
         return undefined;
@@ -715,11 +727,44 @@ test("the owner's own input reaches the session as native user input, not a chat
   const f = fixture();
   await f.start();
   const before = f.inputs.length;
-  f.agent.say("look at the logs");
+  await f.agent.say("/review the parser");
   await tick();
   expect(f.inputs.length).toBe(before + 1);
-  expect(f.inputs.at(-1)!.message.content).toBe("look at the logs");
+  const steered = f.inputs.at(-1)!;
+  expect(steered.message.content).toBe("/review the parser");
+  // Typed by the owner: its commands and mentions work as in the terminal.
+  expect(steered.client_composed).toBeUndefined();
+  expect(steered.priority).toBe("next");
   expect(f.calls.some((c) => c.path.includes("/chat/deliveries"))).toBe(false);
+  await f.agent.say("then the docs", "queue");
+  await tick();
+  expect(f.inputs.at(-1)!.priority).toBe("later");
+  // Interrupting stops the turn in progress first.
+  f.state("running");
+  await tick();
+  await f.agent.say("stop, look here", "interrupt");
+  await tick();
+  expect(f.interrupts()).toBe(1);
+  expect(f.inputs.at(-1)!.message.content).toBe("stop, look here");
+});
+
+test("the harness's commands and skills are offered as the owner types them", async () => {
+  const f = fixture();
+  await f.start();
+  expect(await f.agent.commands()).toEqual([
+    {
+      name: "review",
+      description: "Review a change",
+      argument_hint: "<path>",
+      invoke: "/review",
+    },
+    {
+      name: "compact",
+      description: "Summarize the conversation",
+      argument_hint: null,
+      invoke: "/compact",
+    },
+  ]);
 });
 
 test("the session's text and reasoning stream to ZeroLux while a subagent's stay in its card", async () => {
