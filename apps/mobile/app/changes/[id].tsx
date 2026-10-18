@@ -3,6 +3,7 @@ import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import {
   ArrowUpRightIcon,
+  FolderSearchIcon,
   GitBranchIcon,
   MinusIcon,
   PlusIcon,
@@ -165,6 +166,17 @@ export default function ChangesPage() {
     <Screen
       back
       title="Changes"
+      action={
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Files"
+          onPress={() => router.push(`/files/${id}`)}
+          hitSlop={6}
+          className="size-10 items-center justify-center rounded-sm active:bg-accent"
+        >
+          <FolderSearchIcon color={muted} size={20} strokeWidth={1.5} />
+        </Pressable>
+      }
       subtitle={
         status
           ? `${status.changes.length} ${status.changes.length === 1 ? "file" : "files"} changed`

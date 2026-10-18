@@ -66,6 +66,8 @@ function Navigator() {
         <Stack.Screen name="terminal/[id]" />
         <Stack.Screen name="changes/[id]" />
         <Stack.Screen name="diff/[id]" />
+        <Stack.Screen name="files/[id]" />
+        <Stack.Screen name="file/[id]" />
       </Stack.Protected>
       <Stack.Protected guard={Boolean(url) && !authorized}>
         <Stack.Screen name="auth" />
