@@ -235,7 +235,15 @@
         }
       ],
       "expo-asset",
-      ["expo-notifications", { "enableRemoteNotifications": false }]
+      ["expo-notifications", { "enableRemoteNotifications": false }],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "ZeroLux attaches the photos you choose to what you send to a session.",
+          "cameraPermission": "ZeroLux takes the photos you attach to what you send to a session.",
+          "microphonePermission": "ZeroLux records your voice for dictation and voice messages."
+        }
+      ]
     ]
   }
 }
