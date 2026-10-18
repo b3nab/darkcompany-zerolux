@@ -553,15 +553,19 @@ test("pi's yes/no question in one chat's turn reaches the owner as that delivery
     await until(() => f.approvals.length === 2);
     f.approvals[1]!.status = "decided";
     f.approvals[1]!.decision = "deny";
+    (f.approvals[1] as { reason?: string }).reason = "Keep the build output";
     await until(async () => (await f.answers()).length === 2);
     expect((await f.answers())[1]).toEqual({
       type: "extension_ui_response",
       id: "q2",
       confirmed: false,
     });
-    // Native input was never touched: one get_state, then only the answers.
+    // One get_state, then the answers, and the owner's reason for the denial as a steer.
+    await until(async () =>
+      (await readFile(join(f.root, "commands"), "utf8")).endsWith("steer\n"),
+    );
     expect(await readFile(join(f.root, "commands"), "utf8")).toBe(
-      "get_state\nextension_ui_response\nextension_ui_response\n",
+      "get_state\nextension_ui_response\nextension_ui_response\nsteer\n",
     );
   } finally {
     await f.close();

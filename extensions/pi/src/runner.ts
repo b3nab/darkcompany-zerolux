@@ -752,6 +752,7 @@ export class PiRunner {
             id: string;
             status: string;
             decision?: string | null;
+            reason?: string | null;
             answer?: { answers?: Record<string, string[]> } | null;
           }[];
         }>("/chat/inbox").catch(() => undefined);
@@ -777,6 +778,20 @@ export class PiRunner {
                   ? { cancelled: true }
                   : { value },
             );
+            // pi's confirmation has no reason: the owner's follows as their own words.
+            if (
+              event.method === "confirm" &&
+              current.decision === "deny" &&
+              current.reason &&
+              !this.inputClosed &&
+              child.exitCode === null
+            ) {
+              child.stdin.write(
+                JSON.stringify({ type: "steer", message: current.reason }) +
+                  "\n",
+              );
+              void child.stdin.flush();
+            }
           }
           await resolveApproval(approval);
           return;
