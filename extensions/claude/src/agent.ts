@@ -34,6 +34,10 @@ interface Approval {
   id: string;
   status: string;
   decision: string | null;
+  /** How far an allowed permission goes: "once", "session" or "always". */
+  scope?: string | null;
+  /** Why the owner denied it. */
+  reason?: string | null;
   answer?: unknown;
 }
 
@@ -498,10 +502,13 @@ export class ClaudeAgent {
   private canUseTool: CanUseTool = async (
     toolName,
     input,
-    { signal, toolUseID, decisionReason },
+    { signal, toolUseID, decisionReason, suggestions },
   ): Promise<PermissionResult> => {
     if (toolName === "AskUserQuestion")
       return this.askQuestions(input, toolUseID, signal);
+    // Claude Code suggests the rules that would let this through again: for the session,
+    // or kept in its settings.
+    const rules = suggestions ?? [];
     const details = JSON.stringify(input);
     const decided = await this.ask(
       "permission",
@@ -514,14 +521,32 @@ export class ClaudeAgent {
             ? `${details.slice(0, MAX_DETAILS)}…`
             : input,
         ...(decisionReason ? { reason: decisionReason } : {}),
+        scopes: rules.length ? ["once", "session", "always"] : ["once"],
       },
       signal,
     );
     if (typeof decided === "string")
       return { behavior: "deny", message: UNANSWERED[decided] };
-    return decided.decision === "allow"
-      ? { behavior: "allow", updatedInput: input }
-      : { behavior: "deny", message: "The owner denied this in ZeroLux." };
+    if (decided.decision !== "allow")
+      return {
+        behavior: "deny",
+        message: decided.reason || "The owner denied this in ZeroLux.",
+      };
+    const updatedPermissions =
+      decided.scope === "session"
+        ? rules.map((rule) => ({ ...rule, destination: "session" as const }))
+        : decided.scope === "always"
+          ? rules.map((rule) =>
+              rule.destination === "session"
+                ? { ...rule, destination: "localSettings" as const }
+                : rule,
+            )
+          : undefined;
+    return {
+      behavior: "allow",
+      updatedInput: input,
+      ...(updatedPermissions ? { updatedPermissions } : {}),
+    };
   };
 
   /** Claude Code's questions go to the owner as they are; the answers come back as its own. */

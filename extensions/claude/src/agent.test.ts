@@ -876,3 +876,57 @@ test("the owner's inputs show as waiting until the session takes them", async ()
   await tick();
   expect(queues().at(-1)).toEqual({ type: "queue", items: [] });
 });
+
+test("a permission is allowed as far as Claude Code suggests, or denied with the owner's reason", async () => {
+  const f = fixture();
+  await f.start();
+  const signal = new AbortController().signal;
+  const rule = {
+    type: "addRules" as const,
+    rules: [{ toolName: "Bash", ruleContent: "bun test:*" }],
+    behavior: "allow" as const,
+    destination: "localSettings" as const,
+  };
+  const ask = (toolUseID: string, suggestions?: (typeof rule)[]) =>
+    f.options().canUseTool!(
+      "Bash",
+      { command: "bun test" },
+      { signal, toolUseID, requestId: toolUseID, suggestions },
+    );
+  const decide = async (
+    index: number,
+    decision: string,
+    extra: { scope?: string; reason?: string },
+  ) => {
+    for (let i = 0; i < 50 && !f.approvals[index]; i++) await tick();
+    Object.assign(f.approvals[index]!, {
+      status: "decided",
+      decision,
+      ...extra,
+    });
+    await f.agent.refresh();
+  };
+  const session = ask("tool-1", [rule]);
+  await decide(0, "allow", { scope: "session" });
+  expect(await session).toEqual({
+    behavior: "allow",
+    updatedInput: { command: "bun test" },
+    updatedPermissions: [{ ...rule, destination: "session" }],
+  });
+  const created = (tool: string) =>
+    f.calls.find(
+      (c) => c.path === "/chat/approvals" && c.body?.native_request_id === tool,
+    )!.body;
+  expect(created("tool-1").details.scopes).toEqual([
+    "once",
+    "session",
+    "always",
+  ]);
+  const always = ask("tool-2", [rule]);
+  await decide(1, "allow", { scope: "always" });
+  expect(await always).toMatchObject({ updatedPermissions: [rule] });
+  const denied = ask("tool-3");
+  await decide(2, "deny", { reason: "Not on main" });
+  expect(await denied).toEqual({ behavior: "deny", message: "Not on main" });
+  expect(created("tool-3").details.scopes).toEqual(["once"]);
+});
