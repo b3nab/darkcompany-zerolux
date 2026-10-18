@@ -15,6 +15,10 @@ import {
 import {
   ChatBridge,
   ChatHttpError,
+  readSession,
+  sendSession,
+  startSession,
+  stopSession,
   type Batch,
   type ChatRequest,
 } from "@zerolux/bridge";
@@ -30,6 +34,10 @@ export type StartQuery = (input: {
 const MAX_DETAILS = 16 * 1024;
 /** The chat tools ZeroLux gives an agent's session. */
 const CHAT_TOOLS = [
+  "mcp__zerolux__session_start",
+  "mcp__zerolux__session_read",
+  "mcp__zerolux__session_send",
+  "mcp__zerolux__session_stop",
   "mcp__zerolux__send",
   "mcp__zerolux__thread",
   "mcp__zerolux__close_thread",
@@ -481,8 +489,75 @@ export class ClaudeAgent {
             };
           },
         ),
+        ...this.delegationTools(),
       ],
     });
+  }
+
+  /** Sessions this one starts, follows and steers to delegate work. */
+  private delegationTools() {
+    const call = <T>(path: string, body?: unknown) =>
+      this.bridge.call<T>(path, body);
+    const reply = (value: unknown) => ({
+      content: [{ type: "text" as const, text: JSON.stringify(value) }],
+    });
+    return [
+      tool(
+        "session_start",
+        "Start a session to delegate work to.",
+        {
+          harness: z.enum(["claude-code", "codex", "pi"]).describe("Harness"),
+          prompt: z.string().describe("The work, as its first input"),
+          workspace: z
+            .string()
+            .optional()
+            .describe("Absolute folder; yours by default"),
+          model: z.string().optional().describe("Model"),
+          effort: z.string().optional().describe("Effort"),
+        },
+        async ({ harness, prompt, workspace, model, effort }) => {
+          const session = await startSession(call, {
+            harness,
+            prompt,
+            workspace: workspace ?? this.session.workspace,
+            model,
+            effort,
+          });
+          return reply({ id: session.id, title: session.title });
+        },
+      ),
+      tool(
+        "session_read",
+        "Read a delegated session: its state and last answer.",
+        { id: z.string().describe("Session ID") },
+        async ({ id }) => reply(await readSession(call, id)),
+      ),
+      tool(
+        "session_send",
+        "Write to a delegated session.",
+        {
+          id: z.string().describe("Session ID"),
+          text: z.string().describe("Message"),
+          mode: z
+            .enum(["steer", "queue", "interrupt"])
+            .optional()
+            .describe("While it works: into its turn, after it, or instead"),
+        },
+        async ({ id, text, mode }) => {
+          await sendSession(call, id, text, mode);
+          return reply({ sent: true });
+        },
+      ),
+      tool(
+        "session_stop",
+        "Stop a delegated session.",
+        { id: z.string().describe("Session ID") },
+        async ({ id }) => {
+          await stopSession(call, id);
+          return reply({ stopped: true });
+        },
+      ),
+    ];
   }
 
   /**

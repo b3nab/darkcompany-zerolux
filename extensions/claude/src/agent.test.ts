@@ -249,6 +249,10 @@ test("a session ZeroLux owns starts in its folder, with its ID, mode and permiss
   expect(Object.keys(f.options().mcpServers!)).toEqual(["zerolux"]);
   // Its own chat tools are never held for a permission check.
   expect(f.options().allowedTools).toEqual([
+    "mcp__zerolux__session_start",
+    "mcp__zerolux__session_read",
+    "mcp__zerolux__session_send",
+    "mcp__zerolux__session_stop",
     "mcp__zerolux__send",
     "mcp__zerolux__thread",
     "mcp__zerolux__close_thread",
