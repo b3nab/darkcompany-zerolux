@@ -88,7 +88,7 @@ export async function request<T>(
   path: string,
   body?: unknown,
   signal?: AbortSignal,
-  method?: "PATCH",
+  method?: "PATCH" | "DELETE",
 ): Promise<T> {
   // A file goes as it is, with its own type; anything else as JSON.
   const file = body instanceof Blob;

@@ -39,6 +39,8 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     request<T>(server, path, body);
   const patch = <T>(path: string, body: unknown) =>
     request<T>(server, path, body, undefined, "PATCH");
+  const remove = <T>(path: string) =>
+    request<T>(server, path, undefined, undefined, "DELETE");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
@@ -445,6 +447,22 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
         mode,
         ...(images.length ? { images } : {}),
       });
+    },
+    /**
+     * Takes one of the owner's inputs out of a session's queue before it runs. Codex allows it;
+     * the other harnesses say they do not.
+     */
+    async removeQueued(sessionId: string, itemId: string) {
+      await remove(
+        `/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(itemId)}`,
+      );
+    },
+    /** Rewrites one of the owner's inputs waiting in a session's queue, where Codex allows it. */
+    async editQueued(sessionId: string, itemId: string, text: string) {
+      await patch(
+        `/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(itemId)}`,
+        { text },
+      );
     },
     /**
      * Starts the harness's own compaction of a session's history, to give its context room
