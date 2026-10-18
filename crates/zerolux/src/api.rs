@@ -699,7 +699,8 @@ async fn list_sessions(
     State(store): State<Store>,
     Extension(who): Extension<ChatIdentity>,
 ) -> Result<Json<Value>, Error> {
-    Ok(Json(json!({ "sessions": store.sessions(&who).await? })))
+    let sessions = crate::native_output::with_tails(store.sessions(&who).await?);
+    Ok(Json(json!({ "sessions": sessions })))
 }
 
 async fn read_session(
@@ -710,9 +711,7 @@ async fn read_session(
     if !who.is_owner() && who.session_id.as_deref() != Some(&id) {
         return Err(Error::Forbidden);
     }
-    let session = store
-        .sessions(&who)
-        .await?
+    let session = crate::native_output::with_tails(store.sessions(&who).await?)
         .into_iter()
         .find(|session| session.id == id)
         .ok_or(Error::NotFound)?;
