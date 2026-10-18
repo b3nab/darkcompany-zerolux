@@ -175,7 +175,9 @@ export type LiveChange =
       text: string;
     }
   | { type: "done"; item: string }
-  | { type: "clear" };
+  | { type: "clear" }
+  /** The owner's inputs waiting in the harness's queue, all of them, oldest first. */
+  | { type: "queue"; items: { id: string; text: string }[] };
 /** How often streamed output reaches ZeroLux. */
 const LIVE_EVERY_MS = 150;
 /** Characters of one report's append: within what ZeroLux takes. */
@@ -869,6 +871,14 @@ export class ChatBridge {
    */
   live(change: LiveChange) {
     if (!this.session || this.closed) return;
+    if (change.type === "queue") {
+      this.liveChanges = this.liveChanges.filter(
+        (waiting) => waiting.type !== "queue",
+      );
+      this.liveChanges.push(change);
+      this.reportLive();
+      return;
+    }
     if (change.type !== "done" && change.type !== "clear") {
       if (change.text.length > LIVE_APPEND) {
         for (let at = 0; at < change.text.length; at += LIVE_APPEND)
