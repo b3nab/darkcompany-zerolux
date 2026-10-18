@@ -5,7 +5,7 @@
 //! that say nothing about the agent's work (bookkeeping, settings, token counts) project
 //! to no event.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::native_output::Record;
@@ -50,6 +50,82 @@ pub enum Event {
     Compacted {
         summary: Option<String>,
     },
+}
+
+/// How a session's record ends, for the Console's inbox.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Tail {
+    /// When the native record last grew, in ms.
+    pub output_at: Option<i64>,
+    /// `completed`, `interrupted` or `error`; none while a turn runs, or before the first.
+    pub last_turn: Option<String>,
+    /// The agent's latest text on one line, or else its latest step, up to 200 characters.
+    pub summary: Option<String>,
+}
+
+const SUMMARY_CHARS: usize = 200;
+
+/// The end of a session's events: how its last turn ended and its latest line.
+pub fn tail(items: &[Item], output_at: Option<i64>) -> Tail {
+    // Compaction happens between turns; anything else after the last end is a turn running.
+    let last_turn = items
+        .iter()
+        .rev()
+        .find(|item| !matches!(item.event, Event::Compacted { .. }))
+        .and_then(|item| match &item.event {
+            Event::TurnEnded { status } => Some(status.clone()),
+            Event::Error { .. } => Some("error".into()),
+            _ => None,
+        });
+    let latest =
+        |pick: fn(&Event) -> Option<String>| items.iter().rev().find_map(|i| pick(&i.event));
+    let summary = latest(|event| match event {
+        Event::Text { text } => Some(text.clone()),
+        _ => None,
+    })
+    .or_else(|| {
+        latest(|event| match event {
+            Event::ToolCall { name, input, .. } => Some(step(name, input)),
+            _ => None,
+        })
+    })
+    .map(|text| one_line(&text))
+    .filter(|line| !line.is_empty());
+    Tail {
+        output_at,
+        last_turn,
+        summary,
+    }
+}
+
+/// A tool call in a few words: its name and what it works on.
+fn step(name: &str, input: &Value) -> String {
+    let detail = [
+        "command",
+        "cmd",
+        "file_path",
+        "path",
+        "pattern",
+        "query",
+        "url",
+        "description",
+    ]
+    .iter()
+    .find_map(|key| input[*key].as_str())
+    .or_else(|| input.as_str());
+    match detail {
+        Some(detail) => format!("{name}: {detail}"),
+        None => name.to_owned(),
+    }
+}
+
+fn one_line(text: &str) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= SUMMARY_CHARS {
+        return line;
+    }
+    let cut: String = line.chars().take(SUMMARY_CHARS - 1).collect();
+    format!("{}…", cut.trim_end())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -208,7 +284,12 @@ fn claude(record: &Value) -> Vec<Event> {
             let content = &record["message"]["content"];
             let mut events = Vec::new();
             let text = text_of(content, &["text"]);
-            if !text.trim().is_empty() {
+            // Claude Code writes an interruption as the user's line.
+            if text.starts_with("[Request interrupted by user") {
+                events.push(Event::TurnEnded {
+                    status: "interrupted".into(),
+                });
+            } else if !text.trim().is_empty() {
                 events.push(input(text));
             }
             for block in content.as_array().into_iter().flatten() {
@@ -482,6 +563,7 @@ mod tests {
                 json!({"type":"assistant","message":{"content":[{"type":"text","text":"Fine"}]}}),
                 json!({"type":"system","subtype":"turn_duration"}),
                 json!({"type":"permission-mode"}),
+                json!({"type":"user","message":{"content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}),
             ]),
             vec![
                 Event::Input {
@@ -503,8 +585,76 @@ mod tests {
                 },
                 Event::Text { text: "Fine".into() },
                 Event::TurnEnded { status: "completed".into() },
+                Event::TurnEnded { status: "interrupted".into() },
             ]
         );
+    }
+
+    #[test]
+    fn a_tail_says_how_the_last_turn_ended_and_the_latest_line() {
+        let at = |events: Vec<Event>| -> Vec<Item> {
+            events
+                .into_iter()
+                .enumerate()
+                .map(|(at, event)| Item {
+                    at: at as u64,
+                    time: None,
+                    event,
+                })
+                .collect()
+        };
+        let text = |text: &str| Event::Text { text: text.into() };
+        let call = |name: &str, input: Value| Event::ToolCall {
+            id: "c".into(),
+            name: name.into(),
+            input,
+        };
+        let ended = |status: &str| Event::TurnEnded {
+            status: status.into(),
+        };
+        assert_eq!(tail(&[], None), Tail::default());
+        let done = tail(
+            &at(vec![
+                text("First"),
+                text("Fixed the build.\n\nAll   tests pass."),
+                ended("completed"),
+                Event::Compacted { summary: None },
+            ]),
+            Some(7),
+        );
+        assert_eq!(
+            done,
+            Tail {
+                output_at: Some(7),
+                last_turn: Some("completed".into()),
+                summary: Some("Fixed the build. All tests pass.".into()),
+            }
+        );
+        // Working: no ending yet; without text, its latest step.
+        let working = tail(
+            &at(vec![
+                ended("completed"),
+                call("Bash", json!({"command": "bun test"})),
+            ]),
+            None,
+        );
+        assert_eq!(working.last_turn, None);
+        assert_eq!(working.summary.as_deref(), Some("Bash: bun test"));
+        assert_eq!(
+            tail(
+                &at(vec![Event::Error {
+                    message: "x".into()
+                }]),
+                None
+            )
+            .last_turn,
+            Some("error".into())
+        );
+        let long = tail(&at(vec![text(&"word ".repeat(100))]), None)
+            .summary
+            .unwrap();
+        assert_eq!(long.chars().count(), SUMMARY_CHARS);
+        assert!(long.ends_with('…'));
     }
 
     #[test]
