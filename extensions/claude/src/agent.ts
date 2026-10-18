@@ -316,6 +316,24 @@ export class ClaudeAgent {
       : "None.";
   }
 
+  /** What the session has cost so far, as its last result said. */
+  private cost?: number;
+
+  /** How full the context is now, and the cost so far. */
+  private async reportUsage() {
+    // Reading Claude Code's counts never gets in the way of the turn's end.
+    const usage = await Promise.resolve()
+      .then(() => this.query?.getContextUsage({ detail: "summary" }))
+      .catch(() => undefined);
+    if (!usage && this.cost === undefined) return;
+    this.bridge.live({
+      type: "usage",
+      context_tokens: usage?.totalTokens ?? null,
+      context_window: usage?.maxTokens ?? null,
+      cost_usd: this.cost ?? null,
+    });
+  }
+
   /** The owner's inputs the session has not taken yet, oldest first. */
   private ownerQueue: { id: string; text: string }[] = [];
 
@@ -362,6 +380,7 @@ export class ClaudeAgent {
   private handle(message: SDKMessage) {
     this.settings.observe(message);
     this.stream(message);
+    if (message.type === "result") this.cost = message.total_cost_usd;
     if (
       message.type === "system" &&
       message.subtype === "session_state_changed"
@@ -373,6 +392,7 @@ export class ClaudeAgent {
       if (message.state === "idle") {
         this.streaming = undefined;
         this.bridge.live({ type: "clear" });
+        void this.reportUsage();
         this.turnDelivery = undefined; // The next turn asks about its own message.
         // Input this chat wrote and no turn took yet runs next: the turn's chat holds until
         // then. The session drops queued input only when it ends, and so does this run.

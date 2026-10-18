@@ -125,6 +125,10 @@ function fixture() {
       }
     }
     return Object.assign(stream(), {
+      getContextUsage: async () => ({
+        totalTokens: 42_000,
+        maxTokens: 200_000,
+      }),
       supportedCommands: async () => [
         {
           name: "review",
@@ -845,7 +849,8 @@ test("the session's text and reasoning stream to ZeroLux while a subagent's stay
   await tick();
   const live = f.calls
     .filter((c) => c.path === "/chat/sessions/link/live")
-    .flatMap((c) => c.body.changes);
+    .flatMap((c) => c.body.changes)
+    .filter((change: { type: string }) => change.type !== "usage");
   expect(live).toEqual([
     { type: "append", item: "msg:0", kind: "thinking", text: "Planning" },
     { type: "done", item: "msg:0" },
@@ -929,4 +934,24 @@ test("a permission is allowed as far as Claude Code suggests, or denied with the
   await decide(2, "deny", { reason: "Not on main" });
   expect(await denied).toEqual({ behavior: "deny", message: "Not on main" });
   expect(created("tool-3").details.scopes).toEqual(["once"]);
+});
+
+test("how full the context is, and the cost so far, reach ZeroLux when a turn ends", async () => {
+  const f = fixture();
+  await f.start();
+  f.state("running");
+  f.emitRaw({ type: "result", subtype: "success", total_cost_usd: 0.25 });
+  f.state("idle");
+  await tick();
+  await tick();
+  const usage = f.calls
+    .filter((c) => c.path === "/chat/sessions/link/live")
+    .flatMap((c) => c.body.changes)
+    .filter((change: { type: string }) => change.type === "usage");
+  expect(usage.at(-1)).toEqual({
+    type: "usage",
+    context_tokens: 42_000,
+    context_window: 200_000,
+    cost_usd: 0.25,
+  });
 });
