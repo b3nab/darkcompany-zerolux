@@ -49,6 +49,7 @@ export const startsHere = (
 export const joinedHarnesses: readonly NewSession["harness"][] = [
   "codex",
   "pi",
+  "claude-code",
 ];
 
 /** One's own joined computers that are online: where one starts sessions besides the kernel's. */
