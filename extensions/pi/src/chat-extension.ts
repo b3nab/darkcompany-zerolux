@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import {
@@ -668,6 +668,7 @@ export default function chatExtension(pi: ExtensionAPI) {
           "input-v1",
           "input-v2",
           "commands-v1",
+          "images-v1",
           "compact-v1",
           ...(installedCode ? ["integration-update-v1"] : []),
         ],
@@ -751,13 +752,27 @@ export default function chatExtension(pi: ExtensionAPI) {
           throw error;
         }
       },
-      input: async (linkId, text, mode) => {
+      input: async (linkId, text, mode, images) => {
         if (
           ![...links.values()].some(
             (link) => link.bridge.connected && link.bridge.sessionId === linkId,
           )
         )
           throw new Error("Unknown or disconnected link");
+        // Read before anything is stopped: an image that cannot be read sends nothing.
+        const attached = await Promise.all(
+          images.map(async (image) => ({
+            type: "image" as const,
+            data: Buffer.from(await readFile(image.path)).toString("base64"),
+            mimeType: image.media_type,
+          })),
+        );
+        const content = attached.length
+          ? [
+              ...(text.trim() ? [{ type: "text" as const, text }] : []),
+              ...attached,
+            ]
+          : text;
         // Interrupting: the running turn stops first, then the input starts the next one.
         if (mode === "interrupt" && !ctx.isIdle()) {
           ctx.abort();
@@ -787,7 +802,7 @@ export default function chatExtension(pi: ExtensionAPI) {
           expandPromptTemplates: true,
         };
         // An extension's command runs at once, without a turn of its own.
-        if (command?.source === "extension") {
+        if (command?.source === "extension" && !attached.length) {
           pi.sendUserMessage(text, options);
           return;
         }
@@ -800,7 +815,7 @@ export default function chatExtension(pi: ExtensionAPI) {
         };
         ownerInputs.add(waiter);
         try {
-          pi.sendUserMessage(text, options);
+          pi.sendUserMessage(content, options);
           for (let waited = 0; waited < 3000 && !seen; waited += 50) {
             await new Promise((resolve) => setTimeout(resolve, 50));
             if (!seen && !ctx.isIdle() && ctx.hasPendingMessages()) return;

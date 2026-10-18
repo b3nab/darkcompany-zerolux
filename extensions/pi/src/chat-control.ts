@@ -2,6 +2,11 @@ import { LocalControl, type NativeSettingsSnapshot } from "@zerolux/bridge";
 
 /** How the owner's input reaches a working session: into its turn, after it, or instead. */
 export type InputMode = "steer" | "queue" | "interrupt";
+/** An image the owner sent with their input, saved by ZeroLux on this host. */
+export interface InputImage {
+  path: string;
+  media_type: string;
+}
 /** A command or skill, and what the owner types to use it. */
 export interface SessionCommand {
   name: string;
@@ -51,7 +56,12 @@ export interface ControlHost {
   /** Stops the native turn in progress, whoever started it, for the owner of a link. */
   interrupt?(linkId: string): Promise<{ interrupted: boolean }>;
   /** The owner's own input for a link's session: native user input, not a chat message. */
-  input?(linkId: string, text: string, mode: InputMode): Promise<void>;
+  input?(
+    linkId: string,
+    text: string,
+    mode: InputMode,
+    images: InputImage[],
+  ): Promise<void>;
   /** The commands and skills pi offers, as the owner types them. */
   commands?(linkId: string): Promise<SessionCommand[]>;
   /** Starts pi's own compaction of a link's session; the session records how it went. */
@@ -106,16 +116,26 @@ export class ChatControl extends LocalControl {
               typeof request.link_id !== "string" ||
               !request.link_id ||
               typeof request.text !== "string" ||
-              !request.text.trim() ||
               !["steer", "queue", "interrupt", undefined].includes(
                 request.mode as string | undefined,
-              )
+              ) ||
+              (request.images !== undefined &&
+                (!Array.isArray(request.images) ||
+                  request.images.some(
+                    (image: InputImage) =>
+                      typeof image?.path !== "string" ||
+                      typeof image.media_type !== "string",
+                  )))
             )
+              throw new Error("Invalid input request");
+            const images = (request.images ?? []) as InputImage[];
+            if (!request.text.trim() && !images.length)
               throw new Error("Invalid input request");
             await host.input(
               request.link_id,
               request.text,
               (request.mode as InputMode | undefined) ?? "steer",
+              images,
             );
             return {};
           }

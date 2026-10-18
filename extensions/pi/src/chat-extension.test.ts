@@ -1063,6 +1063,31 @@ while IFS= read -r line; do :; done
           })
         ).ok,
       ).toBe(true);
+      // Images go with the words, as pi's own image content.
+      const shot = join(root, "shot.png");
+      await writeFile(shot, Buffer.from([1, 2, 3]));
+      const pictured = control({
+        method: "input",
+        link_id: "link-b",
+        text: "what is this?",
+        images: [{ path: shot, media_type: "image/png" }],
+      });
+      for (
+        let i = 0;
+        i < 100 && sent.at(-1)?.content === "/zerolux-chat status";
+        i++
+      )
+        await Bun.sleep(20);
+      const content = [
+        { type: "text", text: "what is this?" },
+        { type: "image", data: "AQID", mimeType: "image/png" },
+      ];
+      expect(sent.at(-1)!.content).toEqual(content as unknown as string);
+      await handlers.get("message_start")!(
+        { message: { role: "user", content } },
+        ctx,
+      );
+      expect((await pictured).ok).toBe(true);
       const offered = await control({ method: "commands", link_id: "link-b" });
       expect(offered.commands).toEqual([
         {
