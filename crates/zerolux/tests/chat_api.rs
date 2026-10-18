@@ -1537,6 +1537,18 @@ async fn the_console_lists_reads_and_organizes_sessions_with_or_without_an_agent
             .status(),
         StatusCode::FORBIDDEN
     );
+    // Input comes in one of three modes.
+    assert_eq!(
+        kernel
+            .post(
+                &format!("/sessions/{}/input", free.session.id),
+                None,
+                json!({"text":"hello","mode":"whenever"}),
+            )
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
     // A new session names its harness.
     assert_eq!(
         kernel

@@ -228,6 +228,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/sessions/{id}/events", get(session_events))
         .route("/sessions/{id}/interrupt", post(interrupt_session))
         .route("/sessions/{id}/input", post(session_input))
+        .route("/sessions/{id}/commands", get(session_commands))
         .route("/sessions/{id}/compact", post(compact_session))
         .route("/actors/{id}/name", post(rename_agent))
         .route(
@@ -922,6 +923,8 @@ async fn compact_session(
 #[serde(deny_unknown_fields)]
 struct InputRequest {
     text: String,
+    #[serde(default)]
+    mode: InputMode,
 }
 
 /// The owner's own input, straight into the native session; not a chat message.
@@ -932,10 +935,23 @@ async fn session_input(
     ChatJson(input): ChatJson<InputRequest>,
 ) -> Result<Json<Value>, ApiFailure> {
     runtime(&state)?
-        .input(&who, &id, &input.text)
+        .input(&who, &id, &input.text, input.mode)
         .await
         .map_err(runtime_error)?;
     Ok(Json(json!({ "sent": true })))
+}
+
+/// The commands and skills the session's harness offers.
+async fn session_commands(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let commands = runtime(&state)?
+        .commands(&who, &id)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "commands": commands })))
 }
 
 #[derive(Deserialize)]
