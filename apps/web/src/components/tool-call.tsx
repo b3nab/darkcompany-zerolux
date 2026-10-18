@@ -211,9 +211,12 @@ export function ExploredCalls({
 export function SubagentCard({
   tool,
   chatTitle,
+  openWork,
 }: {
   tool: ToolBlock;
   chatTitle?: ChatTitle;
+  /** Opens the subagent's own work, step by step, where its harness records it. */
+  openWork?: () => void;
 }) {
   const view = toolView(tool.name, tool.input);
   const outcome = useMemo(
@@ -293,6 +296,15 @@ export function SubagentCard({
           ) : null}
         </div>
       </Reveal>
+      {openWork && (
+        <button
+          type="button"
+          onClick={openWork}
+          className="w-full border-t border-agent/15 px-3 py-1.5 pl-9 text-left font-mono text-[11px] text-agent-foreground/80 transition-colors outline-none hover:bg-agent/10 focus-visible:bg-agent/10"
+        >
+          Open its work →
+        </button>
+      )}
     </div>
   );
 }

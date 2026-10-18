@@ -48,6 +48,7 @@ import {
   sessionBlocks,
   sessionCommand,
   hitKindLabels,
+  useSessionSubagents,
   matchParts,
   useHistorySearch,
   sessionAccess,
@@ -124,6 +125,7 @@ import { ApprovalCard, ApprovalReceipt } from "./Approvals";
 import { sendsOnEnter } from "./ChatView";
 import { useMe } from "./AuthGate";
 import { ChangesPanel, FilesPanel, TerminalPanel } from "./SessionCode";
+import { SubagentList, SubagentPanel } from "./SessionSubagents";
 import { AskOnTheSide, InputActions } from "./SessionFork";
 import { SessionSchedules } from "./SessionSchedules";
 import { SessionTriggers } from "./SessionTriggers";
@@ -216,14 +218,14 @@ const emptyLists: Record<ListView, string> = {
 export function ConsoleList({
   chat,
   actors,
-  owns = true,
+  starts = true,
   busy,
   perform,
 }: {
   chat: Chat;
   actors: Actor[];
-  /** The workspace's owner starts sessions on this computer; the others on their own. */
-  owns?: boolean;
+  /** Sessions start on this computer for its person, or for anyone it is open to. */
+  starts?: boolean;
   busy: boolean;
   perform: Perform;
 }) {
@@ -260,7 +262,7 @@ export function ConsoleList({
     <section aria-label="Console" className="flex min-h-0 flex-1 flex-col">
       <header className="flex items-center justify-between gap-2 px-4 pt-4 pb-3">
         <h2 className="text-lg font-semibold tracking-tight">Console</h2>
-        {owns && (
+        {starts && (
           <Button size="sm" variant="outline" onClick={() => setStarting(true)}>
             <PlusIcon data-icon="inline-start" />
             New session
@@ -517,6 +519,14 @@ export function SessionView({
   const git = useSessionGit(access.read ? session.id : undefined, at);
   const changed = git.status?.changes.length ?? 0;
   const [pane, setPane] = useState<CodePane>();
+  // The subagents it started, each with work of its own to open beside its own.
+  const { subagents = [] } = useSessionSubagents(session.id, at);
+  const [shownSubagent, setShownSubagent] = useState<string>();
+  const subagent = subagents.find((s) => s.id === shownSubagent);
+  const openSubagent = (id: string) => {
+    setShownSubagent(id);
+    setPane("subagent");
+  };
   // The session that started this one, and those this one started, to delegate work.
   const parent = delegatedBy(session, chat.sessions);
   const delegates = delegatedTo(session.id, chat.sessions);
@@ -538,6 +548,8 @@ export function SessionView({
   const note = access.write
     ? (text: string) => chat.input(session.id, text)
     : undefined;
+  const chatTitle = (id: string | null) =>
+    chat.conversations.find((c) => c.id === id)?.title;
   const code =
     access.read &&
     (pane === "changes" ? (
@@ -559,6 +571,14 @@ export function SessionView({
         busy={busy}
         perform={perform}
         send={note}
+        close={() => setPane(undefined)}
+      />
+    ) : pane === "subagent" && subagent ? (
+      <SubagentPanel
+        session={session}
+        subagent={subagent}
+        grown={chat.outputs[session.id]?.end}
+        chatTitle={chatTitle}
         close={() => setPane(undefined)}
       />
     ) : pane === "terminal" && access.write ? (
@@ -632,8 +652,6 @@ export function SessionView({
     // The session and its working state decide; interrupt reads them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, working, access.write]);
-  const chatTitle = (id: string | null) =>
-    chat.conversations.find((c) => c.id === id)?.title;
   return (
     <>
       <SidePanel
@@ -895,6 +913,9 @@ export function SessionView({
                   }
                 />
               )}
+              {about && subagents.length > 0 && (
+                <SubagentList subagents={subagents} open={openSubagent} />
+              )}
               {about && delegates.length > 0 && (
                 <DelegatedSessions sessions={delegates} actors={actors} />
               )}
@@ -943,6 +964,12 @@ export function SessionView({
                   chat.approvals.filter((a) => a.session_id === session.id),
                 )}
                 chatTitle={chatTitle}
+                openSubagent={(toolCallId) => {
+                  const started = subagents.find(
+                    (s) => s.tool_call_id === toolCallId,
+                  );
+                  return started && (() => openSubagent(started.id));
+                }}
                 inputActions={
                   access.write
                     ? (input) => (

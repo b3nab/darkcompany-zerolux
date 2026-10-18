@@ -7,6 +7,8 @@ import { InputActions } from "./SessionFork";
 import { ScheduleForm } from "./SessionSchedules";
 import { GoalCard } from "./SessionGoal";
 import { TriggerForm } from "./SessionTriggers";
+import { SubagentList } from "./SessionSubagents";
+import { SubagentCard } from "@/components/tool-call";
 import { Marked } from "./Console";
 import { SessionBlocks } from "@/components/session-blocks";
 import type { InputBlock } from "@/components/session-blocks";
@@ -222,4 +224,41 @@ test("a session listens for its CI: failures only by default, then the owner's w
   expect(form(true)).toContain("hears of a failure");
   expect(form(true)).toContain(">Fix what failed.</textarea>");
   expect(form(false)).toContain("hears how they went");
+});
+
+test("a subagent's work opens from the call that started it, and from the session's About", () => {
+  const card = (openWork?: () => void) =>
+    renderToStaticMarkup(
+      <SubagentCard
+        tool={{
+          key: "1.0",
+          time: null,
+          kind: "tool",
+          id: "t1",
+          name: "Task",
+          input: { description: "Check the docs", prompt: "Read them all" },
+        }}
+        openWork={openWork}
+      />,
+    );
+  expect(card(() => {})).toContain("Open its work");
+  expect(card()).not.toContain("Open its work");
+  const list = renderToStaticMarkup(
+    <SubagentList
+      subagents={[
+        {
+          id: "a1",
+          name: null,
+          description: "Check the docs",
+          kind: "general-purpose",
+          tool_call_id: "t1",
+          parent_id: null,
+          updated_at: 1,
+        },
+      ]}
+      open={() => {}}
+    />,
+  );
+  expect(list).toContain("general-purpose");
+  expect(list).toContain("Check the docs");
 });

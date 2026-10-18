@@ -53,12 +53,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { useTheme } from "./theme";
 
 /** The panels of a session's code, opened by its owner beside its work. */
-export type CodePane = "changes" | "files" | "terminal";
+export type CodePane = "changes" | "files" | "terminal" | "subagent";
 
 type Git = ReturnType<typeof useSessionGit>;
 
 /** A panel's frame: its title and actions on top, then what it shows, scrolling. */
-function Pane({
+export function Pane({
   title,
   actions,
   close,

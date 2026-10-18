@@ -37,6 +37,7 @@ export function SessionBlocks({
   chatTitle,
   renderApproval,
   inputActions,
+  openSubagent,
 }: {
   blocks: (SessionBlock | ApprovalItem)[];
   /** How a chat is named: inputs say which chat they came from, ZeroLux tools where they wrote. */
@@ -45,6 +46,8 @@ export function SessionBlocks({
   renderApproval?: (approval: Approval) => ReactNode;
   /** What the owner can do from one of the session's inputs, under it. */
   inputActions?: (input: InputBlock) => ReactNode;
+  /** Opens the work of the subagent a tool call started, where there is one to open. */
+  openSubagent?: (toolCallId: string) => (() => void) | undefined;
 }) {
   const fresh = useArrivals(blocks);
   const density = useDensity();
@@ -66,6 +69,7 @@ export function SessionBlocks({
             block={run}
             chatTitle={chatTitle}
             inputActions={inputActions}
+            openSubagent={openSubagent}
           />
         )}
       </div>
@@ -161,10 +165,12 @@ function Block({
   block,
   chatTitle,
   inputActions,
+  openSubagent,
 }: {
   block: SessionBlock;
   chatTitle?: ChatTitle;
   inputActions?: (input: InputBlock) => ReactNode;
+  openSubagent?: (toolCallId: string) => (() => void) | undefined;
 }) {
   switch (block.kind) {
     case "input":
@@ -208,7 +214,11 @@ function Block({
       );
     case "tool":
       return isSubagent(block) ? (
-        <SubagentCard tool={block} chatTitle={chatTitle} />
+        <SubagentCard
+          tool={block}
+          chatTitle={chatTitle}
+          openWork={openSubagent?.(block.id)}
+        />
       ) : (
         <ToolCall tool={block} chatTitle={chatTitle} />
       );
