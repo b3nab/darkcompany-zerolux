@@ -28,7 +28,8 @@ export function InputActions({
   perform,
 }: {
   input: InputBlock;
-  fork: Fork;
+  /** Writing it again in a fork: its person's. */
+  fork?: Fork;
   /** The files as they were before the input; with `dryRun`, only what that would change. */
   rewind?: (at: number, dryRun: boolean) => Promise<FilesRewind>;
   busy: boolean;
@@ -43,7 +44,7 @@ export function InputActions({
         className="flex w-full max-w-[min(40rem,85%)] flex-col gap-2"
         onSubmit={(event) => {
           event.preventDefault();
-          if (editing.trim()) void fork(input.at, editing.trim());
+          if (editing.trim()) void fork?.(input.at, editing.trim());
         }}
       >
         <Textarea
@@ -128,16 +129,18 @@ export function InputActions({
     );
   return (
     <span className="flex gap-1 opacity-0 transition-opacity group-hover/input:opacity-100 focus-within:opacity-100">
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-6 px-2 text-xs text-faint"
-        disabled={busy}
-        onClick={() => setEditing(input.text)}
-      >
-        <PencilIcon data-icon="inline-start" />
-        Edit
-      </Button>
+      {fork && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-xs text-faint"
+          disabled={busy}
+          onClick={() => setEditing(input.text)}
+        >
+          <PencilIcon data-icon="inline-start" />
+          Edit
+        </Button>
+      )}
       {rewind && (
         <Button
           variant="ghost"

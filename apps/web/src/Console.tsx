@@ -22,6 +22,7 @@ import {
   SendIcon,
   SquareIcon,
   SquareTerminalIcon,
+  UsersIcon,
   XIcon,
 } from "lucide-react";
 import {
@@ -46,8 +47,12 @@ import {
   saveDraft,
   sessionBlocks,
   sessionCommand,
+  sessionAccess,
   sessionMatches,
   sessionName,
+  shareChoice,
+  shareLabels,
+  sharedAs,
   delegatedBy,
   delegatedTo,
   sessionOutputAt,
@@ -78,7 +83,9 @@ import type {
   Perform,
   PlanStep,
   QueuedInput,
+  SessionShare,
   SessionUsage,
+  ShareChoice as ShareChoiceValue,
 } from "@zerolux/chat";
 import type { Actor } from "./api";
 import { sessionTone } from "./presence";
@@ -112,7 +119,7 @@ import {
 import { SessionCard, StartSession, resumable, takeable } from "./Team";
 import { ApprovalCard, ApprovalReceipt } from "./Approvals";
 import { sendsOnEnter } from "./ChatView";
-import { useOwner } from "./AuthGate";
+import { useMe } from "./AuthGate";
 import { ChangesPanel, FilesPanel, TerminalPanel } from "./SessionCode";
 import { AskOnTheSide, InputActions } from "./SessionFork";
 import { SessionSchedules } from "./SessionSchedules";
@@ -204,14 +211,18 @@ const emptyLists: Record<ListView, string> = {
 export function ConsoleList({
   chat,
   actors,
+  owns = true,
   busy,
   perform,
 }: {
   chat: Chat;
   actors: Actor[];
+  /** The workspace's owner starts sessions on this computer; the others on their own. */
+  owns?: boolean;
   busy: boolean;
   perform: Perform;
 }) {
+  const { me } = useMe(actors);
   const [view, setView] = useState<ListView>("live");
   const [starting, setStarting] = useState(false);
   // Every word typed is in the session's title, agent, folder, harness or latest line.
@@ -244,10 +255,12 @@ export function ConsoleList({
     <section aria-label="Console" className="flex min-h-0 flex-1 flex-col">
       <header className="flex items-center justify-between gap-2 px-4 pt-4 pb-3">
         <h2 className="text-lg font-semibold tracking-tight">Console</h2>
-        <Button size="sm" variant="outline" onClick={() => setStarting(true)}>
-          <PlusIcon data-icon="inline-start" />
-          New session
-        </Button>
+        {owns && (
+          <Button size="sm" variant="outline" onClick={() => setStarting(true)}>
+            <PlusIcon data-icon="inline-start" />
+            New session
+          </Button>
+        )}
       </header>
       <Dialog open={starting} onOpenChange={setStarting}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
@@ -370,6 +383,20 @@ export function ConsoleList({
                     <span className="shrink-0 font-mono text-[11px] text-faint">
                       {harnessLabels[session.harness] ?? session.harness}
                     </span>
+                    {/* Shared: with everyone, to read or to work in; someone else's, by whom. */}
+                    {session.shared && (
+                      <UsersIcon
+                        aria-label={`Shared to ${session.shared}`}
+                        className="size-3 shrink-0 text-faint"
+                      />
+                    )}
+                    {session.owner_id !== me?.id && (
+                      <span className="truncate font-mono text-[11px] text-faint">
+                        by{" "}
+                        {actors.find((a) => a.id === session.owner_id)?.name ??
+                          "someone"}
+                      </span>
+                    )}
                     {session.output_at && (
                       <span className="ml-auto shrink-0 font-mono text-[11px] text-faint">
                         {ago(session.output_at)}
@@ -451,7 +478,9 @@ export function SessionView({
   const agent = actors.find((a) => a.id === session.actor_id);
   const tone = sessionTone(session);
   const working = tone === "working";
-  const owner = useOwner(actors);
+  const { me } = useMe(actors);
+  // Its person does everything; shared to write, one works in it too; to read, one follows it.
+  const access = sessionAccess(session, me?.id);
   const [about, setAbout] = useState(false);
   // The new title while renaming.
   const [title, setTitle] = useState<string>();
@@ -479,7 +508,7 @@ export function SessionView({
   const density = useDensity();
   const at = sessionOutputAt(chat, session);
   // Its code, for its owner: what git sees, read again as the session writes; the panel open.
-  const git = useSessionGit(owner ? session.id : undefined, at);
+  const git = useSessionGit(access.read ? session.id : undefined, at);
   const changed = git.status?.changes.length ?? 0;
   const [pane, setPane] = useState<CodePane>();
   // The session that started this one, and those this one started, to delegate work.
@@ -499,8 +528,12 @@ export function SessionView({
     });
   const wide = useMedia(XL);
   const toggle = (next: CodePane) => setPane(pane === next ? undefined : next);
+  // Notes on lines go to the session as input: for those who may write to it.
+  const note = access.write
+    ? (text: string) => chat.input(session.id, text)
+    : undefined;
   const code =
-    owner &&
+    access.read &&
     (pane === "changes" ? (
       <ChangesPanel
         session={session}
@@ -509,7 +542,7 @@ export function SessionView({
         revision={at}
         busy={busy}
         perform={perform}
-        send={(text) => chat.input(session.id, text)}
+        send={note}
         close={() => setPane(undefined)}
       />
     ) : pane === "files" ? (
@@ -519,10 +552,10 @@ export function SessionView({
         revision={at}
         busy={busy}
         perform={perform}
-        send={(text) => chat.input(session.id, text)}
+        send={note}
         close={() => setPane(undefined)}
       />
-    ) : pane === "terminal" ? (
+    ) : pane === "terminal" && access.write ? (
       <TerminalPanel
         session={session}
         perform={perform}
@@ -558,7 +591,7 @@ export function SessionView({
   const interrupt = () =>
     void perform(async () => void (await chat.interrupt(session.id)));
   useEffect(() => {
-    if (!working || !owner) return;
+    if (!working || !access.write) return;
     // Esc stops the turn, as in the harness itself, unless a dialog or menu takes it.
     const stop = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
@@ -570,7 +603,7 @@ export function SessionView({
     return () => window.removeEventListener("keydown", stop);
     // The session and its working state decide; interrupt reads them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id, working, owner]);
+  }, [session.id, working, access.write]);
   const chatTitle = (id: string | null) =>
     chat.conversations.find((c) => c.id === id)?.title;
   return (
@@ -662,7 +695,7 @@ export function SessionView({
               choose={setDensity}
               options={Object.entries(densityLabels) as [Density, string][]}
             />
-            {owner && (
+            {access.read && (
               <>
                 <Button
                   variant="outline"
@@ -691,17 +724,19 @@ export function SessionView({
                   <FileSearchIcon data-icon="inline-start" />
                   <span className="max-xl:sr-only">Files</span>
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  aria-pressed={pane === "terminal"}
-                  title="Terminal"
-                  onClick={() => toggle("terminal")}
-                  className="aria-pressed:bg-accent"
-                >
-                  <SquareTerminalIcon data-icon="inline-start" />
-                  <span className="max-xl:sr-only">Terminal</span>
-                </Button>
+                {access.write && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    aria-pressed={pane === "terminal"}
+                    title="Terminal"
+                    onClick={() => toggle("terminal")}
+                    className="aria-pressed:bg-accent"
+                  >
+                    <SquareTerminalIcon data-icon="inline-start" />
+                    <span className="max-xl:sr-only">Terminal</span>
+                  </Button>
+                )}
               </>
             )}
             <Button
@@ -712,7 +747,7 @@ export function SessionView({
             >
               About this session
             </Button>
-            {owner && (
+            {access.mine && (
               <DropdownMenu>
                 <DropdownMenuTrigger
                   render={
@@ -798,7 +833,7 @@ export function SessionView({
                   }
                   // Codex reports no cost: a budget there would never be reached.
                   budget={
-                    owner && session.harness !== "codex"
+                    access.mine && session.harness !== "codex"
                       ? (usd) =>
                           perform(() =>
                             chat.updateSession(session.id, { budget_usd: usd }),
@@ -806,23 +841,36 @@ export function SessionView({
                       : undefined
                   }
                   busy={busy}
-                  stop={() => perform(() => chat.stop(session.id))}
+                  stop={
+                    access.write
+                      ? () => perform(() => chat.stop(session.id))
+                      : undefined
+                  }
                   resume={
-                    resumable(session)
+                    access.write && resumable(session)
                       ? () => perform(() => chat.resume(session.id))
                       : undefined
                   }
                   takeover={
-                    takeable(session)
+                    access.mine && takeable(session)
                       ? () => perform(() => chat.takeoverPi(session.id))
                       : undefined
+                  }
+                />
+              )}
+              {about && access.mine && (
+                <ShareChoice
+                  session={session}
+                  busy={busy}
+                  share={(shared) =>
+                    perform(() => chat.updateSession(session.id, { shared }))
                   }
                 />
               )}
               {about && delegates.length > 0 && (
                 <DelegatedSessions sessions={delegates} actors={actors} />
               )}
-              {about && owner && (
+              {about && access.write && (
                 <SessionSchedules
                   session={session}
                   busy={busy}
@@ -851,11 +899,12 @@ export function SessionView({
                 )}
                 chatTitle={chatTitle}
                 inputActions={
-                  owner
+                  access.write
                     ? (input) => (
                         <InputActions
                           input={input}
-                          fork={fork}
+                          // A fork is its person's; rewinding works the session's files.
+                          fork={access.mine ? fork : undefined}
                           // Claude Code keeps checkpoints of the files; the others do not.
                           rewind={
                             session.harness === "claude-code"
@@ -898,7 +947,7 @@ export function SessionView({
             key={session.id}
             session={session}
             name={name}
-            owner={owner}
+            owner={access.write}
             working={working}
             busy={busy}
             perform={perform}
@@ -918,7 +967,7 @@ export function SessionView({
                 busy={busy}
                 // Codex lets a waiting input change; the other harnesses only show it.
                 change={
-                  session.harness === "codex"
+                  access.write && session.harness === "codex"
                     ? {
                         remove: (item) =>
                           perform(() => chat.removeQueued(session.id, item.id)),
@@ -963,6 +1012,45 @@ export function SessionView({
         </Sheet>
       )}
     </>
+  );
+}
+
+/**
+ * Who else in the workspace sees the session: nobody, everyone to follow it, or everyone to
+ * work in it too, with native input as its person's.
+ */
+function ShareChoice({
+  session,
+  busy,
+  share,
+}: {
+  session: ChatSession;
+  busy: boolean;
+  share: (shared: SessionShare) => Promise<boolean>;
+}) {
+  const choice = shareChoice(session.shared);
+  return (
+    <section
+      aria-label="Share"
+      className="flex flex-wrap items-center gap-3 rounded-lg border p-3"
+    >
+      <h3 className="text-sm font-medium">Share</h3>
+      <Segmented<ShareChoiceValue>
+        label="Shared with the workspace"
+        value={choice}
+        choose={(next) => {
+          if (!busy && next !== choice) void share(sharedAs(next));
+        }}
+        options={Object.entries(shareLabels) as [ShareChoiceValue, string][]}
+      />
+      <p className="w-full text-xs text-faint">
+        {choice === "private"
+          ? "Only you see it."
+          : choice === "read"
+            ? "Everyone in the workspace follows it: its work, code and requests."
+            : "Everyone in the workspace works in it as you do: input, terminals, git and schedules. Its title, budget, sharing, forks and requests stay yours."}
+      </p>
+    </section>
   );
 }
 
@@ -1261,7 +1349,7 @@ function SessionInput({
           disabled={!open}
           placeholder={
             !owner
-              ? "Only the workspace's owner writes to a session"
+              ? "Shared with you to read: you follow it, without writing to it"
               : open
                 ? working
                   ? `Add to ${name}'s turn`
@@ -1385,7 +1473,7 @@ function SessionInput({
             : imagesError
               ? imagesError
               : !owner
-                ? "Its work is open to everyone in the workspace"
+                ? "Shared with you to read"
                 : command?.name === "compact"
                   ? "Summarizes the older work; anything after /compact says what to keep"
                   : started

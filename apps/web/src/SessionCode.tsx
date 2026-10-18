@@ -150,10 +150,14 @@ export function ChangesPanel({
   revision: unknown;
   busy: boolean;
   perform: Perform;
-  /** Writes into the session, as the owner's input. */
-  send: (text: string) => Promise<void>;
+  /**
+   * Writes into the session as input; none for someone it is shared with only to read, who
+   * sees its changes without acting on them.
+   */
+  send?: (text: string) => Promise<void>;
   close: () => void;
 }) {
+  const write = send !== undefined;
   const [open, setOpen] = useState<{ path: string; staged: boolean }>();
   const [discarding, setDiscarding] = useState<string[]>();
   const status = git.status;
@@ -220,14 +224,16 @@ export function ChangesPanel({
           </>
         }
         actions={
-          <ChangeActions
-            change={opened}
-            staged={side}
-            git={git}
-            busy={busy}
-            perform={perform}
-            discard={() => setDiscarding([opened.path])}
-          />
+          write && (
+            <ChangeActions
+              change={opened}
+              staged={side}
+              git={git}
+              busy={busy}
+              perform={perform}
+              discard={() => setDiscarding([opened.path])}
+            />
+          )
         }
         close={close}
       >
@@ -284,16 +290,17 @@ export function ChangesPanel({
         )}
         {status && (
           <>
-            <Branch git={git} busy={busy} perform={perform} />
+            <Branch git={git} write={write} busy={busy} perform={perform} />
             <PullRequestBox
               sessionId={session.id}
               revision={revision}
               pushed={!!status.upstream}
+              write={write}
               busy={busy}
               perform={perform}
             />
             {confirm}
-            {staged.length > 0 && (
+            {write && staged.length > 0 && (
               <Commit
                 count={staged.length}
                 git={git}
@@ -305,6 +312,7 @@ export function ChangesPanel({
               title="Staged"
               changes={staged}
               staged
+              write={write}
               git={git}
               busy={busy}
               perform={perform}
@@ -315,6 +323,7 @@ export function ChangesPanel({
               title="Changes"
               changes={unstaged}
               staged={false}
+              write={write}
               git={git}
               busy={busy}
               perform={perform}
@@ -392,6 +401,7 @@ function ChangeList({
   title,
   changes,
   staged,
+  write,
   git,
   busy,
   perform,
@@ -401,6 +411,8 @@ function ChangeList({
   title: string;
   changes: GitChange[];
   staged: boolean;
+  /** Who may only read sees the changes, without the actions. */
+  write: boolean;
   git: Git;
   busy: boolean;
   perform: Perform;
@@ -415,7 +427,7 @@ function ChangeList({
         <h3 className="flex-1 font-mono text-[11px] tracking-wide text-faint uppercase">
           {title} · {changes.length}
         </h3>
-        {staged ? (
+        {!write ? null : staged ? (
           <Button
             variant="ghost"
             size="sm"
@@ -459,16 +471,18 @@ function ChangeList({
               <Letter letter={staged ? change.staged : change.unstaged} />
               <PathName path={change.path} />
             </button>
-            <span className="flex shrink-0 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
-              <ChangeActions
-                change={change}
-                staged={staged}
-                git={git}
-                busy={busy}
-                perform={perform}
-                discard={() => discard([change.path])}
-              />
-            </span>
+            {write && (
+              <span className="flex shrink-0 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
+                <ChangeActions
+                  change={change}
+                  staged={staged}
+                  git={git}
+                  busy={busy}
+                  perform={perform}
+                  discard={() => discard([change.path])}
+                />
+              </span>
+            )}
           </li>
         ))}
       </ul>
@@ -518,10 +532,13 @@ function Commit({
 /** Where the branch stands against its upstream, and the push that brings it there. */
 function Branch({
   git,
+  write,
   busy,
   perform,
 }: {
   git: Git;
+  /** Pushing is for whoever may write to the session. */
+  write: boolean;
   busy: boolean;
   perform: Perform;
 }) {
@@ -540,7 +557,7 @@ function Branch({
           ? "Not on a remote yet"
           : `${status.upstream} · ${status.ahead} ahead · ${status.behind} behind`}
       </span>
-      {(publish || status.ahead > 0) && (
+      {write && (publish || status.ahead > 0) && (
         <Button
           size="sm"
           variant="outline"
@@ -576,12 +593,15 @@ function PullRequestBox({
   sessionId,
   revision,
   pushed,
+  write,
   busy,
   perform,
 }: {
   sessionId: string;
   revision: unknown;
   pushed: boolean;
+  /** Opening one is for whoever may write to the session. */
+  write: boolean;
   busy: boolean;
   perform: Perform;
 }) {
@@ -662,7 +682,7 @@ function PullRequestBox({
       </section>
     );
   }
-  if (!pushed) return null;
+  if (!pushed || !write) return null;
   if (!draft)
     return (
       <Button
@@ -759,7 +779,8 @@ function NotedLines({
   name: string;
   busy: boolean;
   perform: Perform;
-  send: (text: string) => Promise<void>;
+  /** Notes go to the session as input; without it, the lines are only read. */
+  send?: (text: string) => Promise<void>;
 }) {
   const [chosen, setChosen] = useState<{ from: number; to: number }>();
   const [note, setNote] = useState("");
@@ -778,7 +799,7 @@ function NotedLines({
           rows[range.to]!.line,
           note,
         );
-        if (note.trim())
+        if (note.trim() && send)
           void perform(() => send(text)).then((done) => {
             if (!done) return;
             setNote("");
@@ -841,6 +862,7 @@ function NotedLines({
                 <button
                   type="button"
                   aria-label={`Note on line ${row.line}`}
+                  disabled={!send}
                   onClick={(event) =>
                     setChosen(
                       event.shiftKey && chosen
@@ -848,7 +870,7 @@ function NotedLines({
                         : { from: i, to: i },
                     )
                   }
-                  className="flex shrink-0 text-faint select-none hover:text-foreground"
+                  className="flex shrink-0 text-faint select-none enabled:hover:text-foreground"
                 >
                   {row.numbers.map((number, n) => (
                     <span key={n} className="w-10 pr-1 text-right">
@@ -903,7 +925,7 @@ export function FileDiff({
   name: string;
   busy: boolean;
   perform: Perform;
-  send: (text: string) => Promise<void>;
+  send?: (text: string) => Promise<void>;
 }) {
   const { diff, error } = useSessionDiff(sessionId, path, staged, revision);
   if (error)
@@ -919,8 +941,8 @@ export function FileDiff({
     <div className="flex flex-col gap-2">
       <p className="font-mono text-[11px] text-faint">
         <span className="text-success">+{diff.added}</span>{" "}
-        <span className="text-destructive">−{diff.removed}</span> · choose a
-        line's number to write a note on it
+        <span className="text-destructive">−{diff.removed}</span>
+        {send && " · choose a line's number to write a note on it"}
       </p>
       <NotedLines
         rows={diff.lines.map((line) => ({
@@ -959,7 +981,7 @@ export function FilesPanel({
   revision: unknown;
   busy: boolean;
   perform: Perform;
-  send: (text: string) => Promise<void>;
+  send?: (text: string) => Promise<void>;
   close: () => void;
 }) {
   const [query, setQuery] = useState("");

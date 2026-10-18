@@ -92,7 +92,7 @@ const session = (
   status: ChatSession["status"] = "connected",
 ): ChatSession => ({
   id,
-  owner_id: "owner",
+  owner_id: OWNER,
   shared: null,
   actor_id,
   host_id: null,
@@ -873,6 +873,8 @@ test("the organization shows each person with the agents they own, and what each
   expect(html.indexOf(">Ada<")).toBeGreaterThan(html.indexOf(">Owner<"));
   expect(html).toContain(">2 agents<");
   expect(html).toContain(">1 agent<");
+  // The workspace's owner invites people.
+  expect(html).toContain("Invite people");
   expect(html).not.toContain("retired");
   // The owner's profile opens first and says what each of their agents is doing.
   expect(html).toMatch(/<p[^>]*>Owner<\/p>/);
@@ -1700,6 +1702,66 @@ test("a session's work keeps its requests where they were made, and density sets
   setDensity("detailed");
   expect(work()).toContain("built");
   setDensity("normal");
+});
+
+test("another person's sessions: marked by whom, shared to read or to work in, and their requests theirs", () => {
+  const MAPLE = "0b7c2f1e-0000-4000-8000-0000000000b1";
+  const people: Actor[] = [
+    ...actors,
+    { ...agent(MAPLE, "maple"), kind: "human", invited_by: OWNER },
+  ];
+  const theirs = (shared: ChatSession["shared"]): ChatSession => ({
+    ...session("s-maple", ASPEN),
+    owner_id: MAPLE,
+    shared,
+  });
+  const list = renderToStaticMarkup(
+    <ConsoleList
+      owns={false}
+      busy={false}
+      perform={perform}
+      chat={fakeChat({ sessions: [theirs("read")] })}
+      actors={people}
+    />,
+  );
+  expect(list).toContain("by maple");
+  expect(list).toContain('aria-label="Shared to read"');
+  // Sessions on this computer are its owner's to start.
+  expect(list).not.toContain("New session");
+  const view = (shared: ChatSession["shared"]) =>
+    renderToStaticMarkup(
+      <SessionView
+        session={theirs(shared)}
+        chat={fakeChat({ sessions: [theirs(shared)] })}
+        actors={people}
+        busy={false}
+        perform={perform}
+      />,
+    );
+  // Shared to read: followed, code included, without writing to it.
+  const read = view("read");
+  expect(read).toContain("Shared with you to read");
+  expect(read).toMatch(/<textarea[^>]*disabled/);
+  expect(read).toContain('title="Changes"');
+  expect(read).not.toContain('title="Terminal"');
+  expect(read).not.toContain('aria-label="Session actions"');
+  // Shared to write: worked in as its person does; its title, forks and sharing stay theirs.
+  const write = view("write");
+  expect(write).not.toContain("Shared with you to read");
+  expect(write).toContain('title="Terminal"');
+  expect(write).not.toContain('aria-label="Session actions"');
+  // Its requests wait for its person.
+  const request = renderToStaticMarkup(
+    <ApprovalCard
+      approval={{ ...approval("a1", "pending"), session_id: "s-maple" }}
+      chat={fakeChat({ sessions: [theirs("write")] })}
+      actors={people}
+      busy={false}
+      perform={perform}
+    />,
+  );
+  expect(request).toContain("Waiting for maple to answer.");
+  expect(request).not.toContain("Allow once");
 });
 
 test("a session in the console: its work in the middle, and Interrupt in the box while it works", () => {

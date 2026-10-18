@@ -11,6 +11,7 @@ import {
   approvalLabels,
   scopeLabels,
   scopesOf,
+  sessionAccess,
 } from "@zerolux/chat";
 import type { Approval, Conversation } from "@zerolux/chat";
 import type { Chat, Perform } from "@zerolux/chat";
@@ -18,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ActorMark, Eyebrow } from "@/components/presence";
 import { McpForm, QuestionForm } from "./RequestAnswer";
+import { useMe } from "./AuthGate";
 
 const open = new Set<Approval["status"]>(["pending", "decided", "uncertain"]);
 /** The requests still waiting for a decision or for the agent to receive it. */
@@ -81,6 +83,11 @@ export function ApprovalCard({
 }) {
   const agent =
     actors.find((a) => a.id === approval.actor_id)?.name ?? "An agent";
+  // A session's requests are its person's to answer; the others see whose answer they wait for.
+  const { me } = useMe(actors);
+  const session = chat.sessions.find((s) => s.id === approval.session_id);
+  const mine = !!session && sessionAccess(session, me?.id).mine;
+  const person = actors.find((a) => a.id === session?.owner_id)?.name;
   const conversation = chat.conversations.find(
     (c) => c.id === approval.conversation_id,
   );
@@ -118,6 +125,10 @@ export function ApprovalCard({
       {approval.status !== "pending" ? (
         <p className="text-sm text-muted-foreground">
           {answerSummary(approval)} · {approvalLabels[approval.status]}
+        </p>
+      ) : !mine ? (
+        <p className="text-sm text-muted-foreground">
+          Waiting for {person ?? "the session's person"} to answer.
         </p>
       ) : approval.kind === "permission" ? (
         <PermissionChoice

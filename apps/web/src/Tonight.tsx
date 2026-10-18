@@ -172,7 +172,11 @@ export function Tonight({
                     >
                       Answer
                     </Link>
-                  ) : need.approvalId ? (
+                  ) : need.approvalId &&
+                    // Another person's session waits for its own person.
+                    chat.sessions.some(
+                      (s) => s.id === need.sessionId && s.owner_id === owner.id,
+                    ) ? (
                     <div className="flex shrink-0 gap-1.5">
                       {(["deny", "allow"] as const).map((decision) => (
                         <Button

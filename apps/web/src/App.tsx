@@ -23,7 +23,7 @@ import { cn } from "cn";
 import type { Actor, Workspace } from "./api";
 import { AdministrationPage, MySettingsPage, ProfilePage } from "./Account";
 import { Approvals, openApprovals } from "./Approvals";
-import { useAuthentication } from "./AuthGate";
+import { useAuthentication, useMe } from "./AuthGate";
 import { ChatHome, ChatList, ChatView, NewConversation } from "./ChatView";
 import { CommandMenu } from "./CommandMenu";
 import { ConsoleHome, ConsoleList, SessionView } from "./Console";
@@ -134,7 +134,9 @@ export function App({
 
   const actors = activeActors(workspace?.actors ?? []);
   const needsOnboarding = workspace?.onboarding_required === true;
-  const owner = actors.find((a) => a.kind === "human");
+  // The person signed in, and whether they own the workspace: invitations and this
+  // computer's sessions and agents are the owner's.
+  const { me, owner: owns } = useMe(actors);
   // Hide chat only when the kernel answers without it (an older kernel).
   const chatReady = health?.capabilities.includes("chat-v1") ?? true;
   const capabilities = health?.capabilities ?? [];
@@ -189,7 +191,12 @@ export function App({
     }
   }
 
-  const pending = chat.approvals.filter((a) => a.status === "pending").length;
+  // The requests waiting for me: those of my sessions.
+  const pending = chat.approvals.filter(
+    (a) =>
+      a.status === "pending" &&
+      chat.sessions.some((s) => s.id === a.session_id && s.owner_id === me?.id),
+  ).length;
   const approvals = workspace && (
     <Approvals
       chat={chat}
@@ -237,13 +244,19 @@ export function App({
       />
     </Page>,
   );
-  const agentList = workspace && owner && (
-    <AgentList workspace={workspace} chat={chat} owner={owner} />
+  const agentList = workspace && me && (
+    <AgentList workspace={workspace} chat={chat} owner={me} />
   );
   // A session that is not (or no longer) listed shows the whole console.
   const consoleSession = chat.sessions.find((s) => s.id === consoleId);
   const consoleList = (
-    <ConsoleList chat={chat} actors={actors} busy={busy} perform={perform} />
+    <ConsoleList
+      chat={chat}
+      actors={actors}
+      owns={owns}
+      busy={busy}
+      perform={perform}
+    />
   );
   const consoleHome = section(
     consoleList,
@@ -256,17 +269,22 @@ export function App({
   const agent = actors.find((a) => a.id === agentId && a.kind === "agent");
   const team =
     workspace &&
-    owner &&
+    me &&
     section(
       agentList,
       true,
       <Page>
-        <Team workspace={workspace} chat={chat} owner={owner} hire={hire} />
+        <Team
+          workspace={workspace}
+          chat={chat}
+          owner={me}
+          hire={owns ? hire : undefined}
+        />
       </Page>,
     );
-  const shell = !!workspace && !!owner && !needsOnboarding && chatReady;
+  const shell = !!workspace && !!me && !needsOnboarding && chatReady;
   const sidebar = shell && (
-    <Sidebar chat={chat} owner={owner} kernel={kernel} toggle={toggle} />
+    <Sidebar chat={chat} owner={me} kernel={kernel} toggle={toggle} />
   );
   // In the macOS desktop app the header is the window's title bar: it spans the window,
   // with the native traffic lights in its first 92px, and the rail starts below it.
@@ -418,7 +436,7 @@ export function App({
                 }
               />
             </Page>
-          ) : !owner ? null : !chatReady ? (
+          ) : !me ? null : !chatReady ? (
             <Page>Update the kernel to use chats.</Page>
           ) : (
             <Routes>
@@ -428,7 +446,7 @@ export function App({
                   <Tonight
                     workspace={workspace}
                     chat={chat}
-                    owner={owner}
+                    owner={me}
                     busy={busy}
                     perform={perform}
                     capabilities={capabilities}
@@ -445,7 +463,7 @@ export function App({
                     <NewConversation
                       chat={chat}
                       actors={actors}
-                      ownerId={owner.id}
+                      ownerId={me.id}
                       busy={busy}
                       perform={perform}
                       open={showChat}
@@ -466,7 +484,7 @@ export function App({
                           chat={chat}
                           conversation={conversation}
                           actors={workspace.actors}
-                          ownerId={owner.id}
+                          ownerId={me.id}
                           busy={busy}
                           perform={perform}
                           hire={hire}
@@ -504,7 +522,7 @@ export function App({
                   <Meetings
                     workspace={workspace}
                     chat={chat}
-                    owner={owner}
+                    owner={me}
                     capabilities={capabilities}
                   />
                 }
@@ -547,12 +565,19 @@ export function App({
                   agentList,
                   true,
                   <Page>
-                    <Hire
-                      chat={chat}
-                      actors={workspace.actors}
-                      busy={busy}
-                      perform={perform}
-                    />
+                    {owns ? (
+                      <Hire
+                        chat={chat}
+                        actors={workspace.actors}
+                        busy={busy}
+                        perform={perform}
+                      />
+                    ) : (
+                      <p className="text-sm text-muted-foreground">
+                        This computer's sessions and agents are the workspace
+                        owner's. Yours come from your own computer.
+                      </p>
+                    )}
                   </Page>,
                 )}
               />
@@ -580,7 +605,7 @@ export function App({
                 path="/profile"
                 element={
                   <Page>
-                    <ProfilePage owner={owner} />
+                    <ProfilePage owner={me} />
                   </Page>
                 }
               />

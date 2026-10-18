@@ -585,7 +585,8 @@ export function Team({
   workspace: Workspace;
   chat: Chat;
   owner: Actor;
-  hire: () => void;
+  /** Hiring a session of this computer: the workspace owner's. */
+  hire?: () => void;
 }) {
   const rows = activeActors(workspace.actors)
     .filter((a) => a.kind === "agent" && a.owner_id === owner.id)
@@ -613,7 +614,7 @@ export function Team({
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-4">
           <Eyebrow>Team</Eyebrow>
-          <Button onClick={hire}>Hire an agent</Button>
+          {hire && <Button onClick={hire}>Hire an agent</Button>}
         </div>
         <h1 className="text-2xl font-semibold tracking-tight">Your agents.</h1>
         <p className="text-sm text-muted-foreground">
@@ -1245,7 +1246,8 @@ export function SessionCard({
   /** The session that started it to delegate work to it. */
   delegatedBy?: ReactNode;
   busy: boolean;
-  stop: () => Promise<boolean>;
+  /** Stops it; none for someone who may only read it. */
+  stop?: () => Promise<boolean>;
   /** Stops the turn it is working on; the session stays. */
   interrupt?: () => Promise<boolean>;
   /** A session ZeroLux runs, stopped or needing attention: start it again. */
@@ -1315,52 +1317,53 @@ export function SessionCard({
       {session.attention_reason && (
         <p className="text-xs text-attention">{session.attention_reason}</p>
       )}
-      {!confirming && (takeover || resume || session.status !== "stopped") && (
-        <div className="flex flex-wrap gap-2">
-          {interrupt &&
-            session.status === "connected" &&
-            session.activity === "working" && (
+      {!confirming &&
+        (takeover || resume || (stop && session.status !== "stopped")) && (
+          <div className="flex flex-wrap gap-2">
+            {interrupt &&
+              session.status === "connected" &&
+              session.activity === "working" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void interrupt()}
+                >
+                  Interrupt
+                </Button>
+              )}
+            {takeover && (
               <Button
                 variant="outline"
                 size="sm"
                 disabled={busy}
-                onClick={() => void interrupt()}
+                onClick={() => setConfirming("takeover")}
               >
-                Interrupt
+                Take over
               </Button>
             )}
-          {takeover && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() => setConfirming("takeover")}
-            >
-              Take over
-            </Button>
-          )}
-          {resume && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() => void resume()}
-            >
-              Resume
-            </Button>
-          )}
-          {session.status !== "stopped" && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() => setConfirming("stop")}
-            >
-              Stop
-            </Button>
-          )}
-        </div>
-      )}
+            {resume && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => void resume()}
+              >
+                Resume
+              </Button>
+            )}
+            {stop && session.status !== "stopped" && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => setConfirming("stop")}
+              >
+                Stop
+              </Button>
+            )}
+          </div>
+        )}
       {confirming && (
         <div className="flex flex-col gap-3 rounded-lg bg-attention/10 p-3">
           <p className="text-sm">

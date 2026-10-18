@@ -39,6 +39,7 @@ import {
   receipt,
   receiptLabels,
   saveDraft,
+  sessionAccess,
   threadsOf,
   transcribe,
   unreadIn,
@@ -59,7 +60,7 @@ import type {
 } from "@zerolux/chat";
 import { ApprovalCard, openApprovals } from "./Approvals";
 import { canRecord, useRecorder } from "./recorder";
-import { useOwner } from "./AuthGate";
+import { useMe } from "./AuthGate";
 import { ChatAbout } from "@/components/chat-about";
 import { LiveWork, WorkLine } from "@/components/chat-work";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -345,7 +346,7 @@ export function ChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const owner = useOwner(actors);
+  const { me } = useMe(actors);
   const chatTitle = (id: string | null) =>
     chat.conversations.find((c) => c.id === id)?.title;
   const agents = agentMembers(conversation, actors);
@@ -626,7 +627,7 @@ export function ChatView({
                         toggle={() => toggle(key)}
                         busy={busy}
                         interrupt={
-                          owner
+                          sessionAccess(s, me?.id).write
                             ? () =>
                                 void perform(async () => {
                                   await chat.interrupt(s.id);
