@@ -56,8 +56,8 @@ const empty: Record<Shown, string> = {
 export default function Console() {
   const { workspace, chat, url } = useSession();
   // Sessions start on the kernel's computer: its person's, or open to you.
-  const { me } = useMe();
-  const starts = startsHere(useHosts(url).hosts, me?.id);
+  const { me, owner } = useMe();
+  const starts = startsHere(useHosts(url).hosts, me?.id, owner);
   const router = useRouter();
   const ink = String(useCSSVariable("--color-foreground"));
   const faint = String(useCSSVariable("--color-faint"));

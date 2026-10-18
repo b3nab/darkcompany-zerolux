@@ -72,7 +72,7 @@ export default function MySettings() {
         <Section title="Devices">
           <Devices />
         </Section>
-        <Section title="Hosts">
+        <Section title="Computers">
           <Hosts />
         </Section>
         <Section title="Theme">

@@ -36,8 +36,8 @@ export default function NewChat() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const onLamp = String(useCSSVariable("--color-primary-foreground"));
-  const { me: self } = useMe();
-  const starts = startsHere(useHosts(url).hosts, self?.id);
+  const { me: self, owner } = useMe();
+  const starts = startsHere(useHosts(url).hosts, self?.id, owner);
   const me = self?.id;
   const agents = agentsForChat(actors, chat.sessions, picked);
   const members = kind === "dm" ? picked.slice(0, 1) : picked;

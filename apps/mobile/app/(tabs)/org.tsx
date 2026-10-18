@@ -54,8 +54,8 @@ export default function Org() {
   const ink = String(useCSSVariable("--color-foreground"));
   // Starting an agent commands the kernel: it runs on the kernel's computer, not here.
   // A new agent starts its session on the kernel's computer: its person's, or open to you.
-  const { me } = useMe();
-  const starts = startsHere(useHosts(url).hosts, me?.id);
+  const { me, owner } = useMe();
+  const starts = startsHere(useHosts(url).hosts, me?.id, owner);
   const newAgent = starts ? (
     <Pressable
       onPress={() => router.push("/session/new?agent=new")}
