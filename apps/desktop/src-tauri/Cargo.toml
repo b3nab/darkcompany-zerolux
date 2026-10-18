@@ -18,6 +18,7 @@ reqwest = { workspace = true, features = ["rustls-tls-native-roots"] }
 tempfile = "3"
 clap.workspace = true
 uuid.workspace = true
+tauri-plugin-notification = "2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
