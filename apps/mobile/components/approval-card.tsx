@@ -1,19 +1,38 @@
-import { View } from "react-native";
+import { useState } from "react";
+import { TextInput, View } from "react-native";
 import {
   MessageCircleQuestionMarkIcon,
   ShieldCheckIcon,
   ShieldXIcon,
 } from "lucide-react-native";
 import { useCSSVariable } from "uniwind";
-import { answerSummary, approvalLabels } from "@zerolux/chat";
-import type { Approval, FormAnswer, QuestionAnswer } from "@zerolux/chat";
+import {
+  answerSummary,
+  approvalLabels,
+  scopeLabels,
+  scopesOf,
+} from "@zerolux/chat";
+import type {
+  Approval,
+  ApprovalScope,
+  FormAnswer,
+  QuestionAnswer,
+} from "@zerolux/chat";
 import { ActorMark } from "@/components/member";
 import { McpForm, QuestionForm } from "@/components/request-answer";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 
-/** What an agent asks: a permission, a question or an MCP form. Only the owner answers. */
+export type Decide = (
+  decision: "allow" | "deny",
+  options?: { scope?: ApprovalScope; reason?: string },
+) => void;
+
+/**
+ * What an agent asks: a permission, a question or an MCP form. Only the owner answers: a
+ * permission once, for the session or always, as the request offers, or no with a reason.
+ */
 export function ApprovalCard({
   approval,
   agent,
@@ -24,9 +43,12 @@ export function ApprovalCard({
   approval: Approval;
   agent: string;
   busy: boolean;
-  decide: (decision: "allow" | "deny") => void;
+  decide: Decide;
   answer: (answer: QuestionAnswer | FormAnswer) => void;
 }) {
+  const [reason, setReason] = useState("");
+  const faint = String(useCSSVariable("--color-faint"));
+  const scopes = scopesOf(approval);
   return (
     <View className="gap-3 rounded-md border border-human/40 bg-human/5 p-4">
       <View className="flex-row items-center gap-2.5">
@@ -54,14 +76,37 @@ export function ApprovalCard({
         )
       ) : approval.status === "pending" ? (
         <View className="gap-2">
-          <View className="flex-row gap-2">
-            <Button disabled={busy} onPress={() => decide("allow")}>
-              <Text>Allow</Text>
-            </Button>
+          <View className="flex-row flex-wrap gap-2">
+            {scopes.map((scope, i) => (
+              <Button
+                key={scope}
+                variant={i === 0 ? "default" : "outline"}
+                disabled={busy}
+                onPress={() => decide("allow", { scope })}
+              >
+                <Text>
+                  {scopes.length === 1 ? "Allow" : scopeLabels[scope]}
+                </Text>
+              </Button>
+            ))}
+          </View>
+          <View className="flex-row items-end gap-2">
+            <TextInput
+              value={reason}
+              onChangeText={setReason}
+              placeholder="Why not, if you deny (optional)"
+              placeholderTextColor={faint}
+              maxLength={2000}
+              multiline
+              accessibilityLabel="Reason for denying"
+              className="max-h-24 min-h-10 flex-1 rounded-md border border-input bg-background px-3 py-2 font-sans text-sm text-foreground"
+            />
             <Button
               variant="outline"
               disabled={busy}
-              onPress={() => decide("deny")}
+              onPress={() =>
+                decide("deny", { reason: reason.trim() || undefined })
+              }
             >
               <Text>Deny</Text>
             </Button>
@@ -72,8 +117,7 @@ export function ApprovalCard({
         </View>
       ) : (
         <Text className="text-sm text-muted-foreground">
-          {approval.decision === "allow" ? "Allowed" : "Denied"} ·{" "}
-          {approvalLabels[approval.status]}
+          {answerSummary(approval)} · {approvalLabels[approval.status]}
         </Text>
       )}
     </View>
@@ -84,10 +128,7 @@ export function ApprovalCard({
 export function ApprovalReceipt({ approval }: { approval: Approval }) {
   const human = String(useCSSVariable("--color-human"));
   const permission = approval.kind === "permission";
-  const answer = permission
-    ? approval.decision &&
-      (approval.decision === "allow" ? "Allowed" : "Denied")
-    : answerSummary(approval);
+  const answer = answerSummary(approval);
   const Icon = !permission
     ? MessageCircleQuestionMarkIcon
     : approval.decision === "deny"

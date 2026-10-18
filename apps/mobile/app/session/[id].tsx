@@ -241,8 +241,10 @@ export default function SessionPage() {
                     approval={approval}
                     agent={name}
                     busy={busy}
-                    decide={(decision) =>
-                      void act(() => chat.decide(approval.id, decision))
+                    decide={(decision, options) =>
+                      void act(() =>
+                        chat.decide(approval.id, decision, options),
+                      )
                     }
                     answer={(answer) =>
                       void act(() => chat.answer(approval.id, answer))

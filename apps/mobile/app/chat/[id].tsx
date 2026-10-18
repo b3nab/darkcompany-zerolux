@@ -437,8 +437,8 @@ export default function ChatScreen() {
               approval={item.approval}
               agent={actor(item.approval.actor_id)?.name ?? "An agent"}
               busy={busy}
-              decide={(decision) =>
-                void act(() => chat.decide(item.approval.id, decision))
+              decide={(decision, options) =>
+                void act(() => chat.decide(item.approval.id, decision, options))
               }
               answer={(answer) =>
                 void act(() => chat.answer(item.approval.id, answer))
