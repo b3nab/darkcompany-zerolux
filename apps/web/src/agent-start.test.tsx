@@ -1,28 +1,36 @@
 import { afterEach, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { agentLaunchSettings, setKernelFetch, useChat } from "@zerolux/chat";
-import type { Chat } from "@zerolux/chat";
+import type { Chat, NewSession } from "@zerolux/chat";
 
 afterEach(() => setKernelFetch());
 
-for (const harness of ["claude", "codex", "pi"] as const) {
+/** The chat hook against a fixture kernel, recording every request it makes. */
+function fixture() {
+  const requests: { url: string; init: RequestInit }[] = [];
+  setKernelFetch(async (url, init = {}) => {
+    requests.push({ url, init });
+    return Response.json(
+      url.endsWith("/sessions") && !init.body
+        ? { sessions: [] }
+        : { actor: null, session: { id: "s-1" } },
+    );
+  });
+  let chat: Chat | undefined;
+  function Probe() {
+    // SSR does not run effects or connect realtime; only the chosen action runs.
+    chat = useChat(false, "https://fixture.example.test");
+    return null;
+  }
+  renderToStaticMarkup(<Probe />);
+  return { chat: chat!, requests };
+}
+
+for (const harness of ["claude-code", "codex", "pi"] as const) {
   for (const override of [false, true]) {
     test(`${harness} creation ${override ? "forwards model and effort" : "leaves blank launch choices unset"}`, async () => {
-      const requests: { url: string; init: RequestInit }[] = [];
-      setKernelFetch(async (url, init = {}) => {
-        requests.push({ url, init });
-        return Response.json(
-          url.endsWith("/chat/sessions") ? { sessions: [] } : {},
-        );
-      });
-      let chat: Chat | undefined;
-      function Probe() {
-        // SSR does not run effects or connect realtime; only the chosen action runs.
-        chat = useChat(false, "https://fixture.example.test");
-        return null;
-      }
-      renderToStaticMarkup(<Probe />);
-      const input = {
+      const { chat, requests } = fixture();
+      const common = {
         name: "Agent",
         workspace: "/fixture/project",
         ...agentLaunchSettings(
@@ -30,24 +38,50 @@ for (const harness of ["claude", "codex", "pi"] as const) {
           override ? " high " : " ",
         ),
       };
-      if (harness === "claude")
-        await chat!.startClaude({ ...input, permission_mode: "plan" });
-      else if (harness === "codex") await chat!.startCodex(input);
-      else await chat!.startPi(input);
+      const input: NewSession =
+        harness === "claude-code"
+          ? { harness, ...common, permission_mode: "plan" }
+          : { harness, ...common };
+      await chat.createSession(input);
       expect(requests).toHaveLength(2);
       expect(requests[0]!.url).toBe(
-        `https://fixture.example.test/api/chat/${harness}-sessions`,
+        "https://fixture.example.test/api/sessions",
       );
       expect(requests[0]!.init.method).toBe("POST");
       expect(JSON.parse(requests[0]!.init.body as string)).toEqual({
+        harness,
         name: "Agent",
         workspace: "/fixture/project",
         ...(override ? { model: "fixture-model", effort: "high" } : {}),
-        ...(harness === "claude" ? { permission_mode: "plan" } : {}),
+        ...(harness === "claude-code" ? { permission_mode: "plan" } : {}),
       });
       expect(requests[1]!.url).toBe(
-        "https://fixture.example.test/api/chat/sessions",
+        "https://fixture.example.test/api/sessions",
       );
     });
   }
 }
+
+test("a session opens without an agent, and the owner pins, renames or archives it", async () => {
+  const { chat, requests } = fixture();
+  await chat.createSession({ harness: "pi", workspace: "/fixture/project" });
+  expect(JSON.parse(requests[0]!.init.body as string)).toEqual({
+    harness: "pi",
+    workspace: "/fixture/project",
+  });
+  await chat.attach("found-1");
+  expect(requests[2]!.url).toBe(
+    "https://fixture.example.test/api/sessions/attach",
+  );
+  expect(JSON.parse(requests[2]!.init.body as string)).toEqual({
+    discovered_session_id: "found-1",
+  });
+  await chat.updateSession("s-1", { pinned: true, title: "Release" });
+  const change = requests.at(-1)!;
+  expect(change.url).toBe("https://fixture.example.test/api/sessions/s-1");
+  expect(change.init.method).toBe("PATCH");
+  expect(JSON.parse(change.init.body as string)).toEqual({
+    pinned: true,
+    title: "Release",
+  });
+});
