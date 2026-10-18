@@ -1324,11 +1324,6 @@ async fn create_approval(
     ))
 }
 
-#[derive(Deserialize)]
-struct ApprovalDecision {
-    decision: String,
-}
-
 async fn decide_approval(
     State(store): State<Store>,
     Extension(who): Extension<ChatIdentity>,
@@ -1336,7 +1331,7 @@ async fn decide_approval(
     ChatJson(input): ChatJson<ApprovalDecision>,
 ) -> Result<Json<Value>, Error> {
     Ok(Json(
-        json!({ "approval": store.decide_chat_approval(&who, &id, &input.decision).await? }),
+        json!({ "approval": store.decide_chat_approval(&who, &id, input).await? }),
     ))
 }
 

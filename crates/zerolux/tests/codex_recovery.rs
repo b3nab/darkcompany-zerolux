@@ -398,7 +398,7 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
         .id
         .clone();
     store
-        .decide_chat_approval(&owner, &decided, "allow")
+        .decide_chat_approval(&owner, &decided, decision("allow"))
         .await
         .unwrap();
     runtime.state.lock().unwrap().unloaded = true;
@@ -604,4 +604,12 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
     chat_runtime.shutdown().await.unwrap();
     server.abort();
     livekit.shutdown().await.unwrap();
+}
+
+fn decision(decision: &str) -> zerolux::model::ApprovalDecision {
+    zerolux::model::ApprovalDecision {
+        decision: decision.into(),
+        scope: None,
+        reason: None,
+    }
 }

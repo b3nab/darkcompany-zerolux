@@ -497,6 +497,8 @@ struct ApprovalRow {
     details_json: String,
     status: String,
     decision: Option<String>,
+    scope: Option<String>,
+    reason: Option<String>,
     answer_json: Option<String>,
     last_error: Option<String>,
     created_at: i64,
@@ -528,6 +530,8 @@ async fn approval_in<C: ConnectionTrait>(db: &C, id: &str) -> Result<ChatApprova
         details: decode(&row.details_json)?,
         status: row.status,
         decision: row.decision,
+        scope: row.scope,
+        reason: row.reason,
         answer: row.answer_json.as_deref().map(decode).transpose()?,
         last_error: row.last_error,
         created_at: row.created_at,
@@ -2049,6 +2053,8 @@ impl Store {
             details_json: Set(input.details.to_string()),
             status: Set("pending".into()),
             decision: Set(None),
+            scope: Set(None),
+            reason: Set(None),
             answer_json: Set(None),
             last_error: Set(None),
             created_at: Set(now),
@@ -2069,23 +2075,61 @@ impl Store {
         Ok(result)
     }
 
+    /// The owner's decision on a permission: allowed this once, for the session or always,
+    /// as far as the harness offers (`details.scopes`); or denied, with a reason the session
+    /// hears. The same decision again is no change.
     pub async fn decide_chat_approval(
         &self,
         who: &ChatIdentity,
         id: &str,
-        decision: &str,
+        input: ApprovalDecision,
     ) -> Result<ChatApproval> {
+        let decision = input.decision.as_str();
         if !matches!(decision, "allow" | "deny") {
             return Err(Error::Invalid("Choose allow or deny".into()));
         }
+        let scope = match (decision, input.scope.as_deref()) {
+            ("allow", scope) => Some(scope.unwrap_or("once").to_owned()),
+            (_, None) => None,
+            _ => {
+                return Err(Error::Invalid(
+                    "Only an allowed permission has a scope".into(),
+                ));
+            }
+        };
+        let reason = match (decision, input.reason.map(|given| given.trim().to_owned())) {
+            ("deny", Some(given)) if !given.is_empty() => {
+                Some(text(&given, "Reason", 2_000, true)?)
+            }
+            ("allow", Some(given)) if !given.is_empty() => {
+                return Err(Error::Invalid("Only a denial has a reason".into()));
+            }
+            _ => None,
+        };
         let tx = self.write().await?;
         owner_in(&tx, who).await?;
         let existing = approval_in(&tx, id).await?;
         if existing.kind != "permission" {
             return Err(Error::Invalid("Answer this request instead".into()));
         }
+        if let Some(scope) = &scope {
+            let offered = existing.details["scopes"]
+                .as_array()
+                .map(|scopes| scopes.iter().any(|offered| offered == scope.as_str()))
+                .unwrap_or(scope == "once");
+            if !offered {
+                return Err(Error::Invalid(format!(
+                    "This harness does not offer to allow it {}",
+                    match scope.as_str() {
+                        "session" => "for the session",
+                        "always" => "always",
+                        _ => "once",
+                    }
+                )));
+            }
+        }
         if let Some(previous) = &existing.decision {
-            return if previous == decision {
+            return if previous == decision && existing.scope == scope && existing.reason == reason {
                 Ok(existing)
             } else {
                 Err(Error::Conflict)
@@ -2100,6 +2144,8 @@ impl Store {
                 tool_approvals::Column::Decision,
                 Expr::value(Some(decision)),
             )
+            .col_expr(tool_approvals::Column::Scope, Expr::value(scope))
+            .col_expr(tool_approvals::Column::Reason, Expr::value(reason))
             .col_expr(tool_approvals::Column::UpdatedAt, Expr::value(now_ms()))
             .filter(tool_approvals::Column::Id.eq(id))
             .exec(&tx)

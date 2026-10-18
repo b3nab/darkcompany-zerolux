@@ -867,7 +867,7 @@ async fn renewing_an_owned_link_keeps_deliveries_approvals_and_permission_mode()
             .unwrap();
         if state != "pending" {
             f.store
-                .decide_chat_approval(&f.owner, &approval.id, "allow")
+                .decide_chat_approval(&f.owner, &approval.id, decision("allow"))
                 .await
                 .unwrap();
         }
@@ -1648,7 +1648,7 @@ async fn a_session_asks_the_owner_without_a_chat() {
     ));
     let decided = f
         .store
-        .decide_chat_approval(&f.owner, &approval.id, "allow")
+        .decide_chat_approval(&f.owner, &approval.id, decision("allow"))
         .await
         .unwrap();
     assert_eq!(decided.decision.as_deref(), Some("allow"));
@@ -1682,7 +1682,7 @@ async fn the_owner_answers_a_question_within_what_it_offers() {
     assert_eq!(question.kind, "question");
     assert!(matches!(
         f.store
-            .decide_chat_approval(&f.owner, &question.id, "allow")
+            .decide_chat_approval(&f.owner, &question.id, decision("allow"))
             .await,
         Err(Error::Invalid(_))
     ));
@@ -1772,7 +1772,7 @@ async fn approvals_require_owner_decision_and_native_dispatch_is_never_replayed(
     assert!(f.store.chat_approvals(&birch_id).await.unwrap().is_empty());
     assert!(matches!(
         f.store
-            .decide_chat_approval(&aspen_id, &approval.id, "allow")
+            .decide_chat_approval(&aspen_id, &approval.id, decision("allow"))
             .await,
         Err(Error::Forbidden)
     ));
@@ -1783,16 +1783,16 @@ async fn approvals_require_owner_decision_and_native_dispatch_is_never_replayed(
         Err(Error::Conflict)
     ));
     f.store
-        .decide_chat_approval(&f.owner, &approval.id, "deny")
+        .decide_chat_approval(&f.owner, &approval.id, decision("deny"))
         .await
         .unwrap();
     f.store
-        .decide_chat_approval(&f.owner, &approval.id, "deny")
+        .decide_chat_approval(&f.owner, &approval.id, decision("deny"))
         .await
         .unwrap();
     assert!(matches!(
         f.store
-            .decide_chat_approval(&f.owner, &approval.id, "allow")
+            .decide_chat_approval(&f.owner, &approval.id, decision("allow"))
             .await,
         Err(Error::Conflict)
     ));
@@ -1867,7 +1867,7 @@ async fn approvals_require_owner_decision_and_native_dispatch_is_never_replayed(
     assert!(closed.decision.is_none());
     assert!(matches!(
         reopened
-            .decide_chat_approval(&f.owner, &closed.id, "allow")
+            .decide_chat_approval(&f.owner, &closed.id, decision("allow"))
             .await,
         Err(Error::Conflict)
     ));
@@ -2773,4 +2773,81 @@ async fn the_owner_names_pins_and_archives_a_session() {
             .await,
         Err(Error::Forbidden)
     ));
+}
+
+fn decision(decision: &str) -> ApprovalDecision {
+    ApprovalDecision {
+        decision: decision.into(),
+        scope: None,
+        reason: None,
+    }
+}
+
+#[tokio::test]
+async fn a_permission_is_allowed_as_far_as_the_harness_offers_or_denied_with_a_reason() {
+    let f = Fixture::new().await;
+    let (_aspen, aspen_id) = f.hire("aspen", None).await;
+    let ask = |native: &str, scopes: serde_json::Value| {
+        let id = Uuid::new_v4().to_string();
+        let store = f.store.clone();
+        let who = aspen_id.clone();
+        let native = native.to_owned();
+        async move {
+            store
+                .create_chat_approval(
+                    &who,
+                    CreateChatApproval {
+                        id: id.clone(),
+                        delivery_id: None,
+                        native_request_id: native,
+                        kind: "permission".into(),
+                        summary: "Run tests".into(),
+                        details: json!({"scopes": scopes}),
+                    },
+                )
+                .await
+                .unwrap();
+            id
+        }
+    };
+    let decide = |id: &str, decision: &str, scope: Option<&str>, reason: Option<&str>| {
+        let (store, owner, id) = (f.store.clone(), f.owner.clone(), id.to_owned());
+        let input = ApprovalDecision {
+            decision: decision.into(),
+            scope: scope.map(Into::into),
+            reason: reason.map(Into::into),
+        };
+        async move { store.decide_chat_approval(&owner, &id, input).await }
+    };
+    let first = ask("tool-1", json!(["once", "session"])).await;
+    assert!(matches!(
+        decide(&first, "allow", Some("always"), None).await,
+        Err(Error::Invalid(_))
+    ));
+    assert!(matches!(
+        decide(&first, "allow", None, Some("because")).await,
+        Err(Error::Invalid(_))
+    ));
+    let allowed = decide(&first, "allow", Some("session"), None)
+        .await
+        .unwrap();
+    assert_eq!(allowed.scope.as_deref(), Some("session"));
+    // The same decision again changes nothing; another one conflicts.
+    decide(&first, "allow", Some("session"), None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        decide(&first, "allow", None, None).await,
+        Err(Error::Conflict)
+    ));
+    let second = ask("tool-2", json!(null)).await;
+    assert!(matches!(
+        decide(&second, "allow", Some("session"), None).await,
+        Err(Error::Invalid(_))
+    ));
+    let denied = decide(&second, "deny", None, Some("  Not on main  "))
+        .await
+        .unwrap();
+    assert_eq!(denied.reason.as_deref(), Some("Not on main"));
+    assert_eq!(denied.scope, None);
 }

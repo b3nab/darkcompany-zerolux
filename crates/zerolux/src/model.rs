@@ -479,10 +479,28 @@ pub struct ChatApproval {
     pub status: String,
     /// A permission's decision.
     pub decision: Option<String>,
+    /// How far an allowed permission goes: "once", "session" or "always".
+    pub scope: Option<String>,
+    /// Why the owner denied it.
+    pub reason: Option<String>,
     /// The owner's answer to a question or a form.
     pub answer: Option<serde_json::Value>,
     pub last_error: Option<String>,
     pub created_at: i64,
+}
+
+/// The owner's decision on a permission.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalDecision {
+    /// "allow" or "deny".
+    pub decision: String,
+    /// For "allow": "once" (the default), "session" or "always", as the request offers.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// For "deny": why, for the session.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
