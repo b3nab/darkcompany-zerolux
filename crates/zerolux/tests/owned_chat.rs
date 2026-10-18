@@ -880,3 +880,85 @@ async fn an_explicit_sdk_executable_must_be_an_absolute_existing_file_before_any
         kernel.shutdown().await;
     }
 }
+
+/// A Claude Code session on a person's computer joined to the workspace: the kernel issues it,
+/// that computer launches its runner and binds it to the kernel, and settings and Stop reach
+/// it over the computer's channel.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_claude_session_runs_on_a_joined_computer() {
+    let fixture = Fixture::new();
+    let kernel = Kernel::start(&fixture, 0).await;
+    let runtime = kernel.runtime.clone().unwrap();
+    let root = fixture.dir.path();
+    let linked = kernel.api("/hosts/link", Some(json!({}))).await;
+    let host = linked["host"]["id"].as_str().unwrap().to_owned();
+    let joined = root.join("joined");
+    zerolux::host_link::join(
+        &kernel.url,
+        linked["code"].as_str().unwrap(),
+        "Laptop",
+        &joined,
+    )
+    .await
+    .unwrap();
+    let config = zerolux::host_link::HostConfig::load(&joined).unwrap();
+    let (tell, told) = tokio::sync::mpsc::unbounded_channel();
+    let computer = zerolux::host_runtime::HostRuntime::with_runners(
+        config.url.clone(),
+        joined.join("links"),
+        None,
+        fixture.program.clone(),
+        tell,
+    );
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let connected = tokio::spawn(zerolux::host_link::run_with(
+        config, stopped, computer, told,
+    ));
+    for _ in 0..100 {
+        if runtime.hosts.online(&host).await {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let started = kernel
+        .api(
+            "/sessions",
+            Some(
+                json!({"harness":"claude-code", "workspace":root.join("workspace"),
+                "host": host, "permission_mode":"plan"}),
+            ),
+        )
+        .await;
+    let session = started["session"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(started["session"]["host_id"], host);
+    assert_eq!(started["session"]["created"], true);
+    let rows = fixture.wait_trace(|rows| count(rows, "start") == 1).await;
+    assert_eq!(count(&rows, "input"), 0, "nothing is sent on its behalf");
+    kernel
+        .wait(&format!("/sessions/{session}"), |data| {
+            data["session"]["status"] == "connected"
+        })
+        .await;
+    // Its settings are read and changed there, through the computer.
+    let view = kernel
+        .api(&format!("/sessions/{session}/settings"), None)
+        .await;
+    assert_eq!(view["values"]["permission_mode"], "plan");
+    kernel
+        .api(&format!("/sessions/{session}/stop"), Some(json!({})))
+        .await;
+    stop.send_replace(true);
+    connected.await.unwrap().unwrap();
+    // The runners this test's computer launched end with it.
+    if let Ok(entries) = std::fs::read_dir(joined.join("links/claude")) {
+        for entry in entries.flatten() {
+            if let Ok(bytes) = std::fs::read(entry.path())
+                && let Ok(record) = serde_json::from_slice::<Value>(&bytes)
+                && let Some(pid) = record["pid"].as_i64()
+            {
+                let _ = killpg(Pid::from_raw(pid as i32), Signal::SIGKILL);
+            }
+        }
+    }
+    kernel.shutdown().await;
+}

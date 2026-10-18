@@ -60,9 +60,36 @@ impl HostRuntime {
         notices: mpsc::UnboundedSender<Value>,
     ) -> Arc<Self> {
         #[cfg(unix)]
-        let program = crate::claude_runner::RunnerProgram::default();
+        return Self::with_runners(
+            url,
+            links,
+            codex,
+            crate::claude_runner::RunnerProgram::default(),
+            notices,
+        );
         #[cfg(not(unix))]
-        let _ = links;
+        {
+            let _ = links;
+            Arc::new(Self {
+                url,
+                codex,
+                pending: Mutex::default(),
+                running: Mutex::default(),
+                wake: broadcast::channel(16).0,
+                notices,
+            })
+        }
+    }
+
+    /// With harness runners of its own choosing, such as a test's.
+    #[cfg(unix)]
+    pub fn with_runners(
+        url: String,
+        links: std::path::PathBuf,
+        codex: Option<String>,
+        program: crate::claude_runner::RunnerProgram,
+        notices: mpsc::UnboundedSender<Value>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             #[cfg(unix)]
             pi: crate::pi_runner::Registry::new(links.join("pi"), program.clone()),
@@ -267,10 +294,14 @@ impl HostRuntime {
     #[cfg(unix)]
     async fn claude_launch(&self, params: Value) -> Result<Value> {
         let workspace = params["workspace"].as_str().context("Choose a folder")?;
-        ensure!(
-            std::path::Path::new(workspace).is_dir(),
-            "This folder is not on this computer"
-        );
+        // The folder as this computer names it, as its runner records it.
+        let workspace = std::fs::canonicalize(workspace)
+            .ok()
+            .filter(|folder| folder.is_dir())
+            .context("This folder is not on this computer")?
+            .to_string_lossy()
+            .into_owned();
+        let workspace = workspace.as_str();
         let mode: crate::model::ClaudePermissionMode =
             serde_json::from_value(params["mode"].clone()).context("Invalid permission mode")?;
         let settings = &params["settings"];
@@ -289,7 +320,7 @@ impl HostRuntime {
                 &crate::homes::Homes::own(),
             )
             .await?;
-        Ok(json!({"launched": true}))
+        Ok(json!({"launched": true, "workspace": workspace}))
     }
 
     #[cfg(unix)]

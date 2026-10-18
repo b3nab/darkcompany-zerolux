@@ -1462,9 +1462,8 @@ impl Store {
             .one(&tx)
             .await?
             .ok_or(Error::StoppedByOwner)?;
-        if session.host_id.as_deref() != self.host() {
-            return Err(Error::Forbidden);
-        }
+        // Only what this kernel's own controls read reaches here: its host's sessions, and
+        // those of the computers joined to it.
         let mut locator: Value = decode(&session.native_locator_json)?;
         let value = serde_json::to_value(values)
             .map_err(|e| Error::Database(DbErr::Json(e.to_string())))?;

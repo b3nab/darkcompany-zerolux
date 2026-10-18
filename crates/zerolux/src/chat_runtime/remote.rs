@@ -459,6 +459,22 @@ impl ChatRuntime {
         let mode = input.permission_mode.unwrap_or_default();
         let native = uuid::Uuid::new_v4().to_string();
         let initial = json!({"model": input.model, "effort": input.effort});
+        // The computer launches the runner first, in its folder as it names it; the kernel
+        // then issues the session, and the runner binds to it.
+        let launched = self
+            .hosts
+            .call(
+                host,
+                "claude.launch",
+                json!({"native": native, "workspace": input.workspace, "mode": mode,
+                    "system_prompt": "claude_code", "settings": initial}),
+            )
+            .await?;
+        let workspace = launched["workspace"]
+            .as_str()
+            .context("The computer did not name the folder")?
+            .to_owned();
+        let place = json!({"native": native, "workspace": workspace, "mode": mode});
         let issued = self
             .store
             .hire_chat_session(
@@ -469,29 +485,29 @@ impl ChatRuntime {
                     harness: Harness::ClaudeCode,
                     native_session_id: native.clone(),
                     title: "Claude Code".into(),
-                    workspace: input.workspace.clone(),
+                    workspace,
                     native_locator: json!({"kind":"claude-runner","permission_mode":mode,
                         "system_prompt":"claude_code","initial_settings":initial}),
                     resume: false,
                 },
             )
-            .await?;
+            .await;
+        let issued = match issued {
+            Ok(issued) => issued,
+            Err(error) => {
+                let mut stop = place.clone();
+                stop["session_id"] = json!("");
+                let _ = self.hosts.call(host, "claude.stop", stop).await;
+                return Err(error.into());
+            }
+        };
         self.store.place_session(&issued.session.id, host).await?;
         self.changed();
-        let place = json!({"native": native, "workspace": input.workspace, "mode": mode});
-        let started = async {
-            let mut launch = place.clone();
-            launch["system_prompt"] = json!("claude_code");
-            launch["settings"] = initial.clone();
-            self.hosts.call(host, "claude.launch", launch).await?;
-            let mut bind = place.clone();
-            bind["session_id"] = json!(issued.session.id);
-            bind["token"] = json!(issued.token);
-            bind["resume"] = json!(false);
-            self.hosts.call(host, "claude.bind", bind).await
-        }
-        .await;
-        if let Err(error) = started {
+        let mut bind = place.clone();
+        bind["session_id"] = json!(issued.session.id);
+        bind["token"] = json!(issued.token);
+        bind["resume"] = json!(false);
+        if let Err(error) = self.hosts.call(host, "claude.bind", bind).await {
             self.store
                 .fail_chat_link(who, &issued.session.id, crate::chat::LINK_FAILED)
                 .await?;
