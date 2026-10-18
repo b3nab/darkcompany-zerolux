@@ -38,8 +38,8 @@ test("a call to a given kernel ignores the current one", async () => {
     return Response.json({});
   }) as unknown as typeof fetch;
   setKernelUrl("http://b:4310");
-  await request("http://a:4310/", "/chat/sessions");
-  expect(urls).toEqual(["http://a:4310/api/chat/sessions"]);
+  await request("http://a:4310/", "/sessions");
+  expect(urls).toEqual(["http://a:4310/api/sessions"]);
 });
 
 test("a file is sent as it is, with its own type", async () => {

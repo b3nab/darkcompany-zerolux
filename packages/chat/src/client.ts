@@ -81,12 +81,14 @@ export const errorMessage = (error: unknown) =>
 export const api = <T>(path: string, body?: unknown, signal?: AbortSignal) =>
   request<T>(base, path, body, signal);
 
-/** A call to one given kernel, whatever the current one is. */
+/** A call to one given kernel, whatever the current one is: GET without a body, else POST
+ * unless `method` says otherwise. */
 export async function request<T>(
   kernel: string,
   path: string,
   body?: unknown,
   signal?: AbortSignal,
+  method?: "PATCH",
 ): Promise<T> {
   // A file goes as it is, with its own type; anything else as JSON.
   const file = body instanceof Blob;
@@ -95,7 +97,7 @@ export async function request<T>(
   const response = await fetchKernel(
     `${kernel.replace(/\/+$/, "")}/api${path}`,
     {
-      method: body === undefined ? "GET" : "POST",
+      method: method ?? (body === undefined ? "GET" : "POST"),
       headers: {
         ...(body === undefined
           ? {}
