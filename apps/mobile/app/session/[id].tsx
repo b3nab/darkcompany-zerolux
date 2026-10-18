@@ -959,8 +959,7 @@ function About({
         <GoalSection session={session} />
         <ForkSession session={session} close={close} />
         <Schedules session={session} />
-        {/* The kernel reads CI in the folder on its own computer only. */}
-        {access.here ? <CiTrigger session={session} /> : null}
+        <CiTrigger session={session} />
         <UsageFacts sessionId={session.id} />
         <SessionCard session={session} name={name} facts />
       </ScrollView>

@@ -33,7 +33,7 @@ export default function DiffPage() {
   const insets = useSafeAreaInsets();
   const session = chat.sessions.find((s) => s.id === id);
   // Following a shared session shows the diff; working in it stages and comments.
-  const { write, here } = useAccess(session);
+  const { write } = useAccess(session);
   const { diff, error: readError } = useSessionDiff(
     id,
     path,
@@ -68,8 +68,7 @@ export default function DiffPage() {
           : path
       }
       action={
-        // Staging changes its folder, there only on the kernel's computer.
-        write && here ? (
+        write ? (
           <Button
             size="sm"
             variant="ghost"
