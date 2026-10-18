@@ -1,4 +1,4 @@
-import type { ToolBlock } from "./session-events";
+import type { SessionBlock, ToolBlock } from "./session-events";
 
 /**
  * A tool call as it is drawn: what kind of work it is, with its fields ready, the same for pi,
@@ -621,4 +621,69 @@ export function toolState(
   return tool.result.error || (exit !== 0 && !empty) || outcome?.timedOut
     ? "error"
     : "done";
+}
+
+/** The plan a session laid out last (TodoWrite, update_plan): its steps as they stand now. */
+export function latestPlan(blocks: SessionBlock[]): PlanStep[] | undefined {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i]!;
+    if (block.kind !== "tool") continue;
+    const view = toolView(block.name, block.input);
+    if (view.kind === "plan") return view.steps;
+  }
+  return undefined;
+}
+
+/** A subagent's call: its work is drawn as a card of its own, not as a line among tools. */
+export const isSubagent = (tool: ToolBlock) =>
+  toolView(tool.name, tool.input).kind === "agent";
+
+/** Tools run one after another, in a few words: "Ran 3 commands · edited 2 files · read 4 files". */
+export function toolsPhrase(tools: ToolBlock[]): string {
+  const count = {
+    commands: 0,
+    reads: 0,
+    searches: 0,
+    web: 0,
+    messages: 0,
+    mcp: 0,
+    plans: 0,
+    other: 0,
+  };
+  const edited = new Set<string>();
+  for (const tool of tools) {
+    const view = toolView(tool.name, tool.input);
+    if (view.kind === "command") count.commands++;
+    else if (view.kind === "edit" || view.kind === "write")
+      edited.add(view.path);
+    else if (view.kind === "patch")
+      view.files.forEach((file) => edited.add(file));
+    else if (view.kind === "read") count.reads++;
+    else if (view.kind === "search") count.searches++;
+    else if (view.kind === "web") count.web++;
+    else if (view.kind === "zerolux") count.messages++;
+    else if (view.kind === "mcp") count.mcp++;
+    else if (view.kind === "plan") count.plans++;
+    else count.other++;
+  }
+  const part = (n: number, one: string, many: string) =>
+    n ? `${n} ${n === 1 ? one : many}` : "";
+  const parts = [
+    part(count.commands, "command", "commands") &&
+      `ran ${part(count.commands, "command", "commands")}`,
+    part(edited.size, "file", "files") &&
+      `edited ${part(edited.size, "file", "files")}`,
+    part(count.reads, "file", "files") &&
+      `read ${part(count.reads, "file", "files")}`,
+    part(count.searches, "search", "searches"),
+    part(count.web, "web lookup", "web lookups"),
+    part(count.messages, "ZeroLux message", "ZeroLux messages"),
+    part(count.mcp, "MCP tool", "MCP tools") &&
+      `called ${part(count.mcp, "MCP tool", "MCP tools")}`,
+    count.plans ? "updated the plan" : "",
+    part(count.other, "tool", "tools") &&
+      `used ${part(count.other, "tool", "tools")}`,
+  ].filter(Boolean);
+  const phrase = parts.join(" · ");
+  return phrase && phrase[0]!.toUpperCase() + phrase.slice(1);
 }

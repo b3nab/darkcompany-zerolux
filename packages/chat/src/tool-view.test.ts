@@ -5,11 +5,13 @@ import {
   diffLines,
   exploration,
   exploredPhrase,
+  latestPlan,
   plainLine,
   toolItems,
   toolOutcome,
   toolState,
   toolView,
+  toolsPhrase,
 } from "./tool-view";
 
 test("a command reads the same from Claude Code, pi and a Codex script", () => {
@@ -315,4 +317,36 @@ test("a tool's state: refused, failed, or a search that found nothing and is don
       ),
     ),
   ).toBe("denied");
+});
+
+test("a run of tools in a few words, and the plan as it stands now", () => {
+  expect(
+    toolsPhrase([
+      call("Bash", { command: "bun test" }),
+      call("Bash", { command: "ls" }),
+      call("Edit", { file_path: "a.ts", old_string: "a", new_string: "b" }),
+      call("Write", { file_path: "a.ts", content: "c" }),
+      call("Read", { file_path: "b.ts" }),
+      call("mcp__zerolux__send", { chat: "c", text: "Done" }),
+    ]),
+  ).toBe("Ran 2 commands · edited 1 file · read 1 file · 1 ZeroLux message");
+  expect(
+    toolsPhrase([
+      call("mcp__browser__navigate", { url: "http://127.0.0.1/" }),
+      call("mcp__browser__screenshot", {}),
+      call("TodoWrite", { todos: [] }),
+      call("ToolSearch", { query: "browser" }),
+    ]),
+  ).toBe("Called 2 MCP tools · updated the plan · used 1 tool");
+  const plan = (status: string) =>
+    call("TodoWrite", { todos: [{ content: "Fix", status }] });
+  expect(
+    latestPlan([
+      { key: "1", time: null, kind: "text", text: "Starting" },
+      plan("in_progress"),
+      { key: "2", time: null, kind: "text", text: "More" },
+      { ...plan("completed"), key: "3" },
+    ]),
+  ).toEqual([{ text: "Fix", status: "done" }]);
+  expect(latestPlan([])).toBeUndefined();
 });
