@@ -113,13 +113,14 @@ fn validate_choice(value: &str, field: &str) -> Result<(), Error> {
 }
 
 impl AgentSettings {
-    pub(crate) fn fields(&self) -> [(&'static str, Option<&str>); 5] {
+    pub(crate) fn fields(&self) -> [(&'static str, Option<&str>); 6] {
         [
             ("model", self.model.as_deref()),
             ("effort", self.effort.as_deref()),
             ("permission_mode", self.permission_mode.as_deref()),
             ("approval_policy", self.approval_policy.as_deref()),
             ("sandbox", self.sandbox.as_deref()),
+            ("collaboration_mode", self.collaboration_mode.as_deref()),
         ]
     }
 
@@ -158,6 +159,9 @@ pub(crate) fn codex_values(settings: &Value) -> AgentSettings {
             Some("dangerFullAccess") => Some("danger-full-access".into()),
             _ => native_policy(sandbox),
         },
+        collaboration_mode: settings["collaborationMode"]["mode"]
+            .as_str()
+            .map(str::to_owned),
     }
 }
 

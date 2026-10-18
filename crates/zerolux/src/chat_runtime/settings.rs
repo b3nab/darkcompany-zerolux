@@ -415,6 +415,7 @@ fn actor_settings(actor: &Actor) -> AgentSettings {
         permission_mode: actor.permission_mode.clone(),
         approval_policy: actor.approval_policy.clone(),
         sandbox: actor.sandbox.clone(),
+        collaboration_mode: None,
     }
 }
 

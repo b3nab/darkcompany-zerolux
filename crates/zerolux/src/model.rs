@@ -39,6 +39,9 @@ pub struct AgentSettings {
     pub approval_policy: Option<String>,
     #[serde(default)]
     pub sandbox: Option<String>,
+    /// Codex's collaboration mode: "plan" to plan before acting, or "default".
+    #[serde(default)]
+    pub collaboration_mode: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

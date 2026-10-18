@@ -46,6 +46,7 @@ impl CodexSettings {
                 ("effort", "reasoningEffort"),
                 ("approvalPolicy", "approvalPolicy"),
                 ("sandboxPolicy", "sandbox"),
+                ("collaborationMode", "collaborationMode"),
             ] {
                 if let Some(value) = native.get(source) {
                     current[target] = value.clone();
@@ -255,7 +256,7 @@ impl CodexSettings {
         let models = models(&self.rpc).await?;
         let mut editable = Vec::new();
         if *self.ready.borrow() {
-            editable.extend(["model".into(), "effort".into()]);
+            editable.extend(["model".into(), "effort".into(), "collaboration_mode".into()]);
             if self.turn.borrow().is_none() {
                 editable.extend(["approval_policy".into(), "sandbox".into()]);
             }
@@ -319,6 +320,17 @@ impl CodexSettings {
             && patch.sandbox != before.values.sandbox
         {
             params["sandboxPolicy"] = value;
+        }
+        // Planning first, or acting: Codex's mode for the next turns, with the model and
+        // effort they run with.
+        if let Some(mode) = &patch.collaboration_mode
+            && patch.collaboration_mode != before.values.collaboration_mode
+        {
+            params["collaborationMode"] = json!({"mode": mode, "settings": {
+                "model": patch.model.as_ref().or(before.values.model.as_ref()),
+                "reasoning_effort": patch.effort.as_ref().or(before.values.effort.as_ref()),
+                "developer_instructions": null,
+            }});
         }
         let permissions_changed =
             params.get("approvalPolicy").is_some() || params.get("sandboxPolicy").is_some();

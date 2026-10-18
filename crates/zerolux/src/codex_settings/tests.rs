@@ -375,3 +375,31 @@ async fn the_queue_is_read_taken_back_and_rewritten_in_codex() {
         json!([{"type":"text","text":"only this"}])
     );
 }
+
+#[tokio::test]
+async fn plan_mode_goes_to_codex_with_the_model_and_effort_it_runs_with() {
+    let idle = Fixture::new(false, false, "applied").await;
+    assert!(
+        idle.control
+            .read()
+            .await
+            .unwrap()
+            .editable
+            .contains(&"collaboration_mode".to_owned())
+    );
+    let _ = idle
+        .control
+        .apply(
+            &AgentSettings {
+                collaboration_mode: Some("plan".into()),
+                ..AgentSettings::default()
+            },
+            false,
+        )
+        .await;
+    let update = idle.calls("thread/settings/update");
+    assert_eq!(
+        update[0]["params"]["collaborationMode"],
+        json!({"mode":"plan","settings":{"model":"one","reasoning_effort":"low","developer_instructions":null}})
+    );
+}

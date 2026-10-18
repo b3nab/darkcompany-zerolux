@@ -1320,6 +1320,11 @@ impl Store {
             .await?
             .ok_or(Error::NotFound)?;
         let harness = actor.harness.as_deref().unwrap_or_default();
+        if input.collaboration_mode.is_some() {
+            return Err(Error::Invalid(
+                "Plan mode belongs to a running Codex session, not to an agent's defaults".into(),
+            ));
+        }
         let value = |field: Option<String>,
                      label: &str,
                      allowed: &[&str]|
