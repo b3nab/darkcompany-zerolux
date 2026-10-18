@@ -888,6 +888,34 @@ impl ChatRuntime {
 
     async fn relink(&self, backoff: bool) -> Result<()> {
         let owner = self.store.chat_identity(None).await?;
+        // A pi whose integration restarted (reloaded for an update, or crashed) no longer
+        // has the control its link went through: the link is lost, though nobody said so.
+        for session in self.store.sessions(&owner).await?.into_iter().filter(|s| {
+            s.stopped_at.is_none()
+                && s.status == "connected"
+                && s.harness == "pi"
+                && s.host_id.as_deref() == self.store.host()
+        }) {
+            let locator = self.store.chat_session_locator(&owner, &session.id).await?;
+            if locator["descriptor"]
+                .as_str()
+                .is_some_and(|path| !std::path::Path::new(path).exists())
+            {
+                self.store
+                    .set_chat_session_status(
+                        &owner,
+                        &session.id,
+                        ChatSessionStatus {
+                            status: "attention".into(),
+                            reason: Some(
+                                "pi restarted its ZeroLux integration; linking it again".into(),
+                            ),
+                        },
+                    )
+                    .await?;
+                self.changed();
+            }
+        }
         let linked = self.store.sessions(&owner).await?;
         // This host's sessions only: their native processes are here.
         for session in linked.into_iter().filter(|s| {
