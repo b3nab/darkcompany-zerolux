@@ -10,6 +10,7 @@ import {
   errorMessage,
   folderName,
   harnessLabels,
+  sessionComputer,
   sessionName,
   sessionState,
   sessionTone,
@@ -69,7 +70,9 @@ export function SessionRow({
   asks?: Approval;
 }) {
   const organize = useOrganize(session);
-  const { workspace, chat } = useSession();
+  const { workspace, chat, hosts } = useSession();
+  // On a joined computer, the row says which.
+  const computer = sessionComputer(session, hosts.hosts);
   const faint = String(useCSSVariable("--color-faint"));
   const unseen = attention === "unseen";
   // A session another started works for it: the row says which.
@@ -134,6 +137,7 @@ export function SessionRow({
                 className="shrink font-mono text-[11px] text-faint"
               >
                 {harnessLabels[session.harness] ?? session.harness}
+                {computer ? ` · on ${computer.name}` : ""}
                 {person ? ` · by ${person}` : ""}
               </Text>
               <View className="ml-auto flex-row items-center gap-1">
@@ -384,7 +388,7 @@ const takeable = (s: ChatSession) =>
 
 /**
  * One session of an agent with its controls: Interrupt, Take over, Stop and Resume, and with
- * `facts` its harness, folder and who started it. Stop asks first: it ends the link and
+ * `facts` its harness, folder, the joined computer it runs on and who started it. Stop asks first: it ends the link and
  * cancels a turn only this chat started.
  */
 export function SessionCard({
@@ -396,7 +400,8 @@ export function SessionCard({
   name: string;
   facts?: boolean;
 }) {
-  const { chat } = useSession();
+  const { chat, hosts } = useSession();
+  const computer = sessionComputer(session, hosts.hosts);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const perform = async (action: () => Promise<unknown>) => {
@@ -488,6 +493,13 @@ export function SessionCard({
           <Fact label="Folder">
             <Text className="font-mono text-xs">{session.workspace}</Text>
           </Fact>
+          {computer ? (
+            <Fact label="Computer">
+              <Text className="text-sm">
+                {computer.name} · {computer.online ? "online" : "offline"}
+              </Text>
+            </Fact>
+          ) : null}
           <Fact label="Started by">
             <Text className="text-sm">
               {session.origin === "owned" ? "ZeroLux" : "You, then hired"}

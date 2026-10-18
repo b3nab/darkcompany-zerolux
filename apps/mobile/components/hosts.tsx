@@ -9,7 +9,6 @@ import {
   errorMessage,
   joinCommand,
   useHostJoining,
-  useHosts,
 } from "@zerolux/chat";
 import type { Host, HostLink } from "@zerolux/chat";
 import { Row } from "@/components/settings";
@@ -24,9 +23,8 @@ import { useMe } from "../src/me";
  * with a code and remove.
  */
 export function Hosts() {
-  const { workspace, url } = useSession();
+  const { workspace, url, hosts } = useSession();
   const { me } = useMe();
-  const hosts = useHosts(url);
   const router = useRouter();
   const [error, setError] = useState("");
   const [link, setLink] = useState<HostLink>();

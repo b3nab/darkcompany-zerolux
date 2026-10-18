@@ -17,6 +17,7 @@ import {
   setKernelFetch,
   setKernelUrl,
   useChat,
+  useHosts,
   useStorage,
 } from "@zerolux/chat";
 import type {
@@ -47,6 +48,8 @@ interface Kernel {
 interface Session {
   url: string;
   actors: Actor[];
+  /** The workspace's computers, read with the workspace: whose, open, online. */
+  hosts: ReturnType<typeof useHosts>;
   name(actorId: string | null): string;
   chat: Chat;
   workspace: Workspace | undefined;
@@ -80,6 +83,8 @@ function Connected({ url, children }: { url: string; children: ReactNode }) {
   }>();
   const capabilities = enabled ? (health?.capabilities ?? []) : [];
   const chat = useChat(enabled);
+  const hosts = useHosts(url, enabled);
+  const readHosts = hosts.reload;
   const storage = useStorage(enabled && capabilities.includes("storage-v1"));
   const guard = auth?.guard;
   useEffect(() => guard?.(chat.canLeave), [guard, chat.canLeave]);
@@ -117,18 +122,20 @@ function Connected({ url, children }: { url: string; children: ReactNode }) {
       );
     };
     void read();
-    const timer = setInterval(read, 5000);
+    // Nothing tells when a computer connects or leaves: its hosts are read with it.
+    const timer = setInterval(() => void read().then(readHosts), 5000);
     return () => {
       current = false;
       clearInterval(timer);
     };
-  }, [enabled, chat.conversations, chat.sessions]);
+  }, [enabled, chat.conversations, chat.sessions, readHosts]);
   const actors = enabled ? (workspace?.actors ?? []) : [];
   return (
     <SessionContext
       value={{
         url,
         actors,
+        hosts,
         name: (id) => actors.find((actor) => actor.id === id)?.name ?? "…",
         chat,
         workspace: enabled ? workspace : undefined,

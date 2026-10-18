@@ -9,8 +9,7 @@ import {
   errorMessage,
   harnessLabels,
   liveSessions,
-  startsHere,
-  useHosts,
+  startsAnywhere,
 } from "@zerolux/chat";
 import type { Conversation } from "@zerolux/chat";
 import { ActorMark } from "@/components/member";
@@ -27,7 +26,7 @@ type Kind = keyof typeof kinds;
 
 /** A new chat, with one agent or a group: each agent through one of its live sessions. */
 export default function NewChat() {
-  const { chat, actors, url } = useSession();
+  const { chat, actors, hosts } = useSession();
   const router = useRouter();
   const [kind, setKind] = useState<Kind>("dm");
   const [picked, setPicked] = useState<string[]>([]);
@@ -37,7 +36,7 @@ export default function NewChat() {
   const [error, setError] = useState("");
   const onLamp = String(useCSSVariable("--color-primary-foreground"));
   const { me: self, owner } = useMe();
-  const starts = startsHere(useHosts(url).hosts, self?.id, owner);
+  const starts = startsAnywhere(hosts.hosts, self?.id, owner);
   const me = self?.id;
   const agents = agentsForChat(actors, chat.sessions, picked);
   const members = kind === "dm" ? picked.slice(0, 1) : picked;
@@ -99,7 +98,7 @@ export default function NewChat() {
             Start a new one here, or hire the sessions you already use from
             ZeroLux on your computer; they appear here.
           </Text>
-          {/* Agents start on the kernel's computer: its person's, or open to you. */}
+          {/* Agents start on the kernel's computer, if yours or open to you, or on one of your own. */}
           {starts ? (
             <Button
               className="self-start"

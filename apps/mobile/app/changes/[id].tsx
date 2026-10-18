@@ -76,7 +76,9 @@ export default function ChangesPage() {
   const muted = String(useCSSVariable("--color-muted-foreground"));
   const session = chat.sessions.find((s) => s.id === id);
   // Following a shared session shows its code; working in it changes it.
-  const { write } = useAccess(session);
+  // Its folder changes from here only on the kernel's computer.
+  const access = useAccess(session);
+  const write = access.write && access.here;
   const git = useSessionGit(id, session?.output_at, url);
   const pr = useSessionPullRequest(id, session?.output_at, url);
   const [message, setMessage] = useState("");

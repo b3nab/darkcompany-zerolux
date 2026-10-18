@@ -73,6 +73,7 @@ import {
   tokenCount,
   usdCost,
   useSessionLive,
+  sessionComputer,
   useSessionSettings,
 } from "@zerolux/chat";
 import type {
@@ -323,7 +324,7 @@ export default function SessionPage() {
               ) : null}
             </Pressable>
           ) : null}
-          {access.write ? (
+          {access.write && access.here ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Terminal"
@@ -467,7 +468,7 @@ function Composer({
   children?: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
-  const { chat, url } = useSession();
+  const { chat, url, hosts } = useSession();
   const { write } = useAccess(session);
   const stop = useInterrupt(session);
   const harnessCommands = useSessionCommands(session.id, url);
@@ -540,10 +541,11 @@ function Composer({
       setSending(false);
     }
   };
-  // Claude Code in a terminal only takes words, into the running turn.
-  const choosable = !(
-    session.harness === "claude-code" && session.origin !== "owned"
-  );
+  // Claude Code in a terminal only takes words, into the running turn; photos reach
+  // sessions on the kernel's computer only.
+  const choosable =
+    !(session.harness === "claude-code" && session.origin !== "owned") &&
+    !sessionComputer(session, hosts.hosts);
   const filled = Boolean(draft.trim() || photos.length);
   const interrupting = !filled && stop.allowed;
   const room = MAX_INPUT_IMAGES - photos.length;
@@ -957,7 +959,8 @@ function About({
         <GoalSection session={session} />
         <ForkSession session={session} close={close} />
         <Schedules session={session} />
-        <CiTrigger session={session} />
+        {/* The kernel reads CI in the folder on its own computer only. */}
+        {access.here ? <CiTrigger session={session} /> : null}
         <UsageFacts sessionId={session.id} />
         <SessionCard session={session} name={name} facts />
       </ScrollView>

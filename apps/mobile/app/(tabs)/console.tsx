@@ -13,8 +13,7 @@ import {
   matchParts,
   sessionMatches,
   sessionOutputAt,
-  startsHere,
-  useHosts,
+  startsAnywhere,
   useHistorySearch,
   useSeen,
 } from "@zerolux/chat";
@@ -54,10 +53,10 @@ const empty: Record<Shown, string> = {
  * The pen starts a new session, with or without an agent.
  */
 export default function Console() {
-  const { workspace, chat, url } = useSession();
+  const { workspace, chat, url, hosts } = useSession();
   // Sessions start on the kernel's computer: its person's, or open to you.
   const { me, owner } = useMe();
-  const starts = startsHere(useHosts(url).hosts, me?.id, owner);
+  const starts = startsAnywhere(hosts.hosts, me?.id, owner);
   const router = useRouter();
   const ink = String(useCSSVariable("--color-foreground"));
   const faint = String(useCSSVariable("--color-faint"));

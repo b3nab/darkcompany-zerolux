@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Pressable, ScrollView, Switch, View } from "react-native";
 import {
   agentLaunchSettings,
@@ -12,8 +12,11 @@ import {
   recentFolders,
   useSessionCatalog,
   accountReady,
+  joinedHarnesses,
+  ownComputers,
+  sessionComputer,
+  startsHere,
   useHostAccounts,
-  useHosts,
 } from "@zerolux/chat";
 import type {
   ClaudeMode,
@@ -41,20 +44,36 @@ type Startable = keyof typeof startable;
 const NEW = "new";
 
 /**
- * A new session the kernel starts in a folder on its own computer: on its own, for a new
- * agent, or as another session of an existing one; then it opens. What is left unset follows
- * the harness's own configuration. From the Org tab it starts with a new agent.
+ * A new session the kernel starts in a folder on its own computer, or on one of yours joined
+ * to the workspace: on its own, for a new agent, or as another session of an existing one;
+ * then it opens. What is left unset follows the harness's own configuration. From the Org tab
+ * it starts with a new agent.
  */
 export default function NewSessionScreen() {
-  const { chat, actors, url } = useSession();
-  // On a computer open to you, sessions run with your own accounts: they come first.
+  const { chat, actors, url, hosts } = useSession();
   const { me } = useMe();
-  const here = useHosts(url).hosts?.find((h) => h.here);
-  const guest = here && here.person_id !== me?.id ? here : undefined;
+  // Where it runs: the kernel's computer, if yours or open to you, or one of yours online.
+  const reloadHosts = hosts.reload;
+  useEffect(() => void reloadHosts(), [reloadHosts]);
+  const here = hosts.hosts?.find((h) => h.here);
+  const hereAllowed = startsHere(hosts.hosts, me?.id, true);
+  const computers = ownComputers(hosts.hosts, me?.id);
+  const [place, setPlace] = useState("");
+  const elsewhere =
+    computers.find((c) => c.id === place) ??
+    (hereAllowed ? undefined : computers[0]);
+  // On the kernel's computer open to you, sessions run with your own accounts: they come first.
+  const guest =
+    !elsewhere && here && here.person_id !== me?.id ? here : undefined;
   const accounts = useHostAccounts(guest?.id, url);
   const router = useRouter();
   const params = useLocalSearchParams<{ agent?: string }>();
-  const [harness, setHarness] = useState<Startable>("claude-code");
+  const [chosen, setHarness] = useState<Startable>("claude-code");
+  // A joined computer runs only some harnesses so far.
+  const harness =
+    elsewhere && !joinedHarnesses.includes(chosen)
+      ? joinedHarnesses[0]!
+      : chosen;
   const [agent, setAgent] = useState(params.agent === NEW ? NEW : "");
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
@@ -76,12 +95,32 @@ export default function NewSessionScreen() {
     catalog.data?.models ?? [],
     model || existing?.model,
   ).slice(0, 2);
-  const folders = recentFolders(chat.sessions);
+  const folders = recentFolders(
+    chat.sessions.filter(
+      (s) => sessionComputer(s, hosts.hosts)?.id === elsewhere?.id,
+    ),
+  );
   const label = harnessLabels[harness];
   const unconnected = Boolean(
     guest && accounts.accounts && !accountReady(accounts.accounts, harness),
   );
-  const ready = workspace.trim().length > 0 && !unconnected;
+  const ready =
+    workspace.trim().length > 0 && !unconnected && (hereAllowed || !!elsewhere);
+  const chooseHarness = (next: Startable) => {
+    setHarness(next);
+    if (agent !== NEW) setAgent("");
+    setModel("");
+    setEffort("");
+    setMode("default");
+    setPolicy("");
+    setSandbox("");
+  };
+  const choosePlace = (id: string) => {
+    setPlace(id);
+    setWorktree(undefined);
+    if (id && !joinedHarnesses.includes(harness))
+      chooseHarness(joinedHarnesses[0]!);
+  };
 
   async function start() {
     if (!ready) return;
@@ -107,6 +146,7 @@ export default function NewSessionScreen() {
               ...common,
               ...(policy ? { approval_policy: policy } : {}),
               ...(sandbox ? { sandbox } : {}),
+              ...(elsewhere ? { host: elsewhere.id } : {}),
             };
     try {
       const { session } = await chat.createSession(input);
@@ -125,22 +165,42 @@ export default function NewSessionScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <Text className="text-sm text-muted-foreground">
-          ZeroLux starts it in a folder on the kernel's computer and opens it
-          here. What you write to it reaches it as yours.
+          ZeroLux starts it in a folder on{" "}
+          {elsewhere?.name ?? "the kernel's computer"} and opens it here. What
+          you write to it reaches it as yours.
         </Text>
+        {computers.length ? (
+          <View className="gap-2">
+            <Choice
+              label="Where"
+              options={Object.fromEntries(computers.map((c) => [c.id, c.name]))}
+              value={elsewhere?.id ?? ""}
+              onChange={choosePlace}
+              none={
+                hereAllowed
+                  ? (here?.name ?? "The kernel's computer")
+                  : undefined
+              }
+            />
+            {elsewhere ? (
+              <Text className="text-xs text-muted-foreground">
+                Only Codex runs on your other computers so far, with their own
+                Codex and its settings.
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
         <Choice
           label="Harness"
-          options={startable}
+          options={
+            elsewhere
+              ? Object.fromEntries(
+                  joinedHarnesses.map((h) => [h, startable[h]]),
+                )
+              : startable
+          }
           value={harness}
-          onChange={(next) => {
-            if (next) setHarness(next);
-            if (agent !== NEW) setAgent("");
-            setModel("");
-            setEffort("");
-            setMode("default");
-            setPolicy("");
-            setSandbox("");
-          }}
+          onChange={(next) => next && chooseHarness(next)}
         />
         <Choice
           label="Agent"
@@ -198,27 +258,29 @@ export default function NewSessionScreen() {
             </View>
           ) : null}
         </View>
-        <View className="gap-2">
-          <View className="flex-row items-center gap-3">
-            <Text className="flex-1 text-sm font-medium">
-              In a new worktree
-            </Text>
-            <Switch
-              value={worktree !== undefined}
-              onValueChange={(on) => setWorktree(on ? "" : undefined)}
-            />
+        {elsewhere ? null : (
+          <View className="gap-2">
+            <View className="flex-row items-center gap-3">
+              <Text className="flex-1 text-sm font-medium">
+                In a new worktree
+              </Text>
+              <Switch
+                value={worktree !== undefined}
+                onValueChange={(on) => setWorktree(on ? "" : undefined)}
+              />
+            </View>
+            {worktree !== undefined ? (
+              <Input
+                value={worktree}
+                onChangeText={setWorktree}
+                placeholder="Branch, or ZeroLux names one"
+                autoCapitalize="none"
+                autoCorrect={false}
+                className="font-mono"
+              />
+            ) : null}
           </View>
-          {worktree !== undefined ? (
-            <Input
-              value={worktree}
-              onChangeText={setWorktree}
-              placeholder="Branch, or ZeroLux names one"
-              autoCapitalize="none"
-              autoCorrect={false}
-              className="font-mono"
-            />
-          ) : null}
-        </View>
+        )}
         {launchFields.map(({ key, label, options }) => (
           <SettingSelect
             key={key}

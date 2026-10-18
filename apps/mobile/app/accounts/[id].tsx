@@ -9,7 +9,6 @@ import {
   errorMessage,
   piProviders,
   useHostAccounts,
-  useHosts,
 } from "@zerolux/chat";
 import type { DeviceCode } from "@zerolux/chat";
 import { Screen } from "@/components/screen";
@@ -25,8 +24,8 @@ import { useSession } from "../../src/kernel";
  */
 export default function AccountsPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { url } = useSession();
-  const host = useHosts(url).hosts?.find((h) => h.id === id);
+  const { url, hosts } = useSession();
+  const host = hosts.hosts?.find((h) => h.id === id);
   const accounts = useHostAccounts(id, url);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");

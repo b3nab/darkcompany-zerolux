@@ -10,8 +10,7 @@ import {
   shiftLabels,
   shiftSegments,
   shiftWindow,
-  startsHere,
-  useHosts,
+  startsAnywhere,
 } from "@zerolux/chat";
 import type { Actor, MemberTone, ShiftSegment } from "@zerolux/chat";
 import { ActorMark } from "@/components/member";
@@ -48,14 +47,14 @@ const role = (actor: Actor) =>
  * owners' hierarchy; they have none of their own.
  */
 export default function Org() {
-  const { workspace, chat, url } = useSession();
+  const { workspace, chat, hosts } = useSession();
   const router = useRouter();
   const [view, setView] = useState<Mode>("everyone");
   const ink = String(useCSSVariable("--color-foreground"));
   // Starting an agent commands the kernel: it runs on the kernel's computer, not here.
-  // A new agent starts its session on the kernel's computer: its person's, or open to you.
+  // A new agent starts its session on the kernel's computer, if yours or open to you, or on one of your own.
   const { me, owner } = useMe();
-  const starts = startsHere(useHosts(url).hosts, me?.id, owner);
+  const starts = startsAnywhere(hosts.hosts, me?.id, owner);
   const newAgent = starts ? (
     <Pressable
       onPress={() => router.push("/session/new?agent=new")}

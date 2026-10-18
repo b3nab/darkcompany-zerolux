@@ -2,6 +2,7 @@ import {
   activeActors,
   requiresSignIn,
   sessionAccess,
+  sessionComputer,
   whoAmI,
 } from "@zerolux/chat";
 import type { ChatSession } from "@zerolux/chat";
@@ -23,10 +24,18 @@ export function useMe() {
   };
 }
 
-/** What you may do with a session: follow it, work in it, or everything its person does. */
+/**
+ * What you may do with a session: follow it, work in it, or everything its person does. `here`:
+ * it runs on the kernel's computer, whose folder, terminals and forks are reached from here;
+ * on a joined computer they stay there.
+ */
 export function useAccess(session: ChatSession | undefined) {
   const { me } = useMe();
+  const { hosts } = useSession();
   return session
-    ? sessionAccess(session, me?.id)
-    : { mine: false, read: false, write: false };
+    ? {
+        ...sessionAccess(session, me?.id),
+        here: !sessionComputer(session, hosts.hosts),
+      }
+    : { mine: false, read: false, write: false, here: false };
 }

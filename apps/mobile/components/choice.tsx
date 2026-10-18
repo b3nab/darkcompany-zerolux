@@ -12,7 +12,7 @@ export function Choice<T extends string>({
   disabled = false,
 }: {
   label: string;
-  options: Record<T, string>;
+  options: Partial<Record<T, string>>;
   value: T | "";
   onChange: (next: T | "") => void;
   none?: string;
@@ -39,7 +39,7 @@ export function Choice<T extends string>({
       <Text className="text-sm font-medium">{label}</Text>
       <View className="flex-row flex-wrap gap-1.5">
         {none ? chip("", none) : null}
-        {(Object.keys(options) as T[]).map((key) => chip(key, options[key]))}
+        {(Object.keys(options) as T[]).map((key) => chip(key, options[key]!))}
       </View>
     </View>
   );
