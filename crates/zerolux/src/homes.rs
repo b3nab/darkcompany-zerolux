@@ -7,6 +7,27 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+/// Credentials a harness would take from its environment: never a guest's.
+const CREDENTIALS: [&str; 17] = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GROQ_API_KEY",
+    "XAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "MISTRAL_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+];
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Homes {
     /// None for the computer's own.
@@ -75,6 +96,21 @@ impl Homes {
             env.push(("PI_CODING_AGENT_DIR", pi));
         }
         env
+    }
+
+    /// A harness process of this person's: a guest's runs with their folders and accounts and
+    /// without any credential of the kernel's environment; the computer's keeps it.
+    pub fn apply<'a>(
+        &self,
+        command: &'a mut tokio::process::Command,
+    ) -> &'a mut tokio::process::Command {
+        if self.is_guest() {
+            for name in CREDENTIALS {
+                command.env_remove(name);
+            }
+            command.envs(crate::accounts::claude_env(self));
+        }
+        command.envs(self.env())
     }
 
     /// The guest's folders exist, private to the kernel's user.

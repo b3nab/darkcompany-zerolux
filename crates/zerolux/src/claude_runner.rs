@@ -220,8 +220,8 @@ impl Registry {
         homes: &crate::homes::Homes,
     ) -> Result<String> {
         let mut command = tokio::process::Command::new(&self.program.bun);
-        command
-            .envs(homes.env())
+        homes
+            .apply(&mut command)
             .arg(&self.program.entry)
             .arg("fork")
             .arg(native);
@@ -260,6 +260,8 @@ impl Registry {
         }
         let log = private_file(&self.path.join(format!("{native_id}.log")), true)?;
         let mut command = tokio::process::Command::new(&self.program.bun);
+        // A guest's harness, with their folders and accounts: never the computer's.
+        homes.apply(&mut command);
         command
             .arg(
                 self.program
@@ -268,8 +270,6 @@ impl Registry {
                     .context("Claude runner entrypoint is unavailable")?,
             )
             .current_dir(workspace)
-            // A guest's Claude Code, with their account: never the computer's.
-            .envs(homes.env())
             .env("ZEROLUX_RUNNER_REGISTRY", self.path.canonicalize()?)
             .env("ZEROLUX_NATIVE_SESSION", native_id)
             .env("ZEROLUX_WORKSPACE", workspace)

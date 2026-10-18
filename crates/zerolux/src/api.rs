@@ -319,6 +319,19 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/chat/deliveries/{id}/receipt", post(delivery_receipt))
         .route("/hosts", get(list_hosts))
         .route("/hosts/{id}", axum::routing::patch(change_host))
+        .route("/hosts/{id}/accounts", get(host_accounts))
+        .route(
+            "/hosts/{id}/accounts/claude-code",
+            axum::routing::put(set_claude_account),
+        )
+        .route(
+            "/hosts/{id}/accounts/codex",
+            post(set_codex_account).delete(clear_codex_account),
+        )
+        .route(
+            "/hosts/{id}/accounts/pi",
+            axum::routing::put(set_pi_account),
+        )
         .route("/invites", get(list_invites).post(create_invite))
         .route("/invites/{id}", axum::routing::delete(revoke_invite))
         .route("/chat/approvals", get(approvals).post(create_approval))
@@ -561,6 +574,14 @@ fn runtime(state: &AppState) -> Result<Arc<ChatRuntime>, ApiFailure> {
     state.runtime.clone().ok_or_else(|| {
         ApiFailure(Box::new((StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "Native session and LiveKit services are not running in this kernel" }))).into_response()))
     })
+}
+
+/// What could not be done, said as it is.
+fn said(error: anyhow::Error) -> ApiFailure {
+    match error.downcast::<Error>() {
+        Ok(error) => error.into(),
+        Err(error) => Error::Invalid(format!("{error:#}")).into(),
+    }
 }
 
 fn runtime_error(error: anyhow::Error) -> ApiFailure {
@@ -2522,6 +2543,75 @@ async fn change_host(
     Ok(Json(
         json!({ "host": store.change_host(&who, &id, change).await? }),
     ))
+}
+
+/// The harness folders of a guest on this kernel's host, where their accounts are kept.
+async fn guest_homes(
+    state: &AppState,
+    who: &ChatIdentity,
+    host: &str,
+) -> Result<crate::homes::Homes, ApiFailure> {
+    if state.store.host() != Some(host) {
+        return Err(Error::Invalid("Sign in on that host, through its own kernel".into()).into());
+    }
+    host_open(state, who).await?;
+    Ok(state.store.homes(who).await?)
+}
+
+/// One's own harness accounts on a host open to one.
+async fn host_accounts(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let homes = guest_homes(&state, &who, &id).await?;
+    let accounts = crate::accounts::read(&homes).await.map_err(said)?;
+    Ok(Json(json!({ "accounts": accounts })))
+}
+
+async fn set_claude_account(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(account): ChatJson<crate::accounts::ClaudeAccount>,
+) -> Result<Json<Value>, ApiFailure> {
+    let homes = guest_homes(&state, &who, &id).await?;
+    crate::accounts::set_claude(&homes, account).map_err(said)?;
+    Ok(Json(json!({ "saved": true })))
+}
+
+async fn set_codex_account(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(account): ChatJson<crate::accounts::CodexAccount>,
+) -> Result<Json<Value>, ApiFailure> {
+    let homes = guest_homes(&state, &who, &id).await?;
+    let started = crate::accounts::set_codex(&homes, account)
+        .await
+        .map_err(said)?;
+    Ok(Json(started))
+}
+
+async fn clear_codex_account(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let homes = guest_homes(&state, &who, &id).await?;
+    crate::accounts::clear_codex(&homes).await.map_err(said)?;
+    Ok(Json(json!({ "signed_out": true })))
+}
+
+async fn set_pi_account(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(account): ChatJson<crate::accounts::PiAccount>,
+) -> Result<Json<Value>, ApiFailure> {
+    let homes = guest_homes(&state, &who, &id).await?;
+    crate::accounts::set_pi(&homes, account).map_err(said)?;
+    Ok(Json(json!({ "saved": true })))
 }
 
 /// A new invitation to join the workspace: its token is in the answer only.

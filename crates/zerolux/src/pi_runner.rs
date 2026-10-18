@@ -117,7 +117,7 @@ impl Registry {
             .as_ref()
             .context("The pi runner is not installed on this execution host")?;
         let mut command = tokio::process::Command::new(&self.program.bun);
-        command.envs(homes.env()).arg(entry).arg("fork").arg(file);
+        homes.apply(&mut command).arg(entry).arg("fork").arg(file);
         if let Some(up_to) = up_to {
             command.arg(up_to);
         }
@@ -203,10 +203,11 @@ impl Registry {
             "Pi runner log must be private"
         );
         let mut command = tokio::process::Command::new(&self.program.bun);
+        // A guest's harness, with their folders and accounts: never the computer's.
+        homes.apply(&mut command);
         command
             .arg(&entry)
             .current_dir(workspace)
-            .envs(homes.env())
             .env("ZEROLUX_PI_REGISTRY", self.path.canonicalize()?)
             .env("ZEROLUX_PI_CONFIG", config.to_string())
             .env_remove("ZEROLUX_TOKEN")

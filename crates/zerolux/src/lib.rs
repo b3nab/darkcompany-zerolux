@@ -1,3 +1,4 @@
+pub mod accounts;
 pub mod agent_link;
 pub mod agent_settings;
 pub mod api;

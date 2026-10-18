@@ -537,5 +537,62 @@ async fn a_person_joins_with_an_invitation_from_the_owner() {
         .await
         .unwrap();
     assert_eq!(sessions["sessions"], json!([]));
+    // The kernel's computer is the owner's, closed to others until the owner opens it.
+    let hosts: Value = kernel
+        .get("/api/hosts", Some(&ada))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let host = hosts["hosts"][0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(hosts["hosts"][0]["person_id"], identity["actor_id"]);
+    assert_eq!(hosts["hosts"][0]["here"], true);
+    let account = format!("/api/hosts/{host}/accounts/claude-code");
+    let put = |token: &str, body: Value| {
+        kernel
+            .client
+            .put(format!("{}{account}", kernel.url))
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+    };
+    assert_eq!(
+        put(&ada, json!({"oauth_token": "fixture-token"}))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let opened = kernel
+        .client
+        .patch(format!("{}/api/hosts/{host}", kernel.url))
+        .bearer_auth(&owner)
+        .json(&json!({"open": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(opened.status(), StatusCode::OK);
+    // Open: Ada keeps her own Claude Code token there; the owner's accounts are the computer's.
+    assert_eq!(
+        put(&ada, json!({"oauth_token": "fixture-token"}))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert!(
+        dir.path()
+            .join("data/people")
+            .join(claimed["actor_id"].as_str().unwrap())
+            .join("claude/zerolux-account.json")
+            .is_file()
+    );
+    assert_eq!(
+        put(&owner, json!({"oauth_token": "fixture-token"}))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
     kernel.server.shutdown().await.unwrap();
 }

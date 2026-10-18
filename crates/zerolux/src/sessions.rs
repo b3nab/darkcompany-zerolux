@@ -651,8 +651,8 @@ pub async fn ensure_codex_daemon_with(
         return Ok(());
     }
     let mut launcher = tokio::process::Command::new(program);
-    launcher
-        .envs(homes.env())
+    homes
+        .apply(&mut launcher)
         .args(["app-server", "daemon", "start"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
