@@ -54,6 +54,29 @@ export const openTerminal = (
 export const writeTerminal = (id: string, data: string, kernel = kernelUrl()) =>
   request<{ sent: boolean }>(kernel, `${path(id)}/input`, { data });
 
+/**
+ * Types into a terminal in order, however fast: while one write is out, what follows waits
+ * and goes with the next. A failed write rejects the call that sent it.
+ */
+export function terminalWriter(send: (data: string) => Promise<unknown>) {
+  let waiting = "";
+  let sending = false;
+  return async (data: string) => {
+    waiting += data;
+    if (sending) return;
+    sending = true;
+    try {
+      while (waiting) {
+        const text = waiting;
+        waiting = "";
+        await send(text);
+      }
+    } finally {
+      sending = false;
+    }
+  };
+}
+
 export const resizeTerminal = (
   id: string,
   size: { cols: number; rows: number },

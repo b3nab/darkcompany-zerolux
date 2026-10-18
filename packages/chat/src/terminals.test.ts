@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { followTerminal, terminalNotice, terminalResync } from "./terminals";
+import {
+  followTerminal,
+  terminalNotice,
+  terminalResync,
+  terminalWriter,
+} from "./terminals";
 import type { TerminalOutput } from "./terminals";
 
 const settle = async () => {
@@ -59,4 +64,33 @@ test("a followed terminal gets its output in order, in bounded pieces, until it 
   expect(written.join("")).toBe("hello world!");
   expect(finished).toBe(1);
   stop();
+});
+
+test("what is typed while a write is out goes next, together, in order", async () => {
+  const sent: string[] = [];
+  let release = () => {};
+  const write = terminalWriter(
+    (data) =>
+      new Promise<void>((done) => {
+        sent.push(data);
+        release = done;
+      }),
+  );
+  const first = write("l");
+  void write("s");
+  void write(" -la\r");
+  expect(sent).toEqual(["l"]);
+  release();
+  await settle();
+  expect(sent).toEqual(["l", "s -la\r"]);
+  release();
+  await first;
+  // A failed write rejects; what is typed after it goes on.
+  const failing = terminalWriter(async (data) => {
+    if (data === "x") throw new Error("gone");
+    sent.push(data);
+  });
+  await expect(failing("x")).rejects.toThrow("gone");
+  await failing("y");
+  expect(sent.at(-1)).toBe("y");
 });
