@@ -1350,7 +1350,7 @@ impl CodexDriver {
                 (
                     "permission",
                     "Codex requests your permission".to_owned(),
-                    json!({"method":method,"params":params,"item":item}),
+                    json!({"method":method,"params":params,"item":item,"scopes":approval_scopes(&request)}),
                 )
             }
             "item/tool/requestUserInput" => {
@@ -1436,7 +1436,11 @@ impl CodexDriver {
         }
         ensure!(decision["id"] == approval.id, "Approval identity changed");
         let result = match decision["kind"].as_str().unwrap_or("permission") {
-            "permission" => approval_result(&approval.request, string(decision, "decision")?)?,
+            "permission" => approval_result(
+                &approval.request,
+                string(decision, "decision")?,
+                decision["scope"].as_str().unwrap_or("once"),
+            )?,
             "question" => question_result(&decision["answer"]),
             // The owner's answer is the MCP elicitation result itself.
             _ => decision["answer"].clone(),
@@ -1459,6 +1463,21 @@ impl CodexDriver {
         // JSON-RPC responses have no acknowledgement. Keep uncertain until native resolution.
         if !sent {
             kernel.approval_receipt(&approval.id, "resolved").await?;
+            return Ok(());
+        }
+        // Codex declines without a reason: the owner's reason follows as their own words.
+        if let Some(reason) = decision["reason"]
+            .as_str()
+            .filter(|_| decision["decision"] == "deny")
+            && let Err(error) = self
+                .native_settings
+                .input(reason, crate::model::InputMode::Steer, &[])
+                .await
+        {
+            tracing::warn!(
+                error = format!("{error:#}"),
+                "The reason for a denial did not reach Codex"
+            );
         }
         Ok(())
     }
@@ -1660,26 +1679,106 @@ fn question_result(answer: &Value) -> Value {
     json!({ "answers": answers })
 }
 
-fn approval_result(request: &Value, decision: &str) -> Result<Value> {
+/// How far Codex lets this permission go: once, for the session, or always (an amendment of
+/// its command policy it proposes).
+fn approval_scopes(request: &Value) -> Vec<&'static str> {
+    let params = &request["params"];
+    if request["method"] == "item/permissions/requestApproval" {
+        return vec!["once", "session"];
+    }
+    let offered = |name: &str| {
+        params["availableDecisions"]
+            .as_array()
+            .is_some_and(|available| {
+                available
+                    .iter()
+                    .any(|choice| choice == name || choice.get(name).is_some())
+            })
+    };
+    let mut scopes = vec!["once"];
+    if offered("acceptForSession") {
+        scopes.push("session");
+    }
+    if offered("acceptWithExecpolicyAmendment") && params["proposedExecpolicyAmendment"].is_array()
+    {
+        scopes.push("always");
+    }
+    scopes
+}
+
+fn approval_result(request: &Value, decision: &str, scope: &str) -> Result<Value> {
     ensure!(
         matches!(decision, "allow" | "deny"),
         "Unknown approval decision"
     );
+    ensure!(
+        decision == "deny" || approval_scopes(request).contains(&scope),
+        "Codex did not offer this approval decision"
+    );
     if request["method"] == "item/permissions/requestApproval" {
         return Ok(
-            json!({"permissions":if decision == "allow" { request["params"]["permissions"].clone() } else { json!({}) },"scope":"turn"}),
+            json!({"permissions":if decision == "allow" { request["params"]["permissions"].clone() } else { json!({}) },
+                "scope": if scope == "session" { "session" } else { "turn" }}),
         );
     }
-    let native = if decision == "allow" {
-        "accept"
-    } else {
-        "decline"
+    let native = match (decision, scope) {
+        ("deny", _) => json!("decline"),
+        (_, "session") => json!("acceptForSession"),
+        (_, "always") => json!({"acceptWithExecpolicyAmendment":
+            {"execpolicy_amendment": request["params"]["proposedExecpolicyAmendment"]}}),
+        _ => json!("accept"),
     };
-    if let Some(available) = request["params"]["availableDecisions"].as_array() {
+    if let (Some(available), Some(name)) = (
+        request["params"]["availableDecisions"].as_array(),
+        native.as_str(),
+    ) {
         ensure!(
-            available.iter().any(|choice| choice == native),
+            available.iter().any(|choice| choice == name),
             "Codex did not offer this approval decision"
         );
     }
     Ok(json!({"decision":native}))
+}
+
+#[cfg(test)]
+mod approval_tests {
+    use super::*;
+
+    fn command(available: Value, amendment: Option<Value>) -> Value {
+        let mut params = json!({"availableDecisions": available});
+        if let Some(amendment) = amendment {
+            params["proposedExecpolicyAmendment"] = amendment;
+        }
+        json!({"method":"item/commandExecution/requestApproval","params":params})
+    }
+
+    #[test]
+    fn a_permission_goes_as_far_as_codex_offers() {
+        let full = command(
+            json!(["accept", "acceptForSession", {"acceptWithExecpolicyAmendment": {}}, "decline"]),
+            Some(json!(["cargo", "test"])),
+        );
+        assert_eq!(approval_scopes(&full), vec!["once", "session", "always"]);
+        assert_eq!(
+            approval_result(&full, "allow", "session").unwrap(),
+            json!({"decision":"acceptForSession"})
+        );
+        assert_eq!(
+            approval_result(&full, "allow", "always").unwrap(),
+            json!({"decision":{"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["cargo","test"]}}})
+        );
+        assert_eq!(
+            approval_result(&full, "deny", "once").unwrap(),
+            json!({"decision":"decline"})
+        );
+        let plain = command(json!(["accept", "decline"]), None);
+        assert_eq!(approval_scopes(&plain), vec!["once"]);
+        assert!(approval_result(&plain, "allow", "session").is_err());
+        let permissions = json!({"method":"item/permissions/requestApproval",
+            "params":{"permissions":{"network":true}}});
+        assert_eq!(
+            approval_result(&permissions, "allow", "session").unwrap(),
+            json!({"permissions":{"network":true},"scope":"session"})
+        );
+    }
 }

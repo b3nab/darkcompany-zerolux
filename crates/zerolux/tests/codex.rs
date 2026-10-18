@@ -2098,3 +2098,56 @@ async fn what_waits_in_codex_queue_reaches_the_kernel_when_it_changes() {
         .await;
     finish(stop, task).await;
 }
+
+#[tokio::test]
+async fn a_command_is_allowed_for_the_session_and_a_denial_says_why() {
+    let runtime = Runtime::new().await;
+    let kernel = KernelFixture::new("stored").await;
+    let (changed, stop, task) = run(&runtime, &kernel).await;
+    runtime.wait(|s| s.queue.len() == 1).await;
+    runtime.emit(item("ours", user("input", Some(DELIVERY))));
+    let request = |id| {
+        json!({"id":id,"method":"item/commandExecution/requestApproval","params":{"threadId":THREAD,"turnId":"ours","itemId":"tool","command":"cargo test",
+        "availableDecisions":["accept","acceptForSession","decline"]}})
+    };
+    runtime.emit(request(960));
+    kernel.wait(|s| s.approvals.len() == 1).await;
+    assert_eq!(
+        kernel.state.lock().unwrap().approvals[0]["details"]["scopes"],
+        json!(["once", "session"])
+    );
+    kernel.state.lock().unwrap().approvals[0]["scope"] = json!("session");
+    kernel.decide(0, "allow");
+    changed.send(()).await.unwrap();
+    runtime
+        .wait(|s| {
+            s.requests
+                .iter()
+                .any(|r| r["id"] == 960 && r["result"]["decision"] == "acceptForSession")
+        })
+        .await;
+    runtime.emit(request(961));
+    kernel.wait(|s| s.approvals.len() == 2).await;
+    kernel.state.lock().unwrap().approvals[1]["reason"] = json!("Not on main");
+    kernel.decide(1, "deny");
+    changed.send(()).await.unwrap();
+    runtime
+        .wait(|s| {
+            s.requests
+                .iter()
+                .any(|r| r["id"] == 961 && r["result"]["decision"] == "decline")
+        })
+        .await;
+    // The reason follows the denial as the owner's own words.
+    runtime
+        .wait(|s| {
+            s.requests.iter().any(|r| {
+                matches!(
+                    r["method"].as_str(),
+                    Some("turn/steer" | "thread/queue/add")
+                ) && r["params"]["input"][0]["text"] == "Not on main"
+            })
+        })
+        .await;
+    finish(stop, task).await;
+}
