@@ -528,6 +528,43 @@ async fn livekit_tickets_are_scoped_to_the_authenticated_actor_and_restart_requi
         state,
         json!({"seq":2,"items":[{"id":"m","kind":"text","text":"Working"}],"queue":[],"usage":null})
     );
+    // At its budget, the session's work stops for the owner; a higher budget lets it go on.
+    let session_path = format!("{url}/api/sessions/{}", agent.session.id);
+    let budget = |usd: f64| {
+        kernel
+            .client
+            .patch(&session_path)
+            .json(&json!({ "budget_usd": usd }))
+            .send()
+    };
+    let set = budget(1.5).await.unwrap().json::<Value>().await.unwrap();
+    assert_eq!(set["session"]["budget_usd"], 1.5);
+    let report = |cost: f64| {
+        kernel
+            .client
+            .post(&live_path)
+            .bearer_auth(&agent.token)
+            .json(&json!({"changes":[{"type":"usage","cost_usd":cost}]}))
+            .send()
+    };
+    report(1.0).await.unwrap().error_for_status().unwrap();
+    let status = |store: Store, id: String| async move {
+        let owner = store.chat_identity(None).await.unwrap();
+        store.chat_session(&owner, &id).await.unwrap()
+    };
+    let before = status(kernel.store.clone(), agent.session.id.clone()).await;
+    report(1.6).await.unwrap().error_for_status().unwrap();
+    let reached = status(kernel.store.clone(), agent.session.id.clone()).await;
+    assert_eq!(reached.status, "attention");
+    assert!(
+        reached
+            .attention_reason
+            .unwrap()
+            .contains("reached its budget of $1.50")
+    );
+    let raised = budget(5.0).await.unwrap().json::<Value>().await.unwrap();
+    assert_eq!(raised["session"]["status"], "connected");
+    assert_ne!(before.status, "stopped");
     let free = kernel.agent("", None).await;
     assert_eq!(
         kernel

@@ -734,8 +734,16 @@ async fn change_session(
     Path(id): Path<String>,
     ChatJson(input): ChatJson<SessionChange>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let session = state.store.change_session(&who, &id, input).await?;
+    let budget = input.budget_usd.is_some();
+    let mut session = state.store.change_session(&who, &id, input).await?;
     if let Some(runtime) = &state.runtime {
+        if budget {
+            runtime
+                .budget_changed(&who, &session)
+                .await
+                .map_err(runtime_error)?;
+            session = state.store.chat_session(&who, &id).await?;
+        }
         runtime.changed();
     }
     Ok(Json(json!({ "session": session })))

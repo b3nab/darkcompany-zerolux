@@ -725,6 +725,7 @@ impl Store {
                     host_id: Set(self.host.clone()),
                     pinned_at: Set(None),
                     archived_at: Set(None),
+                    budget_cents: Set(None),
                 }
                 .insert(&tx)
                 .await?;
@@ -973,9 +974,24 @@ impl Store {
             .title
             .map(|title| text(&title, "Session title", 500, true))
             .transpose()?;
-        if title.is_none() && input.pinned.is_none() && input.archived.is_none() {
+        if title.is_none()
+            && input.pinned.is_none()
+            && input.archived.is_none()
+            && input.budget_usd.is_none()
+        {
             return Err(Error::Invalid("Nothing to change".into()));
         }
+        let budget = input
+            .budget_usd
+            .map(|usd| {
+                if !usd.is_finite() || !(0.0..=1_000_000.0).contains(&usd) {
+                    return Err(Error::Invalid(
+                        "A budget from 0 to 1,000,000 dollars".into(),
+                    ));
+                }
+                Ok((usd > 0.0).then(|| (usd * 100.0).round() as i64))
+            })
+            .transpose()?;
         let tx = self.write().await?;
         owner_in(&tx, who).await?;
         let existing = session_in(&tx, id).await?;
@@ -991,6 +1007,9 @@ impl Store {
         if let Some(archived) = input.archived {
             let at = archived.then(|| existing.archived_at.unwrap_or(now));
             update = update.col_expr(sessions::Column::ArchivedAt, Expr::value(at));
+        }
+        if let Some(cents) = budget {
+            update = update.col_expr(sessions::Column::BudgetCents, Expr::value(cents));
         }
         update.exec(&tx).await?;
         personal_event(&tx, "session.changed", id, json!({"session_id":id})).await?;

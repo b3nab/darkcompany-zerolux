@@ -210,6 +210,8 @@ pub struct ChatRuntime {
     attachments: PathBuf,
     /// What each session is producing right now; see `live`.
     live: crate::live::Live,
+    /// The budget, in cents, each session last reached: its work was stopped for it once.
+    budgets_reached: std::sync::Mutex<HashMap<String, i64>>,
 }
 
 impl ChatRuntime {
@@ -312,13 +314,21 @@ impl ChatRuntime {
             worktrees,
             attachments,
             live: crate::live::Live::default(),
+            budgets_reached: std::sync::Mutex::new(HashMap::new()),
         }))
     }
 
     /// A session's live changes, from its integration: applied, then sent to the people in
     /// the workspace as `session.live` notices numbered like the changes.
     pub async fn live_changes(&self, id: &str, changes: Vec<crate::live::Change>) -> Result<u64> {
+        let cost = changes.iter().rev().find_map(|change| match change {
+            crate::live::Change::Usage(usage) => usage.cost_usd,
+            _ => None,
+        });
         let applied = self.live.apply(id, changes)?;
+        if let Some(cost) = cost {
+            self.check_budget(id, cost).await;
+        }
         let people = self.store.people().await?;
         for notice in applied.notices() {
             let payload = serde_json::json!({"type":"session.live","session_id":id,
@@ -328,6 +338,97 @@ impl ChatRuntime {
             }
         }
         Ok(self.live.state(id).seq)
+    }
+
+    /// At its budget, a session's work stops: the turn in progress is interrupted and the
+    /// owner told, once for that budget. A higher budget lets it go on.
+    async fn check_budget(&self, id: &str, cost: f64) {
+        let Ok(owner) = self.store.chat_identity(None).await else {
+            return;
+        };
+        let Ok(session) = self.store.chat_session(&owner, id).await else {
+            return;
+        };
+        let Some(budget) = session.budget_usd else {
+            return;
+        };
+        let cents = (budget * 100.0).round() as i64;
+        if cost < budget
+            || self
+                .budgets_reached
+                .lock()
+                .expect("budgets")
+                .insert(id.to_owned(), cents)
+                == Some(cents)
+        {
+            return;
+        }
+        let interrupted = self.interrupt(&owner, id).await;
+        let reason = format!(
+            "The session reached its budget of ${budget:.2} (${cost:.2} so far){}. Raise the budget to let it go on.",
+            match interrupted {
+                Ok(true) => "; its turn was stopped",
+                Ok(false) => "",
+                Err(_) => "; its turn could not be stopped",
+            }
+        );
+        let _ = self
+            .store
+            .set_chat_session_status(
+                &owner,
+                id,
+                ChatSessionStatus {
+                    status: "attention".into(),
+                    reason: Some(reason),
+                },
+            )
+            .await;
+        self.changed();
+    }
+
+    /// A new budget for a session stopped at its old one: above what it has cost, it goes on.
+    pub async fn budget_changed(&self, who: &ChatIdentity, session: &ChatSession) -> Result<()> {
+        let reached = self
+            .budgets_reached
+            .lock()
+            .expect("budgets")
+            .get(&session.id)
+            .copied();
+        let Some(reached) = reached else {
+            return Ok(());
+        };
+        let cost = self
+            .live
+            .state(&session.id)
+            .usage
+            .and_then(|usage| usage.cost_usd);
+        let room = match session.budget_usd {
+            None => true,
+            Some(budget) => {
+                (budget * 100.0).round() as i64 > reached && cost.is_none_or(|cost| cost < budget)
+            }
+        };
+        if !room {
+            return Ok(());
+        }
+        self.budgets_reached
+            .lock()
+            .expect("budgets")
+            .remove(&session.id);
+        if session.status == "attention" && session.stopped_at.is_none() {
+            self.store
+                .set_chat_session_status(
+                    who,
+                    &session.id,
+                    ChatSessionStatus {
+                        status: "connected".into(),
+                        reason: None,
+                    },
+                )
+                .await?;
+            self.changed();
+        }
+        Ok(())
     }
 
     /// What a session is producing right now.

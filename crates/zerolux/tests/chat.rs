@@ -2755,6 +2755,29 @@ async fn the_owner_names_pins_and_archives_a_session() {
     .await
     .unwrap();
     assert_eq!((restored.pinned_at, restored.archived_at), (None, None));
+    // A budget, in dollars; zero takes it away.
+    let budgeted = change(SessionChange {
+        budget_usd: Some(12.345),
+        ..SessionChange::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(budgeted.budget_usd, Some(12.35));
+    let unlimited = change(SessionChange {
+        budget_usd: Some(0.0),
+        ..SessionChange::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(unlimited.budget_usd, None);
+    assert!(matches!(
+        change(SessionChange {
+            budget_usd: Some(-1.0),
+            ..SessionChange::default()
+        })
+        .await,
+        Err(Error::Invalid(_))
+    ));
     assert!(matches!(
         change(SessionChange::default()).await,
         Err(Error::Invalid(_))

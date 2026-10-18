@@ -240,6 +240,8 @@ pub struct ChatSession {
     pub created_at: i64,
     pub pinned_at: Option<i64>,
     pub archived_at: Option<i64>,
+    /// What the session may cost, in US dollars; at the limit its work stops.
+    pub budget_usd: Option<f64>,
     /// How its native record ends, from this kernel host's watcher.
     #[serde(flatten)]
     pub tail: crate::native_events::Tail,
@@ -273,6 +275,9 @@ impl FromQueryResult for ChatSession {
             created_at: row.try_get(pre, "created_at")?,
             pinned_at: row.try_get(pre, "pinned_at")?,
             archived_at: row.try_get(pre, "archived_at")?,
+            budget_usd: row
+                .try_get::<Option<i64>>(pre, "budget_cents")?
+                .map(|cents| cents as f64 / 100.0),
             tail: Default::default(),
         })
     }
@@ -316,6 +321,8 @@ pub struct SessionChange {
     pub title: Option<String>,
     pub pinned: Option<bool>,
     pub archived: Option<bool>,
+    /// What the session may cost, in US dollars; `0` takes the limit away.
+    pub budget_usd: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
