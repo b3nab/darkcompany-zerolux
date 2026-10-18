@@ -14,6 +14,7 @@ import { ago, ApiError, deviceName, errorMessage } from "@zerolux/chat";
 import type { AuthDevice } from "@zerolux/chat";
 import { themes } from "@zerolux/theme/themes";
 import { Screen } from "@/components/screen";
+import { Hosts } from "@/components/hosts";
 import { Row, Section, Unavailable } from "@/components/settings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -70,6 +71,9 @@ export default function MySettings() {
         </Section>
         <Section title="Devices">
           <Devices />
+        </Section>
+        <Section title="Hosts">
+          <Hosts />
         </Section>
         <Section title="Theme">
           {themes.map((t) => (

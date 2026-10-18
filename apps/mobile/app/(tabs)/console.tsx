@@ -13,6 +13,8 @@ import {
   matchParts,
   sessionMatches,
   sessionOutputAt,
+  startsHere,
+  useHosts,
   useHistorySearch,
   useSeen,
 } from "@zerolux/chat";
@@ -53,7 +55,9 @@ const empty: Record<Shown, string> = {
  */
 export default function Console() {
   const { workspace, chat, url } = useSession();
-  const { owner } = useMe();
+  // Sessions start on the kernel's computer: its person's, or open to you.
+  const { me } = useMe();
+  const starts = startsHere(useHosts(url).hosts, me?.id);
   const router = useRouter();
   const ink = String(useCSSVariable("--color-foreground"));
   const faint = String(useCSSVariable("--color-faint"));
@@ -87,8 +91,7 @@ export default function Console() {
     <Screen
       title="Console"
       action={
-        // Sessions start on the kernel's computer, which is its owner's.
-        owner ? (
+        starts ? (
           <Pressable
             onPress={() => router.push("/session/new")}
             accessibilityRole="button"
@@ -163,7 +166,7 @@ export default function Console() {
           <Text className="p-5 text-base leading-6 text-faint">
             {query.trim()
               ? `No ${shownLabels[shown].toLowerCase()} session matches "${query.trim()}".`
-              : shown === "live" && !owner
+              : shown === "live" && !starts
                 ? "No live sessions. Those shared with you appear here."
                 : empty[shown]}
           </Text>
