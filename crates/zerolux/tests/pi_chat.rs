@@ -143,7 +143,7 @@ async fn gui_hire_livekit_wake_and_reply_with_a_fake_pi_host() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     let client = owner::client(&base, Duration::from_secs(65)).await;
-    let discovery = api(&client, &base, "/sessions", None).await;
+    let discovery = api(&client, &base, "/sessions/discover", None).await;
     let pi = discovery["sessions"]
         .as_array()
         .unwrap()
@@ -154,7 +154,7 @@ async fn gui_hire_livekit_wake_and_reply_with_a_fake_pi_host() {
     let hired = api(
         &client,
         &base,
-        "/chat/hire",
+        "/sessions/attach",
         Some(json!({"discovered_session_id":pi["id"],"name":"Fixture pi"})),
     )
     .await;
@@ -193,7 +193,7 @@ async fn gui_hire_livekit_wake_and_reply_with_a_fake_pi_host() {
     nix::sys::signal::kill(Pid::from_raw(native.0.id() as i32), Signal::SIGUSR1).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let sessions = api(&client, &base, "/chat/sessions", None).await;
+        let sessions = api(&client, &base, "/sessions", None).await;
         if sessions["sessions"]
             .as_array()
             .unwrap()
@@ -211,7 +211,7 @@ async fn gui_hire_livekit_wake_and_reply_with_a_fake_pi_host() {
     api(
         &client,
         &base,
-        &format!("/chat/sessions/{session}/stop"),
+        &format!("/sessions/{session}/stop"),
         Some(json!({})),
     )
     .await;
@@ -335,7 +335,7 @@ fn free_port() -> u16 {
 }
 
 async fn session_status(client: &reqwest::Client, base: &str, session: &str) -> String {
-    let sessions = api(client, base, "/chat/sessions", None).await;
+    let sessions = api(client, base, "/sessions", None).await;
     sessions["sessions"]
         .as_array()
         .unwrap()
@@ -361,7 +361,7 @@ async fn wait_status(client: &reqwest::Client, base: &str, session: &str, expect
 }
 
 async fn hire_pi(client: &reqwest::Client, base: &str) -> (String, String) {
-    let discovery = api(client, base, "/sessions", None).await;
+    let discovery = api(client, base, "/sessions/discover", None).await;
     let pi = discovery["sessions"]
         .as_array()
         .unwrap()
@@ -371,7 +371,7 @@ async fn hire_pi(client: &reqwest::Client, base: &str) -> (String, String) {
     let hired = api(
         client,
         base,
-        "/chat/hire",
+        "/sessions/attach",
         Some(json!({"discovered_session_id":pi["id"],"name":"Fixture pi"})),
     )
     .await;
@@ -441,7 +441,7 @@ async fn one_pi_session_works_in_two_workspaces_and_a_kernel_restart_keeps_both(
     let relinked = {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            let sessions = api(&a.client, &a.base, "/chat/sessions", None).await;
+            let sessions = api(&a.client, &a.base, "/sessions", None).await;
             let connected = sessions["sessions"]
                 .as_array()
                 .unwrap()

@@ -119,7 +119,7 @@ async fn wait_for(store: &Store, predicate: impl Fn(&[zerolux::model::ChatSessio
     let owner = store.chat_identity(None).await.unwrap();
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            if predicate(&store.chat_sessions(&owner).await.unwrap()) {
+            if predicate(&store.sessions(&owner).await.unwrap()) {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -194,12 +194,13 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
         .iter()
         .find(|s| s.harness == zerolux::harness::Harness::Pi)
         .expect("fake pi discovered");
-    let hire = runtime.hire(&owner, &candidate.id, "cedar", None);
+    let hire = runtime.attach(&owner, &candidate.id, "cedar", None);
     let (hired, _) = tokio::join!(hire, async {
         tokio::time::sleep(Duration::from_millis(300)).await;
         pi.release.notify_one();
     });
     let (actor, first) = hired.unwrap();
+    let actor = actor.unwrap();
     let agent = |id: &str| ChatSessionStatus {
         status: "attention".into(),
         reason: Some(format!("lost {id}")),
@@ -217,12 +218,14 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
     });
     relinked.unwrap();
     wait_for(&store, |sessions| {
-        sessions
-            .iter()
-            .any(|s| s.actor_id == actor.id && s.stopped_at.is_none() && s.status == "attention")
+        sessions.iter().any(|s| {
+            s.actor_id.as_ref() == Some(&actor.id)
+                && s.stopped_at.is_none()
+                && s.status == "attention"
+        })
     })
     .await;
-    let sessions = store.chat_sessions(&owner).await.unwrap();
+    let sessions = store.sessions(&owner).await.unwrap();
     let revived = sessions.iter().find(|s| s.stopped_at.is_none()).unwrap();
     assert_eq!(
         revived.id, first.id,
@@ -248,7 +251,7 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
         .await
         .expect("pairing started");
         let pending = store
-            .chat_sessions(&owner)
+            .sessions(&owner)
             .await
             .unwrap()
             .into_iter()
@@ -260,7 +263,7 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
     let (result, _) = tokio::join!(reconnect, stop);
     result.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let sessions = store.chat_sessions(&owner).await.unwrap();
+    let sessions = store.sessions(&owner).await.unwrap();
     assert!(
         sessions.iter().all(|s| s.stopped_at.is_some()),
         "an owner's Stop is final: {sessions:?}"
@@ -268,7 +271,7 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
     runtime.reconnect().await.unwrap();
     assert!(
         store
-            .chat_sessions(&owner)
+            .sessions(&owner)
             .await
             .unwrap()
             .iter()
@@ -279,7 +282,7 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
     // decision is recorded there: no retry either.
     // The owner's Stop reached pi: its link is gone, so it can be hired again.
     pi.paired.store(false, std::sync::atomic::Ordering::SeqCst);
-    let relinked = runtime.hire(&owner, &candidate.id, "", Some(actor.id.clone()));
+    let relinked = runtime.attach(&owner, &candidate.id, "", Some(actor.id.clone()));
     let (relinked, _) = tokio::join!(relinked, async {
         pi.refuse.store(false, std::sync::atomic::Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -311,7 +314,7 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
     let (result, _) = tokio::join!(reconnect, stop_old);
     result.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let sessions = store.chat_sessions(&owner).await.unwrap();
+    let sessions = store.sessions(&owner).await.unwrap();
     assert!(
         sessions.iter().all(|s| s.stopped_at.is_some()),
         "the owner's Stop on the relinking session is final: {sessions:?}"
@@ -321,7 +324,7 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
     // is told to stop, as if the owner had stopped it.
     pi.paired.store(false, std::sync::atomic::Ordering::SeqCst);
     pi.refuse.store(false, std::sync::atomic::Ordering::SeqCst);
-    let hired = runtime.hire(&owner, &candidate.id, "", Some(actor.id.clone()));
+    let hired = runtime.attach(&owner, &candidate.id, "", Some(actor.id.clone()));
     let (hired, _) = tokio::join!(hired, async {
         tokio::time::sleep(Duration::from_millis(300)).await;
         pi.release.notify_one();
@@ -353,7 +356,7 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
     })
     .await
     .expect("pi told to stop");
-    let sessions = store.chat_sessions(&owner).await.unwrap();
+    let sessions = store.sessions(&owner).await.unwrap();
     assert!(
         sessions.iter().all(|s| s.stopped_at.is_some()),
         "a link paired after the owner's Stop is torn down: {sessions:?}"
@@ -362,7 +365,7 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
     // Scenario 5: a second live pi on the same session (a terminal opened on it): the link
     // is lost, and the relink goes to the newest pi; nothing is refused as a duplicate.
     pi.paired.store(false, std::sync::atomic::Ordering::SeqCst);
-    let hired = runtime.hire(&owner, &candidate.id, "", Some(actor.id.clone()));
+    let hired = runtime.attach(&owner, &candidate.id, "", Some(actor.id.clone()));
     let (hired, _) = tokio::join!(hired, async {
         tokio::time::sleep(Duration::from_millis(300)).await;
         pi.release.notify_one();
@@ -400,7 +403,7 @@ async fn a_failed_relink_retries_unless_the_owner_stopped_the_session_meanwhile(
     .expect("the terminal pi is paired");
     assert_eq!(
         store
-            .chat_sessions(&owner)
+            .sessions(&owner)
             .await
             .unwrap()
             .iter()

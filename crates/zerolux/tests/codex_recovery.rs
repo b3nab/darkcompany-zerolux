@@ -68,7 +68,7 @@ async fn wait_for(store: &Store, predicate: impl Fn(&[zerolux::model::ChatSessio
     let owner = store.chat_identity(None).await.unwrap();
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            if predicate(&store.chat_sessions(&owner).await.unwrap()) {
+            if predicate(&store.sessions(&owner).await.unwrap()) {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -157,7 +157,7 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
             )
         });
     let (actor, first) = chat_runtime
-        .hire(&owner, &candidate.id, "cedar", None)
+        .attach(&owner, &candidate.id, "cedar", None)
         .await
         .unwrap();
     wait_for(&store, |sessions| {
@@ -179,7 +179,7 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
     };
     assert_eq!(cold_resumes(&runtime), 0);
 
-    let actor = actor.id;
+    let actor = actor.unwrap().id;
     // The owner's chat with the agent; what is sent there is the agent's input.
     let dm = store
         .create_conversation(
@@ -250,7 +250,7 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
     );
     assert!(!runtime.state.lock().unwrap().unloaded);
     let live: Vec<_> = store
-        .chat_sessions(&owner)
+        .sessions(&owner)
         .await
         .unwrap()
         .into_iter()
@@ -286,7 +286,7 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
     assert!(runtime.state.lock().unwrap().unloaded);
     assert!(
         store
-            .chat_sessions(&owner)
+            .sessions(&owner)
             .await
             .unwrap()
             .iter()
@@ -298,7 +298,7 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
     // session and reconciles that input from Codex's own queue; it is never resent.
     runtime.state.lock().unwrap().unloaded = false;
     let (_, second) = chat_runtime
-        .hire(&owner, &candidate.id, "cedar", Some(actor.clone()))
+        .attach(&owner, &candidate.id, "cedar", Some(actor.clone()))
         .await
         .unwrap();
     wait_for(&store, |sessions| {
@@ -453,6 +453,7 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
         name: "cedar".into(),
         actor_id,
         workspace: workspace.into(),
+        worktree: None,
         approval_policy: None,
         sandbox: None,
         model: None,
@@ -473,11 +474,11 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
     // Over HTTP the same: an invalid body, or anyone but the owner, is refused before Codex
     // is asked anything.
     let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:{port}/api/chat/codex-sessions");
+    let url = format!("http://127.0.0.1:{port}/api/sessions");
     for body in [
-        json!({"name":"cedar","workspace":"relative"}),
-        json!({"name":"cedar","workspace":workspace,"approval_policy":"yolo"}),
-        json!({"name":"cedar","workspace":workspace,"sandbox":"full"}),
+        json!({"harness":"codex","name":"cedar","workspace":"relative"}),
+        json!({"harness":"codex","name":"cedar","workspace":workspace,"approval_policy":"yolo"}),
+        json!({"harness":"codex","name":"cedar","workspace":workspace,"sandbox":"full"}),
     ] {
         let response = client.post(&url).json(&body).send().await.unwrap();
         assert_eq!(
@@ -505,7 +506,7 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
     let response = client
         .post(&url)
         .bearer_auth(&peer.token)
-        .json(&json!({"name":"cedar","workspace":workspace}))
+        .json(&json!({"harness":"codex","name":"cedar","workspace":workspace}))
         .send()
         .await
         .unwrap();
@@ -524,7 +525,7 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
     runtime.state.lock().unwrap().drop_start_ack = true;
     let response = client
         .post(&url)
-        .json(&json!({"name":"cedar","workspace":workspace}))
+        .json(&json!({"harness":"codex","name":"cedar","workspace":workspace}))
         .send()
         .await
         .unwrap();
@@ -543,7 +544,7 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
     std::fs::create_dir_all(&other).unwrap();
     let response = client
         .post(&url)
-        .json(&json!({"name":"cedar","workspace":other}))
+        .json(&json!({"harness":"codex","name":"cedar","workspace":other}))
         .send()
         .await
         .unwrap();
@@ -554,7 +555,7 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
     assert_eq!(runtime.count("thread/start"), 2);
     assert!(
         store
-            .chat_sessions(&owner)
+            .sessions(&owner)
             .await
             .unwrap()
             .iter()

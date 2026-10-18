@@ -276,7 +276,7 @@ async fn entrusted_terminal_is_resumed_after_exit_without_changing_context() {
     let kernel = start(&root, port);
     ready(&client, &base).await;
     let client = owner::client(&base, Duration::from_secs(75)).await;
-    let discovered = api(&client, &base, "/sessions", None).await;
+    let discovered = api(&client, &base, "/sessions/discover", None).await;
     let candidate = discovered["sessions"]
         .as_array()
         .unwrap()
@@ -286,7 +286,7 @@ async fn entrusted_terminal_is_resumed_after_exit_without_changing_context() {
     let hired = api(
         &client,
         &base,
-        "/chat/hire",
+        "/sessions/attach",
         Some(json!({"discovered_session_id":candidate["id"],"name":"Entrusted Claude"})),
     )
     .await;
@@ -322,7 +322,7 @@ async fn entrusted_terminal_is_resumed_after_exit_without_changing_context() {
     );
     // No Resume call, manual relink or kernel restart: the production reconnect loop acts.
     // The same session continues, now through the owned runner.
-    let sessions = wait(&client, &base, "/chat/sessions", |v| {
+    let sessions = wait(&client, &base, "/sessions", |v| {
         v["sessions"].as_array().unwrap().iter().any(|s| {
             s["native_session_id"] == native && s["origin"] == "owned" && s["status"] == "connected"
         })
@@ -385,7 +385,7 @@ async fn entrusted_terminal_is_resumed_after_exit_without_changing_context() {
     let stopped = api(
         &client,
         &base,
-        &format!("/chat/sessions/{id}/stop"),
+        &format!("/sessions/{id}/stop"),
         Some(json!({})),
     )
     .await;
@@ -395,7 +395,7 @@ async fn entrusted_terminal_is_resumed_after_exit_without_changing_context() {
     ready(&client, &base).await;
     // Longer than the server's reconnect interval: explicit Stop stays stopped.
     tokio::time::sleep(Duration::from_secs(11)).await;
-    let sessions = api(&client, &base, "/chat/sessions", None).await;
+    let sessions = api(&client, &base, "/sessions", None).await;
     assert!(
         sessions["sessions"]
             .as_array()

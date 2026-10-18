@@ -422,6 +422,14 @@ fn permission_record(line: &str, session_id: &str) -> Option<Value> {
         .then_some(record.permission_mode)
 }
 
+/// Where Claude Code keeps every project's transcripts.
+pub(crate) fn projects() -> Result<PathBuf> {
+    projects_dir(
+        std::env::var_os("CLAUDE_CONFIG_DIR"),
+        std::env::var_os("HOME"),
+    )
+}
+
 /// The session's transcript, the same file for terminal and SDK sessions. None until the
 /// session's first turn writes it.
 pub(crate) fn transcript_path(session_id: &str) -> Option<PathBuf> {

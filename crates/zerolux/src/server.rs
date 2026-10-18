@@ -201,7 +201,7 @@ impl Server {
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
                     interval.tick().await;
-                    if let Err(error) = settings.refresh_agent_settings().await {
+                    if let Err(error) = settings.refresh_settings().await {
                         tracing::warn!(error = %error, "Native settings observation failed");
                     }
                 }

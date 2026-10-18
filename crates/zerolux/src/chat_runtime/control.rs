@@ -64,7 +64,7 @@ impl ChatRuntime {
         }
         let session = self
             .store
-            .chat_sessions(who)
+            .sessions(who)
             .await?
             .into_iter()
             .find(|session| session.id == id)
@@ -120,7 +120,7 @@ impl ChatRuntime {
         }
         let session = self
             .store
-            .chat_sessions(who)
+            .sessions(who)
             .await?
             .into_iter()
             .find(|session| session.id == id)
@@ -173,7 +173,7 @@ impl ChatRuntime {
         }
         let session = self
             .store
-            .chat_sessions(who)
+            .sessions(who)
             .await?
             .into_iter()
             .find(|session| session.id == id)

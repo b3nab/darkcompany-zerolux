@@ -25,11 +25,21 @@ impl ChatRuntime {
         &self,
         who: &ChatIdentity,
         input: CreateClaudeSession,
-    ) -> Result<(Actor, ChatSession)> {
+    ) -> Result<(Option<Actor>, ChatSession)> {
         if !who.is_owner() {
             return Err(Error::Forbidden.into());
         }
-        let workspace = super::workspace_dir(&input.workspace)?;
+        self.store
+            .check_hire(
+                who,
+                Harness::ClaudeCode,
+                input.actor_id.as_deref(),
+                &input.name,
+            )
+            .await?;
+        let workspace = self
+            .session_dir(&input.workspace, input.worktree.as_deref())
+            .await?;
         let native_id = uuid::Uuid::new_v4().to_string();
         let chosen = self
             .launch_choices(
@@ -64,15 +74,14 @@ impl ChatRuntime {
             native_locator: json!({"kind":"claude-runner","permission_mode":mode,"system_prompt":"claude_code","initial_settings":initial}),
             resume: false,
         }, mode, false).await?;
-        let native = self.agent_settings(who, &started.0.id).await?;
-        Ok((native.actor, started.1))
+        Ok(started)
     }
 
     pub async fn resume_claude(
         &self,
         who: &ChatIdentity,
         id: &str,
-    ) -> Result<(Actor, ChatSession)> {
+    ) -> Result<(Option<Actor>, ChatSession)> {
         if !who.is_owner() {
             return Err(Error::Forbidden.into());
         }
@@ -108,12 +117,44 @@ impl ChatRuntime {
             who,
             HireChatSession {
                 name: String::new(),
-                actor_id: Some(session.actor_id),
+                actor_id: session.actor_id,
                 harness: Harness::ClaudeCode,
                 native_session_id: session.native_session_id,
                 title: session.title,
                 workspace: session.workspace,
                 native_locator: locator,
+                resume: false,
+            },
+            mode,
+            true,
+        )
+        .await
+    }
+
+    /// A saved Claude Code session, opened again under ZeroLux with its saved permissions.
+    pub(super) async fn open_claude(
+        &self,
+        who: &ChatIdentity,
+        target: sessions::NativeSessionTarget,
+        name: &str,
+        actor_id: Option<String>,
+    ) -> Result<(Option<Actor>, ChatSession)> {
+        self.runners
+            .check_native_stopped(&target.native_session_id, &target.workspace)
+            .await?;
+        let mode = crate::claude::ClaudeSession::saved_permission_mode(&target.native_session_id)
+            .await
+            .unwrap_or_default();
+        self.start_owned(
+            who,
+            HireChatSession {
+                name: name.into(),
+                actor_id,
+                harness: Harness::ClaudeCode,
+                native_session_id: target.native_session_id,
+                title: target.title,
+                workspace: target.workspace,
+                native_locator: json!({"kind":"claude-runner","permission_mode":mode,"system_prompt":"claude_code"}),
                 resume: false,
             },
             mode,
@@ -128,7 +169,7 @@ impl ChatRuntime {
         input: HireChatSession,
         mode: ClaudePermissionMode,
         resume_native: bool,
-    ) -> Result<(Actor, ChatSession)> {
+    ) -> Result<(Option<Actor>, ChatSession)> {
         let executable = self.runners.executable()?;
         let mut agents = self.agents.lock().await;
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
@@ -147,17 +188,6 @@ impl ChatRuntime {
         };
         let issued = self.store.hire_chat_session(who, input).await?;
         self.changed();
-        // The mode this session runs with is the agent's setting from now on.
-        self.store
-            .set_agent_settings(
-                who,
-                &issued.actor.id,
-                AgentSettings {
-                    permission_mode: Some(mode.name().to_owned()),
-                    ..AgentSettings::default()
-                },
-            )
-            .await?;
         let launched = self
             .runners
             .launch(
@@ -194,7 +224,7 @@ impl ChatRuntime {
         who: &ChatIdentity,
         issued: IssuedChatSession,
         result: Result<()>,
-    ) -> Result<(Actor, ChatSession)> {
+    ) -> Result<(Option<Actor>, ChatSession)> {
         let current = self.store.chat_session(who, &issued.session.id).await?;
         if current.stopped_at.is_some() {
             let _ = self.stop_session(&current.id).await;
@@ -204,11 +234,9 @@ impl ChatRuntime {
             self.owned_attention(who, &current.id).await;
             return Err(error);
         }
+        let _ = self.session_settings(who, &current.id).await;
         self.changed();
-        Ok((
-            self.store.settings_actor(who, &issued.actor.id).await?,
-            current,
-        ))
+        Ok((issued.actor, current))
     }
 
     async fn owned_attention(&self, who: &ChatIdentity, id: &str) {
@@ -343,7 +371,7 @@ impl ChatRuntime {
                 who,
                 HireChatSession {
                     name: String::new(),
-                    actor_id: Some(session.actor_id.clone()),
+                    actor_id: session.actor_id.clone(),
                     harness: Harness::ClaudeCode,
                     native_session_id: session.native_session_id.clone(),
                     title: session.title.clone(),

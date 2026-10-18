@@ -3,19 +3,12 @@ use crate::agent_settings::{ModelOption, NativeSettings};
 use serde::Serialize;
 use serde_json::json;
 
-#[derive(Serialize)]
-pub struct SessionSettings {
-    pub id: String,
-    pub values: Option<AgentSettings>,
-    pub error: Option<&'static str>,
-}
-
+/// An agent's defaults for its new sessions, with the choices its harness offers.
 #[derive(Serialize)]
 pub struct AgentSettingsView {
     pub actor: Actor,
     pub models: Vec<ModelOption>,
     pub editable: Vec<String>,
-    pub sessions: Vec<SessionSettings>,
 }
 
 const SETTINGS: &str = "agent-settings-v1";
@@ -289,7 +282,7 @@ impl ChatRuntime {
         }
         for session in self
             .store
-            .chat_sessions(who)
+            .sessions(who)
             .await?
             .into_iter()
             .filter(|session| {
@@ -309,156 +302,76 @@ impl ChatRuntime {
     }
 
     pub async fn agent_settings(&self, who: &ChatIdentity, id: &str) -> Result<AgentSettingsView> {
-        self.store.settings_actor(who, id).await?;
-        let gate = self.settings_gate(id).await;
-        let _guard = gate.lock().await;
-        self.agent_settings_inner(who, id).await
-    }
-
-    async fn agent_settings_inner(
-        &self,
-        who: &ChatIdentity,
-        id: &str,
-    ) -> Result<AgentSettingsView> {
         let actor = self.store.settings_actor(who, id).await?;
-        let linked: Vec<_> = self
-            .store
-            .chat_sessions(who)
-            .await?
-            .into_iter()
-            .filter(|session| session.actor_id == id && session.stopped_at.is_none())
-            .collect();
-        let mut states = Vec::new();
-        let mut snapshots = Vec::new();
-        for session in &linked {
-            let result = async {
-                let control = self.native_control(who, session, SETTINGS).await?;
-                let snapshot = control.call(session, None, false).await?;
-                self.store
-                    .observe_native_settings(
-                        &session.id,
-                        &session.native_session_id,
-                        &snapshot.values,
-                    )
-                    .await?;
-                Ok::<_, anyhow::Error>(snapshot)
-            }
-            .await;
-            match result {
-                Ok(snapshot) => {
-                    states.push(SessionSettings { id: session.id.clone(), values: Some(snapshot.values.clone()), error: None });
-                    snapshots.push(snapshot);
-                }
-                Err(_) => states.push(SessionSettings { id: session.id.clone(), values: None,
-                    error: Some(if session.host_id.as_deref() != self.store.host() {
-                        "This session belongs to another kernel host"
-                    } else if session.harness == "claude-code" && self.store.chat_session_locator(who, &session.id).await?["kind"] != "claude-runner" {
-                        "This Claude terminal does not expose live settings controls"
-                    } else {
-                        "Native settings are unavailable; the session must be connected with an up-to-date integration"
-                    }),
-                }),
-            }
-        }
-        let (models, editable) = if linked.is_empty() {
-            let harness = actor.harness.as_deref().unwrap_or_default();
-            let models = self.settings_catalog(who, harness).await?;
-            (models, fields(harness))
-        } else if snapshots.len() == linked.len() {
-            intersect(&snapshots)
-        } else {
-            (Vec::new(), Vec::new())
-        };
-        let mut actor = self.store.settings_actor(who, id).await?;
-        if !linked.is_empty() && snapshots.len() != linked.len() {
-            // Cached defaults remain available for a future explicit launch, but are not
-            // presented as the effective settings of sessions we could not inspect.
-            actor.model = None;
-            actor.effort = None;
-            actor.permission_mode = None;
-            actor.approval_policy = None;
-            actor.sandbox = None;
-        }
+        let harness = actor.harness.clone().unwrap_or_default();
         Ok(AgentSettingsView {
             actor,
-            models,
-            editable,
-            sessions: states,
+            models: self.settings_catalog(who, &harness).await?,
+            editable: fields(&harness),
         })
     }
 
+    /// The owner's defaults for the agent's new sessions; its running sessions keep theirs.
     pub async fn change_agent_settings(
         &self,
         who: &ChatIdentity,
         id: &str,
         input: AgentSettings,
     ) -> Result<Actor> {
-        self.store.settings_actor(who, id).await?;
-        let gate = self.settings_gate(id).await;
-        let _guard = gate.lock().await;
         let actor = self.store.settings_actor(who, id).await?;
         let patch: AgentSettings = serde_json::from_value(input.patch_json())?;
-        let linked: Vec<_> = self
-            .store
-            .chat_sessions(who)
-            .await?
-            .into_iter()
-            .filter(|session| session.actor_id == id && session.stopped_at.is_none())
-            .collect();
-        if linked.is_empty() {
-            let harness = actor.harness.as_deref().unwrap_or_default();
-            let snapshot = NativeSettings {
-                values: actor_settings(&actor),
-                models: self.settings_catalog(who, harness).await?,
-                editable: fields(harness),
-            };
-            snapshot.validate(&patch)?;
-            let actor = self.store.set_agent_settings(who, id, patch).await?;
-            self.changed();
-            return Ok(actor);
+        let harness = actor.harness.as_deref().unwrap_or_default();
+        NativeSettings {
+            values: actor_settings(&actor),
+            models: self.settings_catalog(who, harness).await?,
+            editable: fields(harness),
         }
-        let mut controls = Vec::new();
-        // All sessions must support the entire request before any of them is changed.
-        for session in &linked {
-            let control = self.native_control(who, session, SETTINGS).await?;
-            control.call(session, Some(&patch), true).await?;
-            controls.push(control);
-        }
-        for (session, control) in linked.iter().zip(&controls) {
-            let current = self.store.chat_session(who, &session.id).await?;
-            ensure!(
-                current.stopped_at.is_none()
-                    && current.status == "connected"
-                    && current.native_session_id == session.native_session_id,
-                "The session changed before the native settings could be applied"
-            );
-            let snapshot = control.call(session, Some(&patch), false).await?;
-            self.store
-                .observe_native_settings(&session.id, &session.native_session_id, &snapshot.values)
-                .await?;
-        }
-        let current: std::collections::HashSet<_> = self
-            .store
-            .chat_sessions(who)
-            .await?
-            .into_iter()
-            .filter(|session| session.actor_id == id && session.stopped_at.is_none())
-            .map(|session| session.id)
-            .collect();
-        ensure!(
-            current == linked.iter().map(|session| session.id.clone()).collect(),
-            "The agent's sessions changed while settings were applied; refresh their native values before making another change"
-        );
+        .validate(&patch)?;
+        let actor = self.store.set_agent_settings(who, id, patch).await?;
         self.changed();
-        Ok(self.store.settings_actor(who, id).await?)
+        Ok(actor)
+    }
+
+    /// What a running session runs with, as its harness reports it, and what it offers.
+    pub async fn session_settings(&self, who: &ChatIdentity, id: &str) -> Result<NativeSettings> {
+        let session = self.store.chat_session(who, id).await?;
+        let gate = self.settings_gate(id).await;
+        let _guard = gate.lock().await;
+        let control = self.native_control(who, &session, SETTINGS).await?;
+        let snapshot = control.call(&session, None, false).await?;
+        self.store
+            .observe_native_settings(&session.id, &session.native_session_id, &snapshot.values)
+            .await?;
+        Ok(snapshot)
+    }
+
+    /// Changes a running session's settings through its harness; nothing else changes.
+    pub async fn change_session_settings(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+        input: AgentSettings,
+    ) -> Result<NativeSettings> {
+        let session = self.store.chat_session(who, id).await?;
+        let gate = self.settings_gate(id).await;
+        let _guard = gate.lock().await;
+        let patch: AgentSettings = serde_json::from_value(input.patch_json())?;
+        let control = self.native_control(who, &session, SETTINGS).await?;
+        control.call(&session, Some(&patch), true).await?;
+        let snapshot = control.call(&session, Some(&patch), false).await?;
+        self.store
+            .observe_native_settings(&session.id, &session.native_session_id, &snapshot.values)
+            .await?;
+        self.changed();
+        Ok(snapshot)
     }
 
     /// Observe, never enforce: choosing a model in the native harness is reflected here too.
-    pub async fn refresh_agent_settings(&self) -> Result<()> {
+    pub async fn refresh_settings(&self) -> Result<()> {
         let who = self.store.chat_identity(None).await?;
         for session in self
             .store
-            .chat_sessions(&who)
+            .sessions(&who)
             .await?
             .into_iter()
             .filter(|session| {
@@ -467,7 +380,7 @@ impl ChatRuntime {
                     && session.host_id.as_deref() == self.store.host()
             })
         {
-            let gate = self.settings_gate(&session.actor_id).await;
+            let gate = self.settings_gate(&session.id).await;
             let Ok(_guard) = gate.try_lock() else {
                 continue;
             };
@@ -513,37 +426,4 @@ fn fields(harness: &str) -> Vec<String> {
         _ => {}
     }
     fields
-}
-
-fn intersect(snapshots: &[NativeSettings]) -> (Vec<ModelOption>, Vec<String>) {
-    let Some(first) = snapshots.first() else {
-        return (Vec::new(), Vec::new());
-    };
-    let models = first
-        .models
-        .iter()
-        .filter_map(|model| {
-            let mut model = model.clone();
-            for snapshot in &snapshots[1..] {
-                let other = snapshot.models.iter().find(|other| {
-                    other.value == model.value && other.resolved_model == model.resolved_model
-                })?;
-                model
-                    .efforts
-                    .retain(|effort| other.efforts.contains(effort));
-            }
-            Some(model)
-        })
-        .collect();
-    let editable = first
-        .editable
-        .iter()
-        .filter(|field| {
-            snapshots[1..]
-                .iter()
-                .all(|snapshot| snapshot.editable.contains(field))
-        })
-        .cloned()
-        .collect();
-    (models, editable)
 }

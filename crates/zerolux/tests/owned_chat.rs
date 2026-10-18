@@ -214,8 +214,8 @@ async fn native_settings_are_confirmed_at_start_and_changed_without_new_input() 
     let kernel = Kernel::start(&fixture, 0).await;
     let started = kernel
         .api(
-            "/chat/claude-sessions",
-            Some(json!({
+            "/sessions",
+            Some(json!({"harness":"claude-code",
                 "name":"Configured fixture", "workspace":fixture.dir.path().join("workspace"),
                 "model":"native-alternate", "effort":"medium", "permission_mode":"plan"
             })),
@@ -223,90 +223,70 @@ async fn native_settings_are_confirmed_at_start_and_changed_without_new_input() 
         .await;
     let actor = started["actor"]["id"].as_str().unwrap();
     let session = started["session"]["id"].as_str().unwrap();
-    assert_eq!(started["actor"]["model"], "native-alternate");
-    assert_eq!(started["actor"]["effort"], "medium");
-    assert_eq!(started["actor"]["permission_mode"], "plan");
-    let path = format!("/actors/{actor}/settings");
+    // The session's settings are its harness's, confirmed at start.
+    let path = format!("/sessions/{session}/settings");
     let view = kernel.api(&path, None).await;
+    assert_eq!(view["values"]["model"], "native-alternate");
+    assert_eq!(view["values"]["effort"], "medium");
+    assert_eq!(view["values"]["permission_mode"], "plan");
     assert_eq!(view["models"][0]["value"], "native-default");
     assert_eq!(view["models"][1]["efforts"], json!(["medium", "high"]));
     assert!(!view.to_string().contains("must-not-be-published"));
-    let changed = kernel
-        .api(
-            &path,
-            Some(json!({"model":"native-default", "effort":"low", "permission_mode":"auto"})),
-        )
-        .await;
-    assert_eq!(changed["actor"]["model"], "native-default");
-    assert_eq!(changed["actor"]["effort"], "low");
-    assert_eq!(changed["actor"]["permission_mode"], "auto");
+    let patch = |body: Value| {
+        kernel
+            .client
+            .patch(format!("{}/api{path}", kernel.url))
+            .json(&body)
+            .send()
+    };
+    let changed: Value =
+        patch(json!({"model":"native-default", "effort":"low", "permission_mode":"auto"}))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    assert_eq!(changed["values"]["model"], "native-default");
+    assert_eq!(changed["values"]["effort"], "low");
+    assert_eq!(changed["values"]["permission_mode"], "auto");
     let traces = fixture.trace();
     assert_eq!(count(&traces, "start"), 1);
     assert_eq!(count(&traces, "input"), 0);
     let mutations = count(&traces, "settings");
-    let rejected = kernel
-        .client
-        .post(format!("{}/api{path}", kernel.url))
-        .json(&json!({"effort":"invented"}))
-        .send()
-        .await
-        .unwrap();
+    let rejected = patch(json!({"effort":"invented"})).await.unwrap();
     assert!(!rejected.status().is_success());
     assert_eq!(count(&fixture.trace(), "settings"), mutations);
-    // Launching another session inherits this agent's confirmed choices before any input.
-    let next = kernel.api("/chat/claude-sessions", Some(json!({"name":"", "actor_id":actor, "workspace":fixture.dir.path().join("workspace")}))).await;
-    assert_eq!(next["actor"]["model"], "native-default");
-    assert_eq!(next["actor"]["effort"], "low");
-    assert_eq!(next["actor"]["permission_mode"], "auto");
-    assert_eq!(count(&fixture.trace(), "input"), 0);
-    let different = kernel.api("/chat/claude-sessions", Some(json!({
-        "name":"", "actor_id":actor, "workspace":fixture.dir.path().join("workspace"), "model":"native-alternate"
-    }))).await;
-    assert!(
-        different["actor"]["model"].is_null(),
-        "Different native models must not be presented as one effective choice"
-    );
-    assert!(different["actor"]["effort"].is_null());
-    let traces = fixture.trace();
-    let started = traces
-        .iter()
-        .rev()
-        .find(|event| event["event"] == "start")
-        .unwrap();
-    assert_eq!(started["model"], "native-alternate");
-    assert!(
-        started["effort"].is_null(),
-        "A new model without an effort override must not inherit the previous model's effort"
-    );
-    let mutations = count(&fixture.trace(), "settings");
-    let refused = kernel
-        .client
-        .post(format!("{}/api{path}", kernel.url))
-        .json(&json!({"effort":"low"}))
-        .send()
-        .await
-        .unwrap();
-    assert!(!refused.status().is_success());
-    assert_eq!(
-        count(&fixture.trace(), "settings"),
-        mutations,
-        "All sessions are preflighted before any mutation"
-    );
-    kernel
+    // The agent's settings are its new sessions' defaults; its running sessions keep theirs.
+    let defaults = format!("/actors/{actor}/settings");
+    let agent = kernel
         .api(
-            &path,
-            Some(json!({"model":"native-default", "effort":"high"})),
+            &defaults,
+            Some(json!({"model":"native-default", "effort":"low", "permission_mode":"auto"})),
         )
         .await;
-    let view = kernel.api(&path, None).await;
-    assert_eq!(view["actor"]["model"], "native-default");
-    assert_eq!(view["sessions"].as_array().unwrap().len(), 3);
-    assert!(
-        view["sessions"]
-            .as_array()
+    assert_eq!(agent["actor"]["model"], "native-default");
+    assert_eq!(count(&fixture.trace(), "settings"), mutations);
+    let next = kernel.api("/sessions", Some(json!({"harness":"claude-code","name":"", "actor_id":actor, "workspace":fixture.dir.path().join("workspace")}))).await;
+    let start = |trace: Vec<Value>| {
+        trace
+            .into_iter()
+            .rev()
+            .find(|e| e["event"] == "start")
             .unwrap()
-            .iter()
-            .all(|session| session["values"]["effort"] == "high")
+    };
+    let launched = start(fixture.trace());
+    assert_eq!(launched["model"], "native-default");
+    assert_eq!(launched["effort"], "low");
+    assert_eq!(launched["mode"], "auto");
+    assert_eq!(count(&fixture.trace(), "input"), 0);
+    let different = kernel.api("/sessions", Some(json!({"harness":"claude-code",
+        "name":"", "actor_id":actor, "workspace":fixture.dir.path().join("workspace"), "model":"native-alternate"
+    }))).await;
+    let launched = start(fixture.trace());
+    assert_eq!(launched["model"], "native-alternate");
+    assert!(
+        launched["effort"].is_null(),
+        "A new model without an effort override must not inherit the previous model's effort"
     );
     for id in [
         session,
@@ -314,11 +294,11 @@ async fn native_settings_are_confirmed_at_start_and_changed_without_new_input() 
         different["session"]["id"].as_str().unwrap(),
     ] {
         kernel
-            .api(&format!("/chat/sessions/{id}/stop"), Some(json!({})))
+            .api(&format!("/sessions/{id}/stop"), Some(json!({})))
             .await;
     }
     let resumed = kernel
-        .api(&format!("/chat/sessions/{session}/resume"), Some(json!({})))
+        .api(&format!("/sessions/{session}/resume"), Some(json!({})))
         .await;
     let traces = fixture.trace();
     let restored = traces
@@ -335,7 +315,7 @@ async fn native_settings_are_confirmed_at_start_and_changed_without_new_input() 
     kernel
         .api(
             &format!(
-                "/chat/sessions/{}/stop",
+                "/sessions/{}/stop",
                 resumed["session"]["id"].as_str().unwrap()
             ),
             Some(json!({})),
@@ -355,7 +335,7 @@ async fn managed_claude_bootstrap_lifecycle() {
     ] {
         let response = kernel
             .client
-            .post(format!("{}/api/chat/claude-sessions", kernel.url))
+            .post(format!("{}/api/sessions", kernel.url))
             .json(&input)
             .send()
             .await
@@ -365,8 +345,8 @@ async fn managed_claude_bootstrap_lifecycle() {
     assert!(fixture.trace().is_empty());
     let created = kernel
         .api(
-            "/chat/claude-sessions",
-            Some(json!({
+            "/sessions",
+            Some(json!({"harness":"claude-code",
                 "name":"Fixture Claude", "workspace":workspace, "permission_mode":"plan"
             })),
         )
@@ -418,7 +398,7 @@ async fn managed_claude_bootstrap_lifecycle() {
 
     let kernel = Kernel::start(&fixture, port).await;
     let sessions = kernel
-        .wait("/chat/sessions", |v| {
+        .wait("/sessions", |v| {
             v["sessions"]
                 .as_array()
                 .is_some_and(|rows| rows.len() == 1 && rows[0]["status"] == "connected")
@@ -493,7 +473,7 @@ async fn managed_claude_bootstrap_lifecycle() {
         .unwrap();
     let peer_identity = kernel.store.chat_identity(Some(&peer.token)).await.unwrap();
     let team = kernel.api("/conversations", Some(json!({"kind":"group", "title":"Fixture peers", "members":[
-        {"actor_id":actor,"session_id":session}, {"actor_id":peer.actor.id,"session_id":peer.session.id}
+        {"actor_id":actor,"session_id":session}, {"actor_id":peer.actor.as_ref().unwrap().id,"session_id":peer.session.id}
     ]}))).await;
     let team = team["conversation"]["id"].as_str().unwrap();
     kernel
@@ -520,9 +500,9 @@ async fn managed_claude_bootstrap_lifecycle() {
     );
     let response = kernel
         .client
-        .post(format!("{}/api/chat/claude-sessions", kernel.url))
+        .post(format!("{}/api/sessions", kernel.url))
         .bearer_auth(&peer.token)
-        .json(&json!({"name":"Denied","workspace":workspace}))
+        .json(&json!({"harness":"claude-code","name":"Denied","workspace":workspace}))
         .send()
         .await
         .unwrap();
@@ -534,7 +514,7 @@ async fn managed_claude_bootstrap_lifecycle() {
         .unwrap();
 
     let stopped = kernel
-        .api(&format!("/chat/sessions/{session}/stop"), Some(json!({})))
+        .api(&format!("/sessions/{session}/stop"), Some(json!({})))
         .await;
     assert_eq!(stopped["session"]["status"], "stopped");
     assert!(
@@ -562,7 +542,7 @@ async fn managed_claude_bootstrap_lifecycle() {
     )
     .unwrap();
     let resumed = kernel
-        .api(&format!("/chat/sessions/{session}/resume"), Some(json!({})))
+        .api(&format!("/sessions/{session}/resume"), Some(json!({})))
         .await;
     assert_eq!(resumed["session"]["native_session_id"], native);
     assert_eq!(resumed["actor"]["id"], actor);
@@ -598,7 +578,7 @@ async fn managed_claude_bootstrap_lifecycle() {
     kernel.shutdown().await;
     let kernel = Kernel::start(&fixture, port).await;
     let sessions = kernel
-        .wait("/chat/sessions", |v| {
+        .wait("/sessions", |v| {
             v["sessions"]
                 .as_array()
                 .unwrap()
@@ -626,7 +606,7 @@ async fn managed_claude_bootstrap_lifecycle() {
     assert_eq!(start["effort"], "high");
     assert_eq!(count(&trace, "input"), 2);
     let stopped = kernel
-        .api(&format!("/chat/sessions/{restored}/stop"), Some(json!({})))
+        .api(&format!("/sessions/{restored}/stop"), Some(json!({})))
         .await;
     assert!(stopped["session"]["attention_reason"].is_null());
     kernel.shutdown().await;
@@ -643,7 +623,7 @@ async fn managed_claude_bootstrap_lifecycle() {
 async fn a_native_crash_is_restored_without_replay_or_duplicate_processes() {
     let fixture = Fixture::new();
     let kernel = Kernel::start(&fixture, 0).await;
-    let created = kernel.api("/chat/claude-sessions", Some(json!({
+    let created = kernel.api("/sessions", Some(json!({"harness":"claude-code",
         "name":"Fixture Claude", "workspace":fixture.dir.path().join("workspace"), "permission_mode":"acceptEdits"
     }))).await;
     let session = created["session"]["id"].as_str().unwrap();
@@ -698,7 +678,7 @@ async fn a_native_crash_is_restored_without_replay_or_duplicate_processes() {
     // Kill ONLY this fixture's native child.
     kill(Pid::from_raw(pid), Signal::SIGKILL).unwrap();
     kernel
-        .wait("/chat/sessions", |v| {
+        .wait("/sessions", |v| {
             v["sessions"]
                 .as_array()
                 .unwrap()
@@ -710,7 +690,7 @@ async fn a_native_crash_is_restored_without_replay_or_duplicate_processes() {
     kernel.shutdown().await;
     let kernel = Kernel::start(&fixture, 0).await;
     let sessions = kernel
-        .wait("/chat/sessions", |v| {
+        .wait("/sessions", |v| {
             v["sessions"]
                 .as_array()
                 .unwrap()
@@ -756,7 +736,7 @@ async fn a_native_crash_is_restored_without_replay_or_duplicate_processes() {
     );
     assert_eq!(count(&fixture.trace(), "input"), 1);
     let stopped = kernel
-        .api(&format!("/chat/sessions/{next}/stop"), Some(json!({})))
+        .api(&format!("/sessions/{next}/stop"), Some(json!({})))
         .await;
     assert!(stopped["session"]["attention_reason"].is_null());
     kernel.shutdown().await;
@@ -767,7 +747,7 @@ async fn a_native_crash_is_restored_without_replay_or_duplicate_processes() {
         2,
         "Owner Stop forbids automatic restoration"
     );
-    let sessions = kernel.api("/chat/sessions", None).await;
+    let sessions = kernel.api("/sessions", None).await;
     assert!(
         sessions["sessions"]
             .as_array()
@@ -787,8 +767,8 @@ async fn a_dead_host_and_free_lease_do_not_confirm_stop_of_its_live_native_child
     let kernel = Kernel::start(&fixture, 0).await;
     let created = kernel
         .api(
-            "/chat/claude-sessions",
-            Some(json!({
+            "/sessions",
+            Some(json!({"harness":"claude-code",
                 "name":"Orphan fixture", "workspace":workspace, "permission_mode":"default"
             })),
         )
@@ -829,13 +809,13 @@ async fn a_dead_host_and_free_lease_do_not_confirm_stop_of_its_live_native_child
     assert!(kill(Pid::from_raw(native_pid), None).is_ok());
     let response = kernel
         .client
-        .post(format!("{}/api/chat/sessions/{session}/stop", kernel.url))
+        .post(format!("{}/api/sessions/{session}/stop", kernel.url))
         .json(&json!({}))
         .send()
         .await
         .unwrap();
     let status = response.status();
-    let state = kernel.api("/chat/sessions", None).await;
+    let state = kernel.api("/sessions", None).await;
     let stopped = state["sessions"]
         .as_array()
         .unwrap()
@@ -877,9 +857,9 @@ async fn an_explicit_sdk_executable_must_be_an_absolute_existing_file_before_any
         let workspace = fixture.dir.path().join("workspace");
         let response = kernel
             .client
-            .post(format!("{}/api/chat/claude-sessions", kernel.url))
+            .post(format!("{}/api/sessions", kernel.url))
             .json(
-                &json!({"name":"Fixture Claude", "workspace":workspace, "permission_mode":"plan"}),
+                &json!({"harness":"claude-code","name":"Fixture Claude", "workspace":workspace, "permission_mode":"plan"}),
             )
             .send()
             .await
@@ -888,7 +868,7 @@ async fn an_explicit_sdk_executable_must_be_an_absolute_existing_file_before_any
         // No runner trace: the refusal happened before the spawn. The session the owner asked
         // for is recorded as needing attention, never as connected.
         assert!(fixture.trace().is_empty());
-        let sessions = kernel.api("/chat/sessions", None).await;
+        let sessions = kernel.api("/sessions", None).await;
         let sessions = sessions["sessions"].as_array().unwrap();
         assert!(
             sessions.iter().all(|s| s["status"] == "attention"

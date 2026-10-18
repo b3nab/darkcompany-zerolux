@@ -101,6 +101,24 @@ impl Registry {
         sessions::ensure_pi_stopped(Path::new(agent_dir), native).await?;
         self.launch(workspace, json!({"nativeSessionId":native,"workspace":workspace,"file":file,"profile":profile,"pi":"pi"}), Some(native)).await
     }
+    /// A saved session the owner opens in ZeroLux, under a host of its own.
+    pub(crate) async fn open(
+        &self,
+        native: &str,
+        workspace: &str,
+        file: &str,
+    ) -> Result<RunnerLink> {
+        if let Some(link) = self.find(native, workspace).await? {
+            return Ok(link);
+        }
+        sessions::ensure_pi_stopped(&sessions::agent_dir()?, native).await?;
+        self.launch(
+            workspace,
+            json!({"nativeSessionId":native,"workspace":workspace,"file":file,"pi":"pi","opening":true}),
+            Some(native),
+        )
+        .await
+    }
     pub(crate) async fn create(
         &self,
         workspace: &str,

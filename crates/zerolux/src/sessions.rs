@@ -1,5 +1,5 @@
-//! Read-only native discovery and private handoff to an already-running pi extension.
-//! No resume, process launch of an agent, transcript parser, or model request lives here.
+//! Read-only native discovery, running and saved, and private handoff to an already-running
+//! pi extension. No process launch of an agent or model request lives here.
 use crate::{codex::CodexRpc, harness::Harness};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use std::{
     process::Stdio,
     time::Duration,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_OUTPUT: u64 = 4 * 1024 * 1024;
@@ -396,11 +396,123 @@ fn claude_candidates(value: &Value) -> Result<Vec<Candidate>> {
     }).collect()
 }
 
+/// What is read of a saved transcript to list it: its folder near the start, its title near
+/// the end, where Claude Code writes the latest one again.
+const TRANSCRIPT_HEAD: u64 = 256 * 1024;
+const TRANSCRIPT_TAIL: u64 = 64 * 1024;
+
+/// Claude Code's saved sessions, from their transcripts.
+#[cfg(unix)]
+async fn claude_history() -> Result<Vec<Candidate>> {
+    claude_history_in(&crate::claude::projects()?).await
+}
+#[cfg(not(unix))]
+async fn claude_history() -> Result<Vec<Candidate>> {
+    Ok(Vec::new())
+}
+
+async fn claude_history_in(projects: &Path) -> Result<Vec<Candidate>> {
+    use tokio::io::AsyncSeekExt;
+    let mut found = Vec::new();
+    let mut projects = match tokio::fs::read_dir(projects).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(found),
+        Err(error) => return Err(error.into()),
+    };
+    while let Some(project) = projects.next_entry().await? {
+        let Ok(mut files) = tokio::fs::read_dir(project.path()).await else {
+            continue;
+        };
+        while let Some(file) = files.next_entry().await? {
+            let path = file.path();
+            let Some(id) = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .filter(|stem| uuid::Uuid::parse_str(stem).is_ok())
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Ok(mut handle) = tokio::fs::File::open(&path).await else {
+                continue;
+            };
+            let metadata = handle.metadata().await?;
+            let mut workspace = None;
+            let mut lines = tokio::io::BufReader::new((&mut handle).take(TRANSCRIPT_HEAD)).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Some(cwd) = serde_json::from_str::<Value>(&line)
+                    .ok()
+                    .and_then(|record| record["cwd"].as_str().map(str::to_owned))
+                {
+                    workspace = Some(cwd);
+                    break;
+                }
+            }
+            drop(lines);
+            let Some(workspace) = workspace.filter(|cwd| Path::new(cwd).is_absolute()) else {
+                continue;
+            };
+            handle
+                .seek(std::io::SeekFrom::Start(
+                    metadata.len().saturating_sub(TRANSCRIPT_TAIL),
+                ))
+                .await?;
+            let mut tail = Vec::new();
+            handle.take(TRANSCRIPT_TAIL).read_to_end(&mut tail).await?;
+            let records: Vec<Value> = String::from_utf8_lossy(&tail)
+                .lines()
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .collect();
+            let named = |kind: &str, key: &str| {
+                records
+                    .iter()
+                    .rev()
+                    .find(|record| record["type"] == kind)
+                    .map(|record| title(record, key, ""))
+                    .filter(|name| !name.is_empty())
+            };
+            let name = named("custom-title", "customTitle")
+                .or_else(|| named("ai-title", "aiTitle"))
+                .unwrap_or_else(|| "Claude Code session".into());
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|time| time.as_millis() as i64);
+            found.push(candidate(
+                NativeSessionTarget {
+                    harness: Harness::ClaudeCode,
+                    native_session_id: id.clone(),
+                    title: name,
+                    workspace,
+                    native_locator: json!({"session_id":id,"transcript":path}),
+                },
+                modified,
+                false,
+                "Saved Claude Code session",
+            ));
+        }
+    }
+    Ok(found)
+}
+
 /// What a connected Claude Code session can and cannot do, stated up front.
 const CLAUDE_READY: &str = "Claude Code inbox verified. This terminal connection receives messages but has no ZeroLux send or thread tools. After the terminal exits, ZeroLux resumes the saved conversation through the SDK. Stop prevents recovery but cannot interrupt a turn in the terminal.";
 
-async fn discover_claude() -> Result<Vec<Candidate>> {
+async fn discover_claude(saved: bool) -> Result<Vec<Candidate>> {
     let mut candidates = claude_candidates(&command_json("claude", &["agents", "--json"]).await?)?;
+    let running: HashSet<String> = candidates
+        .iter()
+        .map(|c| c.target.native_session_id.clone())
+        .collect();
+    let saved = if saved {
+        claude_history().await.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     #[cfg(unix)]
     for entry in &mut candidates {
         // Reuse the driver's read-only verifier, rather than diverging on socket/identity rules.
@@ -419,6 +531,11 @@ async fn discover_claude() -> Result<Vec<Candidate>> {
             Err(error) => entry.public.reason = Some(format!("{error}")),
         }
     }
+    candidates.extend(
+        saved
+            .into_iter()
+            .filter(|c| !running.contains(&c.target.native_session_id)),
+    );
     Ok(candidates)
 }
 
@@ -544,8 +661,9 @@ async fn discover_codex() -> Result<Vec<Candidate>> {
     codex_candidates(&codex_endpoint()?).await
 }
 
-async fn scan() -> (Vec<Candidate>, Vec<DiscoveryError>) {
-    let (pi, claude, codex) = tokio::join!(discover_pi(), discover_claude(), discover_codex(),);
+/// Running sessions, and with `saved` the ones that can be opened again.
+async fn scan(saved: bool) -> (Vec<Candidate>, Vec<DiscoveryError>) {
+    let (pi, claude, codex) = tokio::join!(discover_pi(), discover_claude(saved), discover_codex());
     let mut candidates = Vec::new();
     let mut errors = Vec::new();
     let pi = pi.map(|(found, partial)| {
@@ -584,32 +702,31 @@ async fn scan() -> (Vec<Candidate>, Vec<DiscoveryError>) {
 }
 
 pub async fn discover_sessions() -> Discovery {
-    let (candidates, errors) = scan().await;
+    let (candidates, errors) = scan(true).await;
     Discovery {
         sessions: candidates.into_iter().map(|c| c.public).collect(),
         errors,
     }
 }
-pub async fn resolve_session(id: &str) -> Result<NativeSessionTarget> {
+/// A discovered session, running or saved: its target, and whether it is running and can be
+/// linked as it is.
+pub async fn resolve_any(id: &str) -> Result<(NativeSessionTarget, bool)> {
     ensure!(
         id.len() == 64 && id.bytes().all(|c| c.is_ascii_hexdigit()),
         "Invalid discovery selection"
     );
-    let (candidates, _) = scan().await;
+    let (candidates, _) = scan(true).await;
     let candidate = candidates
         .into_iter()
         .find(|c| c.public.id == id)
         .context("The selected session is no longer available; refresh the list")?;
-    ensure!(
-        candidate.public.availability == "attachable",
-        "The selected native session needs attention before linking"
-    );
-    Ok(candidate.target)
+    let running = candidate.public.availability == "attachable";
+    Ok((candidate.target, running))
 }
 
 /// The live session that a link stopped by a kernel restart pointed to, if it can be relinked.
 pub async fn resolve_linked(harness: &str, native_session_id: &str) -> Option<NativeSessionTarget> {
-    let (candidates, _) = scan().await;
+    let (candidates, _) = scan(false).await;
     candidates
         .into_iter()
         .find(|c| {
@@ -779,7 +896,7 @@ mod tests {
     }
     #[tokio::test]
     async fn malformed_selection_is_rejected_before_any_discovery_io() {
-        assert!(resolve_session("../../personal").await.is_err());
+        assert!(resolve_any("../../personal").await.is_err());
     }
     #[cfg(unix)]
     #[tokio::test]
@@ -930,5 +1047,42 @@ mod tests {
             .await
             .unwrap();
         assert!(discover_pi_in(&registry).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn saved_claude_sessions_are_listed_with_their_folder_and_latest_title() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("-work");
+        std::fs::create_dir(&project).unwrap();
+        let id = "3aad9b7c-8834-4fd0-bad4-db1e33573f3d";
+        let lines = [
+            json!({"type":"mode","sessionId":id}),
+            json!({"type":"user","cwd":"/work","sessionId":id}),
+            json!({"type":"ai-title","aiTitle":"First","sessionId":id}),
+            json!({"type":"custom-title","customTitle":"Release","sessionId":id}),
+            json!({"type":"ai-title","aiTitle":"Later","sessionId":id}),
+        ];
+        let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+        std::fs::write(project.join(format!("{id}.jsonl")), text).unwrap();
+        std::fs::write(project.join("notes.jsonl"), "{}\n").unwrap();
+        std::fs::write(
+            project.join("4be6ac03-dbca-45f4-9ef5-1ee0ff9f783b.jsonl"),
+            "{\"type\":\"mode\"}\n",
+        )
+        .unwrap();
+        let found = claude_history_in(root.path()).await.unwrap();
+        assert_eq!(found.len(), 1);
+        let saved = &found[0];
+        assert_eq!(saved.target.native_session_id, id);
+        assert_eq!(saved.target.workspace, "/work");
+        assert_eq!(saved.public.title, "Release");
+        assert_eq!(saved.public.availability, "attention");
+        assert!(saved.public.last_activity_at.is_some());
+        assert!(
+            claude_history_in(&root.path().join("missing"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

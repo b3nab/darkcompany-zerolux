@@ -179,7 +179,7 @@ fn starts(root: &Path) -> Vec<Value> {
 }
 async fn connected(client: &reqwest::Client, base: &str, native: &str) -> Value {
     for _ in 0..200 {
-        let list = api(client, base, "/chat/sessions", None).await;
+        let list = api(client, base, "/sessions", None).await;
         if let Some(session) = list["sessions"]
             .as_array()
             .unwrap()
@@ -237,8 +237,8 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     ready(&client, &base).await;
     let client = owner::client(&base, Duration::from_secs(65)).await;
     let invalid = client
-        .post(format!("{base}/api/chat/pi-sessions"))
-        .json(&json!({"name":"","workspace":"relative"}))
+        .post(format!("{base}/api/sessions"))
+        .json(&json!({"harness":"pi","name":"","workspace":"relative"}))
         .send()
         .await
         .unwrap();
@@ -247,8 +247,8 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     let created = api(
         &client,
         &base,
-        "/chat/pi-sessions",
-        Some(json!({"name":"Fixture pi","workspace":root.join("work")})),
+        "/sessions",
+        Some(json!({"harness":"pi","name":"Fixture pi","workspace":root.join("work")})),
     )
     .await;
     let session = &created["session"];
@@ -258,20 +258,24 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     assert_eq!(original.len(), 1);
     assert_eq!(original[0]["native"], native);
     assert_eq!(original[0]["explicit_model"], false);
-    assert_eq!(created["actor"]["model"], "fixture/native-model");
-    assert_eq!(created["actor"]["effort"], "high");
-    let settings_path = format!("/actors/{actor}/settings");
-    let choices = api(&client, &base, &settings_path, None).await;
-    assert_eq!(choices["models"].as_array().unwrap().len(), 2);
-    let changed = api(
-        &client,
-        &base,
-        &settings_path,
-        Some(json!({"model":"fixture/native-alternate", "effort":"low"})),
-    )
-    .await;
-    assert_eq!(changed["actor"]["model"], "fixture/native-alternate");
-    assert_eq!(changed["actor"]["effort"], "low");
+    // The session's settings are its harness's, read and changed through it.
+    let settings_path = format!("/sessions/{}/settings", session["id"].as_str().unwrap());
+    let settings = api(&client, &base, &settings_path, None).await;
+    assert_eq!(settings["values"]["model"], "fixture/native-model");
+    assert_eq!(settings["values"]["effort"], "high");
+    assert_eq!(settings["models"].as_array().unwrap().len(), 2);
+    let response = client
+        .patch(format!("{base}/api{settings_path}"))
+        .json(&json!({"model":"fixture/native-alternate", "effort":"low"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let changed: Value = response.json().await.unwrap();
+    assert_eq!(changed["values"]["model"], "fixture/native-alternate");
+    assert_eq!(changed["values"]["effort"], "low");
+    // The agent's own settings are what its new sessions start with, the owner's to set.
+    assert_eq!(created["actor"]["model"], Value::Null);
     assert_eq!(
         starts(&root).len(),
         1,
@@ -357,7 +361,7 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     api(
         &client,
         &base,
-        &format!("/chat/sessions/{}/stop", restored["id"].as_str().unwrap()),
+        &format!("/sessions/{}/stop", restored["id"].as_str().unwrap()),
         Some(json!({})),
     )
     .await;
@@ -369,7 +373,7 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     let resumed = api(
         &client,
         &base,
-        &format!("/chat/sessions/{}/resume", restored["id"].as_str().unwrap()),
+        &format!("/sessions/{}/resume", restored["id"].as_str().unwrap()),
         Some(json!({})),
     )
     .await;
@@ -389,7 +393,7 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
         &client,
         &base,
         &format!(
-            "/chat/sessions/{}/stop",
+            "/sessions/{}/stop",
             resumed["session"]["id"].as_str().unwrap()
         ),
         Some(json!({})),
@@ -419,7 +423,7 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     );
     let mut candidate = None;
     for _ in 0..100 {
-        let found = api(&client, &base, "/sessions", None).await;
+        let found = api(&client, &base, "/sessions/discover", None).await;
         candidate = found["sessions"]
             .as_array()
             .unwrap()
@@ -434,7 +438,7 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     let hired = api(
         &client,
         &base,
-        "/chat/hire",
+        "/sessions/attach",
         Some(json!({
             "discovered_session_id":candidate.expect("terminal discovery")["id"],
             "name":"", "actor_id":actor
@@ -451,7 +455,7 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let response = client
-            .post(format!("{base}/api/chat/sessions/{hired_id}/takeover"))
+            .post(format!("{base}/api/sessions/{hired_id}/takeover"))
             .json(&json!({}))
             .send()
             .await
@@ -480,20 +484,18 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     api(
         &client,
         &base,
-        &format!("/chat/sessions/{}/stop", taken["id"].as_str().unwrap()),
+        &format!("/sessions/{}/stop", taken["id"].as_str().unwrap()),
         Some(json!({})),
     )
     .await;
 
-    let configured = api(&client, &base, "/chat/pi-sessions", Some(json!({
+    let configured = api(&client, &base, "/sessions", Some(json!({"harness":"pi",
         "name":"", "actor_id":actor, "workspace":root.join("work"), "model":"fixture/native-model", "effort":"medium"
     }))).await;
     assert_ne!(configured["session"]["native_session_id"], native);
     assert_eq!(configured["actor"]["id"], actor);
     assert_eq!(starts(&root)[5]["model"], "fixture/native-model");
     assert_eq!(starts(&root)[5]["effort"], "medium");
-    assert_eq!(configured["actor"]["model"], "fixture/native-model");
-    assert_eq!(configured["actor"]["effort"], "medium");
     assert_eq!(
         fs::read(root.join("home/native-inputs.jsonl")).unwrap(),
         inputs
@@ -502,7 +504,7 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
         &client,
         &base,
         &format!(
-            "/chat/sessions/{}/stop",
+            "/sessions/{}/stop",
             configured["session"]["id"].as_str().unwrap()
         ),
         Some(json!({})),
@@ -512,8 +514,8 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     // A native guard failure retains the known identity, rather than minting/retrying another.
     fs::write(root.join("home/no-auth"), "fixture").unwrap();
     let failure = client
-        .post(format!("{base}/api/chat/pi-sessions"))
-        .json(&json!({"name":"Unavailable auth", "workspace":root.join("work")}))
+        .post(format!("{base}/api/sessions"))
+        .json(&json!({"harness":"pi","name":"Unavailable auth", "workspace":root.join("work")}))
         .send()
         .await
         .unwrap();

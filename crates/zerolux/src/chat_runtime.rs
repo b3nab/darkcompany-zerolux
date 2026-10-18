@@ -61,6 +61,84 @@ pub(crate) fn workspace_dir(path: &str) -> Result<String> {
     Ok(workspace.to_string_lossy().into_owned())
 }
 
+/// `git` in `dir`, bounded; its own message on failure.
+async fn git(dir: &std::path::Path, args: &[&str]) -> Result<String> {
+    let output = tokio::time::timeout(
+        Duration::from_secs(60),
+        tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .context("git timed out")?
+    .context("Cannot run git")?;
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(Error::Invalid(if message.is_empty() {
+            "git failed".into()
+        } else {
+            message
+        })
+        .into());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+impl ChatRuntime {
+    /// The folder a new session works in: `workspace`, or with `worktree` the same folder in
+    /// a new git worktree of its repository, on a branch of its own (`worktree` names it;
+    /// empty, ZeroLux does).
+    pub(crate) async fn session_dir(
+        &self,
+        workspace: &str,
+        worktree: Option<&str>,
+    ) -> Result<String> {
+        let workspace = workspace_dir(workspace)?;
+        let Some(branch) = worktree else {
+            return Ok(workspace);
+        };
+        let folder = PathBuf::from(&workspace);
+        let top = PathBuf::from(git(&folder, &["rev-parse", "--show-toplevel"]).await?);
+        let branch = match branch.trim() {
+            "" => format!(
+                "zerolux/{}",
+                &uuid::Uuid::new_v4().simple().to_string()[..8]
+            ),
+            name => git(&folder, &["check-ref-format", "--branch", name]).await?,
+        };
+        let repository = top
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "repository".into());
+        let dir = self
+            .worktrees
+            .join(repository)
+            .join(branch.replace('/', "-"));
+        std::fs::create_dir_all(dir.parent().context("Invalid worktree folder")?)?;
+        git(
+            &top,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                &branch,
+                &dir.to_string_lossy(),
+                "HEAD",
+            ],
+        )
+        .await?;
+        let inner = std::fs::canonicalize(&folder)?
+            .strip_prefix(std::fs::canonicalize(&top)?)
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        workspace_dir(&dir.join(inner).to_string_lossy())
+    }
+}
+
 enum NativeDriver {
     Codex(Box<CodexDriver>),
     #[cfg(unix)]
@@ -126,6 +204,10 @@ pub struct ChatRuntime {
     retries: std::sync::Mutex<HashMap<String, (u32, std::time::Instant)>>,
     /// Installed code at kernel activation, not edits made later in a checkout.
     integration_revisions: HashMap<&'static str, String>,
+    /// Where sessions started in a worktree of their own work.
+    worktrees: PathBuf,
+    /// What each session is producing right now; see `live`.
+    live: crate::live::Live,
 }
 
 impl ChatRuntime {
@@ -164,7 +246,8 @@ impl ChatRuntime {
         links: PathBuf,
         #[cfg(unix)] program: Option<crate::claude_runner::RunnerProgram>,
     ) -> Result<Arc<Self>> {
-        store.recover_chat_sessions().await?;
+        store.recover_sessions().await?;
+        let worktrees = links.with_file_name("worktrees");
         let (stop, stopped) = watch::channel(false);
         let changed = Arc::new(Notify::new());
         let (wake, _) = broadcast::channel(16);
@@ -223,7 +306,29 @@ impl ChatRuntime {
             settings_gates: Mutex::new(HashMap::new()),
             retries: std::sync::Mutex::new(HashMap::new()),
             integration_revisions,
+            worktrees,
+            live: crate::live::Live::default(),
         }))
+    }
+
+    /// A session's live changes, from its integration: applied, then sent to the people in
+    /// the workspace as `session.live` notices numbered like the changes.
+    pub async fn live_changes(&self, id: &str, changes: Vec<crate::live::Change>) -> Result<u64> {
+        let applied = self.live.apply(id, changes)?;
+        let people = self.store.people().await?;
+        for notice in applied.notices() {
+            let payload = serde_json::json!({"type":"session.live","session_id":id,
+                "first":notice.first,"changes":notice.changes});
+            if let Err(error) = self.livekit.notify(&payload, &people).await {
+                tracing::debug!(error = format!("{error:#}"), "Live notice not sent");
+            }
+        }
+        Ok(self.live.state(id).seq)
+    }
+
+    /// What a session is producing right now.
+    pub fn live_state(&self, id: &str) -> crate::live::State {
+        self.live.state(id)
     }
 
     pub fn changed(&self) {
@@ -259,13 +364,15 @@ impl ChatRuntime {
         Ok(serde_json::to_value(sessions::discover_sessions().await)?)
     }
 
-    pub async fn hire(
+    /// A discovered session in ZeroLux: a running one is linked as it is; a saved one is
+    /// opened again under ZeroLux, with its own history and folder. No input is sent.
+    pub async fn attach(
         &self,
         who: &ChatIdentity,
         discovered_session_id: &str,
         name: &str,
         actor_id: Option<String>,
-    ) -> Result<(Actor, ChatSession)> {
+    ) -> Result<(Option<Actor>, ChatSession)> {
         if !who.is_owner() {
             return Err(Error::Forbidden.into());
         }
@@ -276,8 +383,62 @@ impl ChatRuntime {
         {
             return Err(Error::Invalid("Invalid discovered session ID".into()).into());
         }
-        let target = sessions::resolve_session(discovered_session_id).await?;
-        self.link(who, target, name, actor_id, false).await
+        let (target, running) = sessions::resolve_any(discovered_session_id).await?;
+        if running {
+            return self.link(who, target, name, actor_id, false).await;
+        }
+        self.store
+            .check_hire(who, target.harness, actor_id.as_deref(), name)
+            .await?;
+        ensure!(!*self.stop.borrow(), "The kernel is stopping");
+        match target.harness {
+            Harness::Codex => {
+                let endpoint = sessions::ensure_codex_daemon().await?;
+                let driver = CodexDriver::resume(
+                    &endpoint,
+                    &target.native_session_id,
+                    &target.workspace,
+                    || async { Ok(true) },
+                )
+                .await?;
+                let target = sessions::NativeSessionTarget {
+                    native_locator: serde_json::json!({"endpoint": endpoint}),
+                    ..target
+                };
+                self.bind(
+                    who,
+                    target,
+                    name,
+                    actor_id,
+                    false,
+                    Some(NativeDriver::Codex(Box::new(driver))),
+                )
+                .await
+            }
+            #[cfg(unix)]
+            Harness::Pi => {
+                let file = target.native_locator["session_file"]
+                    .as_str()
+                    .context("The saved pi session has no file")?;
+                let host = self
+                    .pi_runners
+                    .open(&target.native_session_id, &target.workspace, file)
+                    .await?;
+                let result = async {
+                    let opened = host.target().await?;
+                    self.link(who, opened, name, actor_id, false).await
+                }
+                .await;
+                if result.is_err() {
+                    host.discard_unstarted().await;
+                }
+                result
+            }
+            #[cfg(unix)]
+            Harness::ClaudeCode => self.open_claude(who, target, name, actor_id).await,
+            #[cfg(not(unix))]
+            _ => bail!("Saved sessions open only on a Unix execution host"),
+        }
     }
 
     async fn link(
@@ -287,7 +448,7 @@ impl ChatRuntime {
         name: &str,
         actor_id: Option<String>,
         resume: bool,
-    ) -> Result<(Actor, ChatSession)> {
+    ) -> Result<(Option<Actor>, ChatSession)> {
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
         // Verify native identity before creating a link. No prompt is submitted.
         let driver = match target.harness {
@@ -345,7 +506,7 @@ impl ChatRuntime {
         actor_id: Option<String>,
         resume: bool,
         driver: Option<NativeDriver>,
-    ) -> Result<(Actor, ChatSession)> {
+    ) -> Result<(Option<Actor>, ChatSession)> {
         let issued = match self
             .store
             .hire_chat_session(
@@ -370,26 +531,7 @@ impl ChatRuntime {
             Err(error) => return Err(error.into()),
         };
         self.changed();
-        // What the harness reports it runs with, on the agent.
-        let (model, effort) = match &driver {
-            Some(NativeDriver::Codex(codex)) => (
-                codex.settings()["model"].as_str().map(str::to_owned),
-                codex.settings()["reasoningEffort"]
-                    .as_str()
-                    .map(str::to_owned),
-            ),
-            _ => (
-                target.native_locator["model"].as_str().map(str::to_owned),
-                target.native_locator["effort"].as_str().map(str::to_owned),
-            ),
-        };
-        if let Err(error) = self
-            .store
-            .observe_agent_settings(&issued.actor.id, model.as_deref(), effort.as_deref())
-            .await
-        {
-            tracing::warn!(error = %error, "Agent settings were not recorded");
-        }
+        self.live.forget(&issued.session.id);
         let paired = if let Some(driver) = driver {
             self.connect_native(driver, &issued.session, issued.token)
                 .await
@@ -411,6 +553,8 @@ impl ChatRuntime {
             self.changed();
             return Err(error);
         }
+        // What it runs with, confirmed by its harness, for a later relaunch.
+        let _ = self.session_settings(who, &issued.session.id).await;
         // As it is now: the owner may have stopped it while it was pairing.
         let session = self.store.chat_session(who, &issued.session.id).await?;
         Ok((issued.actor, session))
@@ -425,13 +569,15 @@ impl ChatRuntime {
         &self,
         who: &ChatIdentity,
         input: CreateCodexSession,
-    ) -> Result<(Actor, ChatSession)> {
+    ) -> Result<(Option<Actor>, ChatSession)> {
         if !who.is_owner() {
             return Err(Error::Forbidden.into());
         }
-        let workspace = workspace_dir(&input.workspace)?;
         self.store
             .check_hire(who, Harness::Codex, input.actor_id.as_deref(), &input.name)
+            .await?;
+        let workspace = self
+            .session_dir(&input.workspace, input.worktree.as_deref())
             .await?;
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
         let chosen = self
@@ -480,8 +626,7 @@ impl ChatRuntime {
             )
             .await
             .context(CodexStartFailure::Unlinked { thread_id })?;
-        let native = self.agent_settings(who, &actor.id).await?;
-        Ok((native.actor, session))
+        Ok((actor, session))
     }
 
     #[cfg(unix)]
@@ -489,13 +634,15 @@ impl ChatRuntime {
         &self,
         who: &ChatIdentity,
         input: crate::model::CreatePiSession,
-    ) -> Result<(Actor, ChatSession)> {
+    ) -> Result<(Option<Actor>, ChatSession)> {
         if !who.is_owner() {
             return Err(Error::Forbidden.into());
         }
-        let workspace = workspace_dir(&input.workspace)?;
         self.store
             .check_hire(who, Harness::Pi, input.actor_id.as_deref(), &input.name)
+            .await?;
+        let workspace = self
+            .session_dir(&input.workspace, input.worktree.as_deref())
             .await?;
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
         let initial = self
@@ -518,11 +665,8 @@ impl ChatRuntime {
         let native_session_id = host.native_id().to_owned();
         let result = async {
             let target = host.target().await?;
-            let (actor, session) = self
-                .link(who, target, &input.name, input.actor_id, false)
-                .await?;
-            let native = self.agent_settings(who, &actor.id).await?;
-            Ok::<_, anyhow::Error>((native.actor, session))
+            self.link(who, target, &input.name, input.actor_id, false)
+                .await
         }
         .await;
         // A failed response is not permission to start another identity or kill native work.
@@ -532,8 +676,77 @@ impl ChatRuntime {
         result.context(PiStartFailure::Unlinked { native_session_id })
     }
 
+    /// The owner's Resume of a stopped session, or of one whose link was lost, through its
+    /// harness: the same native session, continued.
+    pub async fn resume(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+    ) -> Result<(Option<Actor>, ChatSession)> {
+        let session = self.store.chat_session(who, id).await?;
+        match session.harness.as_str() {
+            "codex" => self.resume_codex(who, session).await,
+            #[cfg(unix)]
+            "pi" => self.resume_pi(who, id).await,
+            #[cfg(unix)]
+            _ => self.resume_claude(who, id).await,
+            #[cfg(not(unix))]
+            _ => bail!("This session can be resumed only on a Unix execution host"),
+        }
+    }
+
+    async fn resume_codex(
+        &self,
+        who: &ChatIdentity,
+        session: ChatSession,
+    ) -> Result<(Option<Actor>, ChatSession)> {
+        if !who.is_owner() {
+            return Err(Error::Forbidden.into());
+        }
+        ensure!(
+            session.stopped_at.is_some() || session.status == "attention",
+            "Stop the running session before resuming it"
+        );
+        self.store
+            .check_hire(who, Harness::Codex, session.actor_id.as_deref(), "")
+            .await?;
+        ensure!(!*self.stop.borrow(), "The kernel is stopping");
+        let endpoint = sessions::ensure_codex_daemon().await?;
+        if let Some(previous) = self.agents.lock().await.remove(&session.id) {
+            previous.release().await;
+        }
+        let driver = CodexDriver::resume(
+            &endpoint,
+            &session.native_session_id,
+            &session.workspace,
+            || async { Ok(true) },
+        )
+        .await?;
+        let target = sessions::NativeSessionTarget {
+            harness: Harness::Codex,
+            native_session_id: session.native_session_id.clone(),
+            title: session.title.clone(),
+            workspace: session.workspace.clone(),
+            native_locator: serde_json::json!({"endpoint": endpoint}),
+        };
+        let reconnect = session.stopped_at.is_none();
+        self.bind(
+            who,
+            target,
+            "",
+            session.actor_id,
+            reconnect,
+            Some(NativeDriver::Codex(Box::new(driver))),
+        )
+        .await
+    }
+
     #[cfg(unix)]
-    pub async fn resume_pi(&self, who: &ChatIdentity, id: &str) -> Result<(Actor, ChatSession)> {
+    pub async fn resume_pi(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+    ) -> Result<(Option<Actor>, ChatSession)> {
         if !who.is_owner() {
             return Err(Error::Forbidden.into());
         }
@@ -544,7 +757,7 @@ impl ChatRuntime {
             "Stop the running session before resuming it"
         );
         self.store
-            .check_hire(who, Harness::Pi, Some(&session.actor_id), "")
+            .check_hire(who, Harness::Pi, session.actor_id.as_deref(), "")
             .await?;
         let live = sessions::resolve_linked("pi", &session.native_session_id).await;
         let target = self.pi_target(who, &session, live).await?;
@@ -553,7 +766,7 @@ impl ChatRuntime {
             previous.release().await;
         }
         // Explicit Resume after an owner's Stop transfers only never-attempted deliveries.
-        self.bind(who, target, "", Some(session.actor_id), reconnect, None)
+        self.bind(who, target, "", session.actor_id, reconnect, None)
             .await
     }
 
@@ -571,7 +784,7 @@ impl ChatRuntime {
             );
         }
         self.store
-            .check_hire(who, Harness::Pi, Some(&session.actor_id), "")
+            .check_hire(who, Harness::Pi, session.actor_id.as_deref(), "")
             .await?;
         let live = sessions::resolve_linked("pi", &session.native_session_id)
             .await
@@ -671,7 +884,7 @@ impl ChatRuntime {
 
     async fn relink(&self, backoff: bool) -> Result<()> {
         let owner = self.store.chat_identity(None).await?;
-        let linked = self.store.chat_sessions(&owner).await?;
+        let linked = self.store.sessions(&owner).await?;
         // This host's sessions only: their native processes are here.
         for session in linked.into_iter().filter(|s| {
             s.stopped_at.is_none()
@@ -759,7 +972,7 @@ impl ChatRuntime {
                 lost.release().await;
             }
             match self
-                .link(&owner, target, "", Some(session.actor_id), true)
+                .link(&owner, target, "", session.actor_id.clone(), true)
                 .await
             {
                 // The owner stopped the relinking session while it was pairing: torn down.
@@ -1078,6 +1291,7 @@ impl ChatRuntime {
     }
 
     pub async fn stop_session(&self, id: &str) -> Result<Option<&'static str>> {
+        self.live.forget(id);
         let agent = self.agents.lock().await.remove(id);
         let Some(mut agent) = agent else {
             #[cfg(unix)]
