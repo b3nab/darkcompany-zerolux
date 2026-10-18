@@ -177,7 +177,15 @@ export type LiveChange =
   | { type: "done"; item: string }
   | { type: "clear" }
   /** The owner's inputs waiting in the harness's queue, all of them, oldest first. */
-  | { type: "queue"; items: { id: string; text: string }[] };
+  | { type: "queue"; items: { id: string; text: string }[] }
+  /** How full the context is and what the session has used, as the harness counts them. */
+  | {
+      type: "usage";
+      context_tokens?: number | null;
+      context_window?: number | null;
+      total_tokens?: number | null;
+      cost_usd?: number | null;
+    };
 /** How often streamed output reaches ZeroLux. */
 const LIVE_EVERY_MS = 150;
 /** Characters of one report's append: within what ZeroLux takes. */
@@ -871,9 +879,9 @@ export class ChatBridge {
    */
   live(change: LiveChange) {
     if (!this.session || this.closed) return;
-    if (change.type === "queue") {
+    if (change.type === "queue" || change.type === "usage") {
       this.liveChanges = this.liveChanges.filter(
-        (waiting) => waiting.type !== "queue",
+        (waiting) => waiting.type !== change.type,
       );
       this.liveChanges.push(change);
       this.reportLive();
