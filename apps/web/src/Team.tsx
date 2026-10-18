@@ -22,6 +22,7 @@ import {
   folderName,
   recentFolders,
   sessionState,
+  joinedHarnesses,
   contextShare,
   percent,
   tokenCount,
@@ -35,6 +36,7 @@ import type {
   CodexSandbox,
   DiscoveredSession,
   Discovery,
+  Host,
   NewSession,
   SessionUsage,
   Tone,
@@ -277,6 +279,8 @@ export function StartSession({
   created,
   className,
   ready,
+  here = true,
+  computers = [],
 }: {
   chat: Chat;
   actors: Actor[];
@@ -284,6 +288,10 @@ export function StartSession({
   folders: string[];
   /** For a guest on a computer: whether a harness has their own account there to run with. */
   ready?: (harness: Startable) => boolean;
+  /** Whether sessions may start on the workspace's computer, the kernel's own. */
+  here?: boolean;
+  /** One's own joined computers online, where sessions may start too. */
+  computers?: Host[];
   busy: boolean;
   perform: Perform;
   /** Who it works for at first: no agent, or a new one. */
@@ -294,7 +302,13 @@ export function StartSession({
   created?: (session: ChatSession) => void;
   className?: string;
 }) {
-  const [harness, setHarness] = useState<Startable>("claude-code");
+  // Where it runs: the workspace's computer (""), or one of one's own by its ID.
+  const [where, setWhere] = useState(here ? "" : (computers[0]?.id ?? ""));
+  const away = where !== "";
+  // A joined computer runs only some harnesses so far.
+  const offered = startable.filter((h) => !away || joinedHarnesses.includes(h));
+  const [chosen, setHarness] = useState<Startable>("claude-code");
+  const harness = offered.includes(chosen) ? chosen : offered[0]!;
   const agents = actors.filter(
     (a) => a.kind === "agent" && !a.archived && a.harness === harness,
   );
@@ -323,7 +337,7 @@ export function StartSession({
     event.preventDefault();
     const common = {
       workspace: workspace.trim(),
-      ...(worktree ? { worktree: branch.trim() } : {}),
+      ...(worktree && !away ? { worktree: branch.trim() } : {}),
       ...agentLaunchSettings(model, effort),
       ...(pick === NO_AGENT
         ? {}
@@ -341,6 +355,7 @@ export function StartSession({
               ...common,
               ...(policy ? { approval_policy: policy } : {}),
               ...(sandbox ? { sandbox } : {}),
+              ...(away ? { host: where } : {}),
             };
     let session: ChatSession | undefined;
     const started = await perform(async () => {
@@ -369,6 +384,34 @@ export function StartSession({
         <h2 className="text-base font-semibold">{heading}</h2>
         <p className="text-sm text-muted-foreground">{intro}</p>
       </div>
+      {computers.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="start-where">Where</Label>
+          <NativeSelect
+            id="start-where"
+            className="w-full"
+            value={where}
+            onChange={(e) => setWhere(e.target.value)}
+          >
+            {here && (
+              <NativeSelectOption value="">
+                The workspace's computer
+              </NativeSelectOption>
+            )}
+            {computers.map((computer) => (
+              <NativeSelectOption key={computer.id} value={computer.id}>
+                {computer.name}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+          {away && (
+            <p className="text-xs text-muted-foreground">
+              On your computer, with its own {harnessLabels.codex}: its folders,
+              accounts and settings.
+            </p>
+          )}
+        </div>
+      )}
       <div className="flex flex-col gap-2">
         <Label htmlFor="start-harness">Harness</Label>
         <NativeSelect
@@ -385,7 +428,7 @@ export function StartSession({
             setSandbox("");
           }}
         >
-          {startable.map((h) => (
+          {offered.map((h) => (
             <NativeSelectOption key={h} value={h}>
               {harnessLabels[h]}
             </NativeSelectOption>
@@ -448,25 +491,27 @@ export function StartSession({
           ))}
         </datalist>
       </div>
-      <div className="flex flex-col gap-2">
-        <Label className="font-normal">
-          <Checkbox
-            checked={worktree}
-            onCheckedChange={(checked) => setWorktree(checked)}
-          />
-          In a new git worktree of the folder
-        </Label>
-        {worktree && (
-          <Input
-            aria-label="Branch"
-            value={branch}
-            onChange={(e) => setBranch(e.target.value)}
-            placeholder="Branch: ZeroLux names one if empty"
-            maxLength={200}
-            className="font-mono"
-          />
-        )}
-      </div>
+      {!away && (
+        <div className="flex flex-col gap-2">
+          <Label className="font-normal">
+            <Checkbox
+              checked={worktree}
+              onCheckedChange={(checked) => setWorktree(checked)}
+            />
+            In a new git worktree of the folder
+          </Label>
+          {worktree && (
+            <Input
+              aria-label="Branch"
+              value={branch}
+              onChange={(e) => setBranch(e.target.value)}
+              placeholder="Branch: ZeroLux names one if empty"
+              maxLength={200}
+              className="font-mono"
+            />
+          )}
+        </div>
+      )}
       <div className="grid gap-3 sm:grid-cols-2">
         {launchFields.map(({ key, label, options }) => (
           <div key={key} className="flex flex-col gap-2">
@@ -567,7 +612,7 @@ export function StartSession({
           Uses pi's own tools and project settings.
         </p>
       )}
-      {ready && !ready(harness) && (
+      {ready && !away && !ready(harness) && (
         <p className="rounded-md bg-attention/10 p-3 text-sm">
           Your sessions on this computer use your own accounts, and{" "}
           {harnessLabels[harness]} has none of yours yet:{" "}
@@ -581,7 +626,9 @@ export function StartSession({
         type="submit"
         className="self-start"
         disabled={
-          busy || !workspace.trim() || (ready !== undefined && !ready(harness))
+          busy ||
+          !workspace.trim() ||
+          (ready !== undefined && !away && !ready(harness))
         }
       >
         Start
@@ -1249,6 +1296,7 @@ export function SessionCard({
   usage,
   budget,
   delegatedBy,
+  computer,
 }: {
   session: ChatSession;
   name: string;
@@ -1260,6 +1308,8 @@ export function SessionCard({
   budget?: (usd: number) => Promise<boolean>;
   /** The session that started it to delegate work to it. */
   delegatedBy?: ReactNode;
+  /** The joined computer it runs on, and whether it is online. */
+  computer?: ReactNode;
   busy: boolean;
   /** Stops it; none for someone who may only read it. */
   stop?: () => Promise<boolean>;
@@ -1299,6 +1349,7 @@ export function SessionCard({
           <Fact label="Folder" className="font-mono text-xs break-all">
             {session.workspace}
           </Fact>
+          {computer && <Fact label="Computer">{computer}</Fact>}
           <Fact label="Started by">
             {delegatedBy ??
               (session.origin === "owned" ? "ZeroLux" : "You, then hired")}

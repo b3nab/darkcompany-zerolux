@@ -55,6 +55,8 @@ import {
   useHistorySearch,
   sessionAccess,
   sessionMatches,
+  ownComputers,
+  sessionComputer,
   sessionName,
   shareChoice,
   shareLabels,
@@ -89,6 +91,7 @@ import type {
   Perform,
   PlanStep,
   QueuedInput,
+  Host,
   SessionShare,
   SessionUsage,
   ShareChoice as ShareChoiceValue,
@@ -223,11 +226,14 @@ export function ConsoleList({
   actors,
   starts = true,
   guestOn,
+  hosts,
   busy,
   perform,
 }: {
   chat: Chat;
   actors: Actor[];
+  /** The workspace's computers: one's own joined ones run sessions too. */
+  hosts?: Host[];
   /** Sessions start on this computer for its person, or for anyone it is open to. */
   starts?: boolean;
   /** The computer one is a guest on: one's sessions there need one's own accounts. */
@@ -238,6 +244,8 @@ export function ConsoleList({
   const { me } = useMe(actors);
   const [view, setView] = useState<ListView>("live");
   const [starting, setStarting] = useState(false);
+  // One's own joined computers online: sessions start there too.
+  const computers = ownComputers(hosts, me?.id);
   // A guest's sessions here run with their own accounts: one per harness, connected first.
   const { accounts: guestAccounts } = useHostAccounts(guestOn);
   // Every word typed is in the session's title, agent, folder, harness or latest line.
@@ -270,7 +278,7 @@ export function ConsoleList({
     <section aria-label="Console" className="flex min-h-0 flex-1 flex-col">
       <header className="flex items-center justify-between gap-2 px-4 pt-4 pb-3">
         <h2 className="text-lg font-semibold tracking-tight">Console</h2>
-        {starts && (
+        {(starts || computers.length > 0) && (
           <Button size="sm" variant="outline" onClick={() => setStarting(true)}>
             <PlusIcon data-icon="inline-start" />
             New session
@@ -293,6 +301,8 @@ export function ConsoleList({
             busy={busy}
             perform={perform}
             agent="none"
+            here={starts}
+            computers={computers}
             ready={
               guestOn
                 ? (harness) => accountReady(guestAccounts, harness)
@@ -410,6 +420,11 @@ export function ConsoleList({
                         className="size-3 shrink-0 text-faint"
                       />
                     )}
+                    {sessionComputer(session, hosts) && (
+                      <span className="truncate font-mono text-[11px] text-faint">
+                        on {sessionComputer(session, hosts)!.name}
+                      </span>
+                    )}
                     {session.owner_id !== me?.id && (
                       <span className="truncate font-mono text-[11px] text-faint">
                         by{" "}
@@ -486,15 +501,21 @@ export function SessionView({
   session,
   chat,
   actors,
+  hosts,
   busy,
   perform,
 }: {
   session: ChatSession;
   chat: Chat;
   actors: Actor[];
+  /** The workspace's computers: a session on a joined one is reached through its link. */
+  hosts?: Host[];
   busy: boolean;
   perform: Perform;
 }) {
+  // A joined computer runs it: its settings, images, terminals, forks, git and CI stay there.
+  const computer = sessionComputer(session, hosts);
+  const away = computer !== undefined;
   const name = sessionName(session, actors);
   const agent = actors.find((a) => a.id === session.actor_id);
   const tone = sessionTone(session);
@@ -574,6 +595,7 @@ export function SessionView({
         busy={busy}
         perform={perform}
         send={note}
+        act={access.write && !away}
         close={() => setPane(undefined)}
       />
     ) : pane === "files" ? (
@@ -594,7 +616,7 @@ export function SessionView({
         chatTitle={chatTitle}
         close={() => setPane(undefined)}
       />
-    ) : pane === "terminal" && access.write ? (
+    ) : pane === "terminal" && access.write && !away ? (
       <TerminalPanel
         session={session}
         perform={perform}
@@ -783,7 +805,7 @@ export function SessionView({
                   <FileSearchIcon data-icon="inline-start" />
                   <span className="max-xl:sr-only">Files</span>
                 </Button>
-                {access.write && (
+                {access.write && !away && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -852,14 +874,18 @@ export function SessionView({
                     )}
                     {session.archived_at ? "Unarchive" : "Archive"}
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => void fork()}>
-                    <GitForkIcon />
-                    Fork
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setAsking(true)}>
-                    <MessageCircleQuestionIcon />
-                    Ask on the side…
-                  </DropdownMenuItem>
+                  {!away && (
+                    <>
+                      <DropdownMenuItem onClick={() => void fork()}>
+                        <GitForkIcon />
+                        Fork
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setAsking(true)}>
+                        <MessageCircleQuestionIcon />
+                        Ask on the side…
+                      </DropdownMenuItem>
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -880,6 +906,10 @@ export function SessionView({
                   name={name}
                   facts
                   usage={usage}
+                  computer={
+                    computer &&
+                    `${computer.name} · ${computer.online ? "online" : "offline"}`
+                  }
                   delegatedBy={
                     parent && (
                       <Link
@@ -948,7 +978,7 @@ export function SessionView({
                   perform={perform}
                 />
               )}
-              {about && access.write && (
+              {about && access.write && !away && (
                 <SessionTriggers
                   session={session}
                   revision={at}
@@ -989,7 +1019,7 @@ export function SessionView({
                         <InputActions
                           input={input}
                           // A fork is its person's; rewinding works the session's files.
-                          fork={access.mine ? fork : undefined}
+                          fork={access.mine && !away ? fork : undefined}
                           // Claude Code keeps checkpoints of the files; the others do not.
                           rewind={
                             session.harness === "claude-code"
@@ -1033,6 +1063,7 @@ export function SessionView({
             session={session}
             name={name}
             owner={access.write}
+            away={away}
             working={working}
             busy={busy}
             perform={perform}
@@ -1269,6 +1300,7 @@ function SessionInput({
   session,
   name,
   owner,
+  away = false,
   working,
   busy,
   perform,
@@ -1281,6 +1313,8 @@ function SessionInput({
   session: ChatSession;
   name: string;
   owner: boolean;
+  /** It runs on a joined computer, reached through its link. */
+  away?: boolean;
   working: boolean;
   busy: boolean;
   perform: Perform;
@@ -1380,6 +1414,8 @@ function SessionInput({
   const modes = !(
     session.harness === "claude-code" && session.origin !== "owned"
   );
+  // A joined computer takes words, not images, so far.
+  const images = modes && !away;
   async function submit(mode: InputMode = "steer") {
     if (!open || empty || tooLong || imagesError) return;
     const sent = text;
@@ -1409,11 +1445,11 @@ function SessionInput({
         void submit();
       }}
       onDragOver={(event) => {
-        if (modes && open && event.dataTransfer.types.includes("Files"))
+        if (images && open && event.dataTransfer.types.includes("Files"))
           event.preventDefault();
       }}
       onDrop={(event) => {
-        if (!modes || !open) return;
+        if (!images || !open) return;
         event.preventDefault();
         add(event.dataTransfer.files);
       }}
@@ -1475,7 +1511,7 @@ function SessionInput({
         </ul>
       )}
       <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
-        {modes && (
+        {images && (
           <>
             <input
               ref={picker}
@@ -1532,7 +1568,7 @@ function SessionInput({
             const pasted = [...event.clipboardData.files].filter((file) =>
               file.type.startsWith("image/"),
             );
-            if (!modes || !pasted.length) return;
+            if (!images || !pasted.length) return;
             event.preventDefault();
             add(pasted);
           }}
@@ -1626,7 +1662,8 @@ function SessionInput({
           </div>
         )}
       </div>
-      {open && <SessionSettings session={session} perform={perform} />}
+      {/* A joined computer's settings are changed there. */}
+      {open && !away && <SessionSettings session={session} perform={perform} />}
       <div className="mx-auto flex w-full max-w-3xl items-center gap-3 font-mono text-[11px] text-faint">
         <p className="min-w-0 flex-1">
           {tooLong

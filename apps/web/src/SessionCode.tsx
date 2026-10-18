@@ -142,6 +142,7 @@ export function ChangesPanel({
   busy,
   perform,
   send,
+  act,
   close,
 }: {
   session: ChatSession;
@@ -155,9 +156,11 @@ export function ChangesPanel({
    * sees its changes without acting on them.
    */
   send?: (text: string) => Promise<void>;
+  /** Staging, discarding, committing, pushing and pull requests; what is only read has none. */
+  act?: boolean;
   close: () => void;
 }) {
-  const write = send !== undefined;
+  const write = act ?? send !== undefined;
   const [open, setOpen] = useState<{ path: string; staged: boolean }>();
   const [discarding, setDiscarding] = useState<string[]>();
   const status = git.status;

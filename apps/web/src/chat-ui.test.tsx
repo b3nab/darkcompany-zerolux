@@ -1183,6 +1183,68 @@ test("starting an agent asks for a harness, an agent, a folder and how it asks p
   );
   expect(own).toMatch(/value="none"[^>]*selected="">No agent/);
   expect(own).not.toContain('id="start-name"');
+  // On one's own joined computer, only what it runs so far, and no worktree.
+  const studio = {
+    id: "h-studio",
+    name: "Studio",
+    person_id: OWNER,
+    open: false,
+    created_at: 0,
+    seen_at: 0,
+    here: false,
+    joined: true,
+    online: true,
+  };
+  const away = renderToStaticMarkup(
+    <StartSession
+      chat={fakeChat({})}
+      actors={actors}
+      folders={[]}
+      busy={false}
+      perform={perform}
+      agent="none"
+      heading="New session"
+      intro=""
+      here={false}
+      computers={[studio]}
+    />,
+  );
+  expect(away).toContain('id="start-where"');
+  expect(away).toMatch(/value="h-studio"[^>]*selected="">Studio</);
+  expect(away).not.toContain("The workspace&#x27;s computer");
+  expect(away).toContain(">Codex</option>");
+  expect(away).not.toContain(">Claude Code</option>");
+  expect(away).not.toContain("git worktree");
+  // A session there says so, and leaves on it what stays on it.
+  const there: ChatSession = {
+    ...session("s-studio", ASPEN),
+    harness: "codex",
+    host_id: "h-studio",
+  };
+  expect(
+    renderToStaticMarkup(
+      <ConsoleList
+        busy={false}
+        perform={perform}
+        chat={fakeChat({ sessions: [there] })}
+        actors={actors}
+        hosts={[studio]}
+      />,
+    ),
+  ).toContain("on Studio");
+  const view = renderToStaticMarkup(
+    <SessionView
+      session={there}
+      chat={fakeChat({ sessions: [there] })}
+      actors={actors}
+      hosts={[studio]}
+      busy={false}
+      perform={perform}
+    />,
+  );
+  expect(view).toContain('title="Changes"');
+  expect(view).not.toContain('title="Terminal"');
+  expect(view).not.toContain('aria-label="Add images"');
   // A guest starts only once the chosen harness has their own account on this computer.
   const guest = renderToStaticMarkup(
     <StartSession

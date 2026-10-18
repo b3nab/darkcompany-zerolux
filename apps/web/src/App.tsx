@@ -265,6 +265,7 @@ export function App({
       actors={actors}
       starts={starts}
       guestOn={guestOn}
+      hosts={hosts}
       busy={busy}
       perform={perform}
     />
@@ -605,6 +606,7 @@ export function App({
                           session={consoleSession}
                           chat={chat}
                           actors={workspace.actors}
+                          hosts={hosts}
                           busy={busy}
                           perform={perform}
                         />,
