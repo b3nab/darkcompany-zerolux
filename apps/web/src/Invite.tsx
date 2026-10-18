@@ -20,8 +20,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 
-/** An address only this computer reaches: a link with it brings nobody else in. */
-const onlyHere = (address: string) =>
+/** An address only this computer reaches: nobody else comes in through it. */
+export const onlyHere = (address: string) =>
   /^https?:\/\/(localhost|127\.|\[::1\])/.test(address);
 
 /**

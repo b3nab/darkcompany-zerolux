@@ -3,7 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import type { Workspace } from "@zerolux/chat";
 import { App } from "./App";
-import { AdministrationPage, MySettingsPage, ProfilePage } from "./Account";
+import {
+  AdministrationPage,
+  hostState,
+  MySettingsPage,
+  ProfilePage,
+} from "./Account";
 import {
   Connection,
   WorkspaceSettings,
@@ -218,4 +223,24 @@ test("your profile, your settings and the administration are three separate page
   expect(admin).toMatch(/Chats<\/span>(?:(?!<\/li>).)*Available/);
   expect(admin).toMatch(/Meetings<\/span>(?:(?!<\/li>).)*Not yet/);
   expect(admin).not.toContain("Theme");
+});
+
+test("a computer says where it stands: the kernel's own, waiting for its code, online or not", () => {
+  const host = {
+    id: "h1",
+    name: "Studio Mac",
+    person_id: "p1",
+    open: false,
+    created_at: 0,
+    seen_at: Date.now(),
+    here: false,
+    joined: true,
+    online: true,
+  };
+  expect(hostState(host)).toBe("online");
+  expect(hostState({ ...host, online: false })).toMatch(/^offline · seen /);
+  expect(hostState({ ...host, joined: false, online: false })).toBe(
+    "waiting to join",
+  );
+  expect(hostState({ ...host, here: true })).toMatch(/^runs ZeroLux · seen /);
 });

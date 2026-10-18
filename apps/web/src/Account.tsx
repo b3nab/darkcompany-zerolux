@@ -7,9 +7,13 @@ import {
   capabilityStatus,
   deviceName,
   errorMessage,
+  joinCommand,
+  kernelUrl,
   renameWorkspace,
+  useHostJoining,
   useHosts,
 } from "@zerolux/chat";
+import type { Host, HostLink } from "@zerolux/chat";
 import type { AuthConnection, AuthDevice, Perform } from "@zerolux/chat";
 import { themes } from "@zerolux/theme/themes";
 import type { Actor, Workspace } from "./api";
@@ -25,6 +29,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Connection, WorkspaceSettings } from "@/components/workspace-settings";
 import { HostAccounts } from "./HostAccounts";
+import { onlyHere } from "./Invite";
+import { Copy } from "@/components/tool-call";
 
 /** A page of settings: what it is about, and its sections. */
 function Settings({
@@ -266,8 +272,9 @@ function Computers({
   busy: boolean;
   perform: Perform;
 }) {
-  const { hosts, error, change } = useHosts();
+  const { hosts, error, change, link, remove, reload } = useHosts();
   const [naming, setNaming] = useState<{ id: string; name: string }>();
+  const [removing, setRemoving] = useState<string>();
   if (!hosts?.length && !error) return null;
   return (
     <Section title="Computers">
@@ -327,21 +334,60 @@ function Computers({
                     {host.name}
                   </span>
                   <span className="truncate font-mono text-[11px] text-faint">
-                    {mine ? "Yours" : (person ?? "Someone's")}
-                    {host.here && " · runs ZeroLux"} · seen {ago(host.seen_at)}
+                    {mine ? "Yours" : (person ?? "Someone's")} ·{" "}
+                    {hostState(host)}
                   </span>
                   {mine && (
-                    <Button
-                      variant="link"
-                      size="sm"
-                      className="ml-auto h-auto p-0"
-                      onClick={() =>
-                        setNaming({ id: host.id, name: host.name })
-                      }
-                    >
-                      Rename
-                    </Button>
+                    <span className="ml-auto flex shrink-0 gap-3">
+                      <Button
+                        variant="link"
+                        size="sm"
+                        className="h-auto p-0"
+                        onClick={() =>
+                          setNaming({ id: host.id, name: host.name })
+                        }
+                      >
+                        Rename
+                      </Button>
+                      {!host.here && (
+                        <Button
+                          variant="link"
+                          size="sm"
+                          className="h-auto p-0"
+                          onClick={() => setRemoving(host.id)}
+                        >
+                          Remove
+                        </Button>
+                      )}
+                    </span>
                   )}
+                </div>
+              )}
+              {removing === host.id && (
+                <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-2 text-sm">
+                  <span className="flex-1">
+                    Remove {host.name}? It disconnects, and joining again needs
+                    a new code.
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    disabled={busy}
+                    onClick={() =>
+                      void perform(() => remove(host.id)).then(
+                        (done) => done && setRemoving(undefined),
+                      )
+                    }
+                  >
+                    Remove
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setRemoving(undefined)}
+                  >
+                    Keep it
+                  </Button>
                 </div>
               )}
               {mine ? (
@@ -371,7 +417,132 @@ function Computers({
           );
         })}
       </ul>
+      <AddComputer
+        hosts={hosts}
+        busy={busy}
+        perform={perform}
+        link={link}
+        reload={reload}
+      />
     </Section>
+  );
+}
+
+/** Where a computer stands: the kernel's own, joined and online or not, or waiting for its code. */
+export function hostState(host: Host) {
+  if (host.here) return `runs ZeroLux · seen ${ago(host.seen_at)}`;
+  if (!host.joined) return "waiting to join";
+  return host.online ? "online" : `offline · seen ${ago(host.seen_at)}`;
+}
+
+/**
+ * Adds one of your computers: a code, valid once for ten minutes, and the command that joins
+ * with it there; then the computer as it comes online.
+ */
+function AddComputer({
+  hosts,
+  busy,
+  perform,
+  link,
+  reload,
+}: {
+  hosts: Host[] | undefined;
+  busy: boolean;
+  perform: Perform;
+  link: (name?: string) => Promise<HostLink>;
+  reload: () => Promise<unknown>;
+}) {
+  const [naming, setNaming] = useState<string>();
+  const [made, setMade] = useState<HostLink>();
+  const joining = useHostJoining(made, hosts, reload);
+  // The address the other computer reaches this workspace at: the kernel's, or this page's.
+  const address = kernelUrl() || (globalThis.location?.origin ?? "");
+  if (made) {
+    const command = joinCommand(address, made.code);
+    return (
+      <div className="flex flex-col gap-2 rounded-md border p-3 text-sm">
+        <p className="font-medium">Add {made.host.name}</p>
+        <p className="text-muted-foreground">
+          On that computer, with ZeroLux installed, run this within ten minutes;
+          the code works once and is shown only now:
+        </p>
+        <div className="flex items-center gap-2">
+          <code className="min-w-0 flex-1 overflow-x-auto rounded-sm bg-muted px-2 py-1.5 font-mono text-[12px] whitespace-nowrap">
+            {command}
+          </code>
+          <Copy text={command} className="opacity-100" />
+        </div>
+        <p className="text-muted-foreground">
+          Then keep it connected with{" "}
+          <code className="font-mono text-[12px]">zerolux host run</code>.
+        </p>
+        {onlyHere(address) && (
+          <p className="text-xs text-attention">
+            This address names this computer only: open ZeroLux at the address
+            the other computer reaches it at, then add it from there.
+          </p>
+        )}
+        <p className="font-mono text-[11px] text-faint">
+          {joining?.online
+            ? "Joined and online."
+            : joining?.joined
+              ? "Joined: waiting for it to come online…"
+              : "Waiting for it to join…"}
+        </p>
+        <Button
+          size="sm"
+          variant="outline"
+          className="self-start"
+          onClick={() => setMade(undefined)}
+        >
+          {joining?.online ? "Done" : "Close"}
+        </Button>
+      </div>
+    );
+  }
+  if (naming !== undefined)
+    return (
+      <form
+        className="flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void perform(async () => {
+            setMade(await link(naming.trim() || undefined));
+            setNaming(undefined);
+          });
+        }}
+      >
+        <Input
+          aria-label="Its name"
+          placeholder="Its name, e.g. Studio Mac"
+          value={naming}
+          autoFocus
+          maxLength={100}
+          onChange={(event) => setNaming(event.target.value)}
+          className="h-8"
+        />
+        <Button type="submit" size="sm" disabled={busy}>
+          Make a code
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => setNaming(undefined)}
+        >
+          Cancel
+        </Button>
+      </form>
+    );
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      className="self-start"
+      onClick={() => setNaming("")}
+    >
+      Add a computer
+    </Button>
   );
 }
 
