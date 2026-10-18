@@ -25,6 +25,12 @@ pub struct Model {
     /// A permission's decision.
     #[sea_orm(column_type = "Text")]
     pub decision: Option<String>,
+    /// How far an allowed permission goes: this once, the session, or always.
+    #[sea_orm(column_type = "Text")]
+    pub scope: Option<String>,
+    /// Why the owner denied it, for the session.
+    #[sea_orm(column_type = "Text")]
+    pub reason: Option<String>,
     /// The owner's answer to a question or a form.
     #[sea_orm(column_type = "Text")]
     pub answer_json: Option<String>,
@@ -78,6 +84,7 @@ impl super::schema::Definition for Entity {
         ]));
         table.check(Expr::col(Column::Kind).is_in(["permission", "question", "form"]));
         table.check(Expr::col(Column::Decision).is_in(["allow", "deny"]));
+        table.check(Expr::col(Column::Scope).is_in(["once", "session", "always"]));
         // A permission is decided; a question or a form is answered.
         table.check(
             Expr::col(Column::Kind)
