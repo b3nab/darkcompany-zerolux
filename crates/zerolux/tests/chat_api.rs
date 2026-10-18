@@ -1537,6 +1537,18 @@ async fn the_console_lists_reads_and_organizes_sessions_with_or_without_an_agent
             .status(),
         StatusCode::FORBIDDEN
     );
+    // The files of its folder, to mention them.
+    std::fs::write(kernel._dir.path().join("plan.md"), "").unwrap();
+    let files = kernel
+        .get(
+            &format!("/sessions/{}/files?query=plan", free.session.id),
+            None,
+        )
+        .await
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(files["files"], json!(["plan.md"]));
     // Input comes in one of three modes.
     assert_eq!(
         kernel

@@ -233,6 +233,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
             post(session_input).layer(DefaultBodyLimit::max(21 * 1024 * 1024)),
         )
         .route("/sessions/{id}/commands", get(session_commands))
+        .route("/sessions/{id}/files", get(session_files))
         .route("/sessions/{id}/compact", post(compact_session))
         .route("/actors/{id}/name", post(rename_agent))
         .route(
@@ -946,6 +947,43 @@ async fn session_input(
         .await
         .map_err(runtime_error)?;
     Ok(Json(json!({ "sent": true })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FilesQuery {
+    #[serde(default)]
+    query: String,
+    #[serde(default = "files_limit")]
+    limit: usize,
+}
+
+fn files_limit() -> usize {
+    50
+}
+
+/// Files of the session's folder matching what the owner is typing, to mention them.
+async fn session_files(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    Query(input): Query<FilesQuery>,
+) -> Result<Json<Value>, ApiFailure> {
+    let session = state.store.chat_session(&who, &id).await?;
+    if session.host_id.as_deref() != state.store.host() {
+        return Err(Error::Invalid(
+            "This session runs on another kernel host; read its files there".into(),
+        )
+        .into());
+    }
+    let files = crate::workspace_files::find(
+        std::path::Path::new(&session.workspace),
+        &input.query,
+        input.limit,
+    )
+    .await
+    .map_err(runtime_error)?;
+    Ok(Json(json!({ "files": files })))
 }
 
 /// The commands and skills the session's harness offers.
