@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   Options,
   PermissionResult,
@@ -746,6 +749,35 @@ test("the owner's own input reaches the session as native user input, not a chat
   await tick();
   expect(f.interrupts()).toBe(1);
   expect(f.inputs.at(-1)!.message.content).toBe("stop, look here");
+});
+
+test("images go with the owner's input as the harness's own image blocks", async () => {
+  const f = fixture();
+  await f.start();
+  const dir = await mkdtemp(join(tmpdir(), "zcl-img-"));
+  const path = join(dir, "shot.png");
+  await writeFile(path, Buffer.from([1, 2, 3]));
+  await f.agent.say("what is this?", "steer", [
+    { path, media_type: "image/png" },
+  ]);
+  await tick();
+  expect(f.inputs.at(-1)!.message.content).toEqual([
+    {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "AQID" },
+    },
+    { type: "text", text: "what is this?" },
+  ]);
+  // An image that cannot be read sends nothing.
+  const before = f.inputs.length;
+  await expect(
+    f.agent.say("again", "steer", [
+      { path: join(dir, "missing.png"), media_type: "image/png" },
+    ]),
+  ).rejects.toThrow();
+  await tick();
+  expect(f.inputs.length).toBe(before);
+  await rm(dir, { recursive: true, force: true });
 });
 
 test("the harness's commands and skills are offered as the owner types them", async () => {

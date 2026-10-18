@@ -116,6 +116,7 @@ export class Runner {
         "input-v1",
         "input-v2",
         "commands-v1",
+        "images-v1",
         ...(this.config.managed && this.deps.code && this.deps.execution
           ? ["integration-update-v1"]
           : []),
@@ -207,13 +208,23 @@ export class Runner {
       if (this.stopRequested || !this.transport.bound)
         throw new Error("The session is not connected");
       const mode = request.mode ?? "steer";
+      const images = (request.images ?? []) as {
+        path: string;
+        media_type: string;
+      }[];
       if (
         typeof request.text !== "string" ||
-        !request.text.trim() ||
-        (mode !== "steer" && mode !== "queue" && mode !== "interrupt")
+        (!request.text.trim() && !images.length) ||
+        (mode !== "steer" && mode !== "queue" && mode !== "interrupt") ||
+        !Array.isArray(images) ||
+        images.some(
+          (image) =>
+            typeof image?.path !== "string" ||
+            typeof image.media_type !== "string",
+        )
       )
         throw new Error("Invalid input request");
-      await this.agent.say(request.text, mode);
+      await this.agent.say(request.text, mode, images);
       return {};
     }
     if (method === "commands") {

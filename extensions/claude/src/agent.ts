@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import {
   createSdkMcpServer,
   tool,
@@ -236,14 +237,41 @@ export class ClaudeAgent {
    * the tools in progress; queued, it waits for the turn to end; interrupting, it follows the
    * turn it stops.
    */
-  async say(text: string, mode: "steer" | "queue" | "interrupt" = "steer") {
+  async say(
+    text: string,
+    mode: "steer" | "queue" | "interrupt" = "steer",
+    images: { path: string; media_type: string }[] = [],
+  ) {
+    // Read before anything is stopped: an image that cannot be read sends nothing.
+    const attached = await Promise.all(
+      images.map(async (image) => ({
+        type: "image" as const,
+        source: {
+          type: "base64" as const,
+          media_type: image.media_type as
+            | "image/png"
+            | "image/jpeg"
+            | "image/gif"
+            | "image/webp",
+          data: Buffer.from(await readFile(image.path)).toString("base64"),
+        },
+      })),
+    );
     if (mode === "interrupt") await this.interrupt();
     this.input.push({
       type: "user",
       uuid: randomUUID() as SDKUserMessage["uuid"],
       session_id: "",
       parent_tool_use_id: null,
-      message: { role: "user", content: text },
+      message: {
+        role: "user",
+        content: attached.length
+          ? [
+              ...attached,
+              ...(text.trim() ? [{ type: "text" as const, text }] : []),
+            ]
+          : text,
+      },
       priority: mode === "queue" ? "later" : "next",
     });
   }
