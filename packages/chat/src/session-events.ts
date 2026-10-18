@@ -55,7 +55,13 @@ export type SessionBlock = {
   /** When its event was recorded, as the harness wrote it. */
   time: string | null;
 } & (
-  | { kind: "input"; text: string; chat: string | null }
+  | {
+      kind: "input";
+      text: string;
+      chat: string | null;
+      /** Its offset in `/events`: a fork or a rewind before it names it. */
+      at: number;
+    }
   | { kind: "text"; text: string }
   | {
       kind: "thinking";
@@ -110,6 +116,7 @@ export function sessionBlocks(events: SessionEvent[]): SessionBlock[] {
           kind: "input",
           text: event.text,
           chat: event.chat,
+          at: event.at,
         });
         break;
       case "text":

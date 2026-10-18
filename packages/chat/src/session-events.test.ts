@@ -60,6 +60,7 @@ test("a session's events become blocks: a tool joins its result, a turn's start 
       kind: "input",
       text: "Run the tests",
       chat: "c-group",
+      at: 10,
     },
     {
       key: "20.0",

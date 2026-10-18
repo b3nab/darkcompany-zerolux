@@ -219,6 +219,18 @@ export type NewSession = {
     }
   | { harness: "pi" }
 );
+/** A fork of a session: from all of it, or from before the input at `at`, as a session of its
+ * own in the same folder; without an agent unless one is named. */
+export type SessionFork = { at?: number; actor_id?: string; name?: string };
+/** Putting a session's files back as they were before one of its inputs, as Claude Code says
+ * it went, or, with `dry_run`, would go. */
+export interface FilesRewind {
+  canRewind: boolean;
+  error?: string;
+  filesChanged?: string[];
+  insertions?: number;
+  deletions?: number;
+}
 /** How the owner's input joins a working session: into its turn, after it, or instead of it. */
 export type InputMode = "steer" | "queue" | "interrupt";
 /** An image sent with the owner's input, as the kernel takes it: its type and base64 bytes. */

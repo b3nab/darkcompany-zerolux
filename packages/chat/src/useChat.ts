@@ -24,6 +24,8 @@ import type {
   InputMode,
   MessagePage,
   NewSession,
+  FilesRewind,
+  SessionFork,
   Outgoing,
   QuestionAnswer,
 } from "./chat";
@@ -392,6 +394,21 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       await listSessions();
       return created;
     },
+    /** A new session that goes on from this one, whole or before one of its inputs. */
+    async forkSession(sessionId: string, fork: SessionFork = {}) {
+      const forked = await api<{ actor: Actor | null; session: ChatSession }>(
+        `/sessions/${sessionId}/fork`,
+        fork,
+      );
+      await listSessions();
+      return forked;
+    },
+    /** The session's files as they were before its input at `at`; `dryRun` only says what. */
+    rewindFiles: (sessionId: string, at: number, dryRun = false) =>
+      api<{ result: FilesRewind }>(`/sessions/${sessionId}/rewind-files`, {
+        at,
+        dry_run: dryRun,
+      }).then(({ result }) => result),
     /** The owner renames, pins or archives a session; what is left out stays. */
     async updateSession(
       sessionId: string,

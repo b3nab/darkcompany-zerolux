@@ -213,6 +213,11 @@ function fakeChat(overrides: Partial<Chat> = {}): Chat {
       actor: null,
       session: session("s-new", ASPEN),
     }),
+    forkSession: async () => ({
+      actor: null,
+      session: session("s-fork", ASPEN),
+    }),
+    rewindFiles: async () => ({ canRewind: true }),
     updateSession: nothing,
     live: async () => ({ seq: 0, items: [], queue: [] }),
     takeoverPi: nothing,
@@ -1605,7 +1610,14 @@ test("the console holds sessions without an agent, pinned ones first, and archiv
 test("a session's work keeps its requests where they were made, and density sets how much shows", () => {
   const at = (s: number) => `2026-01-01T10:00:0${s}.000Z`;
   const blocks: SessionBlock[] = [
-    { key: "1", time: at(0), kind: "input", text: "Fix the build", chat: null },
+    {
+      key: "1",
+      time: at(0),
+      kind: "input",
+      text: "Fix the build",
+      chat: null,
+      at: 1,
+    },
     {
       key: "2",
       time: at(1),
