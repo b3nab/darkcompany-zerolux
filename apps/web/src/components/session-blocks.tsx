@@ -1,63 +1,109 @@
-import { useId, useState } from "react";
+import { useId } from "react";
 import type { ReactNode } from "react";
 import { cn } from "cn";
 import { ChevronRightIcon, CircleAlertIcon } from "lucide-react";
 import {
   blockRuns,
+  isSubagent,
   thoughtLabel,
   toolItems,
+  toolsPhrase,
   turnLabel,
   useArrivals,
 } from "@zerolux/chat";
-import type { SessionBlock } from "@zerolux/chat";
+import type {
+  Approval,
+  ApprovalItem,
+  LiveItem,
+  SessionBlock,
+  ToolsRun,
+} from "@zerolux/chat";
 import { MessageText } from "@/components/message-text";
-import { ExploredCalls, ToolCall } from "@/components/tool-call";
+import { ExploredCalls, SubagentCard, ToolCall } from "@/components/tool-call";
 import type { ChatTitle } from "@/components/tool-call";
 import { Reveal } from "@/components/reveal";
+import { useDensity, useOpen } from "@/components/density";
 
 const ARRIVE =
   "animate-in fade-in slide-in-from-bottom-1 duration-300 motion-reduce:animate-none";
 
 /**
  * A session's work, block by block, the same in the Agent Console and in chats. Tools run
- * one after another read as one list; work that arrives live slides in.
+ * one after another read as one list; work that arrives live slides in. How much shows
+ * follows the density around it: compact keeps the outcome, detailed opens every step.
  */
 export function SessionBlocks({
   blocks,
   chatTitle,
+  renderApproval,
 }: {
-  blocks: SessionBlock[];
+  blocks: (SessionBlock | ApprovalItem)[];
   /** How a chat is named: inputs say which chat they came from, ZeroLux tools where they wrote. */
   chatTitle?: ChatTitle;
+  /** A request of the session, drawn where it was made: open while pending, a receipt after. */
+  renderApproval?: (approval: Approval) => ReactNode;
 }) {
   const fresh = useArrivals(blocks);
-  return blockRuns(blocks).map((run) =>
-    run.kind === "tools" ? (
-      <div
-        key={run.key}
-        className={cn(
-          "divide-y overflow-hidden rounded-md border bg-card text-sm",
-          fresh.has(run.key) && ARRIVE,
-        )}
-      >
-        {toolItems(run.tools).map((item) => (
-          <div key={item.key} className={cn(fresh.has(item.key) && ARRIVE)}>
-            {item.kind === "explored" ? (
-              <ExploredCalls tools={item.tools} chatTitle={chatTitle} />
-            ) : (
-              <ToolCall tool={item} chatTitle={chatTitle} />
-            )}
-          </div>
-        ))}
-      </div>
-    ) : (
+  const density = useDensity();
+  return blockRuns(blocks).map((run) => {
+    if (density === "compact" && run.kind === "thinking") return null;
+    return (
       <div
         key={run.key}
         className={cn("flex flex-col", fresh.has(run.key) && ARRIVE)}
       >
-        <Block block={run} chatTitle={chatTitle} />
+        {run.kind === "tools" ? (
+          <ToolRun run={run} fresh={fresh} chatTitle={chatTitle} />
+        ) : run.kind === "approval" ? (
+          renderApproval?.(run.approval)
+        ) : (
+          <Block block={run} chatTitle={chatTitle} />
+        )}
       </div>
-    ),
+    );
+  });
+}
+
+/** Tools run one after another: one card, or in compact density one line that opens on it. */
+function ToolRun({
+  run,
+  fresh,
+  chatTitle,
+}: {
+  run: ToolsRun;
+  fresh: Set<string>;
+  chatTitle?: ChatTitle;
+}) {
+  const card = (
+    <div className="divide-y overflow-hidden rounded-md border bg-card text-sm">
+      {toolItems(run.tools).map((item) => (
+        <div key={item.key} className={cn(fresh.has(item.key) && ARRIVE)}>
+          {item.kind === "explored" ? (
+            <ExploredCalls tools={item.tools} chatTitle={chatTitle} />
+          ) : (
+            <ToolCall tool={item} chatTitle={chatTitle} />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+  if (useDensity() !== "compact") return card;
+  const running = run.tools.some((tool) => !tool.result && !tool.stopped);
+  return (
+    <Fold
+      trigger={
+        <span
+          className={cn(
+            "min-w-0 truncate font-mono text-[12px] text-faint transition-colors group-hover/fold:text-muted-foreground",
+            running && "sweep",
+          )}
+        >
+          {toolsPhrase(run.tools)}
+        </span>
+      }
+    >
+      <div className="mt-1.5">{card}</div>
+    </Fold>
   );
 }
 
@@ -71,7 +117,7 @@ function Fold({
   className?: string;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useOpen();
   const panel = useId();
   return (
     <div className={className}>
@@ -140,7 +186,11 @@ function Block({
         </Fold>
       );
     case "tool":
-      return <ToolCall tool={block} chatTitle={chatTitle} />;
+      return isSubagent(block) ? (
+        <SubagentCard tool={block} chatTitle={chatTitle} />
+      ) : (
+        <ToolCall tool={block} chatTitle={chatTitle} />
+      );
     case "turn":
       return (
         <p className="my-1 flex items-center gap-3 font-mono text-[11px] text-faint before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">
@@ -172,4 +222,44 @@ function Block({
         </Fold>
       );
   }
+}
+
+/** A running command's output in the stream: its last lines, as a terminal shows them. */
+const LIVE_LINES = 40;
+
+/**
+ * What the session is producing right now, after its recorded work: the agent's words as they
+ * come, its reasoning, a command's output. Each gives way to its block once recorded.
+ */
+export function LiveItems({ items }: { items: LiveItem[] }) {
+  const density = useDensity();
+  return items.map((item) =>
+    item.kind === "text" ? (
+      <div key={item.id} className={cn("flex flex-col", ARRIVE)}>
+        <MessageText text={item.text} />
+      </div>
+    ) : item.kind === "thinking" ? (
+      density !== "compact" && (
+        <div key={item.id} className={cn("flex flex-col gap-1", ARRIVE)}>
+          <span className="sweep font-mono text-[12px] text-faint">
+            Thinking
+          </span>
+          <p className="ml-1.5 border-l pl-3.5 text-sm whitespace-pre-wrap text-muted-foreground italic">
+            {item.text}
+          </p>
+        </div>
+      )
+    ) : (
+      <pre
+        key={item.id}
+        aria-label="Output so far"
+        className={cn(
+          "max-h-60 overflow-auto rounded-md border bg-card px-3 py-2 font-mono text-[12px] leading-relaxed whitespace-pre-wrap text-muted-foreground",
+          ARRIVE,
+        )}
+      >
+        {item.text.split("\n").slice(-LIVE_LINES).join("\n")}
+      </pre>
+    ),
+  );
 }

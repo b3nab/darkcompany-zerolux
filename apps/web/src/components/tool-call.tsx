@@ -30,15 +30,17 @@ import {
   changeCount,
   diffLines,
   exploredPhrase,
+  plainLine,
   spanLabel,
   toolOutcome,
   toolPhrase,
   toolState,
   toolView,
 } from "@zerolux/chat";
-import type { ToolBlock, ToolOutcome, ToolView } from "@zerolux/chat";
+import type { PlanStep, ToolBlock, ToolOutcome, ToolView } from "@zerolux/chat";
 import { MessageText } from "@/components/message-text";
 import { Reveal } from "@/components/reveal";
+import { useOpen } from "@/components/density";
 
 /** How a chat is named where a tool names it by id. */
 export type ChatTitle = (id: string | null) => string | undefined;
@@ -63,7 +65,7 @@ export function ToolCall({
     [tool.result],
   );
   const state = toolState(tool, view, outcome);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useOpen();
   const panel = useId();
   const line = summary(view, outcome, state === "running", chatTitle);
   return (
@@ -152,7 +154,7 @@ export function ExploredCalls({
   tools: ToolBlock[];
   chatTitle?: ChatTitle;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useOpen();
   const panel = useId();
   const { verb, subject } = exploredPhrase(tools);
   const running = verb === "Exploring";
@@ -196,6 +198,99 @@ export function ExploredCalls({
           {tools.map((tool) => (
             <ToolCall key={tool.key} tool={tool} chatTitle={chatTitle} />
           ))}
+        </div>
+      </Reveal>
+    </div>
+  );
+}
+
+/**
+ * A subagent the session started: a card of its own under the session's work, with its task,
+ * where it stands, and what it brought back.
+ */
+export function SubagentCard({
+  tool,
+  chatTitle,
+}: {
+  tool: ToolBlock;
+  chatTitle?: ChatTitle;
+}) {
+  const view = toolView(tool.name, tool.input);
+  const outcome = useMemo(
+    () => tool.result && toolOutcome(tool.result.output),
+    [tool.result],
+  );
+  const state = toolState(tool, view, outcome);
+  const [open, setOpen] = useOpen();
+  const panel = useId();
+  if (view.kind !== "agent")
+    return <ToolCall tool={tool} chatTitle={chatTitle} />;
+  const running = state === "running";
+  return (
+    <div
+      data-state={state}
+      className="ml-3 overflow-hidden rounded-md border border-l-2 border-agent/20 border-l-agent/50 bg-agent/5 text-sm"
+    >
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={panel}
+        onClick={() => setOpen(!open)}
+        className="group/tool flex w-full items-center gap-2 px-3 py-2 text-left transition-colors outline-none hover:bg-agent/10 focus-visible:bg-agent/10"
+      >
+        <span className="flex size-4 shrink-0 items-center justify-center">
+          {running ? (
+            <LoaderIcon
+              aria-label="Running"
+              className="size-3.5 animate-spin text-agent motion-reduce:animate-none"
+            />
+          ) : state === "error" ? (
+            <CircleAlertIcon
+              aria-label="Failed"
+              className="size-3.5 text-destructive"
+            />
+          ) : (
+            <BotIcon aria-hidden className="size-3.5 text-agent" />
+          )}
+        </span>
+        <span className="shrink-0 font-mono text-[11px] text-agent-foreground/80 uppercase tracking-wide">
+          Subagent
+        </span>
+        <span
+          className={cn(
+            "min-w-0 truncate text-[13px] font-medium",
+            running && "sweep",
+          )}
+        >
+          {view.title}
+        </span>
+        <span className="ml-auto flex shrink-0 items-center gap-2 pl-2 font-mono text-[11px] text-faint">
+          <Elapsed tool={tool} />
+          <ChevronRightIcon
+            aria-hidden
+            className="size-3.5 transition-transform group-aria-expanded/tool:rotate-90 motion-reduce:transition-none"
+          />
+        </span>
+      </button>
+      {!open && view.prompt && (
+        <p className="-mt-1 truncate px-3 pb-2 pl-9 text-[12.5px] text-muted-foreground">
+          {plainLine(view.prompt)}
+        </p>
+      )}
+      <Reveal open={open} id={panel}>
+        <div className="flex flex-col gap-2 border-t border-agent/15 px-3 py-2.5">
+          {view.prompt && (
+            <p className="text-[13px] whitespace-pre-wrap text-muted-foreground">
+              {view.prompt}
+            </p>
+          )}
+          {outcome?.text ? (
+            <div className="border-t border-agent/15 pt-2">
+              <MessageText text={outcome.text} />
+            </div>
+          ) : running ? (
+            <p className="text-[12.5px] text-faint">Working on it…</p>
+          ) : null}
         </div>
       </Reveal>
     </div>
@@ -429,29 +524,7 @@ function Body({
         </>
       );
     case "plan":
-      return (
-        <ul className="flex flex-col gap-1">
-          {view.steps.map((step, i) => (
-            <li key={i} className="flex items-start gap-2 text-[13px]">
-              {step.status === "done" ? (
-                <CircleCheckIcon className="mt-0.5 size-3.5 shrink-0 text-success" />
-              ) : step.status === "active" ? (
-                <CircleDotIcon className="mt-0.5 size-3.5 shrink-0 text-agent" />
-              ) : (
-                <CircleIcon className="mt-0.5 size-3.5 shrink-0 text-faint" />
-              )}
-              <span
-                className={cn(
-                  step.status === "done" && "text-faint line-through",
-                  step.status === "active" && "text-agent-foreground",
-                )}
-              >
-                {step.text}
-              </span>
-            </li>
-          ))}
-        </ul>
-      );
+      return <PlanSteps steps={view.steps} />;
     case "zerolux":
       return (
         <>
@@ -482,6 +555,33 @@ function Body({
   }
   // Reads, searches and the web: what came back is the point.
   return plain ?? null;
+}
+
+/** A plan as a checklist: done steps struck through, the current one lit. */
+export function PlanSteps({ steps }: { steps: PlanStep[] }) {
+  return (
+    <ul className="flex flex-col gap-1">
+      {steps.map((step, i) => (
+        <li key={i} className="flex items-start gap-2 text-[13px]">
+          {step.status === "done" ? (
+            <CircleCheckIcon className="mt-0.5 size-3.5 shrink-0 text-success" />
+          ) : step.status === "active" ? (
+            <CircleDotIcon className="mt-0.5 size-3.5 shrink-0 text-agent" />
+          ) : (
+            <CircleIcon className="mt-0.5 size-3.5 shrink-0 text-faint" />
+          )}
+          <span
+            className={cn(
+              step.status === "done" && "text-faint line-through",
+              step.status === "active" && "text-agent-foreground",
+            )}
+          >
+            {step.text}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 /** A command and what it printed, as a terminal shows them, with a copy of the command. */
