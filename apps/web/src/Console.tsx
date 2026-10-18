@@ -513,7 +513,7 @@ export function SessionView({
   busy: boolean;
   perform: Perform;
 }) {
-  // A joined computer runs it: its settings, images, terminals, forks and git stay there.
+  // A joined computer runs it: its settings, images, terminals and forks stay there.
   const computer = sessionComputer(session, hosts);
   const away = computer !== undefined;
   const name = sessionName(session, actors);
@@ -595,7 +595,7 @@ export function SessionView({
         busy={busy}
         perform={perform}
         send={note}
-        act={access.write && !away}
+        act={access.write}
         close={() => setPane(undefined)}
       />
     ) : pane === "files" ? (
