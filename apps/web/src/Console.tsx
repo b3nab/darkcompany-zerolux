@@ -1,113 +1,334 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Link, NavLink } from "react-router";
-import { ChevronLeftIcon, SendIcon, SquareIcon } from "lucide-react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import { Link, NavLink, useNavigate } from "react-router";
+import { cn } from "cn";
 import {
+  ArchiveIcon,
+  ArchiveRestoreIcon,
+  ChevronLeftIcon,
+  ChevronDownIcon,
+  EllipsisIcon,
+  ListChecksIcon,
+  PencilIcon,
+  PinIcon,
+  PinOffIcon,
+  PlusIcon,
+  SendIcon,
+  SquareIcon,
+} from "lucide-react";
+import {
+  agentSettingFields,
   ago,
+  attentionInbox,
+  attentionLabels,
+  commandsFor,
   consoleSessions,
+  densityLabels,
   draftOf,
   folderName,
   harnessLabels,
+  latestPlan,
+  markSeen,
+  placeApprovals,
+  plainLine,
+  recentFolders,
   saveDraft,
   sessionBlocks,
+  sessionCommand,
+  sessionName,
+  sessionOutputAt,
   sessionState,
+  useSeen,
   useSessionEvents,
+  useSessionLive,
+  useSessionSettings,
 } from "@zerolux/chat";
-import type { Chat, ChatSession, Perform } from "@zerolux/chat";
+import type {
+  AgentSettings,
+  Attention,
+  Chat,
+  ChatSession,
+  Density,
+  Perform,
+  PlanStep,
+} from "@zerolux/chat";
 import type { Actor } from "./api";
 import { sessionTone } from "./presence";
 import { Presence } from "@/components/presence";
-import { Mark } from "@/components/profile";
-import { SessionBlocks } from "@/components/session-blocks";
+import { SessionMark } from "@/components/profile";
+import { LiveItems, SessionBlocks } from "@/components/session-blocks";
+import { PlanSteps } from "@/components/tool-call";
+import { Reveal } from "@/components/reveal";
+import { setDensity, useDensity } from "@/components/density";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { SessionCard, resumable, takeable } from "./Team";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
+import { SessionCard, StartSession, resumable, takeable } from "./Team";
+import { ApprovalCard, ApprovalReceipt } from "./Approvals";
 import { sendsOnEnter } from "./ChatView";
 import { useOwner } from "./AuthGate";
 
 const MAX_TEXT = 64 * 1024;
 
-/** When a session's native output last grew, if the kernel noticed it since this page opened. */
 const outputLine = (chat: Chat, session: ChatSession) => {
-  const output = chat.outputs[session.id];
-  return output ? `Output ${ago(output.at)}` : undefined;
+  const at = sessionOutputAt(chat, session);
+  return at ? `Output ${ago(at)}` : undefined;
 };
 
-const agentName = (actors: Actor[], session: ChatSession) =>
-  actors.find((a) => a.id === session.actor_id)?.name ?? "Agent";
+/** How each state reads in the inbox: what needs you stands out, the rest stays quiet. */
+const attentionTones: Record<Attention, string> = {
+  approval: "text-attention",
+  input: "text-attention",
+  working: "text-agent-foreground",
+  failed: "text-destructive",
+  unseen: "text-foreground",
+  idle: "text-faint",
+};
 
-/** The Agent Console's column: the live sessions, working first; the stopped ones on request. */
-export function ConsoleList({ chat, actors }: { chat: Chat; actors: Actor[] }) {
-  const [stopped, setStopped] = useState(false);
+/** A choice among a few, side by side; the chosen one pressed. */
+function Segmented<T extends string | boolean>({
+  label,
+  value,
+  options,
+  choose,
+  className,
+}: {
+  label: string;
+  value: T;
+  options: readonly (readonly [T, ReactNode])[];
+  choose: (value: T) => void;
+  className?: string;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className={cn(
+        "flex w-fit gap-0.5 rounded-sm border bg-background p-0.5",
+        className,
+      )}
+    >
+      {options.map(([option, text]) => (
+        <button
+          key={String(option)}
+          type="button"
+          aria-pressed={value === option}
+          onClick={() => choose(option)}
+          className="h-6 rounded-[3px] px-2.5 text-[12.5px] font-medium text-muted-foreground transition-colors hover:text-foreground aria-pressed:bg-secondary aria-pressed:text-foreground aria-pressed:shadow-[0_0_0_1px_var(--color-input)]"
+        >
+          {text}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+type ListView = "live" | "stopped" | "archived";
+const emptyLists: Record<ListView, string> = {
+  live: "No live sessions.",
+  stopped: "No stopped sessions.",
+  archived: "Nothing archived.",
+};
+
+/**
+ * The Agent Console's column, as an inbox: pinned sessions first, then each live session in
+ * one state, what needs you first, the latest within each; stopped and archived on request.
+ */
+export function ConsoleList({
+  chat,
+  actors,
+  busy,
+  perform,
+}: {
+  chat: Chat;
+  actors: Actor[];
+  busy: boolean;
+  perform: Perform;
+}) {
+  const [view, setView] = useState<ListView>("live");
+  const [starting, setStarting] = useState(false);
+  const navigate = useNavigate();
+  const seen = useSeen();
   const sessions = consoleSessions(chat.sessions);
-  const shown = stopped ? sessions.stopped : sessions.live;
+  const shown = attentionInbox(
+    sessions[view].map((session) => ({
+      ...session,
+      output_at: sessionOutputAt(chat, session) ?? null,
+    })),
+    chat.approvals,
+    seen,
+  );
+  // Grouped only while live: pinned first, then by state.
+  const group = (row: (typeof shown)[number]) =>
+    view !== "live"
+      ? undefined
+      : row.session.pinned_at
+        ? "pinned"
+        : row.attention;
   return (
     <section aria-label="Console" className="flex min-h-0 flex-1 flex-col">
-      <header className="px-4 pt-4 pb-3">
+      <header className="flex items-center justify-between gap-2 px-4 pt-4 pb-3">
         <h2 className="text-lg font-semibold tracking-tight">Console</h2>
+        <Button size="sm" variant="outline" onClick={() => setStarting(true)}>
+          <PlusIcon data-icon="inline-start" />
+          New session
+        </Button>
       </header>
-      <div
-        role="group"
-        aria-label="Show"
-        className="mx-3 mb-2 flex w-fit gap-0.5 rounded-sm border bg-background p-0.5"
-      >
-        {(
+      <Dialog open={starting} onOpenChange={setStarting}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>New session</DialogTitle>
+            <DialogDescription>
+              ZeroLux runs it in the folder you choose. You follow and steer it
+              here; give it an agent to bring it into your chats too.
+            </DialogDescription>
+          </DialogHeader>
+          <StartSession
+            chat={chat}
+            actors={actors}
+            folders={recentFolders(chat.sessions)}
+            busy={busy}
+            perform={perform}
+            agent="none"
+            heading="New session"
+            intro=""
+            className="border-0 bg-transparent p-0 [&>div:first-child]:hidden"
+            created={(session) => {
+              setStarting(false);
+              navigate(`/console/${session.id}`);
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+      <Segmented<ListView>
+        label="Show"
+        className="mx-3 mb-2"
+        value={view}
+        choose={setView}
+        options={(
           [
-            [false, "Live", sessions.live.length],
-            [true, "Stopped", sessions.stopped.length],
+            ["live", "Live", sessions.live.length],
+            ["stopped", "Stopped", sessions.stopped.length],
+            ["archived", "Archived", sessions.archived.length],
           ] as const
-        ).map(([value, label, count]) => (
-          <button
-            key={label}
-            type="button"
-            aria-pressed={stopped === value}
-            onClick={() => setStopped(value)}
-            className="h-6 rounded-[3px] px-2.5 text-[12.5px] font-medium text-muted-foreground transition-colors hover:text-foreground aria-pressed:bg-secondary aria-pressed:text-foreground aria-pressed:shadow-[0_0_0_1px_var(--color-input)]"
-          >
+        ).map(([value, label, count]) => [
+          value,
+          <>
             {label}
             <span className="ml-1.5 font-mono text-[11px] text-faint">
               {count}
             </span>
-          </button>
-        ))}
-      </div>
+          </>,
+        ])}
+      />
       <nav
         aria-label="Agent sessions"
         className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3"
       >
-        {shown.map((session) => {
+        {shown.map((row, i) => {
+          const { session, attention } = row;
           const agent = actors.find((a) => a.id === session.actor_id);
           const tone = sessionTone(session);
+          const heading = group(row);
+          // A pending request says what it asks; otherwise the session's latest in a line.
+          const asks = chat.approvals.find(
+            (a) => a.session_id === session.id && a.status === "pending",
+          );
+          const line =
+            attention === "working"
+              ? sessionState(session)
+              : asks
+                ? `Asks: ${asks.summary}`
+                : (session.summary && plainLine(session.summary)) ||
+                  (agent ? session.title : folderName(session.workspace)) ||
+                  "Untitled session";
           return (
-            <NavLink
-              key={session.id}
-              to={`/console/${session.id}`}
-              className="flex items-center gap-3 rounded-md px-2 py-2.5 transition-colors hover:bg-accent aria-[current=page]:bg-accent"
-            >
-              {agent && <Mark actor={agent} state={tone} className="size-8" />}
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="flex items-baseline gap-2">
-                  <span className="truncate font-mono text-sm text-agent-foreground">
-                    {agentName(actors, session)}
-                  </span>
-                  <span className="shrink-0 font-mono text-[11px] text-faint">
-                    {harnessLabels[session.harness] ?? session.harness}
-                  </span>
-                </span>
-                <span
-                  data-working={tone === "working" || undefined}
-                  className="truncate text-[13px] text-muted-foreground data-working:text-agent-foreground"
+            <div key={session.id} className="flex flex-col">
+              {heading && (i === 0 || group(shown[i - 1]!) !== heading) && (
+                <h3
+                  className={cn(
+                    "flex items-center justify-between px-2 pt-3 pb-1 font-mono text-[11px] tracking-wide uppercase",
+                    heading === "pinned"
+                      ? "text-muted-foreground"
+                      : attentionTones[heading],
+                  )}
                 >
-                  {tone === "working"
-                    ? sessionState(session)
-                    : session.title || "Untitled session"}
+                  {heading === "pinned" ? "Pinned" : attentionLabels[heading]}
+                  <span className="text-faint">
+                    {shown.filter((s) => group(s) === heading).length}
+                  </span>
+                </h3>
+              )}
+              <NavLink
+                to={`/console/${session.id}`}
+                className="flex items-center gap-3 rounded-md px-2 py-2.5 transition-colors hover:bg-accent aria-[current=page]:bg-accent"
+              >
+                <SessionMark
+                  session={session}
+                  actors={actors}
+                  state={tone}
+                  className="size-8"
+                />
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="flex items-baseline gap-2">
+                    <span
+                      className={cn(
+                        "truncate text-sm",
+                        agent
+                          ? "font-mono text-agent-foreground"
+                          : "font-medium",
+                      )}
+                    >
+                      {sessionName(session, actors)}
+                    </span>
+                    <span className="shrink-0 font-mono text-[11px] text-faint">
+                      {harnessLabels[session.harness] ?? session.harness}
+                    </span>
+                    {session.output_at && (
+                      <span className="ml-auto shrink-0 font-mono text-[11px] text-faint">
+                        {ago(session.output_at)}
+                      </span>
+                    )}
+                  </span>
+                  <span
+                    className={cn(
+                      "flex items-center gap-1.5 truncate text-[13px] text-muted-foreground",
+                      attention === "working" && "text-agent-foreground",
+                      asks && "text-attention",
+                      attention === "unseen" && "font-medium text-foreground",
+                    )}
+                  >
+                    {attention === "unseen" && (
+                      <span
+                        aria-hidden
+                        className="size-1.5 shrink-0 rounded-full bg-agent"
+                      />
+                    )}
+                    <span className="truncate">{line}</span>
+                  </span>
                 </span>
-              </span>
-            </NavLink>
+              </NavLink>
+            </div>
           );
         })}
         {shown.length === 0 && (
-          <p className="px-2 py-6 text-sm text-faint">
-            {stopped ? "No stopped sessions." : "No live sessions."}
-          </p>
+          <p className="px-2 py-6 text-sm text-faint">{emptyLists[view]}</p>
         )}
       </nav>
     </section>
@@ -144,17 +365,43 @@ export function SessionView({
   busy: boolean;
   perform: Perform;
 }) {
-  const name = agentName(actors, session);
+  const name = sessionName(session, actors);
   const agent = actors.find((a) => a.id === session.actor_id);
   const tone = sessionTone(session);
   const working = tone === "working";
   const owner = useOwner(actors);
   const [about, setAbout] = useState(false);
+  // The new title while renaming.
+  const [title, setTitle] = useState<string>();
+  async function rename(event: React.FormEvent) {
+    event.preventDefault();
+    const next = title?.trim();
+    if (
+      next &&
+      (await perform(() => chat.updateSession(session.id, { title: next })))
+    )
+      setTitle(undefined);
+  }
   const { events, error, more, earlier } = useSessionEvents(
     session.id,
     chat.outputs[session.id]?.end,
   );
   const blocks = sessionBlocks(events);
+  // What it produces before its record has it, after the recorded work.
+  const live = useSessionLive(session.id, chat.live, events.length);
+  const plan = latestPlan(blocks);
+  const density = useDensity();
+  const at = sessionOutputAt(chat, session);
+  useEffect(() => {
+    if (!at) return;
+    // What it wrote while you look at it is seen; while the window is hidden, it waits.
+    const look = () => {
+      if (document.visibilityState === "visible") markSeen(session.id, at);
+    };
+    look();
+    document.addEventListener("visibilitychange", look);
+    return () => document.removeEventListener("visibilitychange", look);
+  }, [session.id, at]);
   const scroller = useRef<HTMLDivElement>(null);
   // New work follows at the bottom, as in a chat, while you are there.
   const following = useRef(true);
@@ -170,7 +417,7 @@ export function SessionView({
       view.scrollTop = view.scrollHeight - fromBottom.current;
       fromBottom.current = undefined;
     } else if (following.current) view.scrollTop = view.scrollHeight;
-  }, [events]);
+  }, [events, live]);
   const interrupt = () =>
     void perform(async () => void (await chat.interrupt(session.id)));
   useEffect(() => {
@@ -206,15 +453,46 @@ export function SessionView({
         >
           <ChevronLeftIcon />
         </Link>
-        {agent && <Mark actor={agent} state={tone} className="size-8" />}
+        <SessionMark
+          session={session}
+          actors={actors}
+          state={tone}
+          className="size-8"
+        />
         <div className="min-w-0 flex-1">
-          <h2 className="truncate font-mono text-[15px] font-medium text-agent-foreground">
-            {name}
-            <span className="font-sans text-faint">
-              {" "}
-              · {session.title || "Untitled session"}
-            </span>
-          </h2>
+          {title !== undefined ? (
+            <form className="flex gap-2" onSubmit={(e) => void rename(e)}>
+              <Input
+                aria-label="Session title"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                maxLength={200}
+                autoFocus
+                className="h-7"
+              />
+              <Button type="submit" size="sm" disabled={busy || !title.trim()}>
+                Save
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setTitle(undefined)}
+              >
+                Cancel
+              </Button>
+            </form>
+          ) : agent ? (
+            <h2 className="truncate font-mono text-[15px] font-medium text-agent-foreground">
+              {name}
+              <span className="font-sans text-faint">
+                {" "}
+                · {session.title || "Untitled session"}
+              </span>
+            </h2>
+          ) : (
+            <h2 className="truncate text-[15px] font-medium">{name}</h2>
+          )}
           <p className="truncate text-xs text-muted-foreground">
             {sessionState(session)} ·{" "}
             {harnessLabels[session.harness] ?? session.harness} ·{" "}
@@ -223,9 +501,16 @@ export function SessionView({
             </span>
           </p>
         </div>
-        <Presence tone={tone} className="max-sm:hidden">
+        <Presence tone={tone} className="max-lg:hidden">
           {outputLine(chat, session) ?? sessionState(session)}
         </Presence>
+        <Segmented<Density>
+          label="Density"
+          className="max-sm:hidden"
+          value={density}
+          choose={setDensity}
+          options={Object.entries(densityLabels) as [Density, string][]}
+        />
         <Button
           variant="outline"
           size="sm"
@@ -234,6 +519,51 @@ export function SessionView({
         >
           About this session
         </Button>
+        {owner && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Session actions"
+                />
+              }
+            >
+              <EllipsisIcon />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem onClick={() => setTitle(session.title)}>
+                <PencilIcon />
+                Rename
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() =>
+                  void perform(() =>
+                    chat.updateSession(session.id, {
+                      pinned: !session.pinned_at,
+                    }),
+                  )
+                }
+              >
+                {session.pinned_at ? <PinOffIcon /> : <PinIcon />}
+                {session.pinned_at ? "Unpin" : "Pin"}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() =>
+                  void perform(() =>
+                    chat.updateSession(session.id, {
+                      archived: !session.archived_at,
+                    }),
+                  )
+                }
+              >
+                {session.archived_at ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
+                {session.archived_at ? "Unarchive" : "Archive"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </header>
       <div
         ref={scroller}
@@ -279,8 +609,28 @@ export function SessionView({
               Show earlier work
             </Button>
           )}
-          <SessionBlocks blocks={blocks} chatTitle={chatTitle} />
-          {!blocks.length && !error && (
+          <SessionBlocks
+            blocks={placeApprovals(
+              blocks,
+              chat.approvals.filter((a) => a.session_id === session.id),
+            )}
+            chatTitle={chatTitle}
+            renderApproval={(approval) =>
+              approval.status === "pending" ? (
+                <ApprovalCard
+                  approval={approval}
+                  chat={chat}
+                  actors={actors}
+                  busy={busy}
+                  perform={perform}
+                />
+              ) : (
+                <ApprovalReceipt approval={approval} />
+              )
+            }
+          />
+          <LiveItems items={live} />
+          {!blocks.length && !live.length && !error && (
             <p className="text-sm text-faint">Nothing recorded yet.</p>
           )}
           {error && (
@@ -299,8 +649,13 @@ export function SessionView({
         busy={busy}
         perform={perform}
         send={(text) => chat.input(session.id, text)}
+        compact={(instructions) => chat.compact(session.id, instructions)}
         interrupt={interrupt}
-      />
+      >
+        {plan?.some((step) => step.status !== "done") && (
+          <PlanBar steps={plan} />
+        )}
+      </SessionInput>
     </section>
   );
 }
@@ -317,7 +672,9 @@ function SessionInput({
   busy,
   perform,
   send,
+  compact,
   interrupt,
+  children,
 }: {
   session: ChatSession;
   name: string;
@@ -326,7 +683,11 @@ function SessionInput({
   busy: boolean;
   perform: Perform;
   send: (text: string) => Promise<void>;
+  /** `/compact [instructions]`: the harness's own compaction, as in its terminal. */
+  compact: (instructions: string) => Promise<void>;
   interrupt: () => void;
+  /** What stays above the box while the session works, as its plan. */
+  children?: ReactNode;
 }) {
   // Unsent words stay with their session, as a chat keeps its draft.
   const [text, setText] = useState(() => draftOf(session.id));
@@ -338,10 +699,23 @@ function SessionInput({
   const open = owner && session.status === "connected";
   const tooLong = new TextEncoder().encode(text).length > MAX_TEXT;
   const stops = owner && working && !text.trim();
+  // The commands this box runs itself: listed while their name is typed.
+  const command = sessionCommand(text);
+  const offered = open ? commandsFor(text) : [];
+  const [started, setStarted] = useState(false);
+  const complete = (name: string) => {
+    write(`/${name} `);
+    box.current?.focus();
+  };
   async function submit() {
     if (!open || !text.trim() || tooLong) return;
     const sent = text;
-    if (!(await perform(() => send(sent.trim())))) return;
+    const run = sessionCommand(sent);
+    const done = await perform(() =>
+      run?.name === "compact" ? compact(run.args) : send(sent.trim()),
+    );
+    if (!done) return;
+    setStarted(run?.name === "compact");
     // What was typed meanwhile stays.
     if (draftOf(session.id) === sent) write("");
     if (box.current) box.current.style.height = "auto";
@@ -354,6 +728,30 @@ function SessionInput({
         void submit();
       }}
     >
+      {children}
+      {offered.length > 0 && (
+        <div
+          role="group"
+          aria-label="Commands"
+          className="mx-auto w-full max-w-3xl overflow-hidden rounded-md border bg-popover text-sm shadow-sm"
+        >
+          {offered.map((offer) => (
+            <button
+              key={offer.name}
+              type="button"
+              onClick={() => complete(offer.name)}
+              className="flex w-full items-baseline gap-3 px-3 py-2 text-left transition-colors outline-none hover:bg-accent focus-visible:bg-accent"
+            >
+              <span className="shrink-0 font-mono text-[13px]">
+                /{offer.name}
+              </span>
+              <span className="truncate text-muted-foreground">
+                {offer.description}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
         <textarea
           ref={box}
@@ -375,8 +773,15 @@ function SessionInput({
             event.target.style.height = "auto";
             event.target.style.height = `${event.target.scrollHeight}px`;
             write(event.target.value);
+            setStarted(false);
           }}
           onKeyDown={(event) => {
+            // Tab completes the command being typed, as in a terminal.
+            if (event.key === "Tab" && offered[0]) {
+              event.preventDefault();
+              complete(offered[0].name);
+              return;
+            }
             if (!sendsOnEnter(event.nativeEvent)) return;
             event.preventDefault();
             void submit();
@@ -406,15 +811,131 @@ function SessionInput({
           </Button>
         )}
       </div>
+      {open && <SessionSettings session={session} perform={perform} />}
       <p className="mx-auto w-full max-w-3xl font-mono text-[11px] text-faint">
         {tooLong
           ? "Too long: up to 64 KB."
           : !owner
             ? "Its work is open to everyone in the workspace"
-            : working
-              ? "Joins the turn in progress · Esc interrupts"
-              : "Straight into the session, not into a chat"}
+            : command?.name === "compact"
+              ? "Summarizes the older work; anything after /compact says what to keep"
+              : started
+                ? "Compacting: the summary, or why it failed, appears above"
+                : working
+                  ? "Joins the turn in progress · Esc interrupts"
+                  : "Straight into the session, not into a chat · / for commands"}
       </p>
     </form>
+  );
+}
+
+/**
+ * The session's plan, pinned above the box: how far it is and the step in hand; opened,
+ * every step.
+ */
+function PlanBar({ steps }: { steps: PlanStep[] }) {
+  const [open, setOpen] = useState(false);
+  const panel = useId();
+  const done = steps.filter((step) => step.status === "done").length;
+  const current =
+    steps.find((step) => step.status === "active") ??
+    steps.find((step) => step.status !== "done");
+  return (
+    <div className="mx-auto w-full max-w-3xl overflow-hidden rounded-md border bg-card text-sm">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={panel}
+        onClick={() => setOpen(!open)}
+        className="group/plan flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors outline-none hover:bg-accent focus-visible:bg-accent"
+      >
+        <ListChecksIcon aria-hidden className="size-3.5 shrink-0 text-agent" />
+        <span className="shrink-0 font-mono text-[11px] text-faint">
+          {done} of {steps.length}
+        </span>
+        <span className="min-w-0 truncate text-[13px] group-aria-expanded/plan:invisible">
+          {current?.text}
+        </span>
+        <ChevronDownIcon
+          aria-hidden
+          className="ml-auto size-3.5 shrink-0 text-faint transition-transform group-aria-expanded/plan:rotate-180 motion-reduce:transition-none"
+        />
+      </button>
+      <Reveal open={open} id={panel}>
+        <div className="max-h-60 overflow-y-auto border-t px-3 py-2">
+          <PlanSteps steps={steps} />
+        </div>
+      </Reveal>
+    </div>
+  );
+}
+
+/**
+ * The session's own model, effort and permissions, under its box: read from its harness,
+ * changed through it at once. Only what the harness lets change now is offered.
+ */
+function SessionSettings({
+  session,
+  perform,
+}: {
+  session: ChatSession;
+  perform: Perform;
+}) {
+  const settings = useSessionSettings(
+    session.id,
+    `${session.status}:${session.activity}`,
+  );
+  const values = settings.data?.values ?? {};
+  const models = settings.data?.models ?? [];
+  const editable = settings.data?.editable ?? [];
+  const fields = agentSettingFields(session.harness, models, values.model);
+  if (!settings.data || !editable.length) return null;
+  // One field at a time; the harness confirms it, or says why not.
+  const change = (key: keyof AgentSettings, value: string) =>
+    void perform(async () => void (await settings.apply({ [key]: value })));
+  return (
+    <div
+      role="group"
+      aria-label="Session settings"
+      className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-1.5"
+    >
+      {fields.map(({ key, label, options }) => {
+        const value = values[key] ?? "";
+        return (
+          <NativeSelect
+            key={key}
+            size="sm"
+            aria-label={label}
+            title={label}
+            value={value}
+            disabled={
+              !editable.includes(key) || Object.keys(options).length === 0
+            }
+            onChange={(event) => change(key, event.target.value)}
+          >
+            {!value && (
+              <NativeSelectOption value="" disabled>
+                {label}: the harness's own
+              </NativeSelectOption>
+            )}
+            {value && !Object.hasOwn(options, value) && (
+              <NativeSelectOption value={value} disabled>
+                {value}
+              </NativeSelectOption>
+            )}
+            {Object.entries(options).map(([option, text]) => (
+              <NativeSelectOption key={option} value={option}>
+                {key === "model" || key === "effort"
+                  ? text
+                  : `${label}: ${text}`}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        );
+      })}
+      {settings.error && (
+        <span className="text-xs text-attention">{settings.error}</span>
+      )}
+    </div>
   );
 }

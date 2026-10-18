@@ -1,4 +1,10 @@
 import type { Actor } from "./api";
+import { cn } from "cn";
+import {
+  MessageCircleQuestionMarkIcon,
+  ShieldCheckIcon,
+  ShieldXIcon,
+} from "lucide-react";
 import { answerSummary, approvalLabels } from "@zerolux/chat";
 import type { Approval, Conversation } from "@zerolux/chat";
 import type { Chat, Perform } from "@zerolux/chat";
@@ -152,5 +158,40 @@ export function ApprovalCard({
         </p>
       )}
     </article>
+  );
+}
+
+/** An answered request as it stays in the session's work: what was asked and what you said. */
+export function ApprovalReceipt({ approval }: { approval: Approval }) {
+  const permission = approval.kind === "permission";
+  const answer = permission
+    ? approval.decision &&
+      (approval.decision === "allow" ? "Allowed" : "Denied")
+    : answerSummary(approval);
+  const Icon = !permission
+    ? MessageCircleQuestionMarkIcon
+    : approval.decision === "deny"
+      ? ShieldXIcon
+      : ShieldCheckIcon;
+  return (
+    <p className="flex min-w-0 items-center gap-2 rounded-md border border-human/20 bg-human/5 px-3 py-1.5 text-[13px]">
+      <Icon aria-hidden className="size-3.5 shrink-0 text-human" />
+      <span className="min-w-0 flex-1 truncate text-muted-foreground">
+        {approval.summary}
+      </span>
+      {answer && (
+        <span className="max-w-[40%] shrink-0 truncate font-medium">
+          {answer}
+        </span>
+      )}
+      <span
+        className={cn(
+          "shrink-0 font-mono text-[11px] text-faint",
+          approval.status === "uncertain" && "text-attention",
+        )}
+      >
+        {approvalLabels[approval.status]}
+      </span>
+    </p>
   );
 }
