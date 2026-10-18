@@ -67,6 +67,7 @@ import {
   withMention,
   contextShare,
   percent,
+  planMode,
   tokenCount,
   usdCost,
   useSessionLive,
@@ -74,6 +75,7 @@ import {
 } from "@zerolux/chat";
 import type {
   Actor,
+  AgentSettings,
   Approval,
   ApprovalItem,
   BlockRun,
@@ -883,11 +885,14 @@ function SettingsBar({ session }: { session: ChatSession }) {
   const models = settings.data?.models ?? [];
   const editable = settings.data?.editable ?? [];
   if (!settings.data || !editable.length) return null;
-  const fields = agentSettingFields(
-    session.harness as Actor["harness"],
-    models,
-    values.model,
-  );
+  const harness = session.harness as Actor["harness"];
+  const fields = agentSettingFields(harness, models, values.model);
+  // Plan mode is a switch beside them, set in each harness's own terms.
+  const plan = planMode(harness, values, editable);
+  const apply = (change: AgentSettings) => {
+    setError("");
+    settings.apply(change).catch((e: unknown) => setError(errorMessage(e)));
+  };
   return (
     <View className="gap-1 px-0.5">
       <View className="flex-row flex-wrap gap-1.5">
@@ -902,14 +907,30 @@ function SettingsBar({ session }: { session: ChatSession }) {
             disabled={
               !editable.includes(key) || Object.keys(options).length === 0
             }
-            onChange={(value) => {
-              setError("");
-              settings
-                .apply({ [key]: value })
-                .catch((e: unknown) => setError(errorMessage(e)));
-            }}
+            onChange={(value) => apply({ [key]: value })}
           />
         ))}
+        {plan ? (
+          <Pressable
+            accessibilityRole="switch"
+            accessibilityLabel="Plan"
+            accessibilityState={{ checked: plan.on }}
+            onPress={() => apply(plan.change(!plan.on))}
+            className={cn(
+              "rounded-full border border-border px-2.5 py-1 active:bg-accent",
+              plan.on && "border-primary bg-primary/15",
+            )}
+          >
+            <Text
+              className={cn(
+                "text-xs",
+                plan.on ? "text-foreground" : "text-muted-foreground",
+              )}
+            >
+              Plan
+            </Text>
+          </Pressable>
+        ) : null}
       </View>
       {error || settings.error ? (
         <Text className="text-xs text-attention">
