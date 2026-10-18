@@ -38,9 +38,9 @@ pub struct Model {
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
-        belongs_to = "super::chat_sessions::Entity",
+        belongs_to = "super::sessions::Entity",
         from = "Column::SessionId",
-        to = "super::chat_sessions::Column::Id",
+        to = "super::sessions::Column::Id",
         fk_name = "tool_approvals_session_id_fkey"
     )]
     Session,

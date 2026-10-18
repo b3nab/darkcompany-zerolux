@@ -5,10 +5,10 @@ pub mod schema;
 
 pub mod actors;
 pub mod chat_outbox;
-pub mod chat_sessions;
 pub mod conversation_members;
 pub mod conversations;
 pub mod deliveries;
 pub mod messages;
+pub mod sessions;
 pub mod tool_approvals;
 pub mod workspace;

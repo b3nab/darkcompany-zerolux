@@ -68,7 +68,7 @@ pub fn sql(backend: DatabaseBackend) -> String {
     export!(
         actors,
         workspace,
-        chat_sessions,
+        sessions,
         conversations,
         conversation_members,
         messages,

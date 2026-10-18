@@ -4,8 +4,8 @@ use sea_orm_migration::MigratorTrait;
 use zerolux::{
     db::{Migrator, connect},
     entity::{
-        actors, chat_outbox, chat_sessions, conversation_members, conversations, deliveries,
-        messages, tool_approvals, workspace,
+        actors, chat_outbox, conversation_members, conversations, deliveries, messages, sessions,
+        tool_approvals, workspace,
     },
 };
 
@@ -62,9 +62,9 @@ async fn single_bootstrap_preserves_identity_history_settings_and_stops_on_reope
     .insert(&db)
     .await
     .unwrap();
-    let session = chat_sessions::ActiveModel {
+    let session = sessions::ActiveModel {
         id: Set("session".into()),
-        actor_id: Set(agent.id.clone()),
+        actor_id: Set(Some(agent.id.clone())),
         harness: Set("pi".into()),
         native_session_id: Set("saved-native-session".into()),
         title: Set("Fixture".into()),
@@ -169,7 +169,7 @@ async fn single_bootstrap_preserves_identity_history_settings_and_stops_on_reope
     unchanged!(actors, owner);
     unchanged!(actors, agent);
     unchanged!(workspace, company);
-    unchanged!(chat_sessions, session);
+    unchanged!(sessions, session);
     unchanged!(conversations, conversation);
     unchanged!(messages, message);
     unchanged!(deliveries, delivery);
@@ -224,7 +224,7 @@ async fn single_bootstrap_preserves_identity_history_settings_and_stops_on_reope
     second.id = Set("second".into());
     second.token_hash = Set("second-fixture-not-a-token".into());
     assert!(second.insert(&upgraded).await.is_err());
-    unchanged!(chat_sessions, session);
+    unchanged!(sessions, session);
     upgraded.close().await.unwrap();
 }
 
@@ -238,7 +238,7 @@ fn exported_entities_include_state_constraints_for_both_dialects() {
         for name in [
             "one_bootstrap_owner",
             "one_actor_per_subject",
-            "one_chat_session",
+            "idx-sessions-native_session",
             "one_open_thread_per_root",
             "deliveries_session",
             "chat_outbox_pending",

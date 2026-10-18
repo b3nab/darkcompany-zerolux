@@ -39,9 +39,9 @@ pub enum Relation {
     )]
     Actor,
     #[sea_orm(
-        belongs_to = "super::chat_sessions::Entity",
+        belongs_to = "super::sessions::Entity",
         from = "Column::SessionId",
-        to = "super::chat_sessions::Column::Id",
+        to = "super::sessions::Column::Id",
         fk_name = "deliveries_session_id_fkey"
     )]
     Session,
