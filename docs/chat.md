@@ -28,7 +28,7 @@ What a session is producing before its record has it (text, reasoning and a runn
 
 Requests reach the owner whatever started the turn: a chat message, several chats, or the session's own work. Each belongs to its session, and to the chat whose message started the turn when there is one (`conversation_id` is null otherwise). A request has a `kind`:
 
-- `permission`: allow or deny (`POST /chat/approvals/{id}/decision`).
+- `permission`: allow or deny (`POST /chat/approvals/{id}/decision {"decision", "scope"?, "reason"?}`). An allowed one goes as far as the harness offers in `details.scopes`: `once`, `session` (Claude Code's suggested rules for the session, Codex's session approvals) or `always` (those rules kept in Claude Code's local settings, Codex's proposed command policy). pi confirms once. A denial's `reason` reaches the session: as Claude Code's own denial message, and after Codex's or pi's denial as the owner's words.
 - `question`: Claude Code's `AskUserQuestion`, pi's `select`, `input` and `editor`, Codex's `requestUserInput`. `details.questions` lists each question with its options, single or multiple choice, and free text where the harness takes it. The owner answers `{"answers": {<id>: ["…"]}}` or `{"declined": true}`.
 - `form`: an MCP server's elicitation, through Claude Code or Codex: fields from its schema, or a link to open. The owner answers `{"action": "accept", "content": {…}}`, `decline` or `cancel`.
 
