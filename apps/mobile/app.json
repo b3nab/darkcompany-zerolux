@@ -42,6 +42,9 @@
         {
           "android": {
             "usesCleartextTraffic": true
+          },
+          "ios": {
+            "usePrecompiledModules": false
           }
         }
       ],
@@ -230,7 +233,9 @@
             "backgroundColor": "#0a0b0d"
           }
         }
-      ]
+      ],
+      "expo-asset",
+      ["expo-notifications", { "enableRemoteNotifications": false }]
     ]
   }
 }
