@@ -18,6 +18,7 @@ pub mod entity;
 pub mod harness;
 mod integration_code;
 pub mod lease;
+pub mod live;
 pub mod livekit;
 pub mod model;
 pub mod native_events;

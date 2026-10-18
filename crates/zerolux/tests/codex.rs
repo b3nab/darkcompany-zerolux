@@ -57,6 +57,7 @@ struct KernelState {
     inbox_blocked: bool,
     reject_dispatch: Option<(String, StatusCode)>,
     reply_before_notified: bool,
+    live: Vec<Value>,
 }
 
 #[derive(Clone)]
@@ -189,6 +190,11 @@ fn kernel_response(
         data.activity = value["activity"].as_str().map(str::to_owned);
         data.activity_conversation = value["conversation_id"].as_str().map(str::to_owned);
         return (ok, json!({"session":{"id":SESSION}}));
+    }
+    if path == format!("/api/chat/sessions/{SESSION}/live") {
+        data.live
+            .extend(value["changes"].as_array().unwrap().iter().cloned());
+        return (ok, json!({"seq": data.live.len()}));
     }
     if path == format!("/api/chat/sessions/{SESSION}/status") {
         data.session_status = value["status"].as_str().unwrap().into();
@@ -2030,5 +2036,38 @@ async fn questions_and_mcp_forms_reach_the_owner_and_come_back_as_codex_expects(
     runtime.emit(json!({"id":912,"method":"mcpServer/elicitation/request","params":{"threadId":THREAD,"serverName":"openai","mode":"openai/userVerification","title":"Verify","description":"Device","challenge":"c"}}));
     kernel.wait(|s| s.session_status == "attention").await;
     assert_eq!(kernel.state.lock().unwrap().approvals.len(), 2);
+    finish(stop, task).await;
+}
+
+#[tokio::test]
+async fn streamed_output_reaches_the_kernel_while_the_turn_runs() {
+    let runtime = Runtime::new().await;
+    let kernel = KernelFixture::new("read").await;
+    let (_changed, stop, task) = run(&runtime, &kernel).await;
+    kernel.wait(|s| s.activity.as_deref() == Some("idle")).await;
+    let delta = |method: &str, item: &str, text: &str| json!({"method":method,"params":{"threadId":THREAD,"turnId":"work","itemId":item,"delta":text}});
+    runtime.emit(delta("item/reasoning/textDelta", "r", "Checking "));
+    runtime.emit(delta("item/reasoning/textDelta", "r", "the tests"));
+    runtime.emit(delta("item/commandExecution/outputDelta", "cmd", "ok 1\n"));
+    runtime.emit(delta("item/agentMessage/delta", "m", "All "));
+    runtime.emit(delta("item/agentMessage/delta", "m", "green"));
+    // Another thread's output is not this session's.
+    runtime.emit(json!({"method":"item/agentMessage/delta","params":{"threadId":"other","turnId":"t","itemId":"x","delta":"no"}}));
+    kernel.wait(|s| s.live.len() == 5).await;
+    runtime.emit(item("work", assistant("m", "All green", "final_answer")));
+    runtime.emit(completed("work", vec![]));
+    kernel.wait(|s| s.live.len() == 7).await;
+    let live = kernel.state.lock().unwrap().live.clone();
+    assert_eq!(
+        live[0],
+        json!({"type":"append","item":"r","kind":"thinking","text":"Checking "})
+    );
+    assert_eq!(live[2]["kind"], "output");
+    assert_eq!(
+        live[4],
+        json!({"type":"append","item":"m","kind":"text","text":"green"})
+    );
+    assert_eq!(live[5], json!({"type":"done","item":"m"}));
+    assert_eq!(live[6], json!({"type":"clear"}));
     finish(stop, task).await;
 }

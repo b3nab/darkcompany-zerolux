@@ -398,6 +398,36 @@ pub struct CodexDriver {
     turn_chats: HashSet<String>,
     turn_private: bool,
     approvals: HashMap<String, Approval>,
+    /// Streamed output not yet reported, and when it is due.
+    live: Vec<crate::live::Change>,
+    live_due: Option<tokio::time::Instant>,
+}
+
+/// How often streamed output reaches the kernel.
+const LIVE_EVERY: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// What a Codex notification streams: text, reasoning or a tool's output as it grows, the end
+/// of an item, the end of a turn.
+fn live_change(event: &Value) -> Option<crate::live::Change> {
+    use crate::live::{Change, Kind};
+    let params = &event["params"];
+    let append = |kind| {
+        Some(Change::Append {
+            item: params["itemId"].as_str()?.to_owned(),
+            kind,
+            text: params["delta"].as_str()?.to_owned(),
+        })
+    };
+    match event["method"].as_str()? {
+        "item/agentMessage/delta" => append(Kind::Text),
+        "item/reasoning/textDelta" | "item/reasoning/summaryTextDelta" => append(Kind::Thinking),
+        "item/commandExecution/outputDelta" | "item/fileChange/outputDelta" => append(Kind::Output),
+        "item/completed" => Some(Change::Done {
+            item: params["item"]["id"].as_str()?.to_owned(),
+        }),
+        "turn/completed" => Some(Change::Clear),
+        _ => None,
+    }
 }
 
 impl CodexDriver {
@@ -634,6 +664,8 @@ impl CodexDriver {
             turn_chats: HashSet::new(),
             turn_private: false,
             approvals: HashMap::new(),
+            live: Vec::new(),
+            live_due: None,
         })
     }
 
@@ -704,10 +736,24 @@ impl CodexDriver {
                     value = stop.changed() => {
                         if value.is_err() || *stop.borrow() { return Ok(()); }
                     }
+                    _ = tokio::time::sleep_until(self.live_due.unwrap_or_else(tokio::time::Instant::now)), if self.live_due.is_some() => {
+                        self.report_live(&kernel).await;
+                    }
                     event = self.events.recv() => match event {
                         Ok(event) if event["method"] == CLOSED => bail!("Codex connection closed; pending prompts will not be resent"),
                         Ok(event) => {
                             self.native_settings.observe(&event);
+                            if event["params"]["threadId"] == self.thread_id
+                                && let Some(change) = live_change(&event)
+                            {
+                                let done = !matches!(change, crate::live::Change::Append { .. });
+                                self.live.push(change);
+                                if done {
+                                    self.report_live(&kernel).await;
+                                } else {
+                                    self.live_due.get_or_insert_with(|| tokio::time::Instant::now() + LIVE_EVERY);
+                                }
+                            }
                             let method = event["method"].as_str().map(str::to_owned);
                             let ours = event["params"]["threadId"] == self.thread_id;
                             let turn = event["params"]["turn"]["id"].as_str().map(str::to_owned);
@@ -769,6 +815,20 @@ impl CodexDriver {
         }
         cancellation?;
         if *stop.borrow() { Ok(()) } else { result }
+    }
+
+    /// Streamed output, to the kernel. It is shown while it streams and never stored: a lost
+    /// report is not sent again, since the native record will have the step.
+    async fn report_live(&mut self, kernel: &Kernel) {
+        self.live_due = None;
+        if self.live.is_empty() {
+            return;
+        }
+        let changes = std::mem::take(&mut self.live);
+        let path = format!("/chat/sessions/{}/live", kernel.session_id);
+        if let Err(error) = kernel.post(&path, json!({ "changes": changes })).await {
+            tracing::debug!(error = format!("{error:#}"), "Live output not reported");
+        }
     }
 
     /// `approvals` is false when only the next envelope is due: a native event may still be
