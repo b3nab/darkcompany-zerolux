@@ -46,6 +46,9 @@ pub struct Model {
     /// Private when none; otherwise the workspace's people may `read` it, or `write` to it too.
     #[sea_orm(column_type = "Text")]
     pub shared: Option<String>,
+    /// ZeroLux started its native session, rather than finding one started elsewhere.
+    #[sea_orm(default_value = false)]
+    pub created: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
