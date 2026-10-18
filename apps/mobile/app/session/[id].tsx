@@ -347,9 +347,13 @@ function Composer({
     }
   };
   const interrupting = !draft.trim() && stop.allowed;
+  // Claude Code in a terminal only takes words into the running turn.
+  const choosable = !(
+    session.harness === "claude-code" && session.origin !== "owned"
+  );
   const modes: [string, InputMode][] = [
-    ["After the turn", "queue"],
-    ["Stop and send", "interrupt"],
+    ["Send when this turn ends", "queue"],
+    ["Stop the turn and send", "interrupt"],
   ];
   const chooseMode = () => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -472,12 +476,14 @@ function Composer({
                 )}
                 disabled={!open || !draft.trim() || sending}
                 onPress={() => void send()}
-                onLongPress={stop.allowed && open ? chooseMode : undefined}
+                onLongPress={
+                  stop.allowed && open && choosable ? chooseMode : undefined
+                }
                 accessibilityRole="button"
                 accessibilityLabel="Send"
                 accessibilityHint={
-                  stop.allowed
-                    ? "Joins the turn in progress; hold to send it after the turn, or to stop and send"
+                  stop.allowed && choosable
+                    ? "Joins the turn in progress; hold to send it when the turn ends, or to stop the turn and send"
                     : undefined
                 }
               >
@@ -492,8 +498,9 @@ function Composer({
         )}
         {owner && stop.allowed && draft.trim() && !sessionCommand(draft) ? (
           <Text className="px-1.5 text-xs text-faint">
-            Joins the turn in progress. Hold Send to send it after the turn, or
-            to stop and send.
+            {choosable
+              ? "Joins the turn in progress. Hold Send to send it when the turn ends, or to stop the turn and send."
+              : "Joins the turn in progress."}
           </Text>
         ) : null}
         {owner && session.status !== "stopped" ? (
