@@ -298,7 +298,7 @@ export default function SessionPage() {
               run={item as BlockRun<Item>}
               fresh={fresh}
               chatTitle={chatTitle}
-              inputMenu={access.mine ? inputs.open : undefined}
+              inputMenu={access.read ? inputs.open : undefined}
               renderApproval={(approval: Approval) =>
                 // Its requests are its person's to decide; others see them wait.
                 approval.status === "pending" && access.mine ? (

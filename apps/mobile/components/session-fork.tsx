@@ -49,6 +49,8 @@ const fileList = (rewind: FilesRewind) => {
  */
 export function useInputActions(session: ChatSession | undefined) {
   const { chat } = useSession();
+  // A fork is its person's; putting files back is working in it; copying is reading.
+  const { mine, write } = useAccess(session);
   const router = useRouter();
   const forkWith = useForkWith();
   const [editing, setEditing] = useState<{ block: InputBlock; text: string }>();
@@ -96,12 +98,16 @@ export function useInputActions(session: ChatSession | undefined) {
     if (!session) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const actions = [
-      {
-        label: "Edit and resend",
-        run: () => setEditing({ block, text: block.text }),
-      },
+      ...(mine
+        ? [
+            {
+              label: "Edit and resend",
+              run: () => setEditing({ block, text: block.text }),
+            },
+          ]
+        : []),
       // Only Claude Code keeps checkpoints; the others' files come back through their changes.
-      ...(session.harness === "claude-code"
+      ...(write && session.harness === "claude-code"
         ? [
             {
               label: "Put files back to before this",
