@@ -33,13 +33,14 @@ import {
   changeCount,
   diffLines,
   exploredPhrase,
+  plainLine,
   spanLabel,
   toolOutcome,
   toolPhrase,
   toolState,
   toolView,
 } from "@zerolux/chat";
-import type { ToolBlock, ToolOutcome, ToolView } from "@zerolux/chat";
+import type { PlanStep, ToolBlock, ToolOutcome, ToolView } from "@zerolux/chat";
 import { Fold } from "@/components/fold";
 import { MessageBody } from "@/components/message-body";
 import { Text } from "@/components/ui/text";
@@ -158,6 +159,93 @@ export function ExploredCalls({
   );
 }
 
+/**
+ * A subagent the session started: a card of its own under the session's work, with its task,
+ * where it stands, and what it brought back.
+ */
+export function SubagentCard({
+  tool,
+  chatTitle,
+}: {
+  tool: ToolBlock;
+  chatTitle?: ChatTitle;
+}) {
+  const view = useMemo(
+    () => toolView(tool.name, tool.input),
+    [tool.name, tool.input],
+  );
+  const outcome = useMemo(
+    () => tool.result && toolOutcome(tool.result.output),
+    [tool.result],
+  );
+  const state = toolState(tool, view, outcome);
+  const faint = String(useCSSVariable("--color-faint"));
+  if (view.kind !== "agent")
+    return <ToolCall tool={tool} chatTitle={chatTitle} />;
+  const running = state === "running";
+  return (
+    <View className="ml-3 overflow-hidden rounded-md border border-l-2 border-agent/20 border-l-agent/50 bg-agent/5">
+      <Fold
+        summary={(open) => (
+          <View className="gap-0.5 px-3 py-2">
+            <View className="flex-row items-center gap-2">
+              <View className="size-4 items-center justify-center">
+                <StateIcon state={state} view={view} />
+              </View>
+              <Text className="font-mono text-[11px] tracking-wide text-agent-foreground/80 uppercase">
+                Subagent
+              </Text>
+              <View className="min-w-0 flex-1">
+                <Verb running={running}>{view.title}</Verb>
+              </View>
+              <Elapsed tool={tool} />
+              <View
+                style={{ transform: [{ rotate: open ? "90deg" : "0deg" }] }}
+              >
+                <ChevronRightIcon color={faint} size={13} strokeWidth={2} />
+              </View>
+            </View>
+            {!open && view.prompt ? (
+              <Text
+                numberOfLines={1}
+                className="pl-6 text-[12.5px] text-muted-foreground"
+              >
+                {plainLine(view.prompt)}
+              </Text>
+            ) : null}
+          </View>
+        )}
+      >
+        <View className="gap-2 border-t border-agent/15 px-3 py-2.5">
+          {view.prompt ? (
+            <Text selectable className="text-[13px] text-muted-foreground">
+              {view.prompt}
+            </Text>
+          ) : null}
+          {outcome?.text ? (
+            <View className="border-t border-agent/15 pt-2">
+              <MessageBody text={outcome.text} />
+            </View>
+          ) : running ? (
+            <Text className="text-[12.5px] text-faint">Working on it…</Text>
+          ) : null}
+        </View>
+      </Fold>
+    </View>
+  );
+}
+
+/** A plan's steps as a checklist: done ones struck through, the one in hand in the agent's colour. */
+export function PlanSteps({ steps }: { steps: PlanStep[] }) {
+  return (
+    <View className="gap-1">
+      {steps.map((step, i) => (
+        <Step key={i} text={step.text} status={step.status} />
+      ))}
+    </View>
+  );
+}
+
 function StateIcon({ state, view }: { state: State; view: ToolView }) {
   const [agent, destructive, attention, faint] = useCSSVariable([
     "--color-agent",
@@ -226,7 +314,13 @@ const sweep = {
 };
 
 /** The verb of the line; while the tool runs a light passes over it, dimmed when motion is reduced. */
-function Verb({ running, children }: { running: boolean; children: string }) {
+export function Verb({
+  running,
+  children,
+}: {
+  running: boolean;
+  children: string;
+}) {
   const still = useReducedMotion();
   return (
     <Animated.View
@@ -497,13 +591,7 @@ function Body({
         </>
       );
     case "plan":
-      return (
-        <View className="gap-1">
-          {view.steps.map((step, i) => (
-            <Step key={i} text={step.text} status={step.status} />
-          ))}
-        </View>
-      );
+      return <PlanSteps steps={view.steps} />;
     case "zerolux":
       return (
         <>
