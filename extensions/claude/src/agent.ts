@@ -152,6 +152,8 @@ export class ClaudeAgent {
         canUseTool: this.canUseTool,
         onElicitation: this.onElicitation,
         includePartialMessages: true,
+        // A checkpoint of the files before each of the owner's messages, to rewind them.
+        enableFileCheckpointing: true,
         ...(chat ? { mcpServers: { zerolux: this.tools() } } : {}),
       },
     });
@@ -284,6 +286,12 @@ export class ClaudeAgent {
       },
       priority: mode === "queue" ? "later" : "next",
     });
+  }
+
+  /** The files as they were before one of the session's user messages; `dryRun` only says. */
+  async rewindFiles(messageId: string, dryRun: boolean) {
+    if (!this.query) throw new Error("The session is not running");
+    return this.query.rewindFiles(messageId, { dryRun });
   }
 
   /** Claude Code's commands and skills, as the owner types them. */

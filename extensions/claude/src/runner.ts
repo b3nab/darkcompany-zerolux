@@ -118,6 +118,7 @@ export class Runner {
         "input-v2",
         "commands-v1",
         "images-v1",
+        "rewind-files-v1",
         ...(this.config.managed && this.deps.code && this.deps.execution
           ? ["integration-update-v1"]
           : []),
@@ -227,6 +228,18 @@ export class Runner {
         throw new Error("Invalid input request");
       await this.agent.say(request.text, mode, images);
       return {};
+    }
+    if (method === "rewind_files") {
+      if (this.stopRequested || !this.transport.bound)
+        throw new Error("The session is not connected");
+      if (typeof request.message_id !== "string" || !request.message_id)
+        throw new Error("Invalid rewind request");
+      return {
+        result: await this.agent.rewindFiles(
+          request.message_id,
+          request.dry_run === true,
+        ),
+      };
     }
     if (method === "commands") {
       if (this.stopRequested || !this.transport.bound)

@@ -125,6 +125,11 @@ function fixture() {
       }
     }
     return Object.assign(stream(), {
+      rewindFiles: async (id: string, options: { dryRun?: boolean }) => ({
+        canRewind: true,
+        filesChanged: [`${id}.txt`],
+        insertions: options.dryRun ? 0 : 3,
+      }),
       getContextUsage: async () => ({
         totalTokens: 42_000,
         maxTokens: 200_000,
@@ -954,4 +959,16 @@ test("how full the context is, and the cost so far, reach ZeroLux when a turn en
     context_window: 200_000,
     cost_usd: 0.25,
   });
+});
+
+test("the files go back to how they were before one of the session's messages", async () => {
+  const f = fixture();
+  await f.start();
+  expect(f.options().enableFileCheckpointing).toBe(true);
+  expect(await f.agent.rewindFiles("m1", true)).toEqual({
+    canRewind: true,
+    filesChanged: ["m1.txt"],
+    insertions: 0,
+  });
+  expect((await f.agent.rewindFiles("m1", false)).insertions).toBe(3);
 });
