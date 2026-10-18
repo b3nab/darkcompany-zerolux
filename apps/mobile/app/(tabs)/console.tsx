@@ -8,8 +8,11 @@ import {
   attentionInbox,
   attentionLabels,
   consoleSessions,
+  ago,
+  hitKindLabels,
   sessionMatches,
   sessionOutputAt,
+  useHistorySearch,
   useSeen,
 } from "@zerolux/chat";
 import type { Attention } from "@zerolux/chat";
@@ -48,7 +51,7 @@ const empty: Record<Shown, string> = {
  * The pen starts a new session, with or without an agent.
  */
 export default function Console() {
-  const { workspace, chat } = useSession();
+  const { workspace, chat, url } = useSession();
   const { owner } = useMe();
   const router = useRouter();
   const ink = String(useCSSVariable("--color-foreground"));
@@ -154,6 +157,7 @@ export default function Console() {
         estimatedItemSize={60}
         contentContainerStyle={{ paddingBottom: 16 }}
         keyboardDismissMode="on-drag"
+        ListFooterComponent={<HistoryResults query={query} kernel={url} />}
         ListEmptyComponent={
           <Text className="p-5 text-base leading-6 text-faint">
             {query.trim()
@@ -197,5 +201,69 @@ export default function Console() {
         }}
       />
     </Screen>
+  );
+}
+
+/**
+ * Under the sessions that match, what the sessions you may read said and did that contains the
+ * words typed, the latest first; a tap opens the session at that place.
+ */
+function HistoryResults({ query, kernel }: { query: string; kernel: string }) {
+  const router = useRouter();
+  const { results, truncated, error, searching } = useHistorySearch(
+    query,
+    kernel,
+  );
+  if (query.trim().length < 2) return null;
+  return (
+    <View className="gap-1 pt-4">
+      <Text className="px-5 pb-1 font-mono text-[11px] tracking-wider text-faint uppercase">
+        In their history
+      </Text>
+      {error ? (
+        <Text className="px-5 text-sm text-destructive">{error}</Text>
+      ) : searching && !results ? (
+        <Text className="px-5 text-sm text-faint">Searching…</Text>
+      ) : results && !results.length ? (
+        <Text className="px-5 text-sm text-faint">
+          Nothing they said or did matches.
+        </Text>
+      ) : null}
+      {results?.map((hit) => (
+        <Pressable
+          key={`${hit.session_id}:${hit.at}:${hit.kind}`}
+          accessibilityRole="button"
+          onPress={() =>
+            router.push({
+              pathname: "/session/[id]",
+              params: { id: hit.session_id, at: String(hit.at) },
+            })
+          }
+          className="gap-0.5 px-5 py-2 active:bg-accent"
+        >
+          <View className="flex-row items-baseline gap-2">
+            <Text numberOfLines={1} className="shrink text-sm font-medium">
+              {hit.title || "Untitled session"}
+            </Text>
+            <Text className="font-mono text-[11px] text-faint">
+              {hitKindLabels[hit.kind]}
+            </Text>
+            {hit.time ? (
+              <Text className="ml-auto font-mono text-[11px] text-faint">
+                {ago(Date.parse(hit.time))}
+              </Text>
+            ) : null}
+          </View>
+          <Text numberOfLines={2} className="text-[13px] text-muted-foreground">
+            {hit.snippet}
+          </Text>
+        </Pressable>
+      ))}
+      {truncated ? (
+        <Text className="px-5 pt-1 text-xs text-faint">
+          The search stopped before the end: type more words to narrow it.
+        </Text>
+      ) : null}
+    </View>
   );
 }
