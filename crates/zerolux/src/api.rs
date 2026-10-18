@@ -238,6 +238,18 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
             axum::routing::patch(requeue).delete(unqueue),
         )
         .route("/sessions/{id}/files", get(session_files))
+        .route("/sessions/{id}/file", get(session_file))
+        .route("/sessions/{id}/git", get(session_git))
+        .route("/sessions/{id}/git/diff", get(session_diff))
+        .route("/sessions/{id}/git/stage", post(git_stage))
+        .route("/sessions/{id}/git/unstage", post(git_unstage))
+        .route("/sessions/{id}/git/discard", post(git_discard))
+        .route("/sessions/{id}/git/commit", post(git_commit))
+        .route("/sessions/{id}/git/push", post(git_push))
+        .route(
+            "/sessions/{id}/git/pr",
+            get(git_pull_request).post(git_open_pull_request),
+        )
         .route("/sessions/{id}/compact", post(compact_session))
         .route("/actors/{id}/name", post(rename_agent))
         .route(
@@ -974,6 +986,192 @@ fn files_limit() -> usize {
     50
 }
 
+/// The folder of a session that runs on this kernel host, for the owner.
+async fn session_folder(
+    state: &AppState,
+    who: &ChatIdentity,
+    id: &str,
+) -> Result<std::path::PathBuf, ApiFailure> {
+    let session = state.store.chat_session(who, id).await?;
+    if session.host_id.as_deref() != state.store.host() {
+        return Err(Error::Invalid(
+            "This session runs on another kernel host; read its folder there".into(),
+        )
+        .into());
+    }
+    Ok(std::path::PathBuf::from(session.workspace))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PathQuery {
+    path: String,
+}
+
+/// A file of the session's folder, as it is now.
+async fn session_file(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    Query(input): Query<PathQuery>,
+) -> Result<Json<Value>, ApiFailure> {
+    let folder = session_folder(&state, &who, &id).await?;
+    let text = crate::workspace_git::file(&folder, &input.path)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "path": input.path, "text": text })))
+}
+
+/// What git says has changed in the session's folder.
+async fn session_git(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let folder = session_folder(&state, &who, &id).await?;
+    let status = crate::workspace_git::status(&folder)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!(status)))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiffQuery {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    staged: bool,
+}
+
+/// The changes in the session's folder, for a path or all of them, as a unified diff.
+async fn session_diff(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    Query(input): Query<DiffQuery>,
+) -> Result<Json<Value>, ApiFailure> {
+    let folder = session_folder(&state, &who, &id).await?;
+    let diff = crate::workspace_git::diff(&folder, input.path.as_deref(), input.staged)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "diff": diff })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GitPaths {
+    paths: Vec<String>,
+}
+
+async fn git_stage(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<GitPaths>,
+) -> Result<Json<Value>, ApiFailure> {
+    let folder = session_folder(&state, &who, &id).await?;
+    crate::workspace_git::stage(&folder, &input.paths)
+        .await
+        .map_err(runtime_error)?;
+    session_git(State(state), Extension(who), Path(id)).await
+}
+
+async fn git_unstage(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<GitPaths>,
+) -> Result<Json<Value>, ApiFailure> {
+    let folder = session_folder(&state, &who, &id).await?;
+    crate::workspace_git::unstage(&folder, &input.paths)
+        .await
+        .map_err(runtime_error)?;
+    session_git(State(state), Extension(who), Path(id)).await
+}
+
+/// Throws away the paths' changes that are not staged.
+async fn git_discard(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<GitPaths>,
+) -> Result<Json<Value>, ApiFailure> {
+    let folder = session_folder(&state, &who, &id).await?;
+    crate::workspace_git::discard(&folder, &input.paths)
+        .await
+        .map_err(runtime_error)?;
+    session_git(State(state), Extension(who), Path(id)).await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GitCommit {
+    message: String,
+}
+
+async fn git_commit(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<GitCommit>,
+) -> Result<Json<Value>, ApiFailure> {
+    let folder = session_folder(&state, &who, &id).await?;
+    let commit = crate::workspace_git::commit(&folder, &input.message)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "commit": commit })))
+}
+
+async fn git_push(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let folder = session_folder(&state, &who, &id).await?;
+    crate::workspace_git::push(&folder)
+        .await
+        .map_err(runtime_error)?;
+    session_git(State(state), Extension(who), Path(id)).await
+}
+
+/// The branch's pull request with its checks, through GitHub's `gh`; null when there is none.
+async fn git_pull_request(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let folder = session_folder(&state, &who, &id).await?;
+    let pull_request = crate::workspace_git::pull_request(&folder)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "pull_request": pull_request })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenPullRequest {
+    title: String,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    draft: bool,
+}
+
+async fn git_open_pull_request(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<OpenPullRequest>,
+) -> Result<Json<Value>, ApiFailure> {
+    let folder = session_folder(&state, &who, &id).await?;
+    let url =
+        crate::workspace_git::open_pull_request(&folder, &input.title, &input.body, input.draft)
+            .await
+            .map_err(runtime_error)?;
+    Ok(Json(json!({ "url": url })))
+}
+
 /// Files of the session's folder matching what the owner is typing, to mention them.
 async fn session_files(
     State(state): State<AppState>,
@@ -981,20 +1179,10 @@ async fn session_files(
     Path(id): Path<String>,
     Query(input): Query<FilesQuery>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let session = state.store.chat_session(&who, &id).await?;
-    if session.host_id.as_deref() != state.store.host() {
-        return Err(Error::Invalid(
-            "This session runs on another kernel host; read its files there".into(),
-        )
-        .into());
-    }
-    let files = crate::workspace_files::find(
-        std::path::Path::new(&session.workspace),
-        &input.query,
-        input.limit,
-    )
-    .await
-    .map_err(runtime_error)?;
+    let folder = session_folder(&state, &who, &id).await?;
+    let files = crate::workspace_files::find(&folder, &input.query, input.limit)
+        .await
+        .map_err(runtime_error)?;
     Ok(Json(json!({ "files": files })))
 }
 

@@ -1586,6 +1586,76 @@ async fn the_console_lists_reads_and_organizes_sessions_with_or_without_an_agent
         .await
         .unwrap();
     assert_eq!(files["files"], json!(["plan.md"]));
+    // Its code: what git says has changed, the changes, a file, and the owner's git actions.
+    let folder = kernel._dir.path();
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(folder)
+        .args(["init", "-q", "-b", "main"])
+        .status()
+        .unwrap();
+    let git = kernel
+        .get(&format!("/sessions/{}/git", free.session.id), None)
+        .await
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(git["branch"], "main");
+    assert!(
+        git["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["path"] == "plan.md" && c["unstaged"] == "?")
+    );
+    std::fs::write(folder.join("plan.md"), "first step\n").unwrap();
+    let diff = kernel
+        .get(
+            &format!("/sessions/{}/git/diff?path=plan.md", free.session.id),
+            None,
+        )
+        .await
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert!(diff["diff"].as_str().unwrap().contains("+first step"));
+    let staged = kernel
+        .post(
+            &format!("/sessions/{}/git/stage", free.session.id),
+            None,
+            json!({"paths":["plan.md"]}),
+        )
+        .await
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert!(
+        staged["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["path"] == "plan.md" && c["staged"] == "A")
+    );
+    let file = kernel
+        .get(
+            &format!("/sessions/{}/file?path=plan.md", free.session.id),
+            None,
+        )
+        .await
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(file["text"], "first step\n");
+    assert_eq!(
+        kernel
+            .get(
+                &format!("/sessions/{}/file?path=../x", free.session.id),
+                None
+            )
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
     // Input comes in one of three modes.
     assert_eq!(
         kernel
