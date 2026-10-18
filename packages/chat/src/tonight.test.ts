@@ -6,7 +6,14 @@ import { memberTone } from "./presence";
 import { shiftWindow } from "./shift";
 import { fileKind, fileSize } from "./storage";
 import type { StoredFile } from "./storage";
-import { facade, greeting, homeLabel, needsYou, runningNow } from "./tonight";
+import {
+  facade,
+  greeting,
+  homeLabel,
+  needsYou,
+  requestsFor,
+  runningNow,
+} from "./tonight";
 
 const owner: Actor = {
   id: "owner",
@@ -70,18 +77,40 @@ const approval = (status: Approval["status"]): Approval => ({
   created_at: 5,
 });
 
-test("what needs the owner: open permission requests and stuck sessions", () => {
-  const needs = needsYou({
-    approvals: [approval("pending"), approval("delivered")],
-    sessions: [session("s1", { status: "attention" })],
-    conversations: [general],
-  });
+test("what needs you: your sessions' open requests, and those of them stuck", () => {
+  const mine = { ...approval("pending"), session_id: "s1" };
+  // Another person's session, shared with you: its requests and trouble are theirs.
+  const theirs = {
+    ...approval("pending"),
+    id: "a-theirs",
+    session_id: "s2",
+  };
+  const needs = needsYou(
+    {
+      approvals: [mine, approval("delivered"), theirs],
+      sessions: [
+        session("s1", { status: "attention" }),
+        session("s2", { status: "attention", owner_id: "birch" }),
+      ],
+      conversations: [general],
+    },
+    "owner",
+  );
   expect(needs.map((n) => [n.kind, n.title, n.where])).toEqual([
     ["Permission", "Run bun test", "General"],
     ["pi", "The session needs your attention", undefined],
   ]);
   expect(needs[0]!.approvalId).toBe("a-pending");
   expect(needs[1]!.place).toEqual({ session: "s1" });
+  expect(
+    requestsFor(
+      {
+        approvals: [mine, theirs],
+        sessions: [session("s1", {}), session("s2", { owner_id: "birch" })],
+      },
+      "birch",
+    ).map((a) => a.id),
+  ).toEqual(["a-theirs"]);
 });
 
 test("what runs: an agent answering in a chat and a session elsewhere", () => {

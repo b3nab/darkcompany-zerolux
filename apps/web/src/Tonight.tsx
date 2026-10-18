@@ -12,6 +12,7 @@ import {
 } from "@zerolux/chat";
 import type { Chat, MemberTone, Perform, Place } from "@zerolux/chat";
 import { activeActors } from "./api";
+import { useMe } from "./AuthGate";
 import type { Actor, Workspace } from "./api";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -56,7 +57,7 @@ export function Tonight({
       ? sessionName(session, workspace.actors)
       : (actor(item.actorId)?.name ?? "unknown");
   };
-  const needs = needsYou(chat);
+  const needs = needsYou(chat, useMe(workspace.actors).me?.id);
   const running = runningNow(chat);
   const tones = actors.map((a) => memberTone(a, owner.id, chat.sessions));
   const people = actors.filter((a) => a.kind === "human");

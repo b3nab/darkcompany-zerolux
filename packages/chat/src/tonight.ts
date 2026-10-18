@@ -25,34 +25,45 @@ export interface Need {
   place: Place;
 }
 
-/** Permission requests and sessions that need the owner. */
-export function needsYou(chat: Activity): Need[] {
+/** The requests waiting for a person: those of their own sessions, which only they decide. */
+export function requestsFor(
+  chat: Pick<Chat, "approvals" | "sessions">,
+  me: string | undefined,
+) {
+  const mine = new Set(
+    chat.sessions.filter((s) => s.owner_id === me).map((s) => s.id),
+  );
+  return chat.approvals.filter(
+    (a) => a.status === "pending" && mine.has(a.session_id),
+  );
+}
+
+/** What waits for you: the requests of your sessions, and those of them that need you. */
+export function needsYou(chat: Activity, me: string | undefined): Need[] {
   const chatTitle = (id: string) =>
     chat.conversations.find((c) => c.id === id)?.title;
   return [
-    ...chat.approvals
-      .filter((a) => a.status === "pending")
-      .map((a) => ({
-        key: a.id,
-        actorId: a.actor_id,
-        sessionId: a.session_id,
-        kind:
-          a.kind === "permission"
-            ? "Permission"
-            : a.kind === "question"
-              ? "Question"
-              : "Form",
-        title: a.summary,
-        where: a.conversation_id ? chatTitle(a.conversation_id) : undefined,
-        since: a.created_at,
-        approvalId: a.id,
-        approvalKind: a.kind,
-        place: a.conversation_id
-          ? { chat: a.conversation_id }
-          : { session: a.session_id },
-      })),
+    ...requestsFor(chat, me).map((a) => ({
+      key: a.id,
+      actorId: a.actor_id,
+      sessionId: a.session_id,
+      kind:
+        a.kind === "permission"
+          ? "Permission"
+          : a.kind === "question"
+            ? "Question"
+            : "Form",
+      title: a.summary,
+      where: a.conversation_id ? chatTitle(a.conversation_id) : undefined,
+      since: a.created_at,
+      approvalId: a.id,
+      approvalKind: a.kind,
+      place: a.conversation_id
+        ? { chat: a.conversation_id }
+        : { session: a.session_id },
+    })),
     ...chat.sessions
-      .filter((s) => s.status === "attention")
+      .filter((s) => s.status === "attention" && s.owner_id === me)
       .map((s) => ({
         key: s.id,
         actorId: s.actor_id,
