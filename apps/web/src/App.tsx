@@ -22,7 +22,7 @@ import { WindowControls } from "@/components/window-controls";
 import { cn } from "cn";
 import type { Actor, Workspace } from "./api";
 import { AdministrationPage, MySettingsPage, ProfilePage } from "./Account";
-import { Approvals } from "./Approvals";
+import { Approvals, openApprovals } from "./Approvals";
 import { useAuthentication } from "./AuthGate";
 import { ChatHome, ChatList, ChatView, NewConversation } from "./ChatView";
 import { CommandMenu } from "./CommandMenu";
@@ -513,7 +513,9 @@ export function App({
                 path="/approvals"
                 element={
                   <Page>
-                    {chat.approvals.length ? approvals : nothingWaits}
+                    {openApprovals(chat.approvals).length
+                      ? approvals
+                      : nothingWaits}
                   </Page>
                 }
               />
