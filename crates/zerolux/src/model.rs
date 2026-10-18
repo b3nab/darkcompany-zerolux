@@ -289,6 +289,15 @@ pub enum InputMode {
     Interrupt,
 }
 
+/// An image the owner sends with their input, base64-encoded.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputImage {
+    /// `image/png`, `image/jpeg`, `image/gif` or `image/webp`.
+    pub media_type: String,
+    pub data: String,
+}
+
 /// A command or skill the session's harness offers, and what to type to use it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionCommand {

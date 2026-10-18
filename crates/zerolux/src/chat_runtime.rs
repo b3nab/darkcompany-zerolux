@@ -206,6 +206,8 @@ pub struct ChatRuntime {
     integration_revisions: HashMap<&'static str, String>,
     /// Where sessions started in a worktree of their own work.
     worktrees: PathBuf,
+    /// Images the owner sent with their input, per session, for its harness to read.
+    attachments: PathBuf,
     /// What each session is producing right now; see `live`.
     live: crate::live::Live,
 }
@@ -248,6 +250,7 @@ impl ChatRuntime {
     ) -> Result<Arc<Self>> {
         store.recover_sessions().await?;
         let worktrees = links.with_file_name("worktrees");
+        let attachments = links.with_file_name("attachments");
         let (stop, stopped) = watch::channel(false);
         let changed = Arc::new(Notify::new());
         let (wake, _) = broadcast::channel(16);
@@ -307,6 +310,7 @@ impl ChatRuntime {
             retries: std::sync::Mutex::new(HashMap::new()),
             integration_revisions,
             worktrees,
+            attachments,
             live: crate::live::Live::default(),
         }))
     }

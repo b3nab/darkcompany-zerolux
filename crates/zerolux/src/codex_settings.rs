@@ -59,8 +59,21 @@ impl CodexSettings {
     /// running turn; queued, it waits in Codex's queue and starts the next one; with
     /// interrupt, the running turn stops first. `$name` names one of the thread's skills.
     /// An unconfirmed send is never repeated.
-    pub async fn input(&self, text: &str, mode: crate::model::InputMode) -> Result<()> {
-        let mut input = vec![json!({"type": "text", "text": text})];
+    pub async fn input(
+        &self,
+        text: &str,
+        mode: crate::model::InputMode,
+        images: &[String],
+    ) -> Result<()> {
+        let mut input = Vec::new();
+        if !text.trim().is_empty() {
+            input.push(json!({"type": "text", "text": text}));
+        }
+        input.extend(
+            images
+                .iter()
+                .map(|path| json!({"type": "localImage", "path": path})),
+        );
         if text.contains('$') {
             for skill in self.skills().await? {
                 let named = format!("${}", skill["name"].as_str().unwrap_or_default());

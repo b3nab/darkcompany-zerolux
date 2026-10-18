@@ -1,7 +1,7 @@
 //! Agent Console controls on a running native session, the same for every harness.
 use super::settings::Control;
 use super::*;
-use crate::model::{InputMode, SessionCommand};
+use crate::model::{InputImage, InputMode, SessionCommand};
 use serde_json::json;
 
 const INTERRUPT: &str = "interrupt-v1";
@@ -9,6 +9,15 @@ const INPUT: &str = "input-v1";
 /// Input with a mode (steer, queue, interrupt), and the owner's commands run as typed.
 const INPUT_MODES: &str = "input-v2";
 const COMMANDS: &str = "commands-v1";
+/// Images with the owner's input.
+const IMAGES: &str = "images-v1";
+const IMAGE_TYPES: [(&str, &str); 4] = [
+    ("image/png", "png"),
+    ("image/jpeg", "jpg"),
+    ("image/gif", "gif"),
+    ("image/webp", "webp"),
+];
+const IMAGE_BYTES: usize = 15 * 1024 * 1024;
 const COMPACT: &str = "compact-v1";
 
 impl ChatRuntime {
@@ -35,8 +44,9 @@ impl ChatRuntime {
         id: &str,
         text: &str,
         mode: InputMode,
+        images: &[InputImage],
     ) -> Result<()> {
-        self.input_native(who, id, text, mode)
+        self.input_native(who, id, text, mode, images)
             .await
             .map_err(|error| match error.downcast::<Error>() {
                 Ok(error) => error.into(),
@@ -154,18 +164,51 @@ impl ChatRuntime {
         Ok(serde_json::from_value(listed["commands"].clone())?)
     }
 
+    /// The owner's images, saved for the session's harness to read: each one's file and type.
+    fn save_images(
+        &self,
+        id: &str,
+        images: &[InputImage],
+        decoded: Vec<(&'static str, Vec<u8>)>,
+    ) -> Result<Vec<(String, String)>> {
+        let folder = self.attachments.join(id);
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(&folder)?;
+        decoded
+            .into_iter()
+            .zip(images)
+            .map(|((extension, bytes), image)| {
+                use std::io::Write;
+                let path = folder.join(format!("{}.{extension}", uuid::Uuid::new_v4()));
+                let mut options = std::fs::OpenOptions::new();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+                options.open(&path)?.write_all(&bytes)?;
+                Ok((
+                    path.to_string_lossy().into_owned(),
+                    image.media_type.clone(),
+                ))
+            })
+            .collect()
+    }
+
     async fn input_native(
         &self,
         who: &ChatIdentity,
         id: &str,
         text: &str,
         mode: InputMode,
+        images: &[InputImage],
     ) -> Result<()> {
         if !who.is_owner() {
             return Err(Error::Forbidden.into());
         }
-        if text.trim().is_empty() || text.len() > 64 * 1024 {
-            return Err(Error::Invalid("Write from 1 byte to 64 KiB".into()).into());
+        if (text.trim().is_empty() && images.is_empty()) || text.len() > 64 * 1024 {
+            return Err(Error::Invalid("Write up to 64 KiB, or send an image".into()).into());
         }
         let session = self
             .store
@@ -189,27 +232,39 @@ impl ChatRuntime {
                 .as_str()
                 .context("The Claude Code inbox is unavailable")?;
             ensure!(
-                mode == InputMode::Steer,
-                "Claude Code in a terminal takes input as it comes, without queueing or interrupting"
+                mode == InputMode::Steer && images.is_empty(),
+                "Claude Code in a terminal takes text as it comes, without images, queueing or interrupting"
             );
             return crate::claude::write_inbox(std::path::Path::new(socket), text).await;
         }
-        // The first integrations take input only as it comes, without a mode.
-        let capability = if mode == InputMode::Steer {
+        // The first integrations take input only as it comes, without a mode or images.
+        let capability = if !images.is_empty() {
+            IMAGES
+        } else if mode == InputMode::Steer {
             INPUT
         } else {
             INPUT_MODES
         };
-        let request = json!({"method":"input","link_id":session.id,"text":text,"mode":mode});
-        match self.native_control(who, &session, capability).await? {
-            Control::Codex(control) => control.input(text, mode).await,
+        let decoded = decode_images(images)?;
+        let control = self.native_control(who, &session, capability).await?;
+        #[cfg(unix)]
+        if let Control::Claude(link) = &control {
+            runner_offers(link, capability).await?;
+        }
+        let saved = self.save_images(id, images, decoded)?;
+        let request = json!({"method":"input","link_id":session.id,"text":text,"mode":mode,
+            "images": saved.iter().map(|(path, media_type)| json!({"path":path,"media_type":media_type})).collect::<Vec<_>>()});
+        match control {
+            Control::Codex(control) => {
+                let paths: Vec<String> = saved.into_iter().map(|(path, _)| path).collect();
+                control.input(text, mode, &paths).await
+            }
             Control::Pi(record) => {
                 sessions::control(&record, request).await?;
                 Ok(())
             }
             #[cfg(unix)]
             Control::Claude(link) => {
-                runner_offers(&link, capability).await?;
                 link.request(request).await?;
                 Ok(())
             }
@@ -269,4 +324,56 @@ async fn runner_offers(link: &crate::claude_runner::RunnerLink, capability: &str
         "The Claude runner needs an update for this control"
     );
     Ok(())
+}
+
+/// The owner's images, checked and decoded: each one's file extension and bytes.
+fn decode_images(images: &[InputImage]) -> Result<Vec<(&'static str, Vec<u8>)>, Error> {
+    use base64::Engine;
+    if images.len() > 10 {
+        return Err(Error::Invalid("Send up to 10 images at a time".into()));
+    }
+    let mut decoded = Vec::with_capacity(images.len());
+    for image in images {
+        let extension = IMAGE_TYPES
+            .iter()
+            .find(|(media, _)| *media == image.media_type)
+            .map(|(_, extension)| *extension)
+            .ok_or_else(|| Error::Invalid("Send PNG, JPEG, GIF or WebP images".into()))?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(image.data.trim())
+            .map_err(|_| Error::Invalid("An image is not valid base64".into()))?;
+        decoded.push((extension, bytes));
+    }
+    if decoded.iter().map(|(_, bytes)| bytes.len()).sum::<usize>() > IMAGE_BYTES {
+        return Err(Error::Invalid("Images up to 15 MiB in all".into()));
+    }
+    Ok(decoded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image(media_type: &str, data: &str) -> InputImage {
+        InputImage {
+            media_type: media_type.into(),
+            data: data.into(),
+        }
+    }
+
+    #[test]
+    fn images_are_checked_before_anything_is_sent() {
+        assert_eq!(
+            decode_images(&[image("image/png", "AQID"), image("image/jpeg", "BAU=")]).unwrap(),
+            vec![("png", vec![1, 2, 3]), ("jpg", vec![4, 5])]
+        );
+        assert!(decode_images(&[image("image/svg+xml", "AQID")]).is_err());
+        assert!(decode_images(&[image("image/png", "not base64!")]).is_err());
+        assert!(decode_images(&vec![image("image/png", "AQID"); 11]).is_err());
+        let big = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            vec![0u8; IMAGE_BYTES + 1],
+        );
+        assert!(decode_images(&[image("image/png", &big)]).is_err());
+    }
 }

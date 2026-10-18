@@ -244,7 +244,10 @@ async fn compaction_waits_for_the_running_turn() {
 #[tokio::test]
 async fn input_joins_the_running_turn_or_waits_for_the_next() {
     let busy = Fixture::new(true, false, "applied").await;
-    busy.control.input("look", InputMode::Steer).await.unwrap();
+    busy.control
+        .input("look", InputMode::Steer, &[])
+        .await
+        .unwrap();
     let steered = busy.calls("turn/steer");
     assert_eq!(steered.len(), 1);
     assert_eq!(steered[0]["params"]["expectedTurnId"], "turn");
@@ -254,7 +257,10 @@ async fn input_joins_the_running_turn_or_waits_for_the_next() {
     );
     assert!(busy.calls("thread/queue/add").is_empty());
     let idle = Fixture::new(false, false, "applied").await;
-    idle.control.input("start", InputMode::Steer).await.unwrap();
+    idle.control
+        .input("start", InputMode::Steer, &[])
+        .await
+        .unwrap();
     assert_eq!(idle.calls("thread/queue/add").len(), 1);
     assert!(idle.calls("turn/steer").is_empty());
 }
@@ -262,13 +268,16 @@ async fn input_joins_the_running_turn_or_waits_for_the_next() {
 #[tokio::test]
 async fn queued_input_waits_and_interrupting_input_replaces_the_turn() {
     let busy = Fixture::new(true, false, "applied").await;
-    busy.control.input("later", InputMode::Queue).await.unwrap();
+    busy.control
+        .input("later", InputMode::Queue, &[])
+        .await
+        .unwrap();
     assert!(busy.calls("turn/steer").is_empty());
     assert!(busy.calls("turn/interrupt").is_empty());
     assert_eq!(busy.calls("thread/queue/add").len(), 1);
     let busy = Fixture::new(true, false, "applied").await;
     busy.control
-        .input("instead", InputMode::Interrupt)
+        .input("instead", InputMode::Interrupt, &[])
         .await
         .unwrap();
     assert_eq!(busy.calls("turn/interrupt").len(), 1);
@@ -294,7 +303,7 @@ async fn skills_are_listed_for_the_folder_and_named_ones_go_with_the_input() {
         json!({"cwds":["/fixture"]})
     );
     idle.control
-        .input("$review the parser", InputMode::Steer)
+        .input("$review the parser", InputMode::Steer, &[])
         .await
         .unwrap();
     assert_eq!(
@@ -304,11 +313,33 @@ async fn skills_are_listed_for_the_folder_and_named_ones_go_with_the_input() {
     );
     // A disabled or unknown skill is only text.
     idle.control
-        .input("$off $nope", InputMode::Steer)
+        .input("$off $nope", InputMode::Steer, &[])
         .await
         .unwrap();
     assert_eq!(
         idle.calls("thread/queue/add")[1]["params"]["input"],
         json!([{"type":"text","text":"$off $nope"}])
+    );
+}
+
+#[tokio::test]
+async fn images_go_with_the_input_as_local_files() {
+    let idle = Fixture::new(false, false, "applied").await;
+    idle.control
+        .input("", InputMode::Steer, &["/data/a.png".into()])
+        .await
+        .unwrap();
+    idle.control
+        .input("what is this?", InputMode::Steer, &["/data/b.jpg".into()])
+        .await
+        .unwrap();
+    let queued = idle.calls("thread/queue/add");
+    assert_eq!(
+        queued[0]["params"]["input"],
+        json!([{"type":"localImage","path":"/data/a.png"}])
+    );
+    assert_eq!(
+        queued[1]["params"]["input"],
+        json!([{"type":"text","text":"what is this?"},{"type":"localImage","path":"/data/b.jpg"}])
     );
 }
