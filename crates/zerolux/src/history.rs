@@ -2,7 +2,6 @@
 //! as they are: nothing is indexed or copied.
 
 use std::{
-    io::BufRead,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -106,51 +105,101 @@ fn snippet(text: &str, at: usize) -> String {
 /// A match: the record's offset and time, the kind of step, and its snippet.
 type Match = (u64, Option<String>, &'static str, String);
 
-/// The latest matches of one native record, read line by line until `deadline`.
+/// What is read of a record at a time.
+const CHUNK: usize = 8 * 1024 * 1024;
+
+/// The latest matches of one native record, read until `deadline`. Lines are found in the raw
+/// bytes, a chunk at a time, by the longest ASCII run of the query; only those are read.
 fn scan(
     path: &PathBuf,
     harness: &str,
     query: &[char],
     deadline: Instant,
 ) -> std::io::Result<(Vec<Match>, bool)> {
+    use std::io::Read;
     let needle: String = query.iter().collect();
-    // Most lines say nothing of it: an ASCII query is looked for in the raw bytes first.
-    let finder = memchr::memmem::Finder::new(needle.as_bytes());
-    let mut lowered = Vec::new();
-    let mut reader = std::io::BufReader::new(std::fs::File::open(path)?);
-    let (mut found, mut at, mut line) = (Vec::new(), 0u64, Vec::new());
+    let probe = needle
+        .split(|c: char| !c.is_ascii())
+        .max_by_key(|run| run.len())
+        .unwrap_or_default();
+    let finder = (probe.len() >= 2).then(|| {
+        aho_corasick::AhoCorasick::builder()
+            .ascii_case_insensitive(true)
+            .build([probe])
+            .expect("a literal pattern")
+    });
+    let mut file = std::fs::File::open(path)?;
+    let (mut found, mut data, mut base) = (Vec::new(), Vec::new(), 0u64);
     loop {
         if Instant::now() > deadline {
             return Ok((found, true));
         }
-        line.clear();
-        let read = reader.read_until(b'\n', &mut line)?;
-        if read == 0 || line.last() != Some(&b'\n') {
-            break;
+        let kept = data.len();
+        data.resize(kept + CHUNK, 0);
+        let read = file.read(&mut data[kept..])?;
+        data.truncate(kept + read);
+        // Whole lines only: one still being written waits.
+        let Some(last) = memchr::memrchr(b'\n', &data) else {
+            if read == 0 {
+                break;
+            }
+            continue;
+        };
+        let lines = &data[..=last];
+        let mut spans = Vec::new();
+        match &finder {
+            Some(finder) => {
+                let mut from = 0;
+                for hit in finder.find_iter(lines) {
+                    if hit.start() < from {
+                        continue;
+                    }
+                    let start = memchr::memrchr(b'\n', &lines[..hit.start()]).map_or(0, |n| n + 1);
+                    let end = memchr::memchr(b'\n', &lines[hit.start()..])
+                        .map_or(lines.len(), |n| hit.start() + n);
+                    spans.push((start, end));
+                    from = end + 1;
+                }
+            }
+            None => {
+                let mut start = 0;
+                for end in memchr::memchr_iter(b'\n', lines) {
+                    spans.push((start, end));
+                    start = end + 1;
+                }
+            }
         }
-        let hit = if needle.is_ascii() {
-            lowered.clear();
-            lowered.extend(line.iter().map(u8::to_ascii_lowercase));
-            finder.find(&lowered).is_some()
-        } else {
-            String::from_utf8_lossy(&line)
+        for (start, end) in spans {
+            let line = &lines[start..end];
+            if !String::from_utf8_lossy(line)
                 .to_lowercase()
                 .contains(&needle)
-        };
-        if hit && let Ok(value) = serde_json::from_slice(&line) {
-            let record = Record { at, record: value };
+            {
+                continue;
+            }
+            let Ok(value) = serde_json::from_slice(line) else {
+                continue;
+            };
+            let record = Record {
+                at: base + start as u64,
+                record: value,
+            };
             for item in project(harness, std::slice::from_ref(&record)) {
                 if let Some((kind, words)) = searchable(&item.event)
-                    && let Some(start) = find(&words, query)
+                    && let Some(at) = find(&words, query)
                 {
                     if found.len() == PER_SESSION {
                         found.remove(0);
                     }
-                    found.push((item.at, item.time.clone(), kind, snippet(&words, start)));
+                    found.push((item.at, item.time.clone(), kind, snippet(&words, at)));
                 }
             }
         }
-        at += read as u64;
+        base += (last + 1) as u64;
+        data.drain(..=last);
+        if read == 0 {
+            break;
+        }
     }
     Ok((found, false))
 }

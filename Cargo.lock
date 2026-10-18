@@ -7935,6 +7935,7 @@ dependencies = [
 name = "zerolux"
 version = "0.0.1-dev"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "async-trait",
  "axum",
