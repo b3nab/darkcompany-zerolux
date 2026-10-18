@@ -6,6 +6,7 @@ import {
   PhoneIcon,
   SettingsIcon,
   ShieldIcon,
+  UserPlusIcon,
 } from "lucide-react-native";
 import { Pressable, ScrollView, View } from "react-native";
 import { useCSSVariable } from "uniwind";
@@ -62,6 +63,14 @@ export default function More() {
               icon={ShieldIcon}
               label="Administration"
               onPress={go("/admin")}
+              trailing={next}
+            />
+          ) : null}
+          {owner ? (
+            <Row
+              icon={UserPlusIcon}
+              label="Invite people"
+              onPress={go("/invites")}
               trailing={next}
             />
           ) : null}

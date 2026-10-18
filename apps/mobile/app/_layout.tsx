@@ -61,6 +61,7 @@ function Navigator() {
         <Stack.Screen name="storage" />
         <Stack.Screen name="settings" />
         <Stack.Screen name="admin" />
+        <Stack.Screen name="invites" />
         <Stack.Screen name="session/new" options={{ presentation: "modal" }} />
         <Stack.Screen name="session/[id]" />
         <Stack.Screen name="terminal/[id]" />
