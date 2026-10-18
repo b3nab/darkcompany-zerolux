@@ -5,6 +5,9 @@ import type { ChatSession, GitStatus } from "@zerolux/chat";
 import { ChangesPanel, FilesPanel } from "./SessionCode";
 import { InputActions } from "./SessionFork";
 import { ScheduleForm } from "./SessionSchedules";
+import { GoalCard } from "./SessionGoal";
+import { Marked } from "./Console";
+import { SessionBlocks } from "@/components/session-blocks";
 import type { InputBlock } from "@/components/session-blocks";
 
 afterEach(() => setKernelFetch());
@@ -169,4 +172,38 @@ test("a schedule is written as a rule, and says in words when it runs", () => {
   const custom = form({ every: "custom", cron: "*/15 * * * *" });
   expect(custom).toContain('aria-label="Cron pattern"');
   expect(custom).toContain("*/15 * * * *, in the time");
+});
+
+test("a Codex session's goal is set by whoever may write to it", () => {
+  const card = (write: boolean) =>
+    renderToStaticMarkup(
+      <GoalCard
+        session={{ ...session, harness: "codex" }}
+        read={async () => ({ seq: 0, items: [] })}
+        write={write}
+        busy={false}
+        perform={async () => true}
+      />,
+    );
+  expect(card(true)).toContain("No goal.");
+  expect(card(true)).toContain("Set a goal");
+  expect(card(false)).not.toContain("Set a goal");
+});
+
+test("a search's words stand out in what matched, and each step names where it is", () => {
+  const html = renderToStaticMarkup(
+    <Marked text="Fixed the build, then the BUILD docs" query="build" />,
+  );
+  expect(html.match(/<mark/g)).toHaveLength(2);
+  expect(html).toContain(">BUILD</mark>");
+  // Special characters are searched as written.
+  expect(renderToStaticMarkup(<Marked text="a (b) c" query="(b)" />)).toContain(
+    ">(b)</mark>",
+  );
+  const blocks = renderToStaticMarkup(
+    <SessionBlocks
+      blocks={[{ key: "4096.0", time: null, kind: "text", text: "Done." }]}
+    />,
+  );
+  expect(blocks).toContain('data-at="4096"');
 });

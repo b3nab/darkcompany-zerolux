@@ -53,6 +53,8 @@ export function SessionBlocks({
     return (
       <div
         key={run.key}
+        // Where in the record it comes from, for a link to that point.
+        data-at={run.key.split(".")[0]}
         className={cn("flex flex-col", fresh.has(run.key) && ARRIVE)}
       >
         {run.kind === "tools" ? (
@@ -84,7 +86,11 @@ function ToolRun({
   const card = (
     <div className="divide-y overflow-hidden rounded-md border bg-card text-sm">
       {toolItems(run.tools).map((item) => (
-        <div key={item.key} className={cn(fresh.has(item.key) && ARRIVE)}>
+        <div
+          key={item.key}
+          data-at={item.key.split(".")[0]}
+          className={cn(fresh.has(item.key) && ARRIVE)}
+        >
           {item.kind === "explored" ? (
             <ExploredCalls tools={item.tools} chatTitle={chatTitle} />
           ) : (

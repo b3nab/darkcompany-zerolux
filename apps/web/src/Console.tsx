@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Link, NavLink, useNavigate } from "react-router";
+import { Link, NavLink, useNavigate, useSearchParams } from "react-router";
 import { cn } from "cn";
 import {
   ArchiveIcon,
@@ -47,6 +47,8 @@ import {
   saveDraft,
   sessionBlocks,
   sessionCommand,
+  hitKindLabels,
+  useHistorySearch,
   sessionAccess,
   sessionMatches,
   sessionName,
@@ -123,6 +125,7 @@ import { useMe } from "./AuthGate";
 import { ChangesPanel, FilesPanel, TerminalPanel } from "./SessionCode";
 import { AskOnTheSide, InputActions } from "./SessionFork";
 import { SessionSchedules } from "./SessionSchedules";
+import { GoalCard } from "./SessionGoal";
 import type { Fork } from "./SessionFork";
 import type { CodePane } from "./SessionCode";
 import { SidePanel } from "@/components/side-panel";
@@ -439,6 +442,7 @@ export function ConsoleList({
             {query.trim() ? "No session matches." : emptyLists[view]}
           </p>
         )}
+        <HistoryHits query={query} chat={chat} actors={actors} />
       </nav>
     </section>
   );
@@ -573,8 +577,11 @@ export function SessionView({
     return () => document.removeEventListener("visibilitychange", look);
   }, [session.id, at]);
   const scroller = useRef<HTMLDivElement>(null);
+  // A link to a point of its work (`?at=`, from a search) opens there, not at the bottom.
+  const [params] = useSearchParams();
+  const target = params.get("at");
   // New work follows at the bottom, as in a chat, while you are there.
-  const following = useRef(true);
+  const following = useRef(target === null);
   // Earlier work comes in above: the distance from the bottom keeps your place.
   const fromBottom = useRef<number>(undefined);
   const top = useRef<number>(undefined);
@@ -588,6 +595,25 @@ export function SessionView({
       fromBottom.current = undefined;
     } else if (following.current) view.scrollTop = view.scrollHeight;
   }, [events, live]);
+  // Earlier work is read until the point is in; then it is shown, marked for a moment.
+  const reached = useRef<string>(undefined);
+  useEffect(() => {
+    if (target === null || reached.current === target || !events.length) return;
+    const at = Number(target);
+    if (events[0]!.at > at && more) return void earlier();
+    const place = scroller.current?.querySelector<HTMLElement>(
+      `[data-at="${at}"]`,
+    );
+    if (!place) return;
+    reached.current = target;
+    following.current = false;
+    place.scrollIntoView({ block: "center" });
+    place.classList.add("rounded-md", "ring-2", "ring-primary/60");
+    setTimeout(
+      () => place.classList.remove("rounded-md", "ring-2", "ring-primary/60"),
+      2500,
+    );
+  }, [target, events, more, earlier]);
   const interrupt = () =>
     void perform(async () => void (await chat.interrupt(session.id)));
   useEffect(() => {
@@ -870,6 +896,15 @@ export function SessionView({
               {about && delegates.length > 0 && (
                 <DelegatedSessions sessions={delegates} actors={actors} />
               )}
+              {about && session.harness === "codex" && (
+                <GoalCard
+                  session={session}
+                  read={chat.live}
+                  write={access.write}
+                  busy={busy}
+                  perform={perform}
+                />
+              )}
               {about && access.write && (
                 <SessionSchedules
                   session={session}
@@ -1012,6 +1047,88 @@ export function SessionView({
         </Sheet>
       )}
     </>
+  );
+}
+
+/** The words searched, as they stand out in a match's text. */
+export function Marked({ text, query }: { text: string; query: string }) {
+  const words = query.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return text;
+  const pattern = new RegExp(
+    `(${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,
+    "gi",
+  );
+  return text.split(pattern).map((part, i) =>
+    i % 2 ? (
+      <mark key={i} className="rounded-xs bg-primary/25 text-foreground">
+        {part}
+      </mark>
+    ) : (
+      part
+    ),
+  );
+}
+
+/**
+ * What the sessions said and did that matches what is typed, the latest first: each opens its
+ * session at that point.
+ */
+function HistoryHits({
+  query,
+  chat,
+  actors,
+}: {
+  query: string;
+  chat: Chat;
+  actors: Actor[];
+}) {
+  const { results, truncated, error, searching } = useHistorySearch(query);
+  if (query.trim().length < 2) return null;
+  return (
+    <section aria-label="In their history" className="flex flex-col gap-0.5">
+      <h3 className="flex items-center justify-between px-2 pt-3 pb-1 font-mono text-[11px] tracking-wide text-faint uppercase">
+        In their history
+        <span>{searching ? "…" : (results?.length ?? 0)}</span>
+      </h3>
+      {error && <p className="px-2 text-xs text-attention">{error}</p>}
+      {results?.length === 0 && (
+        <p className="px-2 py-2 text-sm text-faint">
+          Nothing said or done matches.
+        </p>
+      )}
+      {results?.map((hit) => {
+        const session = chat.sessions.find((s) => s.id === hit.session_id);
+        return (
+          <Link
+            key={`${hit.session_id}:${hit.at}:${hit.kind}`}
+            to={`/console/${hit.session_id}?at=${hit.at}`}
+            className="flex flex-col gap-0.5 rounded-md px-2 py-2 transition-colors hover:bg-accent"
+          >
+            <span className="flex items-baseline gap-2">
+              <span className="truncate text-sm font-medium">
+                {session ? sessionName(session, actors) : hit.title}
+              </span>
+              <span className="shrink-0 font-mono text-[11px] text-faint">
+                {hitKindLabels[hit.kind]}
+              </span>
+              {hit.time && (
+                <span className="ml-auto shrink-0 font-mono text-[11px] text-faint">
+                  {ago(Date.parse(hit.time))}
+                </span>
+              )}
+            </span>
+            <span className="line-clamp-2 text-[13px] text-muted-foreground">
+              <Marked text={hit.snippet} query={query} />
+            </span>
+          </Link>
+        );
+      })}
+      {truncated && (
+        <p className="px-2 text-xs text-faint">
+          The search stopped at its time limit: more may match.
+        </p>
+      )}
+    </section>
   );
 }
 
