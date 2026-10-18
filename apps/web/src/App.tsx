@@ -10,7 +10,7 @@ import {
 } from "react-router";
 import { BellIcon, MenuIcon, SearchIcon } from "lucide-react";
 import { usePanelRef } from "react-resizable-panels";
-import { useChat, useStorage } from "@zerolux/chat";
+import { requestsFor, useChat, useStorage } from "@zerolux/chat";
 import type { Conversation } from "@zerolux/chat";
 import { activeActors, api, errorMessage } from "./api";
 import {
@@ -192,11 +192,7 @@ export function App({
   }
 
   // The requests waiting for me: those of my sessions.
-  const pending = chat.approvals.filter(
-    (a) =>
-      a.status === "pending" &&
-      chat.sessions.some((s) => s.id === a.session_id && s.owner_id === me?.id),
-  ).length;
+  const pending = requestsFor(chat, me?.id).length;
   const approvals = workspace && (
     <Approvals
       chat={chat}
