@@ -9,7 +9,15 @@ import {
 export interface AuthIdentity {
   user: { id: string; name: string; email: string };
   actor_id: string | null;
+  /** The workspace's owner, who set it up; a person who joined by invitation is not. */
+  owner: boolean;
   setup_required: boolean;
+}
+/** What an invitation says before one signs up with it. */
+export interface Invitation {
+  workspace: string;
+  invited_by: string;
+  expires_at: number;
 }
 /** A device signed in as you: a browser, the desktop app or the phone. */
 export interface AuthDevice {
@@ -205,6 +213,7 @@ export class AuthConnection {
     method: "GET" | "POST",
     body?: unknown,
     epoch = this.epoch,
+    headers: Record<string, string> = {},
   ): Promise<T> {
     this.current(epoch);
     const { response, value } = await authRequest(
@@ -218,6 +227,7 @@ export class AuthConnection {
           ...(this.credential?.token
             ? { Authorization: `Bearer ${this.credential.token}` }
             : {}),
+          ...headers,
         },
         body: body === undefined ? undefined : JSON.stringify(body),
       },
@@ -325,10 +335,24 @@ export class AuthConnection {
     return this.exchange<AuthIdentity>("/identity", "GET", undefined, epoch);
   }
 
+  /** An invitation, read with no account: refused (410) once used, withdrawn or expired. */
+  async invitation(token: string): Promise<Invitation> {
+    const { invitation } = await this.exchange<{ invitation: Invitation }>(
+      `/invites/${encodeURIComponent(token)}`,
+      "GET",
+    );
+    return invitation;
+  }
+
+  /**
+   * A new account: the owner's, while the workspace has none, or a person's who joins with
+   * an invitation.
+   */
   async signUp(
     name: string,
     email: string,
     password: string,
+    invite?: string,
   ): Promise<AuthIdentity> {
     if (!this.health) throw new Error("Verify the workspace before signing up");
     const epoch = ++this.epoch;
@@ -337,18 +361,20 @@ export class AuthConnection {
       "POST",
       { name: name.trim(), email: email.trim(), password },
       epoch,
+      invite ? { "x-zerolux-invite": invite } : {},
     );
     // Signup and binding are separate: a failed claim can be retried after signing in.
-    return this.claim();
+    return this.claim(invite);
   }
 
-  async claim(): Promise<AuthIdentity> {
+  /** Binds the signed-in account: to the owner, or with an invitation to a new person. */
+  async claim(invite?: string): Promise<AuthIdentity> {
     if (!this.health) throw new Error("Verify the workspace before enrollment");
     const epoch = ++this.epoch;
     const identity = await this.exchange<AuthIdentity>(
       "/claim",
       "POST",
-      undefined,
+      invite ? { invite } : undefined,
       epoch,
     );
     this.health.auth.setup_required = identity.setup_required;

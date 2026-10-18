@@ -87,6 +87,7 @@ test("an unbound account cannot claim after another account has become owner", (
   const html = ready(true, {
     user: { id: "fixture-user", name: "Other", email: "other@example.test" },
     actor_id: null,
+    owner: false,
     setup_required: false,
   });
   expect(html).toContain("This account is not a member of this workspace.");
@@ -99,6 +100,7 @@ test("a restored unbound account can finish enrollment without another field", (
   const html = ready(true, {
     user: { id: "fixture-user", name: "Owner", email: "owner@example.test" },
     actor_id: null,
+    owner: false,
     setup_required: true,
   });
   expect(inputIds(html)).toEqual([]);
