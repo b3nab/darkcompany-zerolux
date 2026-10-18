@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api, errorMessage } from "./client";
-import { changeCount, patchCount, toolPhrase, toolView } from "./tool-view";
+import type { Approval } from "./chat";
+import {
+  changeCount,
+  isSubagent,
+  patchCount,
+  toolPhrase,
+  toolView,
+} from "./tool-view";
 
 /** What an agent's session did, in one model for pi, Claude Code and Codex (`/events`). */
 export type SessionEvent = {
@@ -159,21 +166,75 @@ export function sessionBlocks(events: SessionEvent[]): SessionBlock[] {
   return blocks;
 }
 
-/** Blocks as they are listed: tools run one after another make one list, keyed by the first. */
-export type BlockRun =
-  | SessionBlock
-  | { kind: "tools"; key: string; tools: ToolBlock[] };
+/** A request of the session, placed in its stream where it was made. */
+export interface ApprovalItem {
+  kind: "approval";
+  key: string;
+  approval: Approval;
+}
 
-export function blockRuns(blocks: SessionBlock[]): BlockRun[] {
-  const runs: BlockRun[] = [];
+/**
+ * Blocks as they are listed: tools run one after another make one list, keyed by the first.
+ * A subagent and a request each stand on their own.
+ */
+export interface ToolsRun {
+  kind: "tools";
+  key: string;
+  tools: ToolBlock[];
+}
+export type BlockRun<T extends SessionBlock | ApprovalItem = SessionBlock> =
+  | T
+  | ToolsRun;
+
+export function blockRuns<T extends SessionBlock | ApprovalItem>(
+  blocks: T[],
+): BlockRun<T>[] {
+  const runs: BlockRun<T>[] = [];
   for (const block of blocks) {
     const last = runs.at(-1);
-    if (block.kind !== "tool") runs.push(block);
+    if (block.kind !== "tool" || isSubagent(block)) runs.push(block);
     else if (last?.kind === "tools") last.tools.push(block);
     else runs.push({ kind: "tools", key: block.key, tools: [block] });
   }
   return runs;
 }
+
+/**
+ * A session's requests in its stream, each after the last block recorded before it was made;
+ * one made after everything read stands at the end.
+ */
+export function placeApprovals(
+  blocks: SessionBlock[],
+  approvals: Approval[],
+): (SessionBlock | ApprovalItem)[] {
+  const items: (SessionBlock | ApprovalItem)[] = [...blocks];
+  const sorted = [...approvals].sort((a, b) => a.created_at - b.created_at);
+  for (const approval of sorted) {
+    const item: ApprovalItem = { kind: "approval", key: approval.id, approval };
+    let at = items.length;
+    while (at > 0) {
+      const before = items[at - 1]!;
+      const time =
+        before.kind === "approval"
+          ? before.approval.created_at
+          : before.time
+            ? Date.parse(before.time)
+            : NaN;
+      if (Number.isNaN(time) || time <= approval.created_at) break;
+      at--;
+    }
+    items.splice(at, 0, item);
+  }
+  return items;
+}
+
+/** How much of a session's work is drawn: the outcome, the usual lines, or every step open. */
+export type Density = "compact" | "normal" | "detailed";
+export const densityLabels: Record<Density, string> = {
+  compact: "Compact",
+  normal: "Normal",
+  detailed: "Detailed",
+};
 
 /** The work an agent did for a chat, from the input whose envelope named the delivery. */
 export interface ChatTurn {
@@ -268,7 +329,7 @@ export function thoughtLabel(
  * The blocks that arrived after the last one shown, for a list to animate them in: what loads
  * first, or earlier above, is simply there.
  */
-export function useArrivals(blocks: SessionBlock[]): Set<string> {
+export function useArrivals(blocks: { key: string }[]): Set<string> {
   const shown = useRef<{ keys: Set<string>; last?: string }>({
     keys: new Set(),
   });
@@ -394,7 +455,7 @@ export function sessionReader(
   let queue = Promise.resolve();
   const page = (cursor: string) =>
     api<SessionEventPage>(
-      `/chat/sessions/${encodeURIComponent(sessionId)}/events?${cursor}${chat ? `&chat=${encodeURIComponent(chat)}` : ""}`,
+      `/sessions/${encodeURIComponent(sessionId)}/events?${cursor}${chat ? `&chat=${encodeURIComponent(chat)}` : ""}`,
     );
   // Drawn once per read, when it is over and changed something: never page by page.
   let shown = "";

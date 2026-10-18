@@ -1,6 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
+import type { Approval } from "./chat";
 import {
   blockRuns,
+  placeApprovals,
   chatTurns,
   currentStep,
   sessionBlocks,
@@ -267,7 +269,7 @@ test("the reader's first read starts at the end, scoped to the chat", async () =
   const reader = sessionReader("s/1", "c group", () => {});
   await reader.earlier();
   expect(urls).toEqual([
-    `/api/chat/sessions/s%2F1/events?before=${Number.MAX_SAFE_INTEGER}&chat=c%20group`,
+    `/api/sessions/s%2F1/events?before=${Number.MAX_SAFE_INTEGER}&chat=c%20group`,
   ]);
 });
 
@@ -356,4 +358,50 @@ test("a read is drawn once when it ends, and not at all when it changed nothing"
   await reader.grow(60);
   expect(draws).toBe(1);
   reader.close();
+});
+
+test("subagents and requests stand on their own; requests sit where they were made", () => {
+  const t = (s: number) => `2026-01-01T10:00:${String(s).padStart(2, "0")}Z`;
+  const blocks = sessionBlocks([
+    at(
+      { type: "tool_call", id: "r1", name: "Read", input: { file_path: "a" } },
+      0,
+      t(1),
+    ),
+    at(
+      {
+        type: "tool_call",
+        id: "s1",
+        name: "Agent",
+        input: { description: "Look" },
+      },
+      10,
+      t(2),
+    ),
+    at(
+      { type: "tool_call", id: "b1", name: "Bash", input: { command: "rm x" } },
+      20,
+      t(5),
+    ),
+    at({ type: "text", text: "Done" }, 30, t(9)),
+  ]);
+  const approval = (id: string, created: string) =>
+    ({ id, created_at: Date.parse(created) }) as Approval;
+  const items = placeApprovals(blocks, [
+    approval("late", t(20)),
+    approval("ask", t(6)),
+  ]);
+  expect(items.map((i) => (i.kind === "approval" ? i.key : i.key))).toEqual([
+    "0.0",
+    "10.0",
+    "20.0",
+    "ask",
+    "30.0",
+    "late",
+  ]);
+  expect(
+    blockRuns(items).map((r) =>
+      r.kind === "tools" ? r.tools.map((x) => x.name).join("+") : r.kind,
+    ),
+  ).toEqual(["Read", "tool", "Bash", "approval", "text", "approval"]);
 });
