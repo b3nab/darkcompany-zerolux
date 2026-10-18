@@ -14,7 +14,21 @@ export interface Host {
   created_at: number;
   seen_at: number;
   here: boolean;
+  /** False while an added computer waits to join with its code. */
+  joined: boolean;
+  /** Connected to the kernel now. */
+  online: boolean;
 }
+
+/** One of one's computers added to the workspace, and the code it joins with: once, within ten minutes. */
+export interface HostLink {
+  host: Host;
+  code: string;
+}
+
+/** What joins a computer with its code, run there; `kernel` is the address it reaches the kernel at. */
+export const joinCommand = (kernel: string, code: string) =>
+  `zerolux host join ${kernel.replace(/\/+$/, "")} ${code}`;
 
 /**
  * Whether a person may start sessions on the kernel's own computer: theirs, or open to them.
@@ -60,5 +74,39 @@ export function useHosts(kernel = kernelUrl()) {
         undefined,
         "PATCH",
       ).then(() => reload()),
+    /** Adds one of one's computers: its host, waiting to join with the code. */
+    link: (name?: string) =>
+      request<HostLink>(kernel, "/hosts/link", { name }).then(async (link) => {
+        await reload();
+        return link;
+      }),
+    /** Removes an added computer: its connection closes and its secret stops working. */
+    remove: (id: string) =>
+      request(
+        kernel,
+        `/hosts/${encodeURIComponent(id)}`,
+        undefined,
+        undefined,
+        "DELETE",
+      ).then(() => reload()),
   };
+}
+
+/**
+ * The added computer as the kernel last said, read again every few seconds until it is online:
+ * nothing tells when it joins and connects.
+ */
+export function useHostJoining(
+  link: HostLink | undefined,
+  hosts: Host[] | undefined,
+  reload: () => Promise<unknown>,
+) {
+  const host = link && hosts?.find((h) => h.id === link.host.id);
+  const online = Boolean(host?.online);
+  useEffect(() => {
+    if (!link || online) return;
+    const timer = setInterval(() => void reload(), 3000);
+    return () => clearInterval(timer);
+  }, [link, online, reload]);
+  return host;
 }
