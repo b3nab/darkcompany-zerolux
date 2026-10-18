@@ -1123,3 +1123,34 @@ printf 'closed' > "${root}/$name-closed"
   },
   15000,
 );
+
+test("a failed compaction is kept in the session's record; a cancelled one is not", () => {
+  const handlers = new Map<string, (event: any) => unknown>();
+  const entries: [string, unknown][] = [];
+  chatExtension({
+    on: (name: string, handler: (event: any) => unknown) => {
+      handlers.set(name, handler);
+    },
+    registerTool() {},
+    registerCommand() {},
+    sendUserMessage() {},
+    appendEntry: (type: string, data: unknown) => entries.push([type, data]),
+    events: { on: () => () => {}, emit() {} },
+  } as unknown as ExtensionAPI);
+  const failed = handlers.get("session_compact_failed")!;
+  failed({
+    reason: "overflow",
+    errorMessage: "Context overflow recovery failed: token cap",
+    aborted: false,
+  });
+  failed({ reason: "manual", aborted: true });
+  expect(entries).toEqual([
+    [
+      "zerolux-compaction-failed",
+      {
+        error: "Context overflow recovery failed: token cap",
+        reason: "overflow",
+      },
+    ],
+  ]);
+});

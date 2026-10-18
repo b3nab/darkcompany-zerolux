@@ -633,6 +633,7 @@ export default function chatExtension(pi: ExtensionAPI) {
           "agent-settings-v1",
           "interrupt-v1",
           "input-v1",
+          "compact-v1",
           ...(installedCode ? ["integration-update-v1"] : []),
         ],
         integration_revision: installedCode?.revision,
@@ -743,6 +744,21 @@ export default function chatExtension(pi: ExtensionAPI) {
         } finally {
           ownerInputs.delete(waiter);
         }
+      },
+      compact: async (linkId, instructions) => {
+        if (
+          ![...links.values()].some(
+            (link) => link.bridge.connected && link.bridge.sessionId === linkId,
+          )
+        )
+          throw new Error("Unknown or disconnected link");
+        // pi's compaction aborts a running turn first; stopping it is Interrupt's choice.
+        if (!ctx.isIdle() || ctx.hasPendingMessages())
+          throw new Error(
+            "pi is working: wait for the turn to end or interrupt it",
+          );
+        // Started is the answer: the summary, or why it failed, lands in the session.
+        ctx.compact({ customInstructions: instructions });
       },
       interrupt: async (linkId) => {
         if (
@@ -856,6 +872,14 @@ export default function chatExtension(pi: ExtensionAPI) {
     dialogShared ||= links.size !== 1;
     settled = false;
     for (const bridge of bridges()) bridge.agentStarted();
+  });
+  // pi tells only its extensions why a compaction failed; the session's record keeps it.
+  pi.on("session_compact_failed", (event) => {
+    if (event.aborted) return;
+    pi.appendEntry("zerolux-compaction-failed", {
+      error: event.errorMessage ?? "Compaction failed",
+      reason: event.reason,
+    });
   });
   pi.on("input", (event) => {
     if (event.source !== "extension")
