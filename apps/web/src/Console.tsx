@@ -48,6 +48,8 @@ import {
   sessionCommand,
   sessionMatches,
   sessionName,
+  delegatedBy,
+  delegatedTo,
   sessionOutputAt,
   sessionState,
   useSeen,
@@ -388,6 +390,16 @@ export function ConsoleList({
                         className="size-1.5 shrink-0 rounded-full bg-agent"
                       />
                     )}
+                    {row.session.parent_session_id && (
+                      <span className="shrink-0 font-mono text-[11px] text-faint">
+                        ↳{" "}
+                        {sessionName(
+                          delegatedBy(row.session, chat.sessions) ??
+                            row.session,
+                          actors,
+                        )}
+                      </span>
+                    )}
                     <span className="truncate">{line}</span>
                   </span>
                 </span>
@@ -470,6 +482,9 @@ export function SessionView({
   const git = useSessionGit(owner ? session.id : undefined, at);
   const changed = git.status?.changes.length ?? 0;
   const [pane, setPane] = useState<CodePane>();
+  // The session that started this one, and those this one started, to delegate work.
+  const parent = delegatedBy(session, chat.sessions);
+  const delegates = delegatedTo(session.id, chat.sessions);
   // A new session from this one, whole or before an input, with the owner's words, opened.
   const navigate = useNavigate();
   const [asking, setAsking] = useState(false);
@@ -771,6 +786,16 @@ export function SessionView({
                   name={name}
                   facts
                   usage={usage}
+                  delegatedBy={
+                    parent && (
+                      <Link
+                        to={`/console/${parent.id}`}
+                        className="underline-offset-4 hover:underline"
+                      >
+                        {sessionName(parent, actors)}
+                      </Link>
+                    )
+                  }
                   // Codex reports no cost: a budget there would never be reached.
                   budget={
                     owner && session.harness !== "codex"
@@ -793,6 +818,9 @@ export function SessionView({
                       : undefined
                   }
                 />
+              )}
+              {about && delegates.length > 0 && (
+                <DelegatedSessions sessions={delegates} actors={actors} />
               )}
               {about && owner && (
                 <SessionSchedules
@@ -935,6 +963,52 @@ export function SessionView({
         </Sheet>
       )}
     </>
+  );
+}
+
+/** The sessions this one started to delegate work to, each with its state, to open. */
+function DelegatedSessions({
+  sessions,
+  actors,
+}: {
+  sessions: ChatSession[];
+  actors: Actor[];
+}) {
+  return (
+    <section
+      aria-label="Delegated"
+      className="flex flex-col gap-2 rounded-lg border p-3"
+    >
+      <h3 className="text-sm font-medium">
+        Delegated
+        <span className="ml-1.5 font-mono text-[11px] text-faint">
+          {sessions.length}
+        </span>
+      </h3>
+      <ul className="flex flex-col">
+        {sessions.map((delegate) => (
+          <li key={delegate.id}>
+            <Link
+              to={`/console/${delegate.id}`}
+              className="flex items-center gap-3 rounded-md px-1.5 py-1.5 transition-colors hover:bg-accent"
+            >
+              <SessionMark
+                session={delegate}
+                actors={actors}
+                state={sessionTone(delegate)}
+                className="size-6 text-[10px]"
+              />
+              <span className="min-w-0 flex-1 truncate text-sm">
+                {sessionName(delegate, actors)}
+              </span>
+              <span className="shrink-0 font-mono text-[11px] text-faint">
+                {sessionState(delegate)}
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { SubmitEvent } from "react";
+import type { ReactNode, SubmitEvent } from "react";
 import { Link } from "react-router";
 import { ChevronRightIcon } from "lucide-react";
 import { cn } from "cn";
@@ -1232,6 +1232,7 @@ export function SessionCard({
   takeover,
   usage,
   budget,
+  delegatedBy,
 }: {
   session: ChatSession;
   name: string;
@@ -1241,6 +1242,8 @@ export function SessionCard({
   usage?: SessionUsage | null;
   /** The owner sets what it may cost, where its harness reports cost; 0 takes it away. */
   budget?: (usd: number) => Promise<boolean>;
+  /** The session that started it to delegate work to it. */
+  delegatedBy?: ReactNode;
   busy: boolean;
   stop: () => Promise<boolean>;
   /** Stops the turn it is working on; the session stays. */
@@ -1280,7 +1283,8 @@ export function SessionCard({
             {session.workspace}
           </Fact>
           <Fact label="Started by">
-            {session.origin === "owned" ? "ZeroLux" : "You, then hired"}
+            {delegatedBy ??
+              (session.origin === "owned" ? "ZeroLux" : "You, then hired")}
           </Fact>
           {usage?.context_tokens != null && (
             <Fact label="Context">

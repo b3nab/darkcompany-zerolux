@@ -106,6 +106,7 @@ const session = (
   pinned_at: null,
   archived_at: null,
   budget_usd: null,
+  parent_session_id: null,
 });
 const group: Conversation = {
   id: "c-group",
@@ -1781,6 +1782,36 @@ test("a session in the console: its work in the middle, and Interrupt in the box
     />,
   );
   expect(stopped).toMatch(/<textarea[^>]*disabled/);
+});
+
+test("a session delegated to by another names it, in the Console and in About", () => {
+  const lead = session("s-aspen", ASPEN);
+  const delegate: ChatSession = {
+    ...session("s-birch", BIRCH),
+    actor_id: null,
+    title: "Check the docs",
+    parent_session_id: "s-aspen",
+  };
+  const list = renderToStaticMarkup(
+    <ConsoleList
+      busy={false}
+      perform={perform}
+      chat={fakeChat({ sessions: [lead, delegate] })}
+      actors={actors}
+    />,
+  );
+  expect(list).toContain("↳ aspen");
+  const about = renderToStaticMarkup(
+    <SessionCard
+      session={delegate}
+      name="Check the docs"
+      facts
+      busy={false}
+      stop={perform}
+      delegatedBy="aspen"
+    />,
+  );
+  expect(about).toMatch(/Started by<\/dt><dd[^>]*>aspen</);
 });
 
 test("how full a session's context is shows beside its box, and what it has used in About", () => {
