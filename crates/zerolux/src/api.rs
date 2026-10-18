@@ -222,6 +222,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         )
         .route("/sessions/{id}/resume", post(resume_session))
         .route("/sessions/{id}/fork", post(fork_session))
+        .route("/sessions/{id}/rewind-files", post(rewind_files))
         .route("/sessions/{id}/takeover", post(takeover_pi_session))
         .route("/sessions/{id}/stop", post(stop_session))
         .route("/sessions/{id}/output", get(session_output))
@@ -752,6 +753,29 @@ async fn fork_session(
         .await
         .map_err(runtime_error)?;
     Ok(Json(json!({ "actor": actor, "session": session })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RewindFiles {
+    /// The offset, in the session's `/events`, of the input to go back to before.
+    at: u64,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+/// The files as they were before one of the session's inputs, from the harness's checkpoints.
+async fn rewind_files(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<RewindFiles>,
+) -> Result<Json<Value>, ApiFailure> {
+    let result = runtime(&state)?
+        .rewind_files(&who, &id, input.at, input.dry_run)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "result": result })))
 }
 
 async fn list_sessions(

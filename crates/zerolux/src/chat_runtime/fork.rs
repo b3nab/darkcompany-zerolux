@@ -114,20 +114,8 @@ impl ChatRuntime {
     /// What comes before the input at `at` in the session's native record, as its harness
     /// names it: Claude Code's previous message, pi's previous entry, Codex's turn.
     async fn before(&self, who: &ChatIdentity, id: &str, at: u64) -> Result<String> {
-        let row = self.store.observed_session(who, id).await?;
-        let path = tokio::task::spawn_blocking({
-            let row = row.clone();
-            move || crate::native_output::locate(&row)
-        })
-        .await?
-        .context("The session's native record is not there yet")?;
-        let (records, ..) = crate::native_output::read(&path, at).await?;
-        let record = &records
-            .first()
-            .filter(|record| record.at == at)
-            .context("No record of this session starts there")?
-            .record;
-        let before = match row.harness.as_str() {
+        let (harness, record) = self.record_at(who, id, at).await?;
+        let before = match harness.as_str() {
             "codex" => record["payload"]["turn_id"]
                 .as_str()
                 .or(record["turn_id"].as_str()),
@@ -137,5 +125,75 @@ impl ChatRuntime {
         Ok(before
             .context("Nothing comes before this input to fork from")?
             .to_owned())
+    }
+
+    /// The record of the session's native record that starts at `at`, and the harness.
+    pub(super) async fn record_at(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+        at: u64,
+    ) -> Result<(String, Value)> {
+        let row = self.store.observed_session(who, id).await?;
+        let path = tokio::task::spawn_blocking({
+            let row = row.clone();
+            move || crate::native_output::locate(&row)
+        })
+        .await?
+        .context("The session's native record is not there yet")?;
+        let (records, ..) = crate::native_output::read(&path, at).await?;
+        let record = records
+            .into_iter()
+            .next()
+            .filter(|record| record.at == at)
+            .context("No record of this session starts there")?
+            .record;
+        Ok((row.harness, record))
+    }
+
+    /// The files as they were before the session's input at `at`, from Claude Code's own
+    /// checkpoints; with `dry_run`, only what would change. Its result, as Claude Code says.
+    pub async fn rewind_files(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+        at: u64,
+        dry_run: bool,
+    ) -> Result<Value> {
+        async {
+            if !who.is_owner() {
+                return Err(Error::Forbidden.into());
+            }
+            let session = self.store.chat_session(who, id).await?;
+            let (_, record) = self.record_at(who, id, at).await?;
+            match self.native_control(who, &session, "input-v1").await? {
+                #[cfg(unix)]
+                super::settings::Control::Claude(link) => {
+                    let message = record["uuid"]
+                        .as_str()
+                        .context("No message of the session starts there")?;
+                    let actual = link.describe().await?;
+                    ensure!(
+                        actual["capabilities"]
+                            .as_array()
+                            .is_some_and(|values| values.iter().any(|value| value == "rewind-files-v1")),
+                        "The Claude runner needs an update for this control"
+                    );
+                    let reply = link
+                        .request(serde_json::json!({"method":"rewind_files","link_id":session.id,
+                            "message_id":message,"dry_run":dry_run}))
+                        .await?;
+                    Ok(reply["result"].clone())
+                }
+                _ => bail!(
+                    "Only Claude Code keeps checkpoints of the files; restore them from the session's changes"
+                ),
+            }
+        }
+        .await
+        .map_err(|error: anyhow::Error| match error.downcast::<Error>() {
+            Ok(error) => error.into(),
+            Err(error) => Error::Invalid(format!("{error:#}")).into(),
+        })
     }
 }
