@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup as render } from "react-dom/server";
 import { MemoryRouter } from "react-router";
-import { Approvals } from "./Approvals";
+import { ApprovalCard, ApprovalReceipt, Approvals } from "./Approvals";
 import { ConsoleList, SessionView } from "./Console";
 import {
   AddAgent,
@@ -18,6 +18,8 @@ import { Storage } from "./Storage";
 import { Tonight } from "./Tonight";
 import { ChatAbout } from "./components/chat-about";
 import { LiveWork, WorkLine } from "./components/chat-work";
+import { setDensity } from "./components/density";
+import { LiveItems, SessionBlocks } from "./components/session-blocks";
 import { ToolCall } from "./components/tool-call";
 import { agentPresence } from "./presence";
 import {
@@ -25,7 +27,7 @@ import {
   AgentSettingsForm,
   Hire,
   HireForm,
-  StartAgent,
+  StartSession,
   Team,
 } from "./Team";
 import type { Actor, Workspace } from "./api";
@@ -33,12 +35,13 @@ import type {
   Approval,
   ChatSession,
   ChatTurn,
+  SessionBlock,
   ToolBlock,
   Conversation,
   Discovery,
   Message,
 } from "@zerolux/chat";
-import { saveDraft, sessionState } from "@zerolux/chat";
+import { placeApprovals, saveDraft, sessionState } from "@zerolux/chat";
 import type { Chat, Storage as Files, StoredFile } from "@zerolux/chat";
 
 /** Views render inside the app's router, as in the app. */
@@ -98,6 +101,9 @@ const session = (
       ? "The session was closed; Owner must reopen it."
       : null,
   waiting: 0,
+  created_at: 0,
+  pinned_at: null,
+  archived_at: null,
 });
 const group: Conversation = {
   id: "c-group",
@@ -198,14 +204,18 @@ function fakeChat(overrides: Partial<Chat> = {}): Chat {
     close: nothing,
     create: async () => group,
     discover: async () => ({ sessions: [], errors: [] }),
-    hire: nothing,
-    startClaude: nothing,
-    startCodex: nothing,
-    startPi: nothing,
+    attach: async () => ({ actor: null, session: session("s-new", ASPEN) }),
+    createSession: async () => ({
+      actor: null,
+      session: session("s-new", ASPEN),
+    }),
+    updateSession: nothing,
+    live: async () => ({ seq: 0, items: [] }),
     takeoverPi: nothing,
     resume: nothing,
     stop: nothing,
     interrupt: async () => true,
+    compact: nothing,
     input: nothing,
     decide: nothing,
     answer: nothing,
@@ -1096,14 +1106,34 @@ test("a chat shows its threads under their message and lists the open ones; a th
 
 test("starting an agent asks for a harness, an agent, a folder and how it asks permission", () => {
   const html = renderToStaticMarkup(
-    <StartAgent
+    <StartSession
       chat={fakeChat({})}
       actors={actors}
       folders={["/home/owner/app", "/home/owner/app", "/home/owner/site"]}
       busy={false}
       perform={perform}
+      heading="Start a new agent"
+      intro="What you write in your chats reaches it as yours."
     />,
   );
+  // A new agent by default here; in the Console, no agent and no name to give.
+  expect(html).toMatch(/value=""[^>]*selected="">A new agent</);
+  expect(html).toContain('id="start-name"');
+  const own = renderToStaticMarkup(
+    <StartSession
+      chat={fakeChat({})}
+      actors={actors}
+      folders={[]}
+      busy={false}
+      perform={perform}
+      agent="none"
+      heading="New session"
+      intro="Only in the Console."
+    />,
+  );
+  expect(own).toMatch(/value="none"[^>]*selected="">No agent/);
+  expect(own).not.toContain('id="start-name"');
+  expect(own).toContain("In a new git worktree of the folder");
   expect(html).toContain("Start a new agent");
   expect(html).toContain("What you write in your chats reaches it as yours");
   // Claude Code first; Codex can be chosen, with Codex's own settings as the default.
@@ -1185,7 +1215,7 @@ test("settings forms use selectors for native fields and only the agent's harnes
       harness === "codex",
     );
     expect(html).not.toContain("<input");
-    expect(html).toContain("Not reported or varies by session");
+    expect(html).toContain("The harness&#x27;s own default");
     if (harness === "codex") {
       expect(html).toMatch(/<option[^>]*value="on-request"[^>]*selected=""/);
       expect(html).toMatch(
@@ -1396,7 +1426,7 @@ test("beside a chat: members and shared files, without task controls", () => {
   noUuids(html);
 });
 
-test("the console's column lists live sessions, working first, and keeps the stopped apart", () => {
+test("the console's column is an inbox: what needs you first, each state once, new work marked", () => {
   const working = {
     ...session("s-birch", BIRCH),
     activity: "working" as const,
@@ -1404,6 +1434,8 @@ test("the console's column lists live sessions, working first, and keeps the sto
   const idle = { ...session("s-aspen", ASPEN), activity: "idle" as const };
   const html = renderToStaticMarkup(
     <ConsoleList
+      busy={false}
+      perform={perform}
       chat={fakeChat({ sessions: [idle, working] })}
       actors={actors}
     />,
@@ -1413,6 +1445,171 @@ test("the console's column lists live sessions, working first, and keeps the sto
     html.indexOf('href="/console/s-aspen"'),
   );
   expect(html).toContain("Working…");
+  const inbox = renderToStaticMarkup(
+    <ConsoleList
+      busy={false}
+      perform={perform}
+      chat={fakeChat({
+        sessions: [
+          {
+            ...session("s-aspen-dm", ASPEN),
+            output_at: 100,
+            summary: "Fixed the build",
+          },
+          working,
+          session("s-aspen", ASPEN),
+        ],
+        approvals: [approval("a1", "pending")],
+      })}
+      actors={actors}
+    />,
+  );
+  expect(inbox.indexOf("Needs approval")).toBeLessThan(
+    inbox.indexOf("Working<"),
+  );
+  expect(inbox.indexOf("Working<")).toBeLessThan(inbox.indexOf(">New<"));
+  // A request says what it asks; new work says what it did.
+  expect(inbox).toContain("Asks: Run bun test");
+  expect(inbox).toContain("Fixed the build");
+});
+
+test("what a session produces right now follows its recorded work", () => {
+  const items = [
+    { id: "t", kind: "text" as const, text: "Checking the **build**" },
+    { id: "r", kind: "thinking" as const, text: "The cache may be stale" },
+    {
+      id: "o",
+      kind: "output" as const,
+      text: Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join("\n"),
+    },
+  ];
+  const html = render(<LiveItems items={items} />);
+  expect(html).toContain('data-streamdown="strong">build<');
+  expect(html).toContain("The cache may be stale");
+  // A running command shows its last lines.
+  expect(html).toContain("line 50");
+  expect(html).not.toContain("line 10\n");
+  setDensity("compact");
+  expect(render(<LiveItems items={items} />)).not.toContain(
+    "The cache may be stale",
+  );
+  setDensity("normal");
+});
+
+test("the console holds sessions without an agent, pinned ones first, and archived apart", () => {
+  const own: ChatSession = {
+    ...session("s-own", ASPEN),
+    actor_id: null,
+    title: "Release check",
+    pinned_at: 3,
+  };
+  const away: ChatSession = { ...session("s-away", BIRCH), archived_at: 4 };
+  const html = renderToStaticMarkup(
+    <ConsoleList
+      busy={false}
+      perform={perform}
+      chat={fakeChat({ sessions: [session("s-aspen", ASPEN), own, away] })}
+      actors={actors}
+    />,
+  );
+  // Its own title names it, with its harness's mark; pinned, it heads the list.
+  expect(html).toContain("Release check");
+  expect(html).toContain(">CC<");
+  expect(html.indexOf(">Pinned<")).toBeLessThan(html.indexOf("aspen work"));
+  expect(html).toMatch(/Archived<span[^>]*>1</);
+  expect(html).not.toContain('href="/console/s-away"');
+  expect(html).toContain("New session");
+  const view = renderToStaticMarkup(
+    <SessionView
+      session={own}
+      chat={fakeChat({ sessions: [own] })}
+      actors={actors}
+      busy={false}
+      perform={perform}
+    />,
+  );
+  expect(view).toMatch(/<h2[^>]*>Release check<\/h2>/);
+  expect(view).toContain('aria-label="Session actions"');
+});
+
+test("a session's work keeps its requests where they were made, and density sets how much shows", () => {
+  const at = (s: number) => `2026-01-01T10:00:0${s}.000Z`;
+  const blocks: SessionBlock[] = [
+    { key: "1", time: at(0), kind: "input", text: "Fix the build", chat: null },
+    {
+      key: "2",
+      time: at(1),
+      kind: "thinking",
+      text: "The build fails on a type",
+      until: at(3),
+    },
+    {
+      key: "3",
+      time: at(3),
+      kind: "tool",
+      id: "t1",
+      name: "Bash",
+      input: { command: "bun run build" },
+      result: { output: "built", error: false, time: at(4) },
+    },
+    {
+      key: "4",
+      time: at(5),
+      kind: "tool",
+      id: "t2",
+      name: "Task",
+      input: { description: "Check the tests", prompt: "Run the suite" },
+    },
+    { key: "5", time: at(9), kind: "text", text: "Fixed." },
+  ];
+  const asked = {
+    ...approval("a1", "delivered", "allow"),
+    created_at: Date.parse(at(4)),
+  };
+  const pending = {
+    ...approval("a2", "pending"),
+    summary: "Push to main",
+    created_at: Date.parse(at(9)) + 1,
+  };
+  const work = () =>
+    render(
+      <SessionBlocks
+        blocks={placeApprovals(blocks, [pending, asked])}
+        renderApproval={(a) =>
+          a.status === "pending" ? (
+            <ApprovalCard
+              approval={a}
+              chat={fakeChat()}
+              actors={actors}
+              busy={false}
+              perform={perform}
+            />
+          ) : (
+            <ApprovalReceipt approval={a} />
+          )
+        }
+      />,
+    );
+  const html = work();
+  // Answered, a request stays as a receipt where it was asked; a pending one waits at the end.
+  expect(html).toContain("Allowed");
+  expect(html.indexOf("Run bun test")).toBeLessThan(
+    html.indexOf("Check the tests"),
+  );
+  expect(html.indexOf("Push to main")).toBeGreaterThan(html.indexOf("Fixed."));
+  expect(html).toContain(">Allow</button>");
+  // A subagent is a card of its own, with its task.
+  expect(html).toContain("Subagent");
+  expect(html).toContain("Run the suite");
+  expect(html).not.toContain("built");
+  // Compact keeps the outcome; detailed opens every step.
+  setDensity("compact");
+  const compact = work();
+  expect(compact).toContain("Ran 1 command");
+  expect(compact).not.toContain("The build fails on a type");
+  setDensity("detailed");
+  expect(work()).toContain("built");
+  setDensity("normal");
 });
 
 test("a session in the console: its work in the middle, and Interrupt in the box while it works", () => {
@@ -1462,6 +1659,30 @@ test("a session in the console: its work in the middle, and Interrupt in the box
     ),
   ).toContain(">Check the logs</textarea>");
   saveDraft("s-aspen", "");
+  // "/" lists the commands the box runs itself; /compact says what it will do.
+  const typed = (draft: string) => {
+    saveDraft("s-aspen", draft);
+    const html = renderToStaticMarkup(
+      <SessionView
+        session={session("s-aspen", ASPEN)}
+        chat={fakeChat()}
+        actors={actors}
+        busy={false}
+        perform={perform}
+      />,
+    );
+    saveDraft("s-aspen", "");
+    return html;
+  };
+  expect(typed("/")).toContain('aria-label="Commands"');
+  expect(typed("/")).toContain(">/compact<");
+  expect(typed("/compact keep the plan")).not.toContain(
+    'aria-label="Commands"',
+  );
+  expect(typed("/compact keep the plan")).toContain(
+    "Summarizes the older work; anything after /compact says what to keep",
+  );
+  expect(typed("/review")).not.toContain('aria-label="Commands"');
   // A stopped session takes no input.
   const stopped = renderToStaticMarkup(
     <SessionView

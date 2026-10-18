@@ -162,6 +162,25 @@ test("your profile, your settings and the administration are three separate page
     expect(mine).toContain(part);
   expect(mine).toContain('role="radiogroup"');
   expect(mine).not.toContain("Workspace name");
+  // Notifications on this device: asked for first, then chosen by kind.
+  expect(mine).toContain("This browser cannot show notifications.");
+  const settings = (permission: NotificationPermission) => {
+    globalThis.Notification = { permission } as typeof Notification;
+    try {
+      return renderToStaticMarkup(
+        <MemoryRouter>
+          <MySettingsPage />
+        </MemoryRouter>,
+      );
+    } finally {
+      delete (globalThis as { Notification?: unknown }).Notification;
+    }
+  };
+  expect(settings("default")).toContain("Allow notifications");
+  expect(settings("denied")).toContain("blocked for this page");
+  const granted = settings("granted");
+  expect(granted).toContain("When a session needs you");
+  expect(granted).toContain("When a session finishes its work");
 
   const admin = renderToStaticMarkup(
     <MemoryRouter>
