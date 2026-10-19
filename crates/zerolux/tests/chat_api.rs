@@ -2191,6 +2191,18 @@ async fn a_computer_joins_as_a_host_and_answers_over_its_channel() {
         .await
         .unwrap();
     assert_eq!(files["files"], json!(["notes.md"]), "{files}");
+    // Its history is searched there too.
+    let searched: Value = kernel
+        .get("/sessions/search?q=from%20the%20LAPTOP", None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        searched["results"][0]["session_id"], issued.session.id,
+        "{searched}"
+    );
+    assert_eq!(searched["results"][0]["kind"], "input");
     // Removed: its channel closes and its secret no longer connects.
     kernel
         .request(Method::DELETE, &format!("/hosts/{host}"), None)

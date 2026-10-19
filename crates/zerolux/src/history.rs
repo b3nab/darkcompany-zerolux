@@ -31,7 +31,7 @@ pub struct Found {
     pub at: u64,
     pub time: Option<String>,
     /// `input`, `text`, `thinking` or `tool_call`.
-    pub kind: &'static str,
+    pub kind: String,
     /// The words around the match, on one line.
     pub snippet: String,
 }
@@ -248,7 +248,7 @@ impl Store {
                 harness: session.harness.clone(),
                 at,
                 time,
-                kind,
+                kind: kind.to_owned(),
                 snippet,
             }));
         }
@@ -256,6 +256,28 @@ impl Store {
         results.truncate(limit.clamp(1, 200));
         Ok(Results { results, truncated })
     }
+}
+
+/// The latest matches of one session's record on this computer, as a joined computer answers
+/// the kernel: `{found: [{at, time, kind, snippet}], truncated}`.
+pub(crate) async fn search_record(
+    row: crate::entity::sessions::Model,
+    query: &str,
+) -> anyhow::Result<serde_json::Value> {
+    let lower: Vec<char> = query.trim().chars().flat_map(char::to_lowercase).collect();
+    anyhow::ensure!(lower.len() >= 2, "Search for 2 to 200 bytes of text");
+    let deadline = Instant::now() + BUDGET;
+    let scanned = tokio::task::spawn_blocking(move || {
+        let path = locate(&row)?;
+        scan(&path, &row.harness, &lower, deadline).ok()
+    })
+    .await?;
+    let (found, truncated) = scanned.unwrap_or_default();
+    Ok(serde_json::json!({
+        "found": found.into_iter().map(|(at, time, kind, snippet)| serde_json::json!(
+            {"at": at, "time": time, "kind": kind, "snippet": snippet})).collect::<Vec<_>>(),
+        "truncated": truncated,
+    }))
 }
 
 #[cfg(test)]

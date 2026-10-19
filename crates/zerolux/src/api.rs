@@ -1844,14 +1844,52 @@ fn search_limit() -> usize {
 /// What the sessions one may read said and did, newest first: their words, reasoning and
 /// tool calls that contain the text looked for.
 async fn search_sessions(
-    State(store): State<Store>,
+    State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
     query: Result<Query<SearchQuery>, QueryRejection>,
 ) -> Result<Json<crate::history::Results>, Error> {
     let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
-    Ok(Json(
-        store.search_sessions(&who, &query.q, query.limit).await?,
-    ))
+    let mut found = state
+        .store
+        .search_sessions(&who, &query.q, query.limit)
+        .await?;
+    // The sessions on joined computers, searched there; one offline is left out.
+    if let Some(runtime) = &state.runtime {
+        for session in state.store.sessions(&who).await? {
+            let Some(host) = remote(&state, &session) else {
+                continue;
+            };
+            let row = state.store.observed_session(&who, &session.id).await?;
+            let Ok(answer) = runtime
+                .hosts
+                .call(
+                    &host,
+                    "record",
+                    json!({"op": "search", "record": crate::host_ops::RecordRef::of(&row),
+                        "params": {"query": query.q}}),
+                )
+                .await
+            else {
+                found.truncated = true;
+                continue;
+            };
+            found.truncated |= answer["truncated"] == true;
+            for hit in answer["found"].as_array().into_iter().flatten() {
+                found.results.push(crate::history::Found {
+                    session_id: session.id.clone(),
+                    title: session.title.clone(),
+                    harness: session.harness.clone(),
+                    at: hit["at"].as_u64().unwrap_or_default(),
+                    time: hit["time"].as_str().map(str::to_owned),
+                    kind: hit["kind"].as_str().unwrap_or_default().to_owned(),
+                    snippet: hit["snippet"].as_str().unwrap_or_default().to_owned(),
+                });
+            }
+        }
+        found.results.sort_by(|a, b| b.time.cmp(&a.time));
+        found.results.truncate(query.limit.clamp(1, 200));
+    }
+    Ok(Json(found))
 }
 
 /// The goal the session works toward on its own, as its harness keeps it.

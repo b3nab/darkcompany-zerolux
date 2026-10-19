@@ -108,6 +108,9 @@ pub async fn record(op: &str, record: &RecordRef, params: &Value) -> Result<Valu
                 .context("No record of this session starts there")?
                 .record
         }
+        "search" => {
+            crate::history::search_record(row.clone(), &param::<String>(params, "query")?).await?
+        }
         "subagents" => json!({"subagents": crate::chat_runtime::subagents_of(&row).await?}),
         "subagent_events" => json!(
             crate::chat_runtime::subagent_events_of(
