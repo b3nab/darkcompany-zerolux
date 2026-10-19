@@ -12,7 +12,6 @@
 use std::{
     collections::HashMap,
     io::SeekFrom,
-    os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -23,7 +22,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
-    net::UnixStream,
     process::Command,
     sync::{mpsc, watch},
 };
@@ -56,7 +54,7 @@ struct Listed {
 
 /// Read-only: asks Claude Code for its running sessions.
 async fn list() -> Result<Vec<Listed>> {
-    let listing = Command::new("claude")
+    let listing = Command::new(crate::platform::executable("claude"))
         .args(["agents", "--json"])
         .stdin(Stdio::null())
         .kill_on_drop(true)
@@ -100,7 +98,7 @@ fn projects_dir(
 /// Whether the session's process is still there. Sockets outlive their process, so the
 /// process is asked, not the socket.
 fn alive(pid: u32) -> bool {
-    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok()
+    crate::platform::alive(pid)
 }
 
 /// What one transcript line proves about the envelope it holds.
@@ -294,7 +292,7 @@ impl Transcript {
     async fn read_new(&mut self) -> Result<Vec<String>> {
         let held = self.file.metadata().await?;
         match tokio::fs::metadata(&self.path).await {
-            Ok(current) if (current.dev(), current.ino()) != (held.dev(), held.ino()) => {
+            Ok(current) if !crate::platform::same_file(&current, &held) => {
                 self.file = tokio::fs::File::open(&self.path).await?;
                 self.offset = 0;
                 self.partial.clear();
@@ -510,13 +508,7 @@ impl ClaudeSession {
             pid > 0 && pid <= i32::MAX as u32 && alive(pid),
             "The Claude Code session ended"
         );
-        let socket = sockets.join(format!("{pid}.sock"));
-        let metadata = std::fs::symlink_metadata(&socket)
-            .context("This Claude Code session exposes no inbox; update Claude Code")?;
-        ensure!(
-            metadata.file_type().is_socket() && metadata.permissions().mode() & 0o077 == 0,
-            "The Claude Code inbox is not a private socket"
-        );
+        let socket = inbox(sockets, pid)?;
         Ok(Self {
             session_id: session.session_id,
             pid,
@@ -731,13 +723,37 @@ impl ClaudeSession {
     }
 }
 
+/// A running session's inbox: its private socket.
+#[cfg(unix)]
+fn inbox(sockets: &Path, pid: u32) -> Result<PathBuf> {
+    use std::os::unix::fs::FileTypeExt;
+    let socket = sockets.join(format!("{pid}.sock"));
+    let metadata = std::fs::symlink_metadata(&socket)
+        .context("This Claude Code session exposes no inbox; update Claude Code")?;
+    ensure!(
+        metadata.file_type().is_socket() && crate::platform::is_private(&metadata),
+        "The Claude Code inbox is not a private socket"
+    );
+    Ok(socket)
+}
+
+/// On Windows the inbox is a named pipe that takes a line only with a token Claude Code gives
+/// to its own processes, so a session started in a terminal is not reachable from outside.
+#[cfg(windows)]
+fn inbox(_sockets: &Path, _pid: u32) -> Result<PathBuf> {
+    anyhow::bail!(
+        "On Windows, Claude Code takes messages from outside a session only with a token of its \
+         own processes: start the session from ZeroLux to work with it here"
+    )
+}
+
 /// One line into a live session's inbox, as Claude Code shows a message from another session.
 pub(crate) async fn write_inbox(socket: &Path, text: &str) -> Result<()> {
     let mut line =
         serde_json::to_vec(&json!({"type":"user","message":{"role":"user","content":text}}))?;
     line.push(b'\n');
     let write = async {
-        let mut stream = UnixStream::connect(socket).await?;
+        let mut stream = crate::platform::Local::connect(&socket.to_string_lossy()).await?;
         stream.write_all(&line).await?;
         stream.shutdown().await
     };
@@ -747,8 +763,10 @@ pub(crate) async fn write_inbox(socket: &Path, text: &str) -> Result<()> {
         .context("Cannot reach the Claude Code inbox; outcome may be uncertain")
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use tokio::{io::AsyncReadExt, net::UnixListener};
 
     use super::*;

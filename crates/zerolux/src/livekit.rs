@@ -465,7 +465,7 @@ async fn start_managed(
         .create(true)
         .append(true)
         .open(&log_path)?;
-    let mut child = Command::new("livekit-server")
+    let mut child = Command::new(crate::platform::executable("livekit-server"))
         .env(
             "LIVEKIT_CONFIG",
             managed_config(port, udp_port, &secret, expose),

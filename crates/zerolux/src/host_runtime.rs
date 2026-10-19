@@ -38,14 +38,10 @@ pub struct HostRuntime {
     /// Where sessions started in a worktree of their own work.
     worktrees: std::path::PathBuf,
     /// The pi and Claude Code runners of this computer's sessions.
-    #[cfg(unix)]
     pi: crate::pi_runner::Registry,
-    #[cfg(unix)]
     claude: crate::claude_runner::Registry,
-    #[cfg(unix)]
     pi_pending: Mutex<HashMap<String, crate::pi_runner::RunnerLink>>,
     /// The integrations of this computer's pi sessions, paired with the kernel.
-    #[cfg(unix)]
     pi_links: Mutex<HashMap<String, sessions::PiLink>>,
 }
 
@@ -65,32 +61,16 @@ impl HostRuntime {
         codex: Option<String>,
         notices: mpsc::UnboundedSender<Value>,
     ) -> Arc<Self> {
-        #[cfg(unix)]
-        return Self::with_runners(
+        Self::with_runners(
             url,
             links,
             codex,
             crate::claude_runner::RunnerProgram::default(),
             notices,
-        );
-        #[cfg(not(unix))]
-        {
-            Arc::new(Self {
-                terminals: terminals(notices.clone()),
-                attachments: links.with_file_name("attachments"),
-                worktrees: links.with_file_name("worktrees"),
-                url,
-                codex,
-                pending: Mutex::default(),
-                running: Mutex::default(),
-                wake: broadcast::channel(16).0,
-                notices,
-            })
-        }
+        )
     }
 
     /// With harness runners of its own choosing, such as a test's.
-    #[cfg(unix)]
     pub fn with_runners(
         url: String,
         links: std::path::PathBuf,
@@ -99,13 +79,9 @@ impl HostRuntime {
         notices: mpsc::UnboundedSender<Value>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            #[cfg(unix)]
             pi: crate::pi_runner::Registry::new(links.join("pi"), program.clone()),
-            #[cfg(unix)]
             claude: crate::claude_runner::Registry::new(links.join("claude"), program),
-            #[cfg(unix)]
             pi_pending: Mutex::default(),
-            #[cfg(unix)]
             pi_links: Mutex::default(),
             terminals: terminals(notices.clone()),
             attachments: links.with_file_name("attachments"),
@@ -163,10 +139,8 @@ impl HostRuntime {
                 crate::chat_runtime::localize_images(&self.attachments, session, &mut request)?;
                 control.request(&request).await
             }
-            #[cfg(unix)]
             "pi.create" => self.pi_create(params).await,
             // pi's own fork of a saved session, opened under a runner here, waiting.
-            #[cfg(unix)]
             "pi.fork" => {
                 let file = params["file"].as_str().context("Name the session's file")?;
                 let workspace = params["workspace"].as_str().context("Choose a folder")?;
@@ -185,7 +159,6 @@ impl HostRuntime {
                 )
             }
             // Claude Code's own fork of a saved session: the new session's ID.
-            #[cfg(unix)]
             "claude.fork" => {
                 let native = self
                     .claude
@@ -198,9 +171,7 @@ impl HostRuntime {
                     .await?;
                 Ok(json!({"native": native}))
             }
-            #[cfg(unix)]
             "pi.bind" => self.pi_bind(params).await,
-            #[cfg(unix)]
             "pi.control" => {
                 let session = params["session_id"].as_str().unwrap_or_default();
                 let mut request = params["request"].clone();
@@ -216,7 +187,6 @@ impl HostRuntime {
                 let record = sessions::descriptor(std::path::Path::new(descriptor)).await?;
                 sessions::control(&record, request).await
             }
-            #[cfg(unix)]
             "pi.stop" => {
                 let session = params["session_id"].as_str().unwrap_or_default();
                 if let Some(paired) = self.pi_links.lock().await.remove(session) {
@@ -225,9 +195,7 @@ impl HostRuntime {
                 self.pi_link(&params).await?.stop(session).await?;
                 Ok(json!({"stopped": true}))
             }
-            #[cfg(unix)]
             "claude.launch" => self.claude_launch(params).await,
-            #[cfg(unix)]
             "claude.bind" => {
                 let link = self.claude_link(&params).await?;
                 let executable = self.claude.executable()?;
@@ -241,7 +209,6 @@ impl HostRuntime {
                 .await?;
                 Ok(json!({"bound": true}))
             }
-            #[cfg(unix)]
             "claude.control" => {
                 let link = self.claude_link(&params).await?;
                 let given = &params["params"];
@@ -272,7 +239,6 @@ impl HostRuntime {
                     other => bail!("This computer's Claude control does not know `{other}`"),
                 }
             }
-            #[cfg(unix)]
             "claude.stop" => {
                 let session = params["session_id"].as_str().unwrap_or_default();
                 self.claude_link(&params).await?.stop(session).await?;
@@ -326,7 +292,6 @@ impl HostRuntime {
     }
 
     /// A new pi session in a folder of this computer, waiting for its token.
-    #[cfg(unix)]
     async fn pi_create(&self, params: Value) -> Result<Value> {
         let workspace = params["workspace"].as_str().context("Choose a folder")?;
         ensure!(
@@ -354,7 +319,6 @@ impl HostRuntime {
 
     /// The runner takes the session's token, and its pi integration pairs with the kernel as
     /// it does on the kernel's computer. The locator the kernel keeps for it, as it is here.
-    #[cfg(unix)]
     async fn pi_bind(&self, params: Value) -> Result<Value> {
         let pending = params["pending"].as_str().unwrap_or_default();
         let link = self
@@ -401,7 +365,6 @@ impl HostRuntime {
         Ok(json!({"native_locator": actual.native_locator}))
     }
 
-    #[cfg(unix)]
     async fn pi_link(&self, params: &Value) -> Result<crate::pi_runner::RunnerLink> {
         self.pi
             .find(
@@ -413,7 +376,6 @@ impl HostRuntime {
     }
 
     /// A Claude Code runner for a session the kernel has issued.
-    #[cfg(unix)]
     async fn claude_launch(&self, params: Value) -> Result<Value> {
         let workspace = params["workspace"].as_str().context("Choose a folder")?;
         // The folder as this computer names it, as its runner records it.
@@ -445,7 +407,6 @@ impl HostRuntime {
         Ok(json!({"launched": true, "workspace": workspace}))
     }
 
-    #[cfg(unix)]
     async fn claude_link(&self, params: &Value) -> Result<crate::claude_runner::RunnerLink> {
         let mode: crate::model::ClaudePermissionMode =
             serde_json::from_value(params["mode"].clone()).context("Invalid permission mode")?;

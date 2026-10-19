@@ -781,7 +781,6 @@ async fn create_pi_session(
     if !who.is_person() {
         return Err(Error::Forbidden.into());
     }
-    #[cfg(unix)]
     {
         use crate::chat_runtime::PiStartFailure;
         let runtime = runtime(&state)?;
@@ -818,13 +817,6 @@ async fn create_pi_session(
         state.store.mark_created(&mut session).await?;
         Ok(Json(json!({"actor":actor,"session":session})))
     }
-    #[cfg(not(unix))]
-    {
-        let _ = (state, input);
-        Err(runtime_error(anyhow::anyhow!(
-            "Pi creation requires a Unix execution host"
-        )))
-    }
 }
 
 async fn create_claude_session(
@@ -835,7 +827,6 @@ async fn create_claude_session(
     if !who.is_person() {
         return Err(Error::Forbidden.into());
     }
-    #[cfg(unix)]
     {
         let runtime = runtime(&state)?;
         let (actor, session) = match input.host.clone() {
@@ -852,14 +843,6 @@ async fn create_claude_session(
         state.store.mark_created(&mut session).await?;
         Ok(Json(json!({"actor":actor,"session":session})))
     }
-    #[cfg(not(unix))]
-    {
-        let _ = (state, input);
-        Err(
-            Error::Invalid("Owned Claude sessions are not available on this platform".into())
-                .into(),
-        )
-    }
 }
 
 async fn takeover_pi_session(
@@ -871,18 +854,12 @@ async fn takeover_pi_session(
     if !who.is_person() {
         return Err(Error::Forbidden.into());
     }
-    #[cfg(unix)]
     {
         let session = runtime(&state)?
             .takeover_pi(&who, &id)
             .await
             .map_err(runtime_error)?;
         Ok(Json(json!({"session": session})))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (state, id);
-        Err(Error::Invalid("Pi takeover requires a Unix execution host".into()).into())
     }
 }
 

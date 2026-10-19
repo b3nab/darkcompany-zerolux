@@ -1,15 +1,14 @@
 //! Execution-host lifecycle for an entrusted native pi context. No prompts are sent here.
 use crate::{
     claude_runner::RunnerProgram,
+    platform,
     sessions::{self, PiDescriptor},
 };
 use anyhow::{Context, Result, ensure};
-use nix::{sys::signal::kill, unistd::Pid};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     fs::OpenOptions,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -30,18 +29,7 @@ impl Registry {
         Self { path, program }
     }
     fn directory(&self) -> Result<()> {
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&self.path)?;
-        let info = std::fs::symlink_metadata(&self.path)?;
-        ensure!(
-            info.is_dir()
-                && !info.file_type().is_symlink()
-                && info.permissions().mode() & 0o077 == 0,
-            "Pi runner registry must be private"
-        );
-        Ok(())
+        platform::private_dir(&self.path).context("Pi runner registry must be private")
     }
     pub(crate) async fn find(&self, native: &str, workspace: &str) -> Result<Option<RunnerLink>> {
         self.directory()?;
@@ -60,7 +48,7 @@ impl Registry {
                 .pid
                 .filter(|p| *p > 0)
                 .context("Pi runner has no process identity")?;
-            if kill(Pid::from_raw(pid), None) == Err(nix::errno::Errno::ESRCH) {
+            if !platform::alive(pid as u32) {
                 continue;
             }
             ensure!(
@@ -192,14 +180,10 @@ impl Registry {
             "{:x}",
             Sha256::digest(native.unwrap_or(&request_id).as_bytes())
         );
-        let log = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .custom_flags(nix::libc::O_NOFOLLOW)
+        let log = platform::private(OpenOptions::new().create(true).append(true))
             .open(self.path.join(format!("{key}.log")))?;
         ensure!(
-            log.metadata()?.is_file() && log.metadata()?.permissions().mode() & 0o077 == 0,
+            log.metadata()?.is_file() && platform::is_private(&log.metadata()?),
             "Pi runner log must be private"
         );
         let mut command = tokio::process::Command::new(&self.program.bun);
@@ -220,13 +204,7 @@ impl Registry {
             .stderr(Stdio::from(log))
             .kill_on_drop(false);
         // This independent host, not the kernel, owns native RPC stdin.
-        unsafe {
-            command.pre_exec(|| {
-                nix::unistd::setsid()
-                    .map(|_| ())
-                    .map_err(std::io::Error::from)
-            });
-        }
+        platform::detach(&mut command);
         let mut child = command
             .spawn()
             .context("Could not start the pi execution host")?;
@@ -384,7 +362,7 @@ async fn private_profile(path: &Path) -> Result<Value> {
         info.is_file()
             && !info.file_type().is_symlink()
             && info.len() <= 64 * 1024
-            && info.permissions().mode() & 0o077 == 0,
+            && platform::is_private(&info),
         "Pi profile must be a bounded private file"
     );
     Ok(serde_json::from_slice(&tokio::fs::read(path).await?)?)

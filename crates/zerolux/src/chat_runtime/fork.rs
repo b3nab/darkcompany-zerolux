@@ -72,7 +72,6 @@ impl ChatRuntime {
                 };
                 self.link(who, target, name, actor_id, false).await
             }
-            #[cfg(unix)]
             Harness::Pi => {
                 let locator = self.store.chat_session_locator(who, id).await?;
                 let homes = crate::homes::Homes::of_locator(&locator);
@@ -99,7 +98,6 @@ impl ChatRuntime {
                 }
                 result
             }
-            #[cfg(unix)]
             Harness::ClaudeCode => {
                 let homes = crate::homes::Homes::of_locator(
                     &self.store.chat_session_locator(who, id).await?,
@@ -122,8 +120,6 @@ impl ChatRuntime {
                 };
                 self.open_claude(who, target, name, actor_id, &homes).await
             }
-            #[cfg(not(unix))]
-            _ => bail!("Sessions fork only on a Unix execution host"),
         }
     }
 
@@ -200,7 +196,6 @@ impl ChatRuntime {
             let session = self.store.chat_session(who, id).await?;
             let (_, record) = self.record_at(who, id, at).await?;
             match self.native_control(who, &session, "input-v1").await? {
-                #[cfg(unix)]
                 super::settings::Control::Claude(link) => {
                     let message = record["uuid"]
                         .as_str()

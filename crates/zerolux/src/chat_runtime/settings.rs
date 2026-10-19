@@ -16,7 +16,6 @@ const SETTINGS: &str = "agent-settings-v1";
 pub(super) enum Control {
     Codex(super::remote::CodexControl),
     Pi(super::remote::PiControl),
-    #[cfg(unix)]
     Claude(super::remote::ClaudeControl),
 }
 
@@ -41,7 +40,6 @@ impl Control {
                 let result = control.control(request).await?;
                 Ok(serde_json::from_value(result["settings"].clone())?)
             }
-            #[cfg(unix)]
             Self::Claude(control) => control.settings(&session.id, patch, check).await,
         }
     }
@@ -80,7 +78,6 @@ impl ChatRuntime {
                 );
                 actual
             }
-            #[cfg(unix)]
             Control::Claude(link) => link.describe().await?,
         };
         if !integration_needs_update(&actual, revision) {
@@ -94,7 +91,6 @@ impl ChatRuntime {
                 // Reload is cooperative and idempotently scheduled by the extension.
                 record.control(request).await?;
             }
-            #[cfg(unix)]
             Control::Claude(link) => {
                 let instance = actual["instance_id"]
                     .as_str()
@@ -243,7 +239,6 @@ impl ChatRuntime {
                             .as_str()
                             .map(str::to_owned),
                 }),
-                #[cfg(unix)]
                 _ => Control::Claude(super::remote::ClaudeControl::There {
                     hosts,
                     host,
@@ -254,8 +249,6 @@ impl ChatRuntime {
                         .await?
                         .context("This native terminal does not expose this control")?,
                 }),
-                #[cfg(not(unix))]
-                _ => bail!("The session belongs to another kernel host"),
             });
         }
         if session.harness == "codex" {
@@ -293,7 +286,6 @@ impl ChatRuntime {
             );
             return Ok(Control::Pi(super::remote::PiControl::Here(record)));
         }
-        #[cfg(unix)]
         if let Some(mode) = self.owned_mode(who, &session.id).await? {
             let link = self
                 .runners

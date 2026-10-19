@@ -33,7 +33,6 @@ pub struct ServerOptions {
     /// The origin a reverse proxy serves this kernel at, with the LiveKit address clients
     /// reach from there. `None`: this computer and the exposed address only.
     pub public: Option<Arc<api::PublicOrigin>>,
-    #[cfg(unix)]
     pub runner: Option<crate::claude_runner::RunnerProgram>,
     /// Human sign-in through the authentication service started from here. `None` (tests,
     /// embedders) runs the kernel as it ran before accounts: the local owner is implicit.
@@ -142,7 +141,6 @@ impl Server {
             .for_workspace(&workspace.id),
         );
         let links = std::path::absolute(data_dir.join("links"))?;
-        #[cfg(unix)]
         let started = match options.runner {
             Some(program) => {
                 ChatRuntime::start_with_runner(
@@ -156,8 +154,6 @@ impl Server {
             }
             None => ChatRuntime::start(store.clone(), livekit.clone(), base_url, links).await,
         };
-        #[cfg(not(unix))]
-        let started = ChatRuntime::start(store.clone(), livekit.clone(), base_url, links).await;
         let runtime = match started {
             Ok(runtime) => runtime,
             Err(error) => {

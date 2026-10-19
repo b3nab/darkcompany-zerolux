@@ -79,15 +79,6 @@ enum HostAction {
 /// The web app, sign-in and runners a release packages in `share/zerolux`, beside the `bin`
 /// folder of its kernel, as in `/usr/local`; none for a kernel built in a checkout, which uses
 /// the checkout's.
-fn packaged() -> Option<PathBuf> {
-    let kernel = std::env::current_exe().ok()?.canonicalize().ok()?;
-    let resources = kernel.parent()?.parent()?.join("share/zerolux");
-    resources
-        .join("web/index.html")
-        .is_file()
-        .then_some(resources)
-}
-
 pub fn init_logging() {
     let _ = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -120,12 +111,13 @@ pub async fn run() -> anyhow::Result<()> {
                     .map_or_else(|| PathBuf::from("."), PathBuf::from),
                 (None, crate::db::Location::Postgres(_)) => PathBuf::from(".zerolux"),
             };
-            let packaged = packaged();
-            let web_dir = web_dir.unwrap_or_else(|| match &packaged {
+            // A release's kernel runs what it carries; a checkout's, the checkout.
+            let carried = crate::carry::unpack(&data_dir)?;
+            let web_dir = web_dir.unwrap_or_else(|| match &carried {
                 Some(resources) => resources.join("web"),
                 None => "apps/web/dist".into(),
             });
-            let auth_entry = auth_entry.unwrap_or_else(|| match &packaged {
+            let auth_entry = auth_entry.unwrap_or_else(|| match &carried {
                 Some(resources) => resources.join("auth/server.js"),
                 None => "services/auth/src/server.ts".into(),
             });
@@ -142,12 +134,9 @@ pub async fn run() -> anyhow::Result<()> {
                     }
                     None => None,
                 },
-                #[cfg(unix)]
-                runner: packaged
-                    .as_deref()
-                    .map(crate::claude_runner::RunnerProgram::bundled),
+                runner: None,
                 auth: Some(crate::auth::AuthEntry {
-                    bun: "bun".into(),
+                    bun: crate::platform::executable("bun"),
                     entry: auth_entry,
                 }),
             })
@@ -162,6 +151,7 @@ pub async fn run() -> anyhow::Result<()> {
                 println!("Joined. Run `zerolux host run` to connect this computer.");
             }
             HostAction::Run => {
+                crate::carry::unpack(&data_dir)?;
                 let config = crate::host_link::HostConfig::load(&data_dir)?;
                 let (stop, stopped) = tokio::sync::watch::channel(false);
                 tokio::spawn(async move {

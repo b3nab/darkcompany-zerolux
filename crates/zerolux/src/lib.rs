@@ -4,12 +4,11 @@ pub mod agent_settings;
 pub mod api;
 pub mod auth;
 pub mod byoh;
+pub mod carry;
 pub mod chat;
 pub(crate) mod chat_driver;
 pub mod chat_runtime;
-#[cfg(unix)]
 pub mod claude;
-#[cfg(unix)]
 pub mod claude_runner;
 pub mod cli;
 pub mod codex;
@@ -32,8 +31,8 @@ pub mod model;
 pub mod native_events;
 pub mod native_output;
 pub mod people;
-#[cfg(unix)]
 mod pi_runner;
+pub mod platform;
 pub mod requests;
 pub mod schedules;
 pub mod server;

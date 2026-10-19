@@ -1,9 +1,8 @@
 //! Native-child evidence, read while holding the SAME lease the Bun host writes.
-use std::{io::Read, os::unix::fs::MetadataExt, path::Path};
+use std::{io::Read, path::Path};
 
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
-use nix::{sys::signal::kill, unistd::Pid};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -40,7 +39,7 @@ fn nullable_pid<'de, D: serde::Deserializer<'de>>(
 }
 
 fn alive(pid: i32) -> bool {
-    kill(Pid::from_raw(pid), None) != Err(nix::errno::Errno::ESRCH)
+    pid > 0 && crate::platform::alive(pid as u32)
 }
 
 pub(super) enum Purpose<'a> {
@@ -61,7 +60,7 @@ pub(super) fn verify_exit(
         .context("The Claude execution is still leased; its exit is not confirmed")?;
     let metadata = file.metadata()?;
     ensure!(
-        metadata.nlink() == 1 && metadata.len() <= 64 * 1024,
+        !crate::platform::linked_elsewhere(&metadata) && metadata.len() <= 64 * 1024,
         "Invalid Claude execution evidence"
     );
     let mut bytes = Vec::new();

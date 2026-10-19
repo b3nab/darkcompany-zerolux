@@ -126,7 +126,7 @@ pub(crate) fn agent_dir() -> Result<PathBuf> {
 }
 
 async fn command_json(program: &str, args: &[&str]) -> Result<Value> {
-    let mut child = tokio::process::Command::new(program)
+    let mut child = tokio::process::Command::new(crate::platform::executable(program))
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -186,14 +186,10 @@ pub(crate) async fn descriptor(path: &Path) -> Result<PiDescriptor> {
         metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() < 64 * 1024,
         "Invalid pi descriptor"
     );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        ensure!(
-            metadata.permissions().mode() & 0o077 == 0,
-            "Pi descriptor is not private"
-        );
-    }
+    ensure!(
+        crate::platform::is_private(&metadata),
+        "Pi descriptor is not private"
+    );
     let record: PiDescriptor = serde_json::from_slice(&tokio::fs::read(path).await?)?;
     ensure!(
         record.version == 1
@@ -215,16 +211,9 @@ pub(crate) async fn control(record: &PiDescriptor, mut request: Value) -> Result
     };
     request["nonce"] = Value::String(record.nonce.clone());
     let exchange = async {
-        #[cfg(unix)]
-        let mut stream = tokio::net::UnixStream::connect(&record.endpoint)
+        let mut stream = crate::platform::Local::connect(&record.endpoint)
             .await
             .context("Pi control endpoint unavailable")?;
-        #[cfg(windows)]
-        let mut stream = tokio::net::windows::named_pipe::ClientOptions::new()
-            .open(&record.endpoint)
-            .context("Pi control endpoint unavailable")?;
-        #[cfg(not(any(unix, windows)))]
-        compile_error!("Native pi IPC requires Unix sockets or Windows named pipes");
         stream.write_all(format!("{request}\n").as_bytes()).await?;
         let mut bytes = Vec::new();
         stream
@@ -402,13 +391,8 @@ const TRANSCRIPT_HEAD: u64 = 256 * 1024;
 const TRANSCRIPT_TAIL: u64 = 64 * 1024;
 
 /// Claude Code's saved sessions, from their transcripts.
-#[cfg(unix)]
 async fn claude_history() -> Result<Vec<Candidate>> {
     claude_history_in(&crate::claude::projects()?).await
-}
-#[cfg(not(unix))]
-async fn claude_history() -> Result<Vec<Candidate>> {
-    Ok(Vec::new())
 }
 
 async fn claude_history_in(projects: &Path) -> Result<Vec<Candidate>> {
@@ -513,7 +497,6 @@ async fn discover_claude(saved: bool) -> Result<Vec<Candidate>> {
     } else {
         Vec::new()
     };
-    #[cfg(unix)]
     for entry in &mut candidates {
         // Reuse the driver's read-only verifier, rather than diverging on socket/identity rules.
         // A refusal shows its reason: the owner learns what is missing, not a generic notice.
@@ -637,7 +620,7 @@ pub async fn ensure_codex_daemon() -> Result<String> {
 /// account and threads.
 pub async fn ensure_codex_daemon_in(homes: &crate::homes::Homes) -> Result<String> {
     let endpoint = codex_endpoint_in(homes)?;
-    ensure_codex_daemon_with(Path::new("codex"), &endpoint, homes).await?;
+    ensure_codex_daemon_with(&crate::platform::executable("codex"), &endpoint, homes).await?;
     Ok(endpoint)
 }
 
@@ -754,9 +737,7 @@ pub async fn resolve_linked(harness: &str, native_session_id: &str) -> Option<Na
         .map(|c| c.target)
 }
 
-#[cfg(unix)]
 pub(crate) async fn ensure_pi_stopped(agent: &Path, native: &str) -> Result<()> {
-    use nix::{sys::signal::kill, unistd::Pid};
     let mut entries = match tokio::fs::read_dir(agent.join("zerolux-links")).await {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -776,14 +757,13 @@ pub(crate) async fn ensure_pi_stopped(agent: &Path, native: &str) -> Result<()> 
             .filter(|pid| *pid > 0)
             .context("Pi discovery cannot establish native process death")?;
         ensure!(
-            kill(Pid::from_raw(pid), None) == Err(nix::errno::Errno::ESRCH),
+            !crate::platform::alive(pid as u32),
             "A native pi process still claims this session; no replacement was started"
         );
     }
     Ok(())
 }
 
-#[cfg(unix)]
 pub(crate) async fn running_pi(
     agent: &Path,
     native: &str,

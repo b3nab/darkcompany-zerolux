@@ -67,14 +67,36 @@ impl Process {
             .create(true)
             .append(true)
             .open(log)?;
-        let mut child = Command::new(program)
+        // A bare name is found as the kernel finds its own programs: `bun` beside it first.
+        let program = if Path::new(program).components().count() == 1 {
+            crate::platform::executable(program)
+        } else {
+            folder.join(program)
+        };
+        let mut child = Command::new(&program)
             .args(args)
             .current_dir(folder)
             .env_clear()
             .envs(
-                ["PATH", "HOME", "TMPDIR", "LANG", "USER"]
-                    .into_iter()
-                    .filter_map(|name| std::env::var_os(name).map(|value| (name, value))),
+                [
+                    "PATH",
+                    "HOME",
+                    "TMPDIR",
+                    "LANG",
+                    "USER",
+                    // What programs on Windows need to start and find the user's folders.
+                    "SystemRoot",
+                    "SystemDrive",
+                    "USERPROFILE",
+                    "APPDATA",
+                    "LOCALAPPDATA",
+                    "TEMP",
+                    "TMP",
+                    "PATHEXT",
+                    "ComSpec",
+                ]
+                .into_iter()
+                .filter_map(|name| std::env::var_os(name).map(|value| (name, value))),
             )
             .env("ZEROLUX_EXTENSION", extension)
             .stdin(Stdio::piped())
@@ -82,7 +104,7 @@ impl Process {
             .stderr(Stdio::from(log))
             .kill_on_drop(true)
             .spawn()
-            .with_context(|| format!("Cannot run `{program}` for {extension}"))?;
+            .with_context(|| format!("Cannot run `{}` for {extension}", program.display()))?;
         let mut stdin = child.stdin.take().context("No input to the extension")?;
         let stdout = child
             .stdout

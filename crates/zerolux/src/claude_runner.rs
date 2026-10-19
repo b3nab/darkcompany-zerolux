@@ -2,7 +2,6 @@
 //! Chat data uses the runner's existing HTTP/LiveKit bridge, never this socket.
 use std::{
     fs::{File, OpenOptions},
-    os::unix::{fs::OpenOptionsExt, fs::PermissionsExt},
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -10,16 +9,19 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
-use nix::{sys::signal::kill, unistd::Pid};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
-use crate::model::{AgentSettings, ClaudePermissionMode as PermissionMode};
+pub use crate::platform::executable;
+use crate::{
+    model::{AgentSettings, ClaudePermissionMode as PermissionMode},
+    platform,
+};
 
 mod execution;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
 
 /// Fixed local executable/entrypoint, supplied by the host, never by an API/chat payload.
@@ -36,13 +38,21 @@ pub struct RunnerProgram {
     pub sdk_executable: Option<PathBuf>,
 }
 impl Default for RunnerProgram {
+    /// The runners a release carries, or a checkout's.
     fn default() -> Self {
+        crate::platform::carried().map_or_else(Self::checkout, Self::bundled)
+    }
+}
+
+impl RunnerProgram {
+    /// A checkout's runners, run from source.
+    fn checkout() -> Self {
         Self {
-            bun: "bun".into(),
+            bun: executable("bun"),
             entry: Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../extensions/claude/src/runner.ts"),
             kernel_executable: None,
-            claude_cli: "claude".into(),
+            claude_cli: executable("claude"),
             pi_entry: Some(
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/pi/src/runner.ts"),
             ),
@@ -59,22 +69,9 @@ impl RunnerProgram {
             entry: resources.join("claude/runner.js"),
             pi_entry: Some(resources.join("pi/runner.js")),
             sdk_executable: Some(executable("claude")),
-            ..Default::default()
+            ..Self::checkout()
         }
     }
-}
-
-/// An installed program, as the PATH finds it; its name alone when it is not there.
-pub fn executable(name: &str) -> PathBuf {
-    std::env::var_os("PATH")
-        .as_deref()
-        .map(std::env::split_paths)
-        .into_iter()
-        .flatten()
-        .map(|directory| directory.join(name))
-        .find(|path| path.is_file())
-        .and_then(|path| path.canonicalize().ok())
-        .unwrap_or_else(|| PathBuf::from(name))
 }
 
 pub(crate) struct Registry {
@@ -103,18 +100,18 @@ pub(crate) struct RunnerLink {
 }
 
 fn private_file(path: &Path, create: bool) -> Result<File> {
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(create)
-        .truncate(false)
-        .append(create)
-        .mode(0o600)
-        .custom_flags(nix::libc::O_NOFOLLOW)
-        .open(path)?;
+    let file = platform::private(
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(create)
+            .truncate(false)
+            .append(create),
+    )
+    .open(path)?;
     let metadata = file.metadata()?;
     ensure!(
-        metadata.is_file() && metadata.permissions().mode() & 0o077 == 0,
+        metadata.is_file() && platform::is_private(&metadata),
         "Runner file is not a private regular file"
     );
     Ok(file)
@@ -146,19 +143,7 @@ impl Registry {
         Self { path, program }
     }
     fn prepare_directory(&self) -> Result<()> {
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&self.path)?;
-        let metadata = std::fs::symlink_metadata(&self.path)?;
-        ensure!(
-            metadata.is_dir()
-                && !metadata.file_type().is_symlink()
-                && metadata.permissions().mode() & 0o077 == 0,
-            "Runner registry must be a private directory"
-        );
-        Ok(())
+        platform::private_dir(&self.path).context("Runner registry must be a private directory")
     }
 
     pub(crate) async fn find(
@@ -180,7 +165,7 @@ impl Registry {
             if !metadata.is_file()
                 || metadata.file_type().is_symlink()
                 || metadata.len() > 64 * 1024
-                || metadata.permissions().mode() & 0o077 != 0
+                || !platform::is_private(&metadata)
             {
                 continue;
             }
@@ -195,7 +180,7 @@ impl Registry {
                 record.pid > 0,
                 "The Claude runner has no valid process identity"
             );
-            if kill(Pid::from_raw(record.pid), None) == Err(nix::errno::Errno::ESRCH) {
+            if !platform::alive(record.pid as u32) {
                 continue;
             }
             ensure!(
@@ -320,14 +305,7 @@ impl Registry {
             command.env("ZEROLUX_SYSTEM_PROMPT", system_prompt);
         }
         // Detached, with no terminal streams: stopping the kernel does not stop the runner.
-        // setsid is an async-signal-safe syscall; no allocation or application code runs here.
-        unsafe {
-            command.pre_exec(|| {
-                nix::unistd::setsid()
-                    .map(|_| ())
-                    .map_err(std::io::Error::from)
-            });
-        }
+        platform::detach(&mut command);
         let mut child = command
             .spawn()
             .context("Could not start the owned Claude runner")?;
@@ -399,7 +377,7 @@ impl Registry {
     /// before the first managed host can resume its native conversation.
     pub(crate) async fn check_terminal_stopped(&self, native_id: &str, pid: i32) -> Result<()> {
         ensure!(
-            pid > 0 && kill(Pid::from_raw(pid), None) == Err(nix::errno::Errno::ESRCH),
+            pid > 0 && !platform::alive(pid as u32),
             "The entrusted Claude terminal is still running"
         );
         self.check_not_running(native_id).await
@@ -437,9 +415,7 @@ impl Registry {
                         .as_i64()
                         .and_then(|pid| i32::try_from(pid).ok())
                         .filter(|pid| *pid > 0)
-                        .is_none_or(|pid| {
-                            kill(Pid::from_raw(pid), None) != Err(nix::errno::Errno::ESRCH)
-                        })
+                        .is_none_or(|pid| platform::alive(pid as u32))
             });
             ensure!(
                 !running,
@@ -488,7 +464,7 @@ impl RunnerLink {
             5
         };
         tokio::time::timeout(Duration::from_secs(deadline), async {
-            let mut socket = tokio::net::UnixStream::connect(&self.record.endpoint).await?;
+            let mut socket = platform::Local::connect(&self.record.endpoint).await?;
             socket.write_all(format!("{request}\n").as_bytes()).await?;
             let mut bytes = Vec::new();
             let limit = if request["method"] == "settings" {

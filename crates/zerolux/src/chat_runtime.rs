@@ -220,7 +220,6 @@ pub(crate) async fn session_dir_in(
 
 enum NativeDriver {
     Codex(Box<CodexDriver>),
-    #[cfg(unix)]
     Claude(crate::claude::ClaudeSession),
 }
 
@@ -239,7 +238,6 @@ impl NativeDriver {
                     .run(base_url, session_id, token, invalidations, stop)
                     .await
             }
-            #[cfg(unix)]
             Self::Claude(driver) => {
                 driver
                     .run(base_url, session_id, token, invalidations, stop)
@@ -265,9 +263,7 @@ pub struct ChatRuntime {
     store: Store,
     livekit: Arc<LiveKit>,
     base_url: String,
-    #[cfg(unix)]
     runners: crate::claude_runner::Registry,
-    #[cfg(unix)]
     pi_runners: crate::pi_runner::Registry,
     changed: Arc<Notify>,
     /// Wakes the adapters that run inside this process: they share the store, so a notice
@@ -312,18 +308,9 @@ impl ChatRuntime {
         base_url: String,
         links: PathBuf,
     ) -> Result<Arc<Self>> {
-        Self::start_inner(
-            store,
-            livekit,
-            base_url,
-            links,
-            #[cfg(unix)]
-            None,
-        )
-        .await
+        Self::start_inner(store, livekit, base_url, links, None).await
     }
 
-    #[cfg(unix)]
     pub async fn start_with_runner(
         store: Store,
         livekit: Arc<LiveKit>,
@@ -339,7 +326,7 @@ impl ChatRuntime {
         livekit: Arc<LiveKit>,
         base_url: String,
         links: PathBuf,
-        #[cfg(unix)] program: Option<crate::claude_runner::RunnerProgram>,
+        program: Option<crate::claude_runner::RunnerProgram>,
     ) -> Result<Arc<Self>> {
         store.recover_sessions().await?;
         let worktrees = links.with_file_name("worktrees");
@@ -388,9 +375,7 @@ impl ChatRuntime {
             livekit.clone(),
             stopped,
         ));
-        #[cfg(unix)]
         let program = program.unwrap_or_default();
-        #[cfg(unix)]
         let integration_revisions = {
             let mut revisions = HashMap::new();
             if let Ok(revision) = crate::integration_code::revision(&program.entry) {
@@ -409,18 +394,11 @@ impl ChatRuntime {
             }
             revisions
         };
-        #[cfg(not(unix))]
-        let integration_revisions = {
-            let _ = links;
-            HashMap::new()
-        };
         Ok(Arc::new(Self {
             store,
             livekit,
             base_url,
-            #[cfg(unix)]
             runners: crate::claude_runner::Registry::new(links.join("claude"), program.clone()),
-            #[cfg(unix)]
             pi_runners: crate::pi_runner::Registry::new(links.join("pi"), program),
             changed,
             wake,
@@ -745,7 +723,6 @@ impl ChatRuntime {
                 )
                 .await
             }
-            #[cfg(unix)]
             Harness::Pi => {
                 let file = target.native_locator["session_file"]
                     .as_str()
@@ -769,13 +746,10 @@ impl ChatRuntime {
                 }
                 result
             }
-            #[cfg(unix)]
             Harness::ClaudeCode => {
                 self.open_claude(who, target, name, actor_id, &crate::homes::Homes::own())
                     .await
             }
-            #[cfg(not(unix))]
-            _ => bail!("Saved sessions open only on a Unix execution host"),
         }
     }
 
@@ -812,22 +786,15 @@ impl ChatRuntime {
                 Some(NativeDriver::Codex(Box::new(driver)))
             }
             Harness::ClaudeCode => {
-                #[cfg(unix)]
-                {
-                    let driver = crate::claude::ClaudeSession::attach(
-                        &target.native_session_id,
-                        &target.workspace,
-                    )
-                    .await?;
-                    target.native_locator["pid"] = serde_json::json!(driver.pid());
-                    target.native_locator["socket"] =
-                        serde_json::json!(format!("/tmp/cc-socks/{}.sock", driver.pid()));
-                    Some(NativeDriver::Claude(driver))
-                }
-                #[cfg(not(unix))]
-                {
-                    bail!("Claude Code native inbox attachment is unavailable on this platform");
-                }
+                let driver = crate::claude::ClaudeSession::attach(
+                    &target.native_session_id,
+                    &target.workspace,
+                )
+                .await?;
+                target.native_locator["pid"] = serde_json::json!(driver.pid());
+                target.native_locator["socket"] =
+                    serde_json::json!(format!("/tmp/cc-socks/{}.sock", driver.pid()));
+                Some(NativeDriver::Claude(driver))
             }
             Harness::Pi => None,
         };
@@ -971,7 +938,6 @@ impl ChatRuntime {
         Ok((actor, session))
     }
 
-    #[cfg(unix)]
     pub async fn create_pi(
         &self,
         who: &ChatIdentity,
@@ -1041,12 +1007,8 @@ impl ChatRuntime {
         }
         match session.harness.as_str() {
             "codex" => self.resume_codex(who, session).await,
-            #[cfg(unix)]
             "pi" => self.resume_pi(who, id).await,
-            #[cfg(unix)]
             _ => self.resume_claude(who, id).await,
-            #[cfg(not(unix))]
-            _ => bail!("This session can be resumed only on a Unix execution host"),
         }
     }
 
@@ -1101,7 +1063,6 @@ impl ChatRuntime {
         .await
     }
 
-    #[cfg(unix)]
     pub async fn resume_pi(
         &self,
         who: &ChatIdentity,
@@ -1132,7 +1093,6 @@ impl ChatRuntime {
 
     /// Cooperative handover: native pi closes its idle terminal. Ordinary recovery owns
     /// the later launch and still requires proof of native death; this request starts none.
-    #[cfg(unix)]
     pub async fn takeover_pi(&self, who: &ChatIdentity, id: &str) -> Result<ChatSession> {
         if !who.is_person() {
             return Err(Error::Forbidden.into());
@@ -1192,7 +1152,6 @@ impl ChatRuntime {
         self.store.chat_session(who, id).await.map_err(Into::into)
     }
 
-    #[cfg(unix)]
     async fn pi_target(
         &self,
         who: &ChatIdentity,
@@ -1289,7 +1248,6 @@ impl ChatRuntime {
             {
                 continue;
             }
-            #[cfg(unix)]
             if let Some(mode) = self.owned_mode(&owner, &session.id).await? {
                 match self.reconnect_owned(&owner, &session, mode).await {
                     Ok(()) => self.retried(&session.id, true),
@@ -1310,7 +1268,6 @@ impl ChatRuntime {
             )
             .await
             {
-                #[cfg(unix)]
                 target if session.harness == "pi" => {
                     match self.pi_target(&owner, &session, target).await {
                         Ok(target) => target,
@@ -1322,7 +1279,6 @@ impl ChatRuntime {
                     }
                 }
                 Some(target) => target,
-                #[cfg(unix)]
                 None if session.harness == "claude-code" => {
                     let restored = self.restore_claude_terminal(&owner, &session).await;
                     self.retried(&session.id, restored.is_ok());
@@ -1497,7 +1453,6 @@ impl ChatRuntime {
                     "The Codex workspace changed before pairing"
                 );
             }
-            #[cfg(unix)]
             NativeDriver::Claude(driver) => {
                 ensure!(
                     session.harness == "claude-code"
@@ -1518,7 +1473,6 @@ impl ChatRuntime {
         );
         let settings = match &driver {
             NativeDriver::Codex(driver) => Some(driver.settings_control()),
-            #[cfg(unix)]
             NativeDriver::Claude(_) => None,
         };
         let (stopper, mut stop) = watch::channel(false);
@@ -1602,12 +1556,10 @@ impl ChatRuntime {
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
         let workspace = self.store.workspace_info().await?;
         let mut target = target.clone();
-        #[cfg(unix)]
         let mut runner = self
             .pi_runners
             .find(&session.native_session_id, &session.workspace)
             .await?;
-        #[cfg(unix)]
         if target.native_locator["cold"] == true {
             runner = Some(
                 self.pi_runners
@@ -1619,7 +1571,6 @@ impl ChatRuntime {
                     .await?,
             );
         }
-        #[cfg(unix)]
         if let Some(host) = &runner {
             let pid = host.bind(&self.base_url, &token).await?;
             let description = host.describe().await?;
@@ -1648,7 +1599,6 @@ impl ChatRuntime {
             .stopped_at
             .is_some()
         {
-            #[cfg(unix)]
             if let Some(host) = &runner {
                 let _ = host.stop(&session.id).await;
             }
@@ -1663,15 +1613,11 @@ impl ChatRuntime {
             .await?;
         let link = sessions::pair_pi(&target, &self.base_url, &workspace.id, token, resume).await?;
         let (stopper, mut stop) = watch::channel(false);
-        #[cfg(unix)]
         let owned = runner.is_some();
-        #[cfg(not(unix))]
-        let owned = false;
         let session_id = session.id.clone();
         let task = tokio::spawn(async move {
             let _ = stop.wait_for(|stopped| *stopped).await;
             link.shutdown().await?;
-            #[cfg(unix)]
             if let Some(host) = runner {
                 host.stop(&session_id).await?;
             }
@@ -1709,11 +1655,9 @@ impl ChatRuntime {
         }
         let agent = self.agents.lock().await.remove(id);
         let Some(mut agent) = agent else {
-            #[cfg(unix)]
             if self.stop_untracked_owned(id).await? {
                 return Ok(None);
             }
-            #[cfg(unix)]
             {
                 let owner = self.store.session_person(id).await?;
                 let session = self.store.chat_session(&owner, id).await?;
@@ -1806,7 +1750,6 @@ impl ChatRuntime {
 mod control;
 pub(crate) use control::localize_images;
 mod fork;
-#[cfg(unix)]
 mod owned;
 mod remote;
 mod settings;

@@ -192,7 +192,6 @@ impl PiControl {
 }
 
 /// A Claude session's runner: here, or on the joined computer.
-#[cfg(unix)]
 #[derive(Clone)]
 pub(crate) enum ClaudeControl {
     Here(crate::claude_runner::RunnerLink),
@@ -205,7 +204,6 @@ pub(crate) enum ClaudeControl {
     },
 }
 
-#[cfg(unix)]
 impl ClaudeControl {
     async fn ask(&self, op: &str, params: Value) -> Result<Value> {
         match self {
@@ -387,7 +385,6 @@ impl ChatRuntime {
 
     /// A new pi session on one of `who`'s joined computers: the computer starts pi under its
     /// runner, the kernel issues its token, and the runner's integration links with it.
-    #[cfg(unix)]
     pub async fn create_pi_on(
         &self,
         who: &ChatIdentity,
@@ -469,7 +466,6 @@ impl ChatRuntime {
     }
 
     /// A new Claude Code session on one of `who`'s joined computers, under a runner there.
-    #[cfg(unix)]
     pub async fn create_claude_on(
         &self,
         who: &ChatIdentity,

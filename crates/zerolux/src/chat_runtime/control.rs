@@ -91,7 +91,6 @@ impl ChatRuntime {
             .into_iter()
             .find(|session| session.id == id)
             .ok_or(Error::NotFound)?;
-        #[cfg(unix)]
         if session.harness == "claude-code" && self.owned_mode(who, id).await?.is_none() {
             bail!("Claude Code in a terminal compacts there, with /compact");
         }
@@ -112,7 +111,6 @@ impl ChatRuntime {
             }
             // Claude Code runs its own /compact command when it arrives as user input,
             // after the turn in progress.
-            #[cfg(unix)]
             Control::Claude(link) => {
                 let actual = link.describe().await?;
                 ensure!(
@@ -252,7 +250,6 @@ impl ChatRuntime {
                     .control(json!({"method":"commands","link_id":session.id}))
                     .await?
             }
-            #[cfg(unix)]
             Control::Claude(link) => {
                 runner_offers(&link, COMMANDS).await?;
                 link.request(json!({"method":"commands","link_id":session.id}))
@@ -287,7 +284,6 @@ impl ChatRuntime {
         match control {
             Control::Codex(control) => control.request(request).await.map(drop),
             Control::Pi(record) => record.control(request).await.map(drop),
-            #[cfg(unix)]
             Control::Claude(link) => link.request(request).await.map(drop),
         }
     }
@@ -313,7 +309,6 @@ impl ChatRuntime {
             .into_iter()
             .find(|session| session.id == id)
             .ok_or(Error::NotFound)?;
-        #[cfg(unix)]
         if session.harness == "claude-code" && self.owned_mode(who, id).await?.is_none() {
             ensure!(
                 session.stopped_at.is_none() && session.status == "connected",
@@ -348,7 +343,6 @@ impl ChatRuntime {
                 .input_elsewhere(&session, control, text, mode, images)
                 .await;
         }
-        #[cfg(unix)]
         if let Control::Claude(link) = &control {
             runner_offers(link, capability).await?;
         }
@@ -364,7 +358,6 @@ impl ChatRuntime {
                 record.control(request).await?;
                 Ok(())
             }
-            #[cfg(unix)]
             Control::Claude(link) => {
                 link.request(request).await?;
                 Ok(())
@@ -383,7 +376,6 @@ impl ChatRuntime {
             .into_iter()
             .find(|session| session.id == id)
             .ok_or(Error::NotFound)?;
-        #[cfg(unix)]
         if session.harness == "claude-code" && self.owned_mode(who, id).await?.is_none() {
             bail!("Claude Code in a terminal cannot be interrupted from ZeroLux");
         }
@@ -395,7 +387,6 @@ impl ChatRuntime {
                     .await?;
                 result["interrupted"] == true
             }
-            #[cfg(unix)]
             Control::Claude(link) => {
                 let actual = link.describe().await?;
                 ensure!(
@@ -415,7 +406,6 @@ impl ChatRuntime {
 }
 
 /// A Claude runner started before a control existed says it needs an update.
-#[cfg(unix)]
 async fn runner_offers(link: &super::remote::ClaudeControl, capability: &str) -> Result<()> {
     let actual = link.describe().await?;
     ensure!(

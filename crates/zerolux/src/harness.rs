@@ -53,11 +53,7 @@ pub async fn doctor() -> Vec<HarnessProbe> {
     let mut result = Vec::new();
     for harness in [Harness::Pi, Harness::ClaudeCode, Harness::Codex] {
         let executable = harness.command().remove(0);
-        let path = std::env::var_os("PATH").and_then(|paths| {
-            std::env::split_paths(&paths)
-                .map(|dir| dir.join(&executable))
-                .find(|path| path.is_file())
-        });
+        let path = Some(crate::platform::executable(&executable)).filter(|path| path.is_absolute());
         let mut probe = HarnessProbe {
             harness,
             executable,

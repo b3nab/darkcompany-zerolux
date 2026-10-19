@@ -58,7 +58,7 @@ impl AuthEntry {
     /// The service of this checkout, run from source.
     pub fn checkout(root: &Path) -> Self {
         Self {
-            bun: "bun".into(),
+            bun: crate::platform::executable("bun"),
             entry: root.join("services/auth/src/server.ts"),
         }
     }

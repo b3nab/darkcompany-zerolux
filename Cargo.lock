@@ -8167,6 +8167,7 @@ dependencies = [
  "chrono",
  "clap",
  "croner",
+ "flate2",
  "fs2",
  "futures-util",
  "jsonschema",
@@ -8193,6 +8194,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
