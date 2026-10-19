@@ -71,7 +71,8 @@ struct Terminal {
     info: Mutex<Info>,
     output: Mutex<(u64, VecDeque<u8>)>,
     writer: Mutex<Box<dyn Write + Send>>,
-    master: Mutex<Box<dyn MasterPty + Send>>,
+    /// The terminal's side of the console; closed once its shell has ended.
+    master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     killer: Mutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>,
 }
 
@@ -128,13 +129,26 @@ impl Terminals {
             info: Mutex::new(info.clone()),
             output: Mutex::new((0, VecDeque::new())),
             writer: Mutex::new(writer),
-            master: Mutex::new(pair.master),
+            master: Mutex::new(Some(pair.master)),
             killer: Mutex::new(child.clone_killer()),
         });
         self.open
             .lock()
             .expect("terminals")
             .insert(id.clone(), terminal.clone());
+        // The shell's end: the console is closed then, which also ends its output on Windows,
+        // where the output stays open as long as the console does.
+        let (ending, grown_end, id_end) = (terminal.clone(), self.grown.clone(), id.clone());
+        std::thread::spawn(move || {
+            let code = child.wait().ok().map(|status| status.exit_code());
+            {
+                let mut info = ending.info.lock().expect("info");
+                info.ended = true;
+                info.exit_code = code;
+            }
+            ending.master.lock().expect("master").take();
+            let _ = grown_end.send(id_end);
+        });
         let grown = self.grown.clone();
         std::thread::spawn(move || {
             let mut buffer = [0u8; 16 * 1024];
@@ -152,13 +166,6 @@ impl Terminals {
                 }
                 let _ = grown.send(id.clone());
             }
-            let code = child.wait().ok().map(|status| status.exit_code());
-            {
-                let mut info = terminal.info.lock().expect("info");
-                info.ended = true;
-                info.exit_code = code;
-            }
-            let _ = grown.send(id);
         });
         Ok(info)
     }
@@ -236,6 +243,8 @@ impl Terminals {
             .master
             .lock()
             .expect("master")
+            .as_ref()
+            .context("The terminal has ended")?
             .resize(PtySize {
                 rows,
                 cols,
