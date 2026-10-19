@@ -44,7 +44,7 @@ impl Fixture {
         let program = RunnerProgram {
             bun: wrapper,
             entry: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../extensions/claude/src/fixtures/owned-harness.ts"),
+                .join("../../harnesses/claude/src/fixtures/owned-harness.ts"),
             kernel_executable: Some(env!("CARGO_BIN_EXE_zerolux").into()),
             claude_cli: claude,
             pi_entry: None,

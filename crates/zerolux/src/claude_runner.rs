@@ -50,11 +50,11 @@ impl RunnerProgram {
         Self {
             bun: executable("bun"),
             entry: Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../extensions/claude/src/runner.ts"),
+                .join("../../harnesses/claude/src/runner.ts"),
             kernel_executable: None,
             claude_cli: executable("claude"),
             pi_entry: Some(
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/pi/src/runner.ts"),
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../harnesses/pi/src/runner.ts"),
             ),
             sdk_executable: None,
         }

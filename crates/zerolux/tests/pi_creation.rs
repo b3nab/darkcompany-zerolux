@@ -209,7 +209,7 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     }
     script(&root.join("bin/claude"), "#!/bin/sh\nprintf '[]\\n'\n");
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../extensions/pi/src/fixtures/rpc-harness.ts")
+        .join("../../harnesses/pi/src/fixtures/rpc-harness.ts")
         .canonicalize()
         .unwrap();
     script(
@@ -550,7 +550,7 @@ async fn a_pi_session_runs_on_a_joined_computer() {
     }
     script(&root.join("bin/claude"), "#!/bin/sh\nprintf '[]\\n'\n");
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../extensions/pi/src/fixtures/rpc-harness.ts")
+        .join("../../harnesses/pi/src/fixtures/rpc-harness.ts")
         .canonicalize()
         .unwrap();
     script(

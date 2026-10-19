@@ -133,7 +133,7 @@
         "typescript": "^5.9.0",
       },
     },
-    "extensions/claude": {
+    "harnesses/claude": {
       "name": "@zerolux/claude",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.287",
@@ -145,7 +145,7 @@
         "typescript": "^5.9.0",
       },
     },
-    "extensions/pi": {
+    "harnesses/pi": {
       "name": "@zerolux/pi",
       "version": "0.0.1-dev",
       "dependencies": {
@@ -1105,7 +1105,7 @@
 
     "@zerolux/chat": ["@zerolux/chat@workspace:packages/chat"],
 
-    "@zerolux/claude": ["@zerolux/claude@workspace:extensions/claude"],
+    "@zerolux/claude": ["@zerolux/claude@workspace:harnesses/claude"],
 
     "@zerolux/desktop": ["@zerolux/desktop@workspace:apps/desktop"],
 
@@ -1113,7 +1113,7 @@
 
     "@zerolux/mobile": ["@zerolux/mobile@workspace:apps/mobile"],
 
-    "@zerolux/pi": ["@zerolux/pi@workspace:extensions/pi"],
+    "@zerolux/pi": ["@zerolux/pi@workspace:harnesses/pi"],
 
     "@zerolux/theme": ["@zerolux/theme@workspace:packages/theme"],
 

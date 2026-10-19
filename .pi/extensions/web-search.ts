@@ -1,1 +1,1 @@
-export { default } from "../../extensions/pi/src/web-search.ts";
+export { default } from "../../harnesses/pi/src/web-search.ts";

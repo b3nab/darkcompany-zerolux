@@ -24,7 +24,7 @@ async fn rust_and_bun_agree_on_the_runner_lease_and_process_death_releases_it() 
             .unwrap()
     };
     let module = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../extensions/claude/src/lock.ts")
+        .join("../../harnesses/claude/src/lock.ts")
         .canonicalize()
         .unwrap();
     let script = format!(

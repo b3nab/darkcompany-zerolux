@@ -60,7 +60,7 @@ if (!auth.success)
 // Bundle existing ZeroLux runner code, not a second implementation. The desktop supplies
 // the installed Claude executable explicitly; no SDK binary is downloaded or started here.
 const runner = await Bun.build({
-  entrypoints: [join(root, "extensions/claude/src/runner.ts")],
+  entrypoints: [join(root, "harnesses/claude/src/runner.ts")],
   target: "bun",
   outdir: join(dist, "claude"),
   naming: "runner.js",
@@ -70,7 +70,7 @@ if (!runner.success)
 const sdk = dirname(
   Bun.resolveSync(
     "@anthropic-ai/claude-agent-sdk",
-    join(root, "extensions/claude"),
+    join(root, "harnesses/claude"),
   ),
 );
 await cp(join(sdk, "LICENSE.md"), join(dist, "claude/CLAUDE-SDK-LICENSE.md"));
@@ -79,7 +79,7 @@ await cp(join(sdk, "README.md"), join(dist, "claude/CLAUDE-SDK-README.md"));
 // The pi host is the same runner the checkout uses: it opens the installed `pi` on the
 // agent's own session file. Nothing of pi itself is bundled or downloaded.
 const piHost = await Bun.build({
-  entrypoints: [join(root, "extensions/pi/src/runner.ts")],
+  entrypoints: [join(root, "harnesses/pi/src/runner.ts")],
   target: "bun",
   outdir: join(dist, "pi"),
   naming: "runner.js",
@@ -89,7 +89,7 @@ if (!piHost.success)
 // The chat extension stock pi loads (`--extension`) beside the host. pi runs on Node and
 // supplies its own packages: those stay imports for pi's loader, nothing of pi is copied.
 const piExtension = await Bun.build({
-  entrypoints: [join(root, "extensions/pi/src/chat-extension.ts")],
+  entrypoints: [join(root, "harnesses/pi/src/chat-extension.ts")],
   target: "node",
   outdir: join(dist, "pi"),
   naming: "chat-extension.js",

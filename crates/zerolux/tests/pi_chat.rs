@@ -93,7 +93,7 @@ async fn gui_hire_livekit_wake_and_reply_with_a_fake_pi_host() {
     )))
     .unwrap();
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../extensions/pi/src/fixtures/chat-harness.ts")
+        .join("../../harnesses/pi/src/fixtures/chat-harness.ts")
         .canonicalize()
         .unwrap();
     let mut command = Command::new("bun");
@@ -259,7 +259,7 @@ async fn fixture_host() -> Option<Host> {
     )))
     .unwrap();
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../extensions/pi/src/fixtures/chat-harness.ts")
+        .join("../../harnesses/pi/src/fixtures/chat-harness.ts")
         .canonicalize()
         .unwrap();
     let mut command = Command::new("bun");

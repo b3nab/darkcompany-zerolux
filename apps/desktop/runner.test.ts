@@ -11,7 +11,7 @@ test.skipIf(process.platform === "win32")(
     try {
       const bundle = await Bun.build({
         entrypoints: [
-          resolve(import.meta.dir, "../../extensions/claude/src/runner.ts"),
+          resolve(import.meta.dir, "../../harnesses/claude/src/runner.ts"),
         ],
         outdir: dir,
         target: "bun",

@@ -223,13 +223,13 @@ async fn entrusted_terminal_is_resumed_after_exit_without_changing_context() {
     .unwrap();
     script(&root.join("bin/codex"), "#!/bin/sh\nexit 1\n");
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../extensions/claude/src/fixtures")
+        .join("../../harnesses/claude/src/fixtures")
         .canonicalize()
         .unwrap();
     script(
         &root.join("bin/bun"),
         &format!(
-            "#!/bin/sh\ncase \"$1\" in */extensions/claude/src/runner.ts) shift; exec \"{}\" \"{}\" \"$@\" ;; *) exec \"{}\" \"$@\" ;; esac\n",
+            "#!/bin/sh\ncase \"$1\" in */harnesses/claude/src/runner.ts) shift; exec \"{}\" \"{}\" \"$@\" ;; *) exec \"{}\" \"$@\" ;; esac\n",
             bun.display(),
             fixtures.join("owned-harness.ts").display(),
             bun.display()

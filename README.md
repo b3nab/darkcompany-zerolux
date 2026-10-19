@@ -186,8 +186,8 @@ packages/chat/           Chat logic shared by web and mobile
 packages/theme/          Themes shared by every client
 packages/bridge/         Chat bridge shared by the pi extension and the Claude Code runner
 packages/extension-sdk/  SDK for the TypeScript parts of ZeroLux extensions
-extensions/pi/           pi extension that links pi sessions to ZeroLux
-extensions/claude/       Runner for Claude Code sessions started by ZeroLux
+harnesses/pi/            ZeroLux in pi: the pi extension that links pi sessions to ZeroLux
+harnesses/claude/        Runner for Claude Code sessions started by ZeroLux
 services/auth/           Better Auth service, run by the kernel
 docs/                    Architecture, agents, chats, extensions, desktop, mobile, themes
 ```

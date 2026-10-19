@@ -1,1 +1,1 @@
-export { default } from "../../extensions/pi/src/chat-extension.ts";
+export { default } from "../../harnesses/pi/src/chat-extension.ts";

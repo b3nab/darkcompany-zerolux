@@ -1,6 +1,6 @@
 # Web search for pi
 
-The pi extension `extensions/pi/src/web-search.ts` (loaded from `.pi/extensions/web-search.ts`) adds two tools, `web_search_claude` and `web_search_codex`. Each runs the CLI you already have, `claude` or `codex`, with its built-in web search: no search API and no extra key. Each call is a model run billed to the account the CLI is signed in with.
+The pi extension `harnesses/pi/src/web-search.ts` (loaded from `.pi/extensions/web-search.ts`) adds two tools, `web_search_claude` and `web_search_codex`. Each runs the CLI you already have, `claude` or `codex`, with its built-in web search: no search API and no extra key. Each call is a model run billed to the account the CLI is signed in with.
 
 | Parameter     | Values                                                                                      |
 | ------------- | ------------------------------------------------------------------------------------------- |
@@ -16,4 +16,4 @@ The pi extension `extensions/pi/src/web-search.ts` (loaded from `.pi/extensions/
 
 Each call runs in an empty temporary directory, without the project's files or instructions, with only the web search and fetch tools. While it runs, pi shows each search and page fetch; cancelling the pi turn stops it.
 
-`bun test extensions/pi` covers both tools with a fake CLI.
+`bun test harnesses/pi` covers both tools with a fake CLI.

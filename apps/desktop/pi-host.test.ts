@@ -14,7 +14,7 @@ import {
   readControlDescriptor,
 } from "../../packages/bridge/src/control-client";
 
-const extension = resolve(import.meta.dir, "../../extensions/pi");
+const extension = resolve(import.meta.dir, "../../harnesses/pi");
 
 /** A saved pi session and launch profile, written by pi's own SDK as a terminal would. */
 async function fixture(
