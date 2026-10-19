@@ -513,7 +513,7 @@ export function SessionView({
   busy: boolean;
   perform: Perform;
 }) {
-  // A joined computer runs it: its images and forks stay there.
+  // A joined computer runs it: its forks stay there.
   const computer = sessionComputer(session, hosts);
   const away = computer !== undefined;
   const name = sessionName(session, actors);
@@ -1063,7 +1063,6 @@ export function SessionView({
             session={session}
             name={name}
             owner={access.write}
-            away={away}
             working={working}
             busy={busy}
             perform={perform}
@@ -1300,7 +1299,6 @@ function SessionInput({
   session,
   name,
   owner,
-  away = false,
   working,
   busy,
   perform,
@@ -1313,8 +1311,6 @@ function SessionInput({
   session: ChatSession;
   name: string;
   owner: boolean;
-  /** It runs on a joined computer, reached through its link. */
-  away?: boolean;
   working: boolean;
   busy: boolean;
   perform: Perform;
@@ -1414,8 +1410,6 @@ function SessionInput({
   const modes = !(
     session.harness === "claude-code" && session.origin !== "owned"
   );
-  // A joined computer takes words, not images, so far.
-  const images = modes && !away;
   async function submit(mode: InputMode = "steer") {
     if (!open || empty || tooLong || imagesError) return;
     const sent = text;
@@ -1445,11 +1439,11 @@ function SessionInput({
         void submit();
       }}
       onDragOver={(event) => {
-        if (images && open && event.dataTransfer.types.includes("Files"))
+        if (modes && open && event.dataTransfer.types.includes("Files"))
           event.preventDefault();
       }}
       onDrop={(event) => {
-        if (!images || !open) return;
+        if (!modes || !open) return;
         event.preventDefault();
         add(event.dataTransfer.files);
       }}
@@ -1511,7 +1505,7 @@ function SessionInput({
         </ul>
       )}
       <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
-        {images && (
+        {modes && (
           <>
             <input
               ref={picker}
@@ -1568,7 +1562,7 @@ function SessionInput({
             const pasted = [...event.clipboardData.files].filter((file) =>
               file.type.startsWith("image/"),
             );
-            if (!images || !pasted.length) return;
+            if (!modes || !pasted.length) return;
             event.preventDefault();
             add(pasted);
           }}

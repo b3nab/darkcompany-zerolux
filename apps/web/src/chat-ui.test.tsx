@@ -1245,7 +1245,7 @@ test("starting an agent asks for a harness, an agent, a folder and how it asks p
   );
   expect(view).toContain('title="Changes"');
   expect(view).toContain('title="Terminal"');
-  expect(view).not.toContain('aria-label="Add images"');
+  expect(view).toContain('aria-label="Add images"');
   // A guest starts only once the chosen harness has their own account on this computer.
   const guest = renderToStaticMarkup(
     <StartSession
