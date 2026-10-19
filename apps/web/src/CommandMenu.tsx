@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import {
+  BlocksIcon,
   FolderIcon,
   LayoutDashboardIcon,
   MessagesSquareIcon,
@@ -56,6 +57,12 @@ const pages = () => [
   },
   { to: "/chats", label: "Chat", icon: MessagesSquareIcon },
   { to: "/storage", label: "Storage", icon: FolderIcon },
+  {
+    to: "/extensions",
+    label: "Extensions",
+    value: "Extensions actions settings enable disable",
+    icon: BlocksIcon,
+  },
   { to: "/org", label: "Org", icon: NetworkIcon },
   { to: "/meetings", label: "Meetings", icon: PhoneIcon },
   { to: "/approvals", label: "Approvals", icon: StampIcon },

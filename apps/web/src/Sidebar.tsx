@@ -1,6 +1,7 @@
 import { Link, NavLink, useMatch, useNavigate } from "react-router";
 import { cn } from "cn";
 import {
+  BlocksIcon,
   ChevronsUpDownIcon,
   FolderIcon,
   LayoutDashboardIcon,
@@ -100,6 +101,7 @@ export function Sidebar({
       <Item to="/org" icon={NetworkIcon} label="Org" />
       <Item to="/meetings" icon={PhoneIcon} label="Meetings" />
       <Item to="/storage" icon={FolderIcon} label="Storage" />
+      <Item to="/extensions" icon={BlocksIcon} label="Extensions" />
       <Item
         to="/approvals"
         icon={StampIcon}

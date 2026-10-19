@@ -33,7 +33,7 @@ import { onlyHere } from "./Invite";
 import { Copy } from "@/components/tool-call";
 
 /** A page of settings: what it is about, and its sections. */
-function Settings({
+export function Settings({
   eyebrow,
   title,
   children,
@@ -53,7 +53,7 @@ function Settings({
   );
 }
 
-function Section({
+export function Section({
   title,
   children,
 }: {

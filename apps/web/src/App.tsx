@@ -28,6 +28,7 @@ import { WindowControls } from "@/components/window-controls";
 import { cn } from "cn";
 import type { Actor, Workspace } from "./api";
 import { AdministrationPage, MySettingsPage, ProfilePage } from "./Account";
+import { ExtensionsPage } from "./Extensions";
 import { Approvals, openApprovals } from "./Approvals";
 import { useAuthentication, useMe } from "./AuthGate";
 import { ChatHome, ChatList, ChatView, NewConversation } from "./ChatView";
@@ -515,6 +516,14 @@ export function App({
                     chat={chat}
                     storage={storage}
                   />
+                }
+              />
+              <Route
+                path="/extensions"
+                element={
+                  <Page>
+                    <ExtensionsPage owns={owns} busy={busy} perform={perform} />
+                  </Page>
                 }
               />
               <Route
