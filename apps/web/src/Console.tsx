@@ -513,9 +513,8 @@ export function SessionView({
   busy: boolean;
   perform: Perform;
 }) {
-  // A joined computer runs it: its forks stay there.
+  // The joined computer it runs on, if one: About says which and whether it is online.
   const computer = sessionComputer(session, hosts);
-  const away = computer !== undefined;
   const name = sessionName(session, actors);
   const agent = actors.find((a) => a.id === session.actor_id);
   const tone = sessionTone(session);
@@ -874,18 +873,14 @@ export function SessionView({
                     )}
                     {session.archived_at ? "Unarchive" : "Archive"}
                   </DropdownMenuItem>
-                  {!away && (
-                    <>
-                      <DropdownMenuItem onClick={() => void fork()}>
-                        <GitForkIcon />
-                        Fork
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => setAsking(true)}>
-                        <MessageCircleQuestionIcon />
-                        Ask on the side…
-                      </DropdownMenuItem>
-                    </>
-                  )}
+                  <DropdownMenuItem onClick={() => void fork()}>
+                    <GitForkIcon />
+                    Fork
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setAsking(true)}>
+                    <MessageCircleQuestionIcon />
+                    Ask on the side…
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -1019,7 +1014,7 @@ export function SessionView({
                         <InputActions
                           input={input}
                           // A fork is its person's; rewinding works the session's files.
-                          fork={access.mine && !away ? fork : undefined}
+                          fork={access.mine ? fork : undefined}
                           // Claude Code keeps checkpoints of the files; the others do not.
                           rewind={
                             session.harness === "claude-code"
