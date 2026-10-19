@@ -55,7 +55,7 @@ Only one kernel runtime may serve a database. Connect to its address rather than
 
 ## Services
 
-The app carries what its kernel starts: the LiveKit server, unless an external LiveKit is configured, and Bun, which runs sign-in and the session runners. Sessions use the harnesses installed on this computer (Claude Code, Codex, pi); owned Claude sessions remain tied to a single workspace. The app looks for the harnesses on PATH and in the usual install locations (`~/.bun/bin`, `~/.local/bin`, `~/.cargo/bin`, `~/.pi/agent/bin`, Homebrew, `/usr/local/bin`; on Windows also npm's global folder). Connecting to an existing kernel needs none of this on the client. See [chat setup](chat.md#livekit) and [agents and tasks](byoh.md).
+The app carries what its kernel starts: the LiveKit server, unless an external LiveKit is configured, Bun, which runs sign-in and the session runners, and uv, which runs the Python parts of extensions. Sessions use the harnesses installed on this computer (Claude Code, Codex, pi); owned Claude sessions remain tied to a single workspace. The app looks for the harnesses on PATH and in the usual install locations (`~/.bun/bin`, `~/.local/bin`, `~/.cargo/bin`, `~/.pi/agent/bin`, Homebrew, `/usr/local/bin`; on Windows also npm's global folder). Connecting to an existing kernel needs none of this on the client. See [chat setup](chat.md#livekit) and [agents and tasks](byoh.md).
 
 Use the matching, updated ZeroLux harness integrations. An older loaded pi extension may support only one workspace and may not recognize the desktop subscriber executable; updating source files does not reload an already running extension. Connecting to a remote kernel does not automatically make this computer's native sessions available to that kernel.
 
@@ -69,7 +69,7 @@ bun run desktop:build
 
 Tauri reports the generated application or package location. Open or install that output using your operating system's normal procedure. Building does not install or deploy the app, or sign it for distribution.
 
-The package includes the web assets, Bun, the LiveKit server, the ZeroLux Claude runner, the ZeroLux pi host and the pi chat extension it loads into stock pi, but no harness: the app-managed kernel starts and restores Claude Code, Codex and pi sessions through the ones installed on this computer. Building it takes `livekit-server` on the PATH, which the package copies.
+The package includes the web assets, Bun, the LiveKit server, uv, the ZeroLux Claude runner, the ZeroLux pi host and the pi chat extension it loads into stock pi, but no harness: the app-managed kernel starts and restores Claude Code, Codex and pi sessions through the ones installed on this computer. Building it takes `livekit-server` and `uv` on the PATH, which the package copies.
 
 ## For contributors
 
