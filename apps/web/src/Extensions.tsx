@@ -249,8 +249,9 @@ function RemoveDialog({
   );
 }
 
+/** A dialog open on an extension, which follows the list as it is read again. */
 type Open =
-  | { kind: "settings" | "remove"; extension: Extension }
+  | { kind: "settings" | "remove"; id: string }
   | { kind: "action"; action: ExtensionAction };
 
 function ExtensionItem({
@@ -366,7 +367,7 @@ function ExtensionItem({
             <Button
               size="sm"
               variant="outline"
-              onClick={() => open({ kind: "settings", extension })}
+              onClick={() => open({ kind: "settings", id: extension.id })}
             >
               Settings
             </Button>
@@ -386,7 +387,7 @@ function ExtensionItem({
               size="sm"
               variant="ghost"
               className="ml-auto text-destructive"
-              onClick={() => open({ kind: "remove", extension })}
+              onClick={() => open({ kind: "remove", id: extension.id })}
             >
               Remove
             </Button>
@@ -449,6 +450,10 @@ export function ExtensionList({
 }) {
   const [shown, setShown] = useState<Open>();
   const close = () => setShown(undefined);
+  const opened =
+    shown && "id" in shown
+      ? extensions?.find((extension) => extension.id === shown.id)
+      : undefined;
   return (
     <Settings eyebrow="Workspace" title="Extensions">
       <p className="-mt-3 text-sm text-muted-foreground">
@@ -479,17 +484,17 @@ export function ExtensionList({
       {shown?.kind === "action" && (
         <ActionDialog action={shown.action} close={close} />
       )}
-      {shown?.kind === "settings" && (
+      {shown?.kind === "settings" && opened && (
         <SettingsDialog
-          extension={shown.extension}
+          extension={opened}
           close={close}
           busy={busy}
           perform={perform}
         />
       )}
-      {shown?.kind === "remove" && (
+      {shown?.kind === "remove" && opened && (
         <RemoveDialog
-          extension={shown.extension}
+          extension={opened}
           close={close}
           busy={busy}
           perform={perform}
@@ -508,14 +513,18 @@ export function ExtensionsPage({
   busy: boolean;
   perform: Perform;
 }) {
-  const { extensions, error } = useExtensions();
+  const { extensions, error, reload } = useExtensions();
+  // The list is read again after each change made here, done or refused, besides the
+  // kernel's notices of changes made anywhere.
+  const act: Perform = (operation) =>
+    perform(operation).finally(() => void reload());
   return (
     <ExtensionList
       extensions={extensions}
       error={error}
       owns={owns}
       busy={busy}
-      perform={perform}
+      perform={act}
     />
   );
 }
