@@ -18,6 +18,7 @@
 voice, designed from a description and spoken with Pocket TTS."""
 
 import base64
+import io
 import json
 import shutil
 import time
@@ -28,12 +29,22 @@ import soundfile as sf
 
 from designing import Designer
 from hearing import MODELS, Ears, decode
-from speaking import LANGUAGES, Voices, sentences
+from speaking import MODELS as LANGUAGES
+from speaking import Voices, sentences
 from zerolux import Extension
 
 extension = Extension()
 ears = Ears()
-designer = Designer()
+
+
+def heard(audio, rate: int, language: str) -> str:
+    """What a take says, as Whisper hears it."""
+    wav = io.BytesIO()
+    sf.write(wav, audio, rate, format="WAV")
+    return ears.hear(decode(wav.getvalue()), "whisper", [], gate=False)["text"]
+
+
+designer = Designer(heard)
 voices: Voices | None = None
 
 
@@ -123,7 +134,8 @@ def listed(input: dict, caller: dict) -> dict:
         "actor_id": {"type": "string"},
         "description": {"type": "string", "minLength": 3, "maxLength": 500,
                         "description": "In English, e.g. a warm, calm adult voice with a slight rasp"},
-        "language": {"type": "string", "enum": list(LANGUAGES), "default": "it"},
+        "language": {"type": "string", "enum": list(LANGUAGES), "default": "it",
+                     "description": "The language it speaks best: its greeting and reference are in it"},
     }},
     effects="write", seconds=1800,
 )
@@ -162,9 +174,9 @@ def choose(input: dict, caller: dict) -> dict:
     about = json.loads(proposal.with_suffix(".json").read_text())
     audio, rate = designer.reference(name, str(proposal), about["text"], about["language"])
     voices.forget(input["actor_id"])
-    for old in folder.glob("print.*.safetensors"):
+    for old in folder.glob("voice.*.safetensors"):
         old.unlink()
-    sf.write(folder / "reference.wav", audio, rate)
+    sf.write(folder / "voice.wav", audio, rate)
     voice = {"description": about["description"], "language": about["language"], "created_at": int(time.time() * 1000)}
     (folder / "voice.json").write_text(json.dumps(voice))
     shutil.rmtree(folder / "proposals", ignore_errors=True)
