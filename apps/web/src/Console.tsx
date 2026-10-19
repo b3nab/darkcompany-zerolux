@@ -513,7 +513,7 @@ export function SessionView({
   busy: boolean;
   perform: Perform;
 }) {
-  // A joined computer runs it: its images, terminals, forks and rewinds stay there.
+  // A joined computer runs it: its images, terminals and forks stay there.
   const computer = sessionComputer(session, hosts);
   const away = computer !== undefined;
   const name = sessionName(session, actors);
@@ -1022,7 +1022,7 @@ export function SessionView({
                           fork={access.mine && !away ? fork : undefined}
                           // Claude Code keeps checkpoints of the files; the others do not.
                           rewind={
-                            session.harness === "claude-code" && !away
+                            session.harness === "claude-code"
                               ? (at, dryRun) =>
                                   chat.rewindFiles(session.id, at, dryRun)
                               : undefined
