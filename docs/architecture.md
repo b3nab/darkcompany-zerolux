@@ -11,7 +11,7 @@
 
 ## Component boundaries
 
-The kernel owns workspace rules and persistent state, independently of its CLI or desktop host. Clients consume the same HTTP API; the desktop does not introduce a second domain API through Tauri commands. Authentication, update mechanisms, storage adapters and future client modules must respect these boundaries. Modularity includes clients and themes, not only server components; this is a design requirement, not a claim that a community plugin loader is already implemented.
+The kernel owns workspace rules and persistent state, independently of its CLI or desktop host. Clients consume the same HTTP API; the desktop does not introduce a second domain API through Tauri commands. Authentication, update mechanisms, storage adapters and future client modules must respect these boundaries. Modularity includes clients and themes, not only server components. [Extensions](extensions.md) add actions, extension points, events and triggers to a workspace through the same API.
 
 ## Native agent observability and control
 
@@ -56,6 +56,7 @@ All routes are under `/api`. Main groups:
 | `/sessions/{id}/git`, `/git/*`, `/file`, `/sessions/{id}/terminals`, `/terminals/{id}`                                                                  | The code in a session's folder: git status, diffs, the owner's git actions and pull requests, files, terminals                                              |
 | `/conversations`                                                                                                                                        | Chats, threads, members and messages                                                                                                                        |
 | `/chat/inbox`, `/chat/deliveries`, `/chat/approvals`, `/chat/sessions/{id}/status`, `/activity`, `/live`                                                | What a session's integration reads and reports: deliveries, receipts, requests, state and streamed output                                                   |
+| `/extensions`, `/extensions/folder`, `/extensions/{id}`, `/extensions/{id}/enable`, `/disable`, `/settings`, `/actions`, `/ext/{extension}/{action}`    | The workspace's [extensions](extensions.md), their settings, and their actions for people and agents                                                        |
 | `/livekit/token`                                                                                                                                        | Real-time token for clients                                                                                                                                 |
 
 Timestamps are Unix milliseconds. Request bodies are limited to 1 MiB.
