@@ -3,17 +3,20 @@ import {
   disableExtension,
   enableExtension,
   errorMessage,
+  installExtension,
   loadExtensionFolder,
   removeExtension,
   runAction,
   setExtensionSettings,
   useExtensions,
+  useOfficialExtensions,
 } from "@zerolux/chat";
 import type {
   Extension,
   ExtensionAction,
   ExtensionSetting,
   JsonSchema,
+  OfficialExtension,
   Perform,
 } from "@zerolux/chat";
 import { Section, Settings } from "./Account";
@@ -448,6 +451,72 @@ function ExtensionItem({
   );
 }
 
+/**
+ * The official extensions ZeroLux brings that are not installed yet, installed in one press.
+ * The first start of one can take a while: the press waits on its own, the page does not.
+ */
+function Available({
+  official,
+  owns,
+  installed,
+}: {
+  official: OfficialExtension[];
+  owns: boolean;
+  installed: () => void;
+}) {
+  const [installing, setInstalling] = useState<string>();
+  const [error, setError] = useState("");
+  const offered = official.filter((extension) => !extension.installed);
+  if (!offered.length) return null;
+  return (
+    <Section title="Available">
+      <p className="text-sm text-muted-foreground">
+        Official extensions that come with ZeroLux.
+      </p>
+      <ul className="flex flex-col divide-y">
+        {offered.map((extension) => (
+          <li key={extension.id} className="flex items-center gap-3 py-2.5">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium">
+                {extension.name}{" "}
+                <span className="font-mono text-[11px] font-normal text-faint">
+                  {extension.version}
+                </span>
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {extension.description}
+              </p>
+            </div>
+            {owns && (
+              <Button
+                size="sm"
+                disabled={installing !== undefined}
+                onClick={() => {
+                  setInstalling(extension.id);
+                  setError("");
+                  installExtension(extension.id)
+                    .catch((failed: unknown) => setError(errorMessage(failed)))
+                    .finally(() => {
+                      setInstalling(undefined);
+                      installed();
+                    });
+                }}
+              >
+                {installing === extension.id ? "Installing…" : "Install"}
+              </Button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+    </Section>
+  );
+}
+
 /** An extension being written, from a folder on the kernel's computer. */
 function LoadFolder({ busy, perform }: { busy: boolean; perform: Perform }) {
   const [folder, setFolder] = useState("");
@@ -487,12 +556,18 @@ function LoadFolder({ busy, perform }: { busy: boolean; perform: Perform }) {
 /** The workspace's extensions: what each brings and whether it runs, its actions to run by hand, and for the owner enabling, settings and loading one being written. */
 export function ExtensionList({
   extensions,
+  official = [],
+  installed = () => {},
   error,
   owns,
   busy,
   perform,
 }: {
   extensions: Extension[] | undefined;
+  /** The official extensions this kernel brings. */
+  official?: OfficialExtension[];
+  /** One of them was installed, or failed to be. */
+  installed?: () => void;
   error: string;
   owns: boolean;
   busy: boolean;
@@ -530,6 +605,7 @@ export function ExtensionList({
           ))}
         </ul>
       )}
+      <Available official={official} owns={owns} installed={installed} />
       {owns && <LoadFolder busy={busy} perform={perform} />}
       {shown?.kind === "action" && (
         <ActionDialog action={shown.action} close={close} />
@@ -564,6 +640,7 @@ export function ExtensionsPage({
   perform: Perform;
 }) {
   const { extensions, error, reload } = useExtensions();
+  const { official, reload: reloadOfficial } = useOfficialExtensions();
   // The list is read again after each change made here, done or refused, besides the
   // kernel's notices of changes made anywhere.
   const act: Perform = (operation) =>
@@ -571,6 +648,11 @@ export function ExtensionsPage({
   return (
     <ExtensionList
       extensions={extensions}
+      official={official}
+      installed={() => {
+        void reload();
+        void reloadOfficial();
+      }}
       error={error}
       owns={owns}
       busy={busy}

@@ -217,3 +217,43 @@ test("a choice setting offers its values by their labels", () => {
   expect(field?.kind).toBe("choice");
   expect(field?.options).toEqual(["Fast and small", "Slow and accurate"]);
 });
+
+test("the official extensions not yet installed are offered, installed by the owner", () => {
+  const official = [
+    {
+      id: "zerolux.voice",
+      name: "Voice",
+      version: "0.1.0",
+      publisher: "zerolux",
+      description: "Speech to text, and each agent's own voice",
+      installed: false,
+    },
+    {
+      id: "zerolux.notes",
+      name: "Notes",
+      version: "1.2.0",
+      publisher: "zerolux",
+      description: "Notes",
+      installed: true,
+    },
+  ];
+  const html = (owns: boolean) =>
+    renderToStaticMarkup(
+      <ExtensionList
+        extensions={[]}
+        official={official}
+        error=""
+        owns={owns}
+        busy={false}
+        perform={async () => true}
+      />,
+    );
+  expect(html(true)).toContain("Available");
+  expect(html(true)).toContain(
+    "Speech to text, and each agent&#x27;s own voice",
+  );
+  // What is installed is in the list above, not offered again.
+  expect(html(true)).not.toContain(">Notes<");
+  expect(html(true).match(/>Install</g)).toHaveLength(1);
+  expect(html(false)).not.toContain(">Install<");
+});
