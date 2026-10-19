@@ -37,6 +37,7 @@ export function SessionBlocks({
   chatTitle,
   renderApproval,
   inputActions,
+  textActions,
   openSubagent,
 }: {
   blocks: (SessionBlock | ApprovalItem)[];
@@ -46,6 +47,8 @@ export function SessionBlocks({
   renderApproval?: (approval: Approval) => ReactNode;
   /** What the owner can do from one of the session's inputs, under it. */
   inputActions?: (input: InputBlock) => ReactNode;
+  /** What can be done with the agent's words, under them: hearing them in its voice. */
+  textActions?: (text: TextBlock) => ReactNode;
   /** Opens the work of the subagent a tool call started, where there is one to open. */
   openSubagent?: (toolCallId: string) => (() => void) | undefined;
 }) {
@@ -69,6 +72,7 @@ export function SessionBlocks({
             block={run}
             chatTitle={chatTitle}
             inputActions={inputActions}
+            textActions={textActions}
             openSubagent={openSubagent}
           />
         )}
@@ -160,16 +164,20 @@ function Fold({
 
 /** An input of the session's: the owner's words, or a chat's message it was given. */
 export type InputBlock = Extract<SessionBlock, { kind: "input" }>;
+/** The agent's own words in the session. */
+export type TextBlock = Extract<SessionBlock, { kind: "text" }>;
 
 function Block({
   block,
   chatTitle,
   inputActions,
+  textActions,
   openSubagent,
 }: {
   block: SessionBlock;
   chatTitle?: ChatTitle;
   inputActions?: (input: InputBlock) => ReactNode;
+  textActions?: (text: TextBlock) => ReactNode;
   openSubagent?: (toolCallId: string) => (() => void) | undefined;
 }) {
   switch (block.kind) {
@@ -190,7 +198,12 @@ function Block({
         </div>
       );
     case "text":
-      return <MessageText text={block.text} />;
+      return (
+        <>
+          <MessageText text={block.text} />
+          {textActions?.(block)}
+        </>
+      );
     case "thinking":
       return (
         <Fold

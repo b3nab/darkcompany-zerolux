@@ -211,6 +211,21 @@ test("a search's words stand out in what matched, and each step names where it i
   expect(blocks).toContain('data-at="4096"');
 });
 
+test("the agent's words carry what can be done with them, such as hearing them", () => {
+  const html = renderToStaticMarkup(
+    <SessionBlocks
+      blocks={[
+        { key: "8.0", time: null, kind: "text", text: "Ready for review." },
+        { key: "9.0", time: null, kind: "thinking", text: "Checking" },
+      ]}
+      textActions={(text) => <button>{`Listen to ${text.key}`}</button>}
+    />,
+  );
+  // Only the words, never the reasoning.
+  expect(html.match(/Listen to/g)).toHaveLength(1);
+  expect(html).toContain("Listen to 8.0");
+});
+
 test("a session listens for its CI: failures only by default, then the owner's words", () => {
   const form = (failures_only: boolean) =>
     renderToStaticMarkup(

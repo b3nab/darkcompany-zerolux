@@ -14,9 +14,7 @@ import {
   PaperclipIcon,
   PhoneIcon,
   SendIcon,
-  SquareIcon,
   SquarePenIcon,
-  Volume2Icon,
   XIcon,
 } from "lucide-react";
 import type { Actor } from "./api";
@@ -62,6 +60,7 @@ import type {
   Storage,
 } from "@zerolux/chat";
 import { ApprovalCard, openApprovals } from "./Approvals";
+import { Listen } from "@/components/listen";
 import { useReadAloud } from "./read-aloud";
 import { canRecord, useRecorder } from "./recorder";
 import { useMe } from "./AuthGate";
@@ -799,27 +798,10 @@ function MessageRow({
           </div>
         )}
         <MessageText text={m.text} />
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Stamp message={m} name={name} />
-          {listen && (
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={listen.reading ? "Stop reading" : "Listen"}
-              title={listen.reading ? "Stop reading" : "Listen"}
-              aria-pressed={listen.reading}
-              onClick={listen.toggle}
-              className="text-faint hover:text-foreground aria-pressed:text-agent-foreground"
-            >
-              {listen.reading ? <SquareIcon /> : <Volume2Icon />}
-            </Button>
-          )}
+          {listen && <Listen {...listen} />}
         </div>
-        {listen?.error && (
-          <p role="alert" className="text-xs text-destructive">
-            {listen.error}
-          </p>
-        )}
         {children}
       </div>
     </li>

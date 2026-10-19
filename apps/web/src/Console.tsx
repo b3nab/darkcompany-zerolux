@@ -80,6 +80,7 @@ import {
   percent,
   tokenCount,
   useSessionSettings,
+  useVoice,
 } from "@zerolux/chat";
 import type {
   AgentSettings,
@@ -102,6 +103,8 @@ import { sessionTone } from "./presence";
 import { Presence } from "@/components/presence";
 import { SessionMark } from "@/components/profile";
 import { LiveItems, SessionBlocks } from "@/components/session-blocks";
+import { Listen } from "@/components/listen";
+import { useReadAloud } from "./read-aloud";
 import { PlanSteps } from "@/components/tool-call";
 import { Reveal } from "@/components/reveal";
 import { setDensity, useDensity } from "@/components/density";
@@ -524,6 +527,12 @@ export function SessionView({
   const { me } = useMe(actors);
   // Its person does everything; shared to write, one works in it too; to read, one follows it.
   const access = sessionAccess(session, me?.id);
+  // The agent's words, heard in its own voice where it has one.
+  const voice = useVoice();
+  const aloud = useReadAloud();
+  const speaker = voice.voices?.some((v) => v.actor_id === session.actor_id)
+    ? session.actor_id
+    : undefined;
   const [about, setAbout] = useState(false);
   // The new title while renaming.
   const [title, setTitle] = useState<string>();
@@ -1026,6 +1035,25 @@ export function SessionView({
                   );
                   return started && (() => openSubagent(started.id));
                 }}
+                textActions={
+                  speaker
+                    ? (text) => (
+                        <Listen
+                          reading={aloud.reading === text.key}
+                          error={
+                            aloud.failed?.id === text.key
+                              ? aloud.failed.error
+                              : undefined
+                          }
+                          toggle={() =>
+                            aloud.reading === text.key
+                              ? aloud.stop()
+                              : void aloud.read(text.key, speaker, text.text)
+                          }
+                        />
+                      )
+                    : undefined
+                }
                 inputActions={
                   access.write
                     ? (input) => (
