@@ -337,7 +337,7 @@ export function StartSession({
     event.preventDefault();
     const common = {
       workspace: workspace.trim(),
-      ...(worktree && !away ? { worktree: branch.trim() } : {}),
+      ...(worktree ? { worktree: branch.trim() } : {}),
       ...(away ? { host: where } : {}),
       ...agentLaunchSettings(model, effort),
       ...(pick === NO_AGENT
@@ -491,27 +491,25 @@ export function StartSession({
           ))}
         </datalist>
       </div>
-      {!away && (
-        <div className="flex flex-col gap-2">
-          <Label className="font-normal">
-            <Checkbox
-              checked={worktree}
-              onCheckedChange={(checked) => setWorktree(checked)}
-            />
-            In a new git worktree of the folder
-          </Label>
-          {worktree && (
-            <Input
-              aria-label="Branch"
-              value={branch}
-              onChange={(e) => setBranch(e.target.value)}
-              placeholder="Branch: ZeroLux names one if empty"
-              maxLength={200}
-              className="font-mono"
-            />
-          )}
-        </div>
-      )}
+      <div className="flex flex-col gap-2">
+        <Label className="font-normal">
+          <Checkbox
+            checked={worktree}
+            onCheckedChange={(checked) => setWorktree(checked)}
+          />
+          In a new git worktree of the folder
+        </Label>
+        {worktree && (
+          <Input
+            aria-label="Branch"
+            value={branch}
+            onChange={(e) => setBranch(e.target.value)}
+            placeholder="Branch: ZeroLux names one if empty"
+            maxLength={200}
+            className="font-mono"
+          />
+        )}
+      </div>
       <div className="grid gap-3 sm:grid-cols-2">
         {launchFields.map(({ key, label, options }) => (
           <div key={key} className="flex flex-col gap-2">
