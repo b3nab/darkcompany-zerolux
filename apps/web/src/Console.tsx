@@ -12,6 +12,7 @@ import {
   GitCompareArrowsIcon,
   GitForkIcon,
   ImagePlusIcon,
+  InfoIcon,
   ListChecksIcon,
   MessageCircleQuestionIcon,
   SearchIcon,
@@ -706,7 +707,7 @@ export function SessionView({
       >
         <section
           aria-label={`${name}'s session`}
-          className="flex min-h-0 min-w-0 flex-1 flex-col"
+          className="@container flex min-h-0 min-w-0 flex-1 flex-col"
         >
           <header className="flex min-h-14 shrink-0 items-center gap-3 border-b px-3 py-2 md:px-5">
             <Link
@@ -772,12 +773,14 @@ export function SessionView({
                 </span>
               </p>
             </div>
-            <Presence tone={tone} className="max-xl:hidden">
+            {/* The pane's own width decides what the header has room for: the agent and the
+                session's title always stay. */}
+            <Presence tone={tone} className="@max-6xl:hidden">
               {outputLine(chat, session) ?? sessionState(session)}
             </Presence>
             <Segmented<Density>
               label="Density"
-              className="max-sm:hidden"
+              className="@max-3xl:hidden"
               value={density}
               choose={setDensity}
               options={Object.entries(densityLabels) as [Density, string][]}
@@ -793,7 +796,7 @@ export function SessionView({
                   className="aria-pressed:bg-accent"
                 >
                   <GitCompareArrowsIcon data-icon="inline-start" />
-                  <span className="max-xl:sr-only">Changes</span>
+                  <span className="@max-5xl:sr-only">Changes</span>
                   {changed > 0 && (
                     <span className="font-mono text-[11px] text-attention">
                       {changed}
@@ -809,7 +812,7 @@ export function SessionView({
                   className="aria-pressed:bg-accent"
                 >
                   <FileSearchIcon data-icon="inline-start" />
-                  <span className="max-xl:sr-only">Files</span>
+                  <span className="@max-5xl:sr-only">Files</span>
                 </Button>
                 {access.write && (
                   <Button
@@ -821,7 +824,7 @@ export function SessionView({
                     className="aria-pressed:bg-accent"
                   >
                     <SquareTerminalIcon data-icon="inline-start" />
-                    <span className="max-xl:sr-only">Terminal</span>
+                    <span className="@max-5xl:sr-only">Terminal</span>
                   </Button>
                 )}
               </>
@@ -830,9 +833,11 @@ export function SessionView({
               variant="outline"
               size="sm"
               aria-expanded={about}
+              title="About this session"
               onClick={() => setAbout(!about)}
             >
-              About this session
+              <InfoIcon data-icon="inline-start" />
+              <span className="@max-5xl:sr-only">About this session</span>
             </Button>
             {access.mine && (
               <DropdownMenu>
