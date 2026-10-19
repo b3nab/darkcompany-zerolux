@@ -1,4 +1,5 @@
 import { Redirect } from "expo-router";
+import { Platform } from "react-native";
 import { NativeTabs } from "expo-router/native-tabs";
 import { homeLabel, requestsFor, unreadIn, waitingChats } from "@zerolux/chat";
 import { useCSSVariable } from "uniwind";
@@ -26,7 +27,24 @@ function Connected() {
   const { chat } = useSession();
   const { me } = useMe();
   useSessionNotices();
-  const tint = String(useCSSVariable("--color-human-foreground"));
+  const [tint, muted, bar, indicator] = useCSSVariable([
+    "--color-human-foreground",
+    "--color-muted-foreground",
+    "--color-card",
+    "--color-accent",
+  ]).map(String);
+  // Android draws Material Symbols white and only the selected label: the theme colors them,
+  // and every label shows, as on iOS. iOS keeps the system's own look.
+  const android =
+    Platform.OS === "android"
+      ? {
+          iconColor: { default: muted, selected: tint },
+          labelStyle: { default: { color: muted }, selected: { color: tint } },
+          labelVisibilityMode: "labeled" as const,
+          backgroundColor: bar,
+          indicatorColor: indicator,
+        }
+      : {};
   // The requests waiting for you: those of your sessions.
   const pending = requestsFor(chat, me?.id).length;
   const unread = chat.conversations.filter(
@@ -40,7 +58,7 @@ function Connected() {
   const home = homeLabel();
   const night = home === "Tonight";
   return (
-    <NativeTabs tintColor={tint}>
+    <NativeTabs tintColor={tint} {...android}>
       <NativeTabs.Trigger name="index">
         <NativeTabs.Trigger.Label>{home}</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
