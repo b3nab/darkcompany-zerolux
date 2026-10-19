@@ -21,6 +21,7 @@ import type {
   ToolsRun,
 } from "@zerolux/chat";
 import { Fold } from "@/components/fold";
+import { Listen } from "@/components/listen";
 import { MessageBody } from "@/components/message-body";
 import type { InputBlock } from "@/components/session-fork";
 import {
@@ -39,6 +40,8 @@ type Item = SessionBlock | ApprovalItem;
 type RenderApproval = (approval: Approval) => ReactNode;
 /** The owner's choices on one of their inputs, on a long press. */
 type InputMenu = (block: InputBlock) => void;
+/** The agent with a voice, and the session it writes in. */
+type Voice = { actorId: string; sessionId: string };
 
 /**
  * A session's work, block by block, the same in the Agent Console and in chats: tools run one
@@ -88,6 +91,7 @@ export function SessionRunView({
   chatTitle,
   renderApproval,
   inputMenu,
+  voice,
 }: {
   run: BlockRun<Item>;
   /** The keys of the blocks that just arrived, from `useArrivals`. */
@@ -96,6 +100,8 @@ export function SessionRunView({
   chatTitle?: ChatTitle;
   renderApproval?: RenderApproval;
   inputMenu?: InputMenu;
+  /** When its agent has a voice: what the agent writes can be listened to. */
+  voice?: Voice;
 }) {
   const density = useDensity();
   if (density === "compact" && run.kind === "thinking") return null;
@@ -106,7 +112,12 @@ export function SessionRunView({
       ) : run.kind === "approval" ? (
         renderApproval?.(run.approval)
       ) : (
-        <Block block={run} chatTitle={chatTitle} inputMenu={inputMenu} />
+        <Block
+          block={run}
+          chatTitle={chatTitle}
+          inputMenu={inputMenu}
+          voice={voice}
+        />
       )}
     </Arrive>
   );
@@ -161,10 +172,12 @@ function Block({
   block,
   chatTitle,
   inputMenu,
+  voice,
 }: {
   block: SessionBlock;
   chatTitle?: ChatTitle;
   inputMenu?: InputMenu;
+  voice?: Voice;
 }) {
   const destructive = String(useCSSVariable("--color-destructive"));
   switch (block.kind) {
@@ -190,7 +203,18 @@ function Block({
         </Pressable>
       );
     case "text":
-      return <MessageBody text={block.text} />;
+      return voice ? (
+        <View className="gap-1.5">
+          <MessageBody text={block.text} />
+          <Listen
+            id={`${voice.sessionId}:${block.key}`}
+            actorId={voice.actorId}
+            text={block.text}
+          />
+        </View>
+      ) : (
+        <MessageBody text={block.text} />
+      );
     case "thinking":
       return (
         <Fold

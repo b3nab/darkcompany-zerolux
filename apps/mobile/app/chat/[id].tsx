@@ -41,6 +41,7 @@ import {
   threadsOf,
   transcribe,
   useChatWork,
+  useVoice,
   workingSessions,
   sessionAccess,
 } from "@zerolux/chat";
@@ -59,12 +60,13 @@ import { LiveWork, WorkLine } from "@/components/chat-work";
 import { ActorMark } from "@/components/member";
 import { MessageBody } from "@/components/message-body";
 import { Screen } from "@/components/screen";
+import { Listen } from "@/components/listen";
 import { ChatList, GestureArea } from "@/components/ui/native";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "../../src/kernel";
 import { useMe } from "../../src/me";
-import { asFile, useVoice } from "../../src/voice";
+import { asFile, useRecorder } from "../../src/voice";
 
 type Row =
   | { key: string; kind: "day"; label: string }
@@ -88,7 +90,7 @@ const open = new Set<Approval["status"]>(["pending", "decided", "uncertain"]);
 
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { chat, actors, name, storage, capabilities } = useSession();
+  const { chat, actors, name, storage, url } = useSession();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   // The unsent text waits in its chat while you are elsewhere in the app.
@@ -103,7 +105,7 @@ export default function ChatScreen() {
   const [away, setAway] = useState(false);
   const list = useRef<LegendListRef>(null);
   const input = useRef<TextInputInstance>(null);
-  const recorder = useVoice();
+  const recorder = useRecorder();
   const [muted, faint, onLamp] = useCSSVariable([
     "--color-muted-foreground",
     "--color-faint",
@@ -174,7 +176,12 @@ export default function ChatScreen() {
       if (!next.delete(key)) next.add(key);
       return next;
     });
-  const transcription = capabilities.includes("transcription-v1");
+  const { available: transcription, voices } = useVoice(url);
+  // A row is drawn again only when its item or this changes: what else the rows read.
+  const drawn = useMemo(
+    () => ({ detail, opened, busy, voices }),
+    [detail, opened, busy, voices],
+  );
 
   // The chat on screen is the open one: a thread pushed over its chat takes over, and the
   // chat takes back when it shows again. A chat out of sight reads nothing.
@@ -316,9 +323,14 @@ export default function ChatScreen() {
       if (purpose === "dictation") {
         const said = await transcribe(audio);
         setDraft((t) => (t.trim() ? `${t.trimEnd()} ${said}` : said));
-      } else
-        // TODO: kernel: a file shared in a chat is announced to its members, as a message would be.
+        return;
+      }
+      // The recording is kept first, so a failed transcription loses nothing; its text is the message.
+      // TODO: kernel: a file shared in a chat is announced to its members, as a message would be.
+      if (storage.available)
         await storage.upload([audio], { conversation_id: conversation.id });
+      const said = transcription ? (await transcribe(audio)).trim() : "";
+      if (said) await chat.send(conversation, { id: newId(), text: said });
     });
   }
 
@@ -406,7 +418,14 @@ export default function ChatScreen() {
             </View>
           )}
           <MessageBody text={m.text} />
-          {stamp}
+          {author && voices?.some((v) => v.actor_id === author.id) ? (
+            <View className="flex-row items-center gap-3">
+              {stamp}
+              <Listen id={m.id} actorId={author.id} text={m.text} />
+            </View>
+          ) : (
+            stamp
+          )}
           {deliveries}
           {below ? (
             <ThreadChip thread={below} name={name} className="mt-1.5" />
@@ -595,6 +614,7 @@ export default function ChatScreen() {
         <ChatList
           ref={list}
           data={rows}
+          extraData={drawn}
           keyExtractor={(item) => (item as Row).key}
           renderItem={({ item }) => row(item as Row)}
           contentContainerClassName="px-3 pt-1 pb-3"
@@ -703,7 +723,7 @@ export default function ChatScreen() {
               AudioLinesIcon,
               "Record a voice message",
               () => void record("message"),
-              !storage.available,
+              !storage.available && !transcription,
             )}
             <Pressable
               className={cn(

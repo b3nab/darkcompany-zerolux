@@ -74,6 +74,7 @@ import {
   usdCost,
   useSessionLive,
   useSessionSettings,
+  useVoice,
 } from "@zerolux/chat";
 import type {
   Actor,
@@ -161,6 +162,15 @@ export default function SessionPage() {
     (a) => a.id === session?.owner_id,
   )?.name;
   const inputs = useInputActions(session);
+  const { voices } = useVoice(url);
+  const actorId = session?.actor_id;
+  const voice = useMemo(
+    () =>
+      actorId && voices?.some((v) => v.actor_id === actorId)
+        ? { actorId, sessionId: id }
+        : undefined,
+    [actorId, id, voices],
+  );
 
   // How many files it changed, on the Changes button: for whoever may follow it.
   const changed =
@@ -248,6 +258,11 @@ export default function SessionPage() {
       .some((block) => block.kind === "compacted" || block.kind === "error");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // A row is drawn again only when its item or this changes: what else the rows read.
+  const drawn = useMemo(
+    () => ({ marked, busy, read: access.read, mine: access.mine, voice }),
+    [marked, busy, access.read, access.mine, voice],
+  );
   const act = async (work: () => Promise<unknown>) => {
     setBusy(true);
     setError("");
@@ -351,6 +366,7 @@ export default function SessionPage() {
         <ChatList
           ref={list}
           data={rows}
+          extraData={drawn}
           keyExtractor={(row) => (row as Row).key}
           renderItem={({ item }) =>
             (item as Row).kind === "live" ? (
@@ -367,6 +383,7 @@ export default function SessionPage() {
                   fresh={fresh}
                   chatTitle={chatTitle}
                   inputMenu={access.read ? inputs.open : undefined}
+                  voice={voice}
                   renderApproval={(approval: Approval) =>
                     // Its requests are its person's to decide; others see them wait.
                     approval.status === "pending" && access.mine ? (

@@ -15,6 +15,7 @@ import {
   memberTone,
 } from "@zerolux/chat";
 import type { Actor, AgentSettings, ChatSession } from "@zerolux/chat";
+import { AgentVoice } from "@/components/agent-voice";
 import { ActorMark, Fact, Lamp } from "@/components/member";
 import { Eyebrow } from "@/components/meter";
 import { Screen } from "@/components/screen";
@@ -295,6 +296,7 @@ function Agent({
   open: (actor: Actor) => void;
 }) {
   const { chat } = useSession();
+  const { me } = useMe();
   const router = useRouter();
   const { sessions, earlier, chats, answering, dm, waiting } = agentWork(
     agent,
@@ -344,6 +346,11 @@ function Agent({
         </Fact>
       </View>
       <AgentSettingsForm key={agent.id} agent={agent} />
+      <AgentVoice
+        key={`voice:${agent.id}`}
+        agent={agent}
+        editable={me?.id === agent.owner_id}
+      />
       <Sessions
         agent={agent}
         current={current}
