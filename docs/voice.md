@@ -41,3 +41,5 @@ Clients read a message aloud sentence by sentence: `sentences`, then `speak` for
 ## Running it
 
 Its process part runs `uv run --script main.py`: the first start prepares a Python environment with its packages, and each model downloads the first time it is used, into the Hugging Face cache. Voices are kept in the extension's folder.
+
+`uv run --no-project --with numpy python -m unittest discover -s extensions/voice` tests what it does without its models; `bun run test` runs it.
