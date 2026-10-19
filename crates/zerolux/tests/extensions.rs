@@ -93,6 +93,23 @@ async fn extensions_bring_actions_points_events_triggers_and_settings() {
         client: Client::builder().no_proxy().build().unwrap(),
     };
 
+    // The official extensions ZeroLux brings, here the checkout's: none installed yet.
+    let (status, available) = kernel
+        .call(Method::GET, "/extensions/available", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{available}");
+    let voice = available["extensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|extension| extension["id"] == "zerolux.voice")
+        .expect("the voice extension");
+    assert_eq!(voice["installed"], false);
+    let (status, _) = kernel
+        .call(Method::POST, "/extensions/available/acme.none", None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
     // An extension that depends on another is not enabled before it.
     let (status, body) = kernel
         .call(
