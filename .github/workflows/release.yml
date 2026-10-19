@@ -2,7 +2,8 @@ name: Release
 
 # A version tag, made by `bun run release <version>` and pushed by the owner: its release is
 # drafted with its changelog, gets the kernel and the desktop app for each system, and is
-# published once every required build is in. A build that fails leaves it a draft.
+# published once every build is in: macOS, Linux and Windows. A build that fails leaves it a
+# draft.
 on:
   push:
     tags: ["v*"]
@@ -40,9 +41,8 @@ jobs:
           - { os: macos-26, target: aarch64-apple-darwin }
           - { os: macos-26-intel, target: x86_64-apple-darwin }
           - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
-          - { os: windows-2025, target: x86_64-pc-windows-msvc, untried: true }
+          - { os: windows-2025, target: x86_64-pc-windows-msvc }
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.untried == true }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
@@ -58,13 +58,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           name="zerolux-$GITHUB_REF_NAME-${{ matrix.target }}"
-          mkdir "$name"
+          # As in /usr/local: the kernel in bin, what it serves and runs in share/zerolux.
+          mkdir -p "$name/bin" "$name/share/zerolux"
           if [[ "$RUNNER_OS" == Windows ]]; then
-            cp target/release/zerolux.exe "$name/"
+            cp target/release/zerolux.exe "$name/bin/"
           else
-            cp target/release/zerolux "$name/"
+            cp target/release/zerolux "$name/bin/"
           fi
-          cp -R apps/desktop/dist/web apps/desktop/dist/auth apps/desktop/dist/claude apps/desktop/dist/pi LICENSE README.md "$name/"
+          cp -R apps/desktop/dist/web apps/desktop/dist/auth apps/desktop/dist/claude apps/desktop/dist/pi "$name/share/zerolux/"
+          cp LICENSE README.md "$name/"
           if [[ "$RUNNER_OS" == Windows ]]; then
             archive="$name.zip"
             7z a -bso0 "$archive" "$name"
@@ -82,10 +84,9 @@ jobs:
         include:
           - { os: macos-26 }
           - { os: macos-26-intel }
-          - { os: ubuntu-24.04, untried: true }
-          - { os: windows-2025, untried: true }
+          - { os: ubuntu-24.04 }
+          - { os: windows-2025 }
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.untried == true }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
