@@ -352,7 +352,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/actions", get(list_actions))
         .route(
             "/ext/{extension}/{action}",
-            post(run_action).layer(DefaultBodyLimit::max(4 * 1024 * 1024)),
+            post(run_action).layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
         )
         .route("/invites", get(list_invites).post(create_invite))
         .route("/invites/{id}", axum::routing::delete(revoke_invite))

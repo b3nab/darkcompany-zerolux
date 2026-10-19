@@ -61,14 +61,27 @@ pub struct RemotePart {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Setting {
-    /// `text`, `number`, `boolean` or `secret`.
+    /// `text`, `number`, `boolean`, `secret` or `choice`.
     #[serde(rename = "type")]
     pub kind: String,
     pub label: String,
     #[serde(default)]
     pub description: String,
     pub default: Option<Value>,
+    /// A choice's values, each with its label.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<SettingOption>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SettingOption {
+    pub value: String,
+    pub label: String,
+}
+
+/// The longest an action may take, when it says so; otherwise a minute.
+pub const LONGEST: u64 = 30 * 60;
 
 fn invalid(message: impl Into<String>) -> Error {
     Error::Invalid(message.into())
@@ -142,10 +155,26 @@ impl Manifest {
             }
             if !matches!(
                 setting.kind.as_str(),
-                "text" | "number" | "boolean" | "secret"
+                "text" | "number" | "boolean" | "secret" | "choice"
             ) {
                 return Err(invalid(format!(
-                    "Setting `{key}` is text, number, boolean or secret"
+                    "Setting `{key}` is text, number, boolean, secret or choice"
+                )));
+            }
+            if (setting.kind == "choice") == setting.options.is_empty() {
+                return Err(invalid(format!(
+                    "Setting `{key}` has options only if it is a choice"
+                )));
+            }
+            if setting.kind == "choice"
+                && let Some(default) = &setting.default
+                && !setting
+                    .options
+                    .iter()
+                    .any(|option| Some(option.value.as_str()) == default.as_str())
+            {
+                return Err(invalid(format!(
+                    "Setting `{key}` defaults to one of its options"
                 )));
             }
         }
@@ -203,6 +232,9 @@ pub struct Action {
     /// `read`, `write` or `destructive`.
     #[serde(default = "read")]
     pub effects: String,
+    /// How long it may take, in seconds, when longer than a minute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<u64>,
 }
 
 fn object() -> Value {
@@ -278,6 +310,15 @@ impl Contributes {
             if !local_name(&action.name) || !names.insert(&action.name) {
                 return Err(invalid(format!(
                     "Invalid or repeated action `{}`",
+                    action.name
+                )));
+            }
+            if action
+                .seconds
+                .is_some_and(|seconds| seconds == 0 || seconds > LONGEST)
+            {
+                return Err(invalid(format!(
+                    "`{}` may take up to {LONGEST} seconds",
                     action.name
                 )));
             }

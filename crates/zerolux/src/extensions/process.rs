@@ -190,8 +190,18 @@ impl Process {
         Ok(process)
     }
 
-    /// Asks the extension, and waits for its answer.
+    /// Asks the extension, and waits a minute for its answer.
     pub async fn request(&self, method: &str, params: Value) -> Result<Value> {
+        self.request_within(method, params, ANSWER).await
+    }
+
+    /// Asks the extension, and waits for its answer as long as `limit`.
+    pub async fn request_within(
+        &self,
+        method: &str,
+        params: Value,
+        limit: Duration,
+    ) -> Result<Value> {
         if *self.ended.borrow() {
             bail!("The extension's process has ended");
         }
@@ -203,7 +213,7 @@ impl Process {
             self.pending.lock().expect("pending").remove(&id);
             bail!("The extension's process has ended");
         }
-        match tokio::time::timeout(ANSWER, waiting).await {
+        match tokio::time::timeout(limit, waiting).await {
             Ok(Ok(Ok(result))) => Ok(result),
             Ok(Ok(Err(error))) => bail!(crate::store::Error::Invalid(error)),
             Ok(Err(_)) => bail!("The extension's process ended before answering"),

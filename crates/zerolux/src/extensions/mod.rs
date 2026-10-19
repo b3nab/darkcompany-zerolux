@@ -80,6 +80,9 @@ pub struct SettingView {
     pub value: Option<Value>,
     /// For a secret, whether it has one.
     pub set: bool,
+    /// A choice's values, each with its label.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<manifest::SettingOption>,
 }
 
 /// An enabled extension's action, for clients and agents.
@@ -122,6 +125,11 @@ impl Extensions {
             next_runs: std::sync::Mutex::default(),
             me: me.clone(),
         })
+    }
+
+    /// The folder an extension keeps its files in, private to it and to the kernel.
+    fn folder(&self, id: &str) -> PathBuf {
+        self.root.join(id)
     }
 
     async fn owner_only(&self, who: &ChatIdentity) -> Result<()> {
@@ -295,12 +303,14 @@ impl Extensions {
             )
             .await?;
             let settings = self.setting_values(&id, &manifest, false).await?;
+            let folder = self.folder(&id);
+            crate::platform::private_dir(&folder)?;
             let answer = started
                 .request(
                     "initialize",
                     json!({"extension": {"id": id, "version": manifest.extension.version},
                         "kernel": {"version": env!("CARGO_PKG_VERSION"), "api": manifest::API},
-                        "settings": settings}),
+                        "settings": settings, "folder": folder}),
                 )
                 .await;
             let answer = match answer {
@@ -392,6 +402,11 @@ impl Extensions {
         extensions::Entity::delete_by_id(id)
             .exec(self.store.db())
             .await?;
+        let folder = self.folder(id);
+        if folder.exists() {
+            std::fs::remove_dir_all(&folder)
+                .with_context(|| format!("Cannot remove {}", folder.display()))?;
+        }
         (self.changed)();
         Ok(())
     }
@@ -557,6 +572,7 @@ impl Extensions {
                     } else {
                         settings.contains_key(key)
                     },
+                    options: setting.options.clone(),
                 }
             })
             .collect())
@@ -581,6 +597,10 @@ impl Extensions {
                 (_, Value::Null) => true,
                 ("number", value) => value.is_number(),
                 ("boolean", value) => value.is_boolean(),
+                ("choice", value) => setting
+                    .options
+                    .iter()
+                    .any(|option| Some(option.value.as_str()) == value.as_str()),
                 (_, value) => value.as_str().is_some_and(|text| text.len() <= 64 * 1024),
             };
             ensure!(fits, Error::Invalid(format!("`{key}` is {}", setting.kind)));
@@ -663,9 +683,10 @@ impl Extensions {
         let result = match process {
             Some(process) => {
                 process
-                    .request(
+                    .request_within(
                         "action.run",
                         json!({"action": action, "input": input, "caller": caller}),
+                        std::time::Duration::from_secs(spec.seconds.unwrap_or(60)),
                     )
                     .await
             }
