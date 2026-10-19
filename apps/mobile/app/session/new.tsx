@@ -118,7 +118,6 @@ export default function NewSessionScreen() {
   };
   const choosePlace = (id: string) => {
     setPlace(id);
-    setWorktree(undefined);
     if (id && !joinable.includes(harness)) chooseHarness(joinable[0]!);
   };
 
@@ -259,29 +258,27 @@ export default function NewSessionScreen() {
             </View>
           ) : null}
         </View>
-        {elsewhere ? null : (
-          <View className="gap-2">
-            <View className="flex-row items-center gap-3">
-              <Text className="flex-1 text-sm font-medium">
-                In a new worktree
-              </Text>
-              <Switch
-                value={worktree !== undefined}
-                onValueChange={(on) => setWorktree(on ? "" : undefined)}
-              />
-            </View>
-            {worktree !== undefined ? (
-              <Input
-                value={worktree}
-                onChangeText={setWorktree}
-                placeholder="Branch, or ZeroLux names one"
-                autoCapitalize="none"
-                autoCorrect={false}
-                className="font-mono"
-              />
-            ) : null}
+        <View className="gap-2">
+          <View className="flex-row items-center gap-3">
+            <Text className="flex-1 text-sm font-medium">
+              In a new worktree
+            </Text>
+            <Switch
+              value={worktree !== undefined}
+              onValueChange={(on) => setWorktree(on ? "" : undefined)}
+            />
           </View>
-        )}
+          {worktree !== undefined ? (
+            <Input
+              value={worktree}
+              onChangeText={setWorktree}
+              placeholder="Branch, or ZeroLux names one"
+              autoCapitalize="none"
+              autoCorrect={false}
+              className="font-mono"
+            />
+          ) : null}
+        </View>
         {launchFields.map(({ key, label, options }) => (
           <SettingSelect
             key={key}
