@@ -1676,6 +1676,13 @@ impl ChatRuntime {
         let owner = self.store.session_person(id).await?;
         let session = self.store.chat_session(&owner, id).await?;
         if let Some(host) = self.remote_host(&session) {
+            // Offline, its computer cannot be asked: the session is stopped here, and its token
+            // no longer works there.
+            if !self.hosts.online(&host).await {
+                return Ok(Some(
+                    "Its computer is offline: the session is stopped in ZeroLux and its token revoked. Its harness there loses its link; native cancellation was not confirmed.",
+                ));
+            }
             self.stop_on(&host, &session).await?;
             return Ok(None);
         }

@@ -2525,6 +2525,14 @@ async fn a_codex_session_runs_on_a_joined_computer() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     assert_eq!(session["status"], "attention", "{session}");
+    // Stopped while its computer is offline: here, at once, and said so.
+    let stopped = kernel
+        .post(&format!("/sessions/{id}/stop"), None, json!({}))
+        .await;
+    let status = stopped.status();
+    let stopped: Value = stopped.json().await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{stopped}");
+    assert_eq!(stopped["session"]["status"], "stopped");
     runtime.shutdown().await.unwrap();
     livekit.shutdown().await.unwrap();
 }
