@@ -31,9 +31,9 @@ computer or your phone.
 
 ## What it does
 
-**Bring the agents you already have.** ZeroLux works with the harnesses on your computer:
-Claude Code, Codex and pi. Hire a running session, open a saved one again, or start a new one
-in any folder. Each keeps its own history, settings and account.
+**Bring your own harness.** Your agents are the Claude Code, Codex and pi you already use.
+Hire a running session, open a saved one again, or start a new one in any folder. Each keeps
+its own history, settings and account.
 
 **Watch and steer every session.** The Console draws each session from its harness's own
 record: what it was asked, its reasoning, every tool call and its output, live as it works.
@@ -82,21 +82,23 @@ Download the app from the [latest release](https://github.com/b3nab/darkcompany-
 - **Windows**: the `.msi` or the `-setup.exe`. The installer is not signed yet: if SmartScreen
   stops it, choose **More info › Run anyway**.
 
-The app runs its own kernel, or connects to one you already run. To run sessions it uses what
-is installed on your computer: [Bun](https://bun.sh), [`livekit-server`](https://docs.livekit.io/home/self-hosting/local/)
-and the harnesses you use (Claude Code, Codex, pi). See [the desktop app](docs/desktop.md).
+The app runs its own kernel, or connects to one you already run, and carries everything the
+kernel needs. Your agents are your own Claude Code, Codex or pi. It also joins your computer to
+a workspace that runs elsewhere, to run your sessions there. See
+[the desktop app](docs/desktop.md).
 
 ### Kernel on a computer or server
 
-Each release has the kernel for macOS, Linux and Windows: `bin/zerolux`, with the web app,
-sign-in and runners it serves in `share/zerolux`. It needs [Bun](https://bun.sh) and
-[`livekit-server`](https://docs.livekit.io/home/self-hosting/local/) on the PATH.
+Each release has the kernel for macOS, Linux and Windows, with everything it runs: LiveKit,
+the web app, sign-in and the runners of the sessions it starts.
 
 ```sh
 tar -xzf zerolux-v0.0.1-aarch64-apple-darwin.tar.gz
 cd zerolux-v0.0.1-aarch64-apple-darwin
 ./bin/zerolux serve
 ```
+
+On Windows, extract the `.zip` and run `bin\zerolux.exe serve`.
 
 Open http://127.0.0.1:4310 and create your account: the first one owns the workspace, and
 invites the others. Data lives in `.zerolux/zerolux.db`, in the folder you start it from.
@@ -109,9 +111,15 @@ served by one kernel at a time. A PostgreSQL workspace can be served by several 
 once, each with its own data directory, sharing one external LiveKit (`LIVEKIT_URL`,
 `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`).
 
-To run sessions on another of your computers, add it under **My settings › Computers** and run
-the command it shows there on that computer: `zerolux host join <kernel address> <code>`,
-then `zerolux host run`.
+To run sessions on another of your computers, add it under **My settings › Computers**. Then
+join it from the desktop app on that computer, or run the command shown there:
+`zerolux host join <kernel address> <code>`, then `zerolux host run`.
+
+### Phone
+
+Each release has the Android app, `zerolux-<version>-android-arm64.apk`; the iPhone app is
+built with Xcode. See [the mobile app](docs/mobile.md) to install it and connect it to your
+kernel.
 
 ### From source
 
@@ -129,7 +137,7 @@ cargo run -- serve
 For web development, run the kernel and `bun run dev` side by side, then open
 http://127.0.0.1:5173. For the desktop app, install the
 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/), then `bun run desktop:dev` or
-`bun run desktop:build`. For the mobile app, see [docs/mobile.md](docs/mobile.md).
+`bun run desktop:build`.
 
 ### Agents
 
