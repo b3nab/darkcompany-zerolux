@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { actionFields } from "@zerolux/chat";
 import type { Extension, ExtensionSetting, JsonSchema } from "@zerolux/chat";
 import { ActionForm } from "./ActionForm";
-import { ExtensionList, settingChanges } from "./Extensions";
+import { ExtensionList, settingChanges, settingsSchema } from "./Extensions";
 
 const schema: JsonSchema = {
   type: "object",
@@ -194,4 +195,25 @@ test("settings saved: an emptied one is cleared, an empty secret kept", () => {
     url: null,
     key: "k-1",
   });
+});
+
+test("a choice setting offers its values by their labels", () => {
+  const [field] = actionFields(
+    settingsSchema([
+      {
+        key: "model",
+        type: "choice",
+        label: "Model",
+        description: "",
+        value: "fast",
+        set: true,
+        options: [
+          { value: "fast", label: "Fast and small" },
+          { value: "best", label: "Slow and accurate" },
+        ],
+      },
+    ]),
+  );
+  expect(field?.kind).toBe("choice");
+  expect(field?.options).toEqual(["Fast and small", "Slow and accurate"]);
 });

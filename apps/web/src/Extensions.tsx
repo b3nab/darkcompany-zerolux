@@ -47,8 +47,11 @@ function State({ extension }: { extension: Extension }) {
   );
 }
 
-/** Its settings as an action's input: a secret is never shown, only replaced or forgotten. */
-const settingsSchema = (settings: ExtensionSetting[]): JsonSchema => ({
+/**
+ * Its settings as an action's input: a secret is never shown, only replaced or forgotten; a
+ * choice offers its values by their labels.
+ */
+export const settingsSchema = (settings: ExtensionSetting[]): JsonSchema => ({
   type: "object",
   properties: Object.fromEntries(
     settings.map((setting) => [
@@ -59,6 +62,13 @@ const settingsSchema = (settings: ExtensionSetting[]): JsonSchema => ({
             ? setting.type
             : "string",
         format: setting.type === "secret" ? "password" : undefined,
+        oneOf:
+          setting.type === "choice"
+            ? (setting.options ?? []).map((option) => ({
+                const: option.value,
+                title: option.label,
+              }))
+            : undefined,
         title: setting.label,
         description:
           [
