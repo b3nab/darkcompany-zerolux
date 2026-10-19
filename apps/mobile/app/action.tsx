@@ -63,7 +63,7 @@ function Run({ action, kernel }: { action: ExtensionAction; kernel: string }) {
     const input = form.submit();
     if (!input) return;
     if (action.effects !== "destructive") return run(input);
-    Alert.alert(`${action.title}?`, "This action can't be undone.", [
+    Alert.alert(`${action.title}?`, "It deletes or overwrites data.", [
       { text: "Cancel", style: "cancel" },
       { text: action.title, style: "destructive", onPress: () => run(input) },
     ]);
