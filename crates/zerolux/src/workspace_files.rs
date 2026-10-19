@@ -74,11 +74,14 @@ fn walk(folder: &Path) -> Result<Vec<String>> {
             if kind.is_dir() {
                 pending.push(path);
             } else if kind.is_file() {
+                // A path as people write it, with `/` on every system.
                 found.push(
                     path.strip_prefix(folder)
                         .context("A file outside the folder")?
-                        .to_string_lossy()
-                        .into_owned(),
+                        .components()
+                        .map(|part| part.as_os_str().to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/"),
                 );
                 if found.len() == SEARCHED {
                     return Ok(found);

@@ -379,7 +379,7 @@ impl HostRuntime {
     async fn claude_launch(&self, params: Value) -> Result<Value> {
         let workspace = params["workspace"].as_str().context("Choose a folder")?;
         // The folder as this computer names it, as its runner records it.
-        let workspace = std::fs::canonicalize(workspace)
+        let workspace = dunce::canonicalize(workspace)
             .ok()
             .filter(|folder| folder.is_dir())
             .context("This folder is not on this computer")?

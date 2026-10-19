@@ -1,5 +1,6 @@
 //! Read-only native discovery, running and saved, and private handoff to an already-running
 //! pi extension. No process launch of an agent or model request lives here.
+use crate::platform::Canonical;
 use crate::{codex::CodexRpc, harness::Harness};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
@@ -270,7 +271,7 @@ async fn live_pi_with_descriptors(registry: &Path) -> Result<(Vec<Candidate>, Ve
         {
             continue;
         }
-        let workspace = match tokio::fs::canonicalize(&record.workspace).await {
+        let workspace = match dunce::canonicalize(&record.workspace) {
             Ok(path) => path.to_string_lossy().into_owned(),
             Err(_) => continue,
         };
@@ -830,7 +831,7 @@ pub async fn pair_pi(
             && (resume || actual["busy"] == false),
         "The pi session changed or is busy"
     );
-    let executable = std::env::current_exe()?.canonicalize()?;
+    let executable = std::env::current_exe()?.canonical()?;
     let paired = control(
         &record,
         // The workspace identity lets pi tell a relink by the same kernel from a different
@@ -911,7 +912,7 @@ mod tests {
         let descriptor = registry.join("instance.json");
         let workspace = dir
             .path()
-            .canonicalize()
+            .canonical()
             .unwrap()
             .to_string_lossy()
             .into_owned();
@@ -966,7 +967,7 @@ mod tests {
         tokio::fs::create_dir(&registry).await.unwrap();
         let workspace = dir
             .path()
-            .canonicalize()
+            .canonical()
             .unwrap()
             .to_string_lossy()
             .into_owned();
@@ -1057,9 +1058,10 @@ mod tests {
         let project = root.path().join("-work");
         std::fs::create_dir(&project).unwrap();
         let id = "3aad9b7c-8834-4fd0-bad4-db1e33573f3d";
+        let work = if cfg!(windows) { r"C:\work" } else { "/work" };
         let lines = [
             json!({"type":"mode","sessionId":id}),
-            json!({"type":"user","cwd":"/work","sessionId":id}),
+            json!({"type":"user","cwd":work,"sessionId":id}),
             json!({"type":"ai-title","aiTitle":"First","sessionId":id}),
             json!({"type":"custom-title","customTitle":"Release","sessionId":id}),
             json!({"type":"ai-title","aiTitle":"Later","sessionId":id}),
@@ -1076,7 +1078,7 @@ mod tests {
         assert_eq!(found.len(), 1);
         let saved = &found[0];
         assert_eq!(saved.target.native_session_id, id);
-        assert_eq!(saved.target.workspace, "/work");
+        assert_eq!(saved.target.workspace, work);
         assert_eq!(saved.public.title, "Release");
         assert_eq!(saved.public.availability, "attention");
         assert!(saved.public.last_activity_at.is_some());

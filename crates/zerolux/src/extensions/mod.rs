@@ -6,6 +6,7 @@
 pub mod manifest;
 pub mod process;
 
+use crate::platform::Canonical;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -101,7 +102,7 @@ fn official_root() -> Option<PathBuf> {
     crate::platform::carried()
         .map(|carried| carried.join("extensions"))
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions"))
-        .canonicalize()
+        .canonical()
         .ok()
         .filter(|root| root.is_dir())
 }
@@ -116,7 +117,7 @@ fn official() -> Vec<(Manifest, PathBuf)> {
         .flatten()
         .flatten()
         .filter_map(|entry| {
-            let folder = entry.path().canonicalize().ok()?;
+            let folder = entry.path().canonical().ok()?;
             let text = std::fs::read_to_string(folder.join(manifest::FILE)).ok()?;
             Some((Manifest::parse(&text).ok()?, folder))
         })
@@ -272,7 +273,7 @@ impl Extensions {
 
     async fn install(&self, who: &ChatIdentity, folder: &str, dev: bool) -> Result<Installed> {
         self.owner_only(who).await?;
-        let folder = std::fs::canonicalize(folder)
+        let folder = dunce::canonicalize(folder)
             .ok()
             .filter(|folder| folder.is_dir())
             .ok_or_else(|| Error::Invalid("This folder is not on the kernel's computer".into()))?;

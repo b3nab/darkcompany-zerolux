@@ -12,6 +12,18 @@ use std::{
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+/// A path's real form, without links or `..`. On Windows it is the form people write
+/// (`C:\work`), not the extended one (`\\?\C:\work`) that processes and people do not expect.
+pub trait Canonical {
+    fn canonical(&self) -> io::Result<PathBuf>;
+}
+
+impl<P: AsRef<Path> + ?Sized> Canonical for P {
+    fn canonical(&self) -> io::Result<PathBuf> {
+        dunce::canonicalize(self)
+    }
+}
+
 /// Whether a process with this ID exists. One that exists but cannot be asked about, such as
 /// another user's, is alive: only its absence is evidence.
 pub fn alive(pid: u32) -> bool {
@@ -201,7 +213,7 @@ pub fn executable(name: &str) -> PathBuf {
         )
         .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
         .find(|path| path.is_file())
-        .and_then(|path| path.canonicalize().ok())
+        .and_then(|path| path.canonical().ok())
         .unwrap_or_else(|| PathBuf::from(name))
 }
 

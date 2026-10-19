@@ -498,7 +498,7 @@ impl ClaudeSession {
             "This Claude Code session is of a kind that cannot be connected"
         );
         ensure!(
-            std::fs::canonicalize(&session.cwd)? == std::fs::canonicalize(workspace)?,
+            dunce::canonicalize(&session.cwd)? == dunce::canonicalize(workspace)?,
             "The Claude Code workspace changed before pairing"
         );
         let pid = session

@@ -28,12 +28,12 @@ fn file(database: &Path) -> Result<std::fs::File> {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let directory = std::fs::canonicalize(directory)
+    let directory = dunce::canonicalize(directory)
         .with_context(|| format!("Resolve the data directory {}", directory.display()))?;
     let name = database
         .file_name()
         .context("The database path must name a file")?;
-    let real = match std::fs::canonicalize(database) {
+    let real = match dunce::canonicalize(database) {
         Ok(real) => real,
         Err(_) => directory.join(name),
     };

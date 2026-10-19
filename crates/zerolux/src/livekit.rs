@@ -673,15 +673,25 @@ mod tests {
             tokio::sync::broadcast::channel(4).0,
             stop,
         ));
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        let pending = store.pending_chat_events(10).await.unwrap();
+        // A refused connection takes a while on some systems (Windows tries it again).
+        let settled = |store: Store| async move {
+            for _ in 0..200 {
+                let pending = store.pending_chat_events(10).await.unwrap();
+                if pending.len() == 1 {
+                    return pending;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            store.pending_chat_events(10).await.unwrap()
+        };
+        let pending = settled(store.clone()).await;
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].event_id, "someone");
 
         // A commit that never signalled `changed` is still published by the recovery timer.
         outbox(&store, "unsignalled", "{}", "[]").await;
-        tokio::time::sleep(RETRY + Duration::from_secs(2)).await;
-        let pending = store.pending_chat_events(10).await.unwrap();
+        tokio::time::sleep(RETRY).await;
+        let pending = settled(store.clone()).await;
         assert_eq!(pending.len(), 1, "only the failing notice remains");
         assert_eq!(pending[0].event_id, "someone");
         stopper.send(true).unwrap();

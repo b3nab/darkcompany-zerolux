@@ -53,8 +53,8 @@ pub(crate) fn workspace_dir(path: &str) -> Result<String> {
     if !PathBuf::from(path).is_absolute() {
         return Err(Error::Invalid("Choose an absolute workspace path".into()).into());
     }
-    let workspace = std::fs::canonicalize(path)
-        .map_err(|_| Error::Invalid("Workspace does not exist".into()))?;
+    let workspace =
+        dunce::canonicalize(path).map_err(|_| Error::Invalid("Workspace does not exist".into()))?;
     if !workspace.is_dir() {
         return Err(Error::Invalid("Workspace must be a directory".into()).into());
     }
@@ -211,8 +211,8 @@ pub(crate) async fn session_dir_in(
         ],
     )
     .await?;
-    let inner = std::fs::canonicalize(&folder)?
-        .strip_prefix(std::fs::canonicalize(&top)?)
+    let inner = dunce::canonicalize(&folder)?
+        .strip_prefix(dunce::canonicalize(&top)?)
         .map(PathBuf::from)
         .unwrap_or_default();
     workspace_dir(&dir.join(inner).to_string_lossy())
@@ -1448,8 +1448,7 @@ impl ChatRuntime {
                     .as_str()
                     .context("Codex did not report its workspace")?;
                 ensure!(
-                    std::fs::canonicalize(native_cwd)?
-                        == std::fs::canonicalize(&session.workspace)?,
+                    dunce::canonicalize(native_cwd)? == dunce::canonicalize(&session.workspace)?,
                     "The Codex workspace changed before pairing"
                 );
             }

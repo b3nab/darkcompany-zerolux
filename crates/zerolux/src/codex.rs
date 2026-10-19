@@ -97,7 +97,7 @@ impl CodexRpc {
                     // A socket's address is short: a long path reaches it through the short
                     // one Codex links it to.
                     let path = if path.len() > 100 {
-                        std::fs::canonicalize(path).map_or_else(
+                        dunce::canonicalize(path).map_or_else(
                             |_| path.to_owned(),
                             |real| real.to_string_lossy().into_owned(),
                         )

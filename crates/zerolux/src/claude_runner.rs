@@ -1,5 +1,6 @@
 //! Explicit launch and private process control for ZeroLux-owned Claude sessions.
 //! Chat data uses the runner's existing HTTP/LiveKit bridge, never this socket.
+use crate::platform::Canonical;
 use std::{
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
@@ -277,11 +278,11 @@ impl Registry {
             .arg(
                 self.program
                     .entry
-                    .canonicalize()
+                    .canonical()
                     .context("Claude runner entrypoint is unavailable")?,
             )
             .current_dir(workspace)
-            .env("ZEROLUX_RUNNER_REGISTRY", self.path.canonicalize()?)
+            .env("ZEROLUX_RUNNER_REGISTRY", self.path.canonical()?)
             .env("ZEROLUX_NATIVE_SESSION", native_id)
             .env("ZEROLUX_WORKSPACE", workspace)
             .env("ZEROLUX_PERMISSION_MODE", mode.name())
@@ -432,7 +433,7 @@ impl Registry {
             .kernel_executable
             .clone()
             .map_or_else(std::env::current_exe, Ok)?
-            .canonicalize()
+            .canonical()
             .context("Kernel executable is unavailable")
     }
 

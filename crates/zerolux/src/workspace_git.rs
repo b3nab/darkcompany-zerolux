@@ -212,10 +212,8 @@ pub async fn diff(folder: &Path, path: Option<&str>, staged: bool) -> Result<Str
 /// A file's text, as it is in the folder now.
 pub async fn file(folder: &Path, path: &str) -> Result<String> {
     let full = inside(folder, path)?;
-    let canonical = tokio::fs::canonicalize(&full)
-        .await
-        .map_err(|_| Error::NotFound)?;
-    if !canonical.starts_with(tokio::fs::canonicalize(folder).await?) {
+    let canonical = dunce::canonicalize(&full).map_err(|_| Error::NotFound)?;
+    if !canonical.starts_with(dunce::canonicalize(folder)?) {
         return Err(Error::Invalid("Name a path inside the session's folder".into()).into());
     }
     let bytes = tokio::fs::read(&canonical)
@@ -430,6 +428,10 @@ mod tests {
             .await
             .unwrap();
         git(folder, &["config", "user.name", "Fixture"])
+            .await
+            .unwrap();
+        // Files as written, whatever line endings this computer's git converts to.
+        git(folder, &["config", "core.autocrlf", "false"])
             .await
             .unwrap();
         std::fs::write(folder.join("a.txt"), "one\n").unwrap();

@@ -1,4 +1,5 @@
 use super::*;
+use crate::platform::Canonical;
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -13,7 +14,7 @@ impl Fixture {
             .unwrap();
         let code = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../packages/bridge/src")
-            .canonicalize()
+            .canonical()
             .unwrap();
         let entry = root.path().join("fixture.ts");
         std::fs::write(&entry, format!(r#"
@@ -45,7 +46,7 @@ setTimeout(() => process.exit(0), 20000); // Only this disposable fake host; no 
             .map(|dir| dir.join("bun"))
             .find(|file| file.is_file())
             .unwrap()
-            .canonicalize()
+            .canonical()
             .unwrap();
         let wrapper = root.path().join("bun-fixture");
         std::fs::write(&wrapper, format!("#!/bin/sh\nexec /usr/bin/env -i HOME=\"{root}\" TMPDIR=\"{root}\" PATH=/usr/bin:/bin ZEROLUX_RUNNER_REGISTRY=\"$ZEROLUX_RUNNER_REGISTRY\" ZEROLUX_NATIVE_SESSION=\"$ZEROLUX_NATIVE_SESSION\" ZEROLUX_WORKSPACE=\"$ZEROLUX_WORKSPACE\" ZEROLUX_CLAUDE_MANAGED=\"$ZEROLUX_CLAUDE_MANAGED\" \"{bun}\" \"$@\"\n", root=root.path().display(), bun=bun.display())).unwrap();

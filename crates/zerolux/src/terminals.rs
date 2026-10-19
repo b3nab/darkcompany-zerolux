@@ -9,6 +9,28 @@ use std::{
 
 use anyhow::{Context, Result};
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+
+/// The person's shell: their login shell on Unix, PowerShell on Windows.
+fn shell() -> CommandBuilder {
+    #[cfg(unix)]
+    {
+        let mut command =
+            CommandBuilder::new(std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()));
+        command.arg("-l");
+        command
+    }
+    #[cfg(windows)]
+    {
+        let pwsh = crate::platform::executable("pwsh");
+        let mut command = CommandBuilder::new(if pwsh.is_absolute() {
+            pwsh
+        } else {
+            "powershell.exe".into()
+        });
+        command.arg("-NoLogo");
+        command
+    }
+}
 use serde::Serialize;
 use tokio::sync::mpsc;
 
@@ -81,9 +103,7 @@ impl Terminals {
         let pair = native_pty_system()
             .openpty(size)
             .context("Cannot open a terminal")?;
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-        let mut command = CommandBuilder::new(shell);
-        command.arg("-l");
+        let mut command = shell();
         command.cwd(folder);
         command.env("TERM", "xterm-256color");
         let mut child = pair
@@ -277,22 +297,28 @@ mod tests {
     #[tokio::test]
     async fn a_shell_runs_in_the_folder_and_its_output_is_read_by_offset() {
         let dir = tempfile::tempdir().unwrap();
-        let folder = std::fs::canonicalize(dir.path()).unwrap();
+        let folder = dunce::canonicalize(dir.path()).unwrap();
         let (grown, mut heard) = mpsc::unbounded_channel();
         let terminals = Terminals::new(grown);
         let info = terminals
             .open("session", &folder.to_string_lossy(), 80, 24)
             .unwrap();
         assert_eq!(terminals.of("session").len(), 1);
-        terminals
-            .write(&info.id, "echo here-$((40+2)); pwd\n")
-            .unwrap();
+        // The same line in a Unix shell and in PowerShell.
+        let line = if cfg!(windows) {
+            "echo \"here-$(40+2)\"; pwd\r\n"
+        } else {
+            "echo here-$((40+2)); pwd\n"
+        };
+        terminals.write(&info.id, line).unwrap();
         read_until(&terminals, &info.id, "here-42").await;
         read_until(&terminals, &info.id, &folder.to_string_lossy()).await;
         assert!(heard.recv().await.is_some());
         assert_eq!(terminals.resize(&info.id, 100, 30).unwrap().cols, 100);
         assert!(terminals.output(&info.id, u64::MAX).is_err());
-        terminals.write(&info.id, "exit\n").unwrap();
+        terminals
+            .write(&info.id, if cfg!(windows) { "exit\r\n" } else { "exit\n" })
+            .unwrap();
         for _ in 0..200 {
             if terminals.info(&info.id).unwrap().ended {
                 break;

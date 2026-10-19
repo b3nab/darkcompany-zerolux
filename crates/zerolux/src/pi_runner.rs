@@ -1,4 +1,5 @@
 //! Execution-host lifecycle for an entrusted native pi context. No prompts are sent here.
+use crate::platform::Canonical;
 use crate::{
     claude_runner::RunnerProgram,
     platform,
@@ -173,7 +174,7 @@ impl Registry {
             .pi_entry
             .as_ref()
             .context("The pi runner is not installed on this execution host")?
-            .canonicalize()?;
+            .canonical()?;
         config["entry"] = json!(entry);
         let request_id = uuid::Uuid::new_v4().to_string();
         let key = format!(
@@ -192,7 +193,7 @@ impl Registry {
         command
             .arg(&entry)
             .current_dir(workspace)
-            .env("ZEROLUX_PI_REGISTRY", self.path.canonicalize()?)
+            .env("ZEROLUX_PI_REGISTRY", self.path.canonical()?)
             .env("ZEROLUX_PI_CONFIG", config.to_string())
             .env_remove("ZEROLUX_TOKEN")
             .env_remove("ZEROLUX_URL")
