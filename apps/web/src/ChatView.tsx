@@ -283,10 +283,18 @@ export function ChatView({
   // Who is working on this chat now: shown as a bubble under the last message.
   const turnsHere = workingSessions(conversation, chat.sessions);
   const busyHere = turnsHere.map((s) => s.actor_id);
-  // What each agent did for this chat, read back as far as the messages shown.
+  const { me } = useMe(actors);
+  // What each agent did for this chat, read back as far as the messages shown: only from
+  // the sessions one may read, since another person's are private unless shared.
   const work = useChatWork(
     conversation.id,
-    conversation.members.flatMap((m) => (m.session_id ? [m.session_id] : [])),
+    chat.sessions
+      .filter(
+        (s) =>
+          conversation.members.some((m) => m.session_id === s.id) &&
+          sessionAccess(s, me?.id).read,
+      )
+      .map((s) => s.id),
     chat.outputs,
     chat.messages[0]?.created_at,
   );
@@ -346,7 +354,6 @@ export function ChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const { me } = useMe(actors);
   const chatTitle = (id: string | null) =>
     chat.conversations.find((c) => c.id === id)?.title;
   const agents = agentMembers(conversation, actors);
