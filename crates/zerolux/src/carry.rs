@@ -1,5 +1,5 @@
 //! What a release's kernel carries inside itself, so that one file runs it all: the web app,
-//! sign-in, the runners of the sessions it starts, `bun` and `livekit-server`. They are
+//! sign-in, the runners of the sessions it starts, `bun`, `uv` and `livekit-server`. They are
 //! written out once per release into the data folder, checked, and run from there.
 // A checkout's kernel carries nothing: what writes it out runs only in its tests.
 #![cfg_attr(not(zerolux_carry), allow(dead_code))]
