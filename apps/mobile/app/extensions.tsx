@@ -5,8 +5,10 @@ import { Alert, Platform, Pressable, ScrollView, View } from "react-native";
 import { useCSSVariable } from "uniwind";
 import {
   errorMessage,
+  installExtension,
   loadExtensionFolder,
   useExtensions,
+  useOfficialExtensions,
 } from "@zerolux/chat";
 import { extensionState, StateDot } from "@/components/extensions";
 import { Screen } from "@/components/screen";
@@ -18,25 +20,31 @@ import { useMe } from "../src/me";
 
 /**
  * The workspace's extensions, each with what it is and how it stands; a tap opens it. The
- * owner also loads one from a folder on the kernel's computer, in development.
+ * owner installs the official ones ZeroLux brings, and loads one from a folder on the
+ * kernel's computer, in development.
  */
 export default function Extensions() {
   const { url } = useSession();
   const { owner } = useMe();
   const { extensions, error } = useExtensions(url);
+  const available = useOfficialExtensions(url, owner).official?.filter(
+    (e) => !e.installed,
+  );
   const router = useRouter();
   const faint = String(useCSSVariable("--color-faint"));
-  const [busy, setBusy] = useState(false);
+  // What is being installed or loaded, while the kernel starts it.
+  const [busy, setBusy] = useState<string>();
   const [failure, setFailure] = useState("");
-  const load = (folder: string) => {
-    if (!folder.trim()) return;
-    setBusy(true);
+  const add = (what: string, work: () => Promise<{ id: string }>) => {
+    setBusy(what);
     setFailure("");
-    loadExtensionFolder(folder.trim(), url)
+    work()
       .then((extension) => router.push(`/extension/${extension.id}`))
       .catch((e: unknown) => setFailure(errorMessage(e)))
-      .finally(() => setBusy(false));
+      .finally(() => setBusy(undefined));
   };
+  const load = (folder: string) =>
+    folder.trim() && add(folder, () => loadExtensionFolder(folder.trim(), url));
   return (
     <Screen back title="Extensions">
       <ScrollView contentContainerClassName="gap-4 px-5 pb-10 pt-2">
@@ -87,10 +95,54 @@ export default function Extensions() {
             })}
           </View>
         )}
+        {available?.length ? (
+          <View className="gap-2">
+            <Text className="text-sm text-faint">Available</Text>
+            <View className="overflow-hidden rounded-md border border-border bg-card">
+              {available.map((extension, index) => (
+                <View
+                  key={extension.id}
+                  className={cn(
+                    "flex-row items-center gap-3 px-4 py-3",
+                    index > 0 && "border-t border-border",
+                  )}
+                >
+                  <View className="min-w-0 flex-1">
+                    <Text numberOfLines={1} className="text-[15px]">
+                      {extension.name}
+                    </Text>
+                    <Text numberOfLines={2} className="text-xs text-faint">
+                      {extension.description}
+                    </Text>
+                  </View>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={Boolean(busy)}
+                    onPress={() =>
+                      add(extension.id, () =>
+                        installExtension(extension.id, url),
+                      )
+                    }
+                  >
+                    <Text>
+                      {busy === extension.id ? "Installing…" : "Install"}
+                    </Text>
+                  </Button>
+                </View>
+              ))}
+            </View>
+            {busy ? (
+              <Text className="text-xs text-faint">
+                Its first start can take a few minutes.
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
         {owner && Platform.OS === "ios" ? (
           <Button
             variant="outline"
-            disabled={busy}
+            disabled={Boolean(busy)}
             onPress={() =>
               Alert.prompt(
                 "Load from a folder",
