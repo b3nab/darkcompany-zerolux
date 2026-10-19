@@ -2414,6 +2414,48 @@ async fn a_codex_session_runs_on_a_joined_computer() {
         .unwrap()
         .error_for_status()
         .unwrap();
+    // A new session's worktree is made on the computer, under its own data.
+    let repository = work.join("repository");
+    std::fs::create_dir_all(&repository).unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.test",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "Start",
+        ][..],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repository)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let made = runtime
+        .hosts
+        .call(
+            &host,
+            "session.folder",
+            json!({"workspace": repository, "worktree": "feature/fixture"}),
+        )
+        .await
+        .unwrap();
+    let folder = made["folder"].as_str().unwrap();
+    assert!(
+        folder.ends_with("worktrees/repository/feature-fixture"),
+        "{folder}"
+    );
+    assert!(std::path::Path::new(folder).join(".git").exists());
     // Its computer goes offline: the session waits for it.
     stop.send_replace(true);
     connected.await.unwrap().unwrap();

@@ -35,6 +35,8 @@ pub struct HostRuntime {
     terminals: Arc<crate::terminals::Terminals>,
     /// Images sent with input, kept where this computer's harnesses read them.
     attachments: std::path::PathBuf,
+    /// Where sessions started in a worktree of their own work.
+    worktrees: std::path::PathBuf,
     /// The pi and Claude Code runners of this computer's sessions.
     #[cfg(unix)]
     pi: crate::pi_runner::Registry,
@@ -76,6 +78,7 @@ impl HostRuntime {
             Arc::new(Self {
                 terminals: terminals(notices.clone()),
                 attachments: links.with_file_name("attachments"),
+                worktrees: links.with_file_name("worktrees"),
                 url,
                 codex,
                 pending: Mutex::default(),
@@ -106,6 +109,7 @@ impl HostRuntime {
             pi_links: Mutex::default(),
             terminals: terminals(notices.clone()),
             attachments: links.with_file_name("attachments"),
+            worktrees: links.with_file_name("worktrees"),
             url,
             codex,
             pending: Mutex::default(),
@@ -219,6 +223,13 @@ impl HostRuntime {
                 self.claude_link(&params).await?.stop(session).await?;
                 Ok(json!({"stopped": true}))
             }
+            // A new session's folder: the one named, or a new worktree of its repository.
+            "session.folder" => Ok(json!({"folder": crate::chat_runtime::session_dir_in(
+                &self.worktrees,
+                params["workspace"].as_str().context("Choose a folder")?,
+                params["worktree"].as_str(),
+            )
+            .await?})),
             "terminal.open" => {
                 let folder = params["folder"].as_str().context("Choose a folder")?;
                 let size = |key: &str| params[key].as_u64().unwrap_or(24) as u16;

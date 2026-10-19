@@ -169,46 +169,53 @@ impl ChatRuntime {
         workspace: &str,
         worktree: Option<&str>,
     ) -> Result<String> {
-        let workspace = workspace_dir(workspace)?;
-        let Some(branch) = worktree else {
-            return Ok(workspace);
-        };
-        let folder = PathBuf::from(&workspace);
-        let top = PathBuf::from(git(&folder, &["rev-parse", "--show-toplevel"]).await?);
-        let branch = match branch.trim() {
-            "" => format!(
-                "zerolux/{}",
-                &uuid::Uuid::new_v4().simple().to_string()[..8]
-            ),
-            name => git(&folder, &["check-ref-format", "--branch", name]).await?,
-        };
-        let repository = top
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "repository".into());
-        let dir = self
-            .worktrees
-            .join(repository)
-            .join(branch.replace('/', "-"));
-        std::fs::create_dir_all(dir.parent().context("Invalid worktree folder")?)?;
-        git(
-            &top,
-            &[
-                "worktree",
-                "add",
-                "-b",
-                &branch,
-                &dir.to_string_lossy(),
-                "HEAD",
-            ],
-        )
-        .await?;
-        let inner = std::fs::canonicalize(&folder)?
-            .strip_prefix(std::fs::canonicalize(&top)?)
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        workspace_dir(&dir.join(inner).to_string_lossy())
+        session_dir_in(&self.worktrees, workspace, worktree).await
     }
+}
+
+/// A session's folder: `workspace`, or a new git worktree of its repository under `worktrees`,
+/// on `worktree`'s branch (a new one named by ZeroLux when empty).
+pub(crate) async fn session_dir_in(
+    worktrees: &std::path::Path,
+    workspace: &str,
+    worktree: Option<&str>,
+) -> Result<String> {
+    let workspace = workspace_dir(workspace)?;
+    let Some(branch) = worktree else {
+        return Ok(workspace);
+    };
+    let folder = PathBuf::from(&workspace);
+    let top = PathBuf::from(git(&folder, &["rev-parse", "--show-toplevel"]).await?);
+    let branch = match branch.trim() {
+        "" => format!(
+            "zerolux/{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        ),
+        name => git(&folder, &["check-ref-format", "--branch", name]).await?,
+    };
+    let repository = top
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "repository".into());
+    let dir = worktrees.join(repository).join(branch.replace('/', "-"));
+    std::fs::create_dir_all(dir.parent().context("Invalid worktree folder")?)?;
+    git(
+        &top,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch,
+            &dir.to_string_lossy(),
+            "HEAD",
+        ],
+    )
+    .await?;
+    let inner = std::fs::canonicalize(&folder)?
+        .strip_prefix(std::fs::canonicalize(&top)?)
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    workspace_dir(&dir.join(inner).to_string_lossy())
 }
 
 enum NativeDriver {

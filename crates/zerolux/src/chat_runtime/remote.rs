@@ -282,14 +282,13 @@ impl ChatRuntime {
             self.store.host_person(host).await? == who.actor_id,
             Error::Forbidden
         );
-        ensure!(
-            input.worktree.is_none(),
-            "A joined computer starts sessions in a folder of its own, without a worktree"
-        );
         self.store
             .check_hire(who, Harness::Codex, input.actor_id.as_deref(), &input.name)
             .await?;
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
+        let workspace = self
+            .folder_on(host, &input.workspace, input.worktree.as_deref())
+            .await?;
         let settings = json!({"model": input.model, "effort": input.effort,
             "approval_policy": input.approval_policy, "sandbox": input.sandbox});
         let started = self
@@ -297,7 +296,7 @@ impl ChatRuntime {
             .call(
                 host,
                 "codex.start",
-                json!({"workspace": input.workspace, "settings": settings}),
+                json!({"workspace": workspace, "settings": settings}),
             )
             .await?;
         let thread = started["thread_id"]
@@ -314,10 +313,7 @@ impl ChatRuntime {
                     harness: Harness::Codex,
                     native_session_id: thread.clone(),
                     title: "Codex".into(),
-                    workspace: started["cwd"]
-                        .as_str()
-                        .unwrap_or(&input.workspace)
-                        .to_owned(),
+                    workspace: started["cwd"].as_str().unwrap_or(&workspace).to_owned(),
                     native_locator: json!({"endpoint": started["endpoint"]}),
                     resume: false,
                 },
@@ -348,8 +344,8 @@ impl ChatRuntime {
         Ok((issued.actor, session))
     }
 
-    /// That `who` may start sessions on a joined computer: theirs, without a worktree.
-    async fn may_start_on(&self, who: &ChatIdentity, host: &str, worktree: bool) -> Result<()> {
+    /// That `who` may start sessions on a joined computer: theirs.
+    async fn may_start_on(&self, who: &ChatIdentity, host: &str) -> Result<()> {
         if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
@@ -357,12 +353,32 @@ impl ChatRuntime {
             self.store.host_person(host).await? == who.actor_id,
             Error::Forbidden
         );
-        ensure!(
-            !worktree,
-            "A joined computer starts sessions in a folder of its own, without a worktree"
-        );
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
         Ok(())
+    }
+
+    /// A new session's folder on a joined computer: the one named, or a new worktree there.
+    async fn folder_on(
+        &self,
+        host: &str,
+        workspace: &str,
+        worktree: Option<&str>,
+    ) -> Result<String> {
+        let Some(worktree) = worktree else {
+            return Ok(workspace.to_owned());
+        };
+        let made = self
+            .hosts
+            .call(
+                host,
+                "session.folder",
+                json!({"workspace": workspace, "worktree": worktree}),
+            )
+            .await?;
+        Ok(made["folder"]
+            .as_str()
+            .context("The computer did not name the worktree")?
+            .to_owned())
     }
 
     /// A new pi session on one of `who`'s joined computers: the computer starts pi under its
@@ -374,7 +390,9 @@ impl ChatRuntime {
         input: crate::model::CreatePiSession,
         host: &str,
     ) -> Result<(Option<Actor>, ChatSession)> {
-        self.may_start_on(who, host, input.worktree.is_some())
+        self.may_start_on(who, host).await?;
+        let workspace = self
+            .folder_on(host, &input.workspace, input.worktree.as_deref())
             .await?;
         self.store
             .check_hire(who, Harness::Pi, input.actor_id.as_deref(), &input.name)
@@ -384,7 +402,7 @@ impl ChatRuntime {
             .call(
                 host,
                 "pi.create",
-                json!({"workspace": input.workspace,
+                json!({"workspace": workspace,
                     "settings": {"model": input.model, "effort": input.effort}}),
             )
             .await?;
@@ -404,7 +422,7 @@ impl ChatRuntime {
                     title: "pi".into(),
                     workspace: started["workspace"]
                         .as_str()
-                        .unwrap_or(&input.workspace)
+                        .unwrap_or(&workspace)
                         .to_owned(),
                     native_locator: started["native_locator"].clone(),
                     resume: false,
@@ -454,7 +472,9 @@ impl ChatRuntime {
         input: crate::model::CreateClaudeSession,
         host: &str,
     ) -> Result<(Option<Actor>, ChatSession)> {
-        self.may_start_on(who, host, input.worktree.is_some())
+        self.may_start_on(who, host).await?;
+        let workspace = self
+            .folder_on(host, &input.workspace, input.worktree.as_deref())
             .await?;
         self.store
             .check_hire(
@@ -474,7 +494,7 @@ impl ChatRuntime {
             .call(
                 host,
                 "claude.launch",
-                json!({"native": native, "workspace": input.workspace, "mode": mode,
+                json!({"native": native, "workspace": workspace, "mode": mode,
                     "system_prompt": "claude_code", "settings": initial}),
             )
             .await?;
