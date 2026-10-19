@@ -31,6 +31,11 @@ export interface Context {
     delete(key: string): Promise<void>;
     list(prefix?: string): Promise<string[]>;
   };
+  /** The workspace's name, and its people and agents. */
+  workspace(): Promise<{
+    name: string;
+    actors: { id: string; name: string; kind: "person" | "agent" }[];
+  }>;
   /** Publishes one of its events, named under it. */
   publish(event: string, payload?: unknown): Promise<void>;
   /** Runs another extension's action. */
@@ -206,6 +211,7 @@ export async function serve(
         void (await ask("values.set", { key, value: null })),
       list: async (prefix = "") => (await ask("values.list", { prefix })).keys,
     },
+    workspace: async () => ask("workspace.actors"),
     publish: async (name, payload) =>
       void (await ask("events.publish", { name, payload: payload ?? null })),
     run: async (extensionId, action, input) =>
