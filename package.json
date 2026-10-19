@@ -15,7 +15,7 @@
     "release": "bun scripts/release.ts",
     "desktop:dev": "bun run --cwd apps/desktop dev",
     "desktop:build": "bun run --cwd apps/desktop build",
-    "typecheck": "bun run --cwd packages/theme typecheck && bun run --cwd packages/chat typecheck && bun run --cwd packages/bridge typecheck && bun run --cwd apps/web typecheck && bun run --cwd apps/mobile typecheck && bun run --cwd extensions/pi typecheck && bun run --cwd extensions/claude typecheck && bun run --cwd apps/desktop typecheck && bun run --cwd services/auth typecheck",
+    "typecheck": "bun run --cwd packages/theme typecheck && bun run --cwd packages/chat typecheck && bun run --cwd packages/bridge typecheck && bun run --cwd packages/extension-sdk typecheck && bun run --cwd apps/web typecheck && bun run --cwd apps/mobile typecheck && bun run --cwd extensions/pi typecheck && bun run --cwd extensions/claude typecheck && bun run --cwd apps/desktop typecheck && bun run --cwd services/auth typecheck",
     "test": "bun run --cwd apps/web renderer && bun test packages/theme packages/chat packages/bridge apps/web apps/desktop apps/mobile/src extensions/pi extensions/claude services/auth scripts",
     "format": "bun x --bun oxfmt",
     "format:check": "bun x --bun oxfmt --check",
