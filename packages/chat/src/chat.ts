@@ -7,6 +7,7 @@ import type {
   Harness,
 } from "./client";
 import type { LiveNotice } from "./live";
+import type { ExtensionsNotice } from "./extensions";
 import type { TerminalNotice } from "./terminals";
 
 export const PAGE = 100;
@@ -206,6 +207,7 @@ export type ChatEvent = { event_id: string } & (
     } & SessionTail)
   | LiveNotice
   | TerminalNotice
+  | ExtensionsNotice
 );
 /** How a session's native record ends, as the kernel's watcher last read it. */
 export type SessionTail = Partial<
