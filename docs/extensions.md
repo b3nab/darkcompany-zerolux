@@ -20,6 +20,7 @@ kernel = ">=0.0.1"         # optional: the kernel versions it works with
 
 [process]
 command = ["bun", "run", "main.ts"]   # run in the extension's folder
+start_seconds = 600                   # optional: a first start that prepares what it runs
 
 [settings]
 store = { type = "text", label = "Store", default = "memory" }
@@ -43,7 +44,7 @@ When enabled, its process says what it brings:
 
 The kernel starts the command in the extension's folder with a cleared environment (`PATH`, `HOME`, `TMPDIR`, `LANG`, `USER` and `ZEROLUX_EXTENSION`), and talks JSON-RPC 2.0 over standard input and output, one message per line. Standard error goes to `extensions/<id>.log` in the data folder.
 
-Each extension has a private folder for its files, `extensions/<id>/` in the data folder, given to it in `initialize` and removed with it. The kernel calls `initialize` (answered with what it brings), `action.run` and `point.call`, and notifies `event`, `settings` and `shutdown`. The extension calls `settings.get` (with its secrets), `values.get`, `values.set`, `values.list`, `events.publish`, `actions.run`, `points.implementations` and `points.call`, and notifies `log`. The kernel's requests wait a minute, or an action's own `seconds`.
+Each extension has a private folder for its files, `extensions/<id>/` in the data folder, given to it in `initialize` and removed with it. The kernel calls `initialize` (answered with what it brings), `action.run` and `point.call`, and notifies `event`, `settings` and `shutdown`. The extension calls `settings.get` (with its secrets), `workspace.actors` (the workspace's name, and its people and agents), `values.get`, `values.set`, `values.list`, `events.publish`, `actions.run`, `points.implementations` and `points.call`, and notifies `log`. The kernel's requests wait a minute, or an action's own `seconds`.
 
 `@zerolux/extension-sdk` (`packages/extension-sdk`) writes this in TypeScript:
 
