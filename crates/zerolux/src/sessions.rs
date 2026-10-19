@@ -237,7 +237,7 @@ pub(crate) async fn control(record: &PiDescriptor, mut request: Value) -> Result
         .context("Pi control timed out; do not blindly repeat pairing")?
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 async fn live_pi(registry: &Path) -> Result<Vec<Candidate>> {
     Ok(live_pi_with_descriptors(registry).await?.0)
 }

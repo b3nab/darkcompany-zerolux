@@ -145,6 +145,11 @@ pub(crate) fn string<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
         .with_context(|| format!("Missing {key} in adapter protocol"))
 }
 
+/// The kernel no longer accepts the session's token: its link was stopped, or replaced.
+#[derive(Debug, thiserror::Error)]
+#[error("Kernel request failed (401 Unauthorized): the session's token was revoked")]
+pub(crate) struct Revoked;
+
 pub(crate) struct Kernel {
     client: reqwest::Client,
     url: String,
@@ -185,6 +190,9 @@ impl Kernel {
             .await
             .map_err(|_| anyhow!("Kernel request failed"))?;
         let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(Revoked.into());
+        }
         let value = response
             .json::<Value>()
             .await

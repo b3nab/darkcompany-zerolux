@@ -1697,8 +1697,14 @@ impl ChatRuntime {
                 "The chat link is stopped and its token revoked. Native cancellation was not confirmed because its adapter had already ended; work may still be running in the harness.",
             ));
         }
-        driver?;
-        subscriber?;
+        // The stop revokes the token before it reaches the adapter: a request the adapter made
+        // in between is refused, and that is the stop, not a failure.
+        let revoked = |result: Result<()>| match result {
+            Err(error) if error.is::<crate::chat_driver::Revoked>() => Ok(()),
+            other => other,
+        };
+        revoked(driver)?;
+        revoked(subscriber)?;
         Ok(agent.stop_note)
     }
 
