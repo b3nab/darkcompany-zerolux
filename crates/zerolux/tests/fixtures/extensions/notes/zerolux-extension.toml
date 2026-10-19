@@ -1,0 +1,13 @@
+[extension]
+id = "zerolux.notes"
+name = "Notes"
+version = "1.2.0"
+publisher = "zerolux"
+description = "A test extension: notes kept by the store its setting names"
+
+[process]
+command = ["bun", "run", "main.ts"]
+
+[settings]
+store = { type = "text", label = "Store", default = "memory" }
+token = { type = "secret", label = "Token" }

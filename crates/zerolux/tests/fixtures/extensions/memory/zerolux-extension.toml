@@ -1,0 +1,12 @@
+[extension]
+id = "zerolux.memory"
+name = "Memory store"
+version = "1.0.0"
+publisher = "zerolux"
+description = "A test extension: a store for Notes, and a count of saved notes"
+
+[dependencies]
+"zerolux.notes" = ">=1.0"
+
+[process]
+command = ["bun", "run", "main.ts"]
