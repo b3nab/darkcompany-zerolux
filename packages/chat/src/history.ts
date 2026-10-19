@@ -40,7 +40,8 @@ export function matchParts(text: string, query: string) {
 
 /**
  * What the sessions one may read said and did that contains the text, the latest first: up to
- * `limit` in all, 20 per session. `truncated` when the search stopped at its time limit.
+ * `limit` in all, 20 per session. `truncated` when some were not searched: the search reached
+ * its time limit, or their computer is offline.
  */
 export const searchHistory = (
   query: string,
