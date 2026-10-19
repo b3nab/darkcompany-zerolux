@@ -41,7 +41,8 @@
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": true,
+            "extraProguardRules": "-dontwarn livekit.org.jni_zero.JniZeroJni"
           },
           "ios": {
             "usePrecompiledModules": false
