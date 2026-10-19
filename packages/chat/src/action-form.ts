@@ -15,6 +15,9 @@ export interface JsonSchema {
   required?: string[];
   items?: JsonSchema;
   enum?: unknown[];
+  /** With `const` in each: values with their labels (`title`), drawn as a choice. */
+  oneOf?: JsonSchema[];
+  const?: unknown;
   default?: unknown;
   format?: string;
   minimum?: number;
@@ -72,7 +75,20 @@ const typeOf = (schema: JsonSchema) =>
   (Array.isArray(schema.type)
     ? schema.type.find((t) => t !== "null")
     : schema.type) ??
-  (schema.properties ? "object" : schema.enum ? "string" : undefined);
+  (schema.properties ? "object" : choiceValues(schema) ? "string" : undefined);
+
+/** A choice's values: an `enum`, or a `oneOf` whose every entry is a `const`. */
+function choiceValues(schema: JsonSchema): unknown[] | undefined {
+  if (schema.enum) return schema.enum;
+  if (schema.oneOf?.length && schema.oneOf.every((o) => "const" in o))
+    return schema.oneOf.map((o) => o.const);
+}
+
+/** A choice's labels, in the order of its values: a `oneOf` entry's title, else the value. */
+const choiceLabels = (schema: JsonSchema) =>
+  schema.enum
+    ? schema.enum.map(optionLabel)
+    : schema.oneOf!.map((o) => o.title ?? optionLabel(o.const));
 
 /** `linear_token` and `dueDate` read as "Linear token" and "Due date". */
 const labelOf = (key: string) => {
@@ -105,8 +121,8 @@ function field(
     required,
     schema,
   };
-  if (schema.enum) {
-    return { ...base, kind: "choice", options: schema.enum.map(optionLabel) };
+  if (choiceValues(schema)) {
+    return { ...base, kind: "choice", options: choiceLabels(schema) };
   }
   if (type === "boolean") return { ...base, kind: "boolean" };
   if (type === "number" || type === "integer") return { ...base, kind: type };
@@ -119,8 +135,8 @@ function field(
   }
   if (type === "array" && schema.items) {
     const items = schema.items;
-    if (items.enum)
-      return { ...base, kind: "choices", options: items.enum.map(optionLabel) };
+    if (choiceValues(items))
+      return { ...base, kind: "choices", options: choiceLabels(items) };
     if (scalar(typeOf(items))) return { ...base, kind: "list" };
   }
   if (type === "object" && schema.properties) {
@@ -169,14 +185,15 @@ export function actionDrafts(
         drafts[f.key] = given === true;
         break;
       case "choice": {
-        const index = given === undefined ? -1 : indexOf(f.schema.enum!, given);
+        const index =
+          given === undefined ? -1 : indexOf(choiceValues(f.schema)!, given);
         drafts[f.key] = index < 0 ? "" : String(index);
         break;
       }
       case "choices":
         drafts[f.key] = Array.isArray(given)
           ? given
-              .map((item) => indexOf(f.schema.items!.enum!, item))
+              .map((item) => indexOf(choiceValues(f.schema.items!)!, item))
               .filter((index) => index >= 0)
               .map(String)
           : [];
@@ -276,13 +293,15 @@ export function actionInput(
         break;
       case "choice":
         if (typeof draft === "string" && draft !== "")
-          input[name] = f.schema.enum![Number(draft)];
+          input[name] = choiceValues(f.schema)![Number(draft)];
         else missing();
         break;
       case "choices": {
         const chosen = Array.isArray(draft) ? draft : [];
         if (chosen.length) {
-          input[name] = chosen.map((key) => f.schema.items!.enum![Number(key)]);
+          input[name] = chosen.map(
+            (key) => choiceValues(f.schema.items!)![Number(key)],
+          );
           if (
             f.schema.minItems !== undefined &&
             chosen.length < f.schema.minItems

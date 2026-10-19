@@ -159,3 +159,38 @@ test("a pattern the client cannot read is left to the kernel", () => {
     code: "Not in the expected form",
   });
 });
+
+test("values with labels, as oneOf of consts, are a choice by their titles", () => {
+  const fields = actionFields({
+    type: "object",
+    required: ["model"],
+    properties: {
+      model: {
+        oneOf: [
+          { const: "turbo", title: "Whisper large-v3 turbo" },
+          { const: "parakeet", title: "Parakeet v3" },
+          { const: 3 },
+        ],
+      },
+      tags: {
+        type: "array",
+        items: {
+          oneOf: [
+            { const: "a", title: "First" },
+            { const: "b", title: "Second" },
+          ],
+        },
+      },
+    },
+  });
+  expect(fields.map((f) => [f.key, f.kind, f.options])).toEqual([
+    ["model", "choice", ["Whisper large-v3 turbo", "Parakeet v3", "3"]],
+    ["tags", "choices", ["First", "Second"]],
+  ]);
+  const drafts = actionDrafts(fields, { model: "parakeet", tags: ["b"] });
+  expect(drafts).toEqual({ model: "1", tags: ["1"] });
+  expect(actionInput(fields, { model: "2", tags: ["0", "1"] }).input).toEqual({
+    model: 3,
+    tags: ["a", "b"],
+  });
+});
