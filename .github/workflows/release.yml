@@ -1,0 +1,130 @@
+name: Release
+
+# A version tag, made by `bun run release <version>` and pushed by the owner: its release is
+# drafted with its changelog, gets the kernel and the desktop app for each system, and is
+# published once every required build is in. A build that fails leaves it a draft.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  draft:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Draft the release with its changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # Its section of CHANGELOG.md, without the heading the release's title repeats.
+          awk -v heading="## $version " 'index($0, heading) == 1 { found = 1; next } /^## / && found { exit } found' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
+          prerelease=""
+          [[ "$version" == *-* ]] && prerelease="--prerelease"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --draft $prerelease \
+            --title "ZeroLux $version" --notes-file notes.md
+
+  kernel:
+    needs: draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-26, target: aarch64-apple-darwin }
+          - { os: macos-26-intel, target: x86_64-apple-darwin }
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
+          - { os: windows-2025, target: x86_64-pc-windows-msvc, untried: true }
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.untried == true }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          cache-key: release
+      - name: Bundle the web app, sign-in and runners
+        run: bun run --cwd apps/desktop assets
+      - name: Build the kernel
+        run: cargo build --release --locked -p zerolux
+      - name: Pack it with its bundles and upload it
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          name="zerolux-$GITHUB_REF_NAME-${{ matrix.target }}"
+          mkdir "$name"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            cp target/release/zerolux.exe "$name/"
+          else
+            cp target/release/zerolux "$name/"
+          fi
+          cp -R apps/desktop/dist/web apps/desktop/dist/auth apps/desktop/dist/claude apps/desktop/dist/pi LICENSE README.md "$name/"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            archive="$name.zip"
+            7z a -bso0 "$archive" "$name"
+          else
+            archive="$name.tar.gz"
+            tar -czf "$archive" "$name"
+          fi
+          gh release upload "$GITHUB_REF_NAME" "$archive"
+
+  desktop:
+    needs: draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-26 }
+          - { os: macos-26-intel }
+          - { os: ubuntu-24.04, untried: true }
+          - { os: windows-2025, untried: true }
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.untried == true }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          cache-key: release
+      # Signed and notarized with the Apple Developer ID when its secrets are set; otherwise
+      # signed ad hoc, which Apple Silicon needs to open it at all.
+      - name: Choose how the macOS app is signed
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [[ -z "$APPLE_CERTIFICATE" ]]; then
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            echo "$name=${!name}" >> "$GITHUB_ENV"
+          done
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: bun x --bun tauri
+          tagName: ${{ github.ref_name }}
+          releaseDraft: true
+
+  publish:
+    needs: [kernel, desktop]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false

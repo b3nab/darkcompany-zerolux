@@ -12,6 +12,7 @@
     "dev": "bun run --cwd apps/web dev",
     "build": "bun run --cwd apps/web build",
     "db:generate": "bun scripts/generate-migration.ts",
+    "release": "bun scripts/release.ts",
     "desktop:dev": "bun run --cwd apps/desktop dev",
     "desktop:build": "bun run --cwd apps/desktop build",
     "typecheck": "bun run --cwd packages/theme typecheck && bun run --cwd packages/chat typecheck && bun run --cwd packages/bridge typecheck && bun run --cwd apps/web typecheck && bun run --cwd apps/mobile typecheck && bun run --cwd extensions/pi typecheck && bun run --cwd extensions/claude typecheck && bun run --cwd apps/desktop typecheck && bun run --cwd services/auth typecheck",
