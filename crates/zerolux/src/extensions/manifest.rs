@@ -50,6 +50,10 @@ pub struct KernelPart {
 pub struct ProcessPart {
     /// The program and its arguments, run in the extension's folder.
     pub command: Vec<String>,
+    /// How long it may take to start, in seconds, when longer than a minute: the first start
+    /// may prepare what it runs, such as its packages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -141,6 +145,15 @@ impl Manifest {
                 .is_none_or(|program| program.is_empty())
         {
             return Err(invalid("A process part names its command"));
+        }
+        if let Some(process) = &self.process
+            && process
+                .start_seconds
+                .is_some_and(|seconds| seconds == 0 || seconds > LONGEST)
+        {
+            return Err(invalid(format!(
+                "A process part starts within {LONGEST} seconds"
+            )));
         }
         if let Some(remote) = &self.remote
             && !remote.url.starts_with("https://")

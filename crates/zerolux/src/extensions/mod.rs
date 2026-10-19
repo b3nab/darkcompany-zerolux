@@ -306,11 +306,12 @@ impl Extensions {
             let folder = self.folder(&id);
             crate::platform::private_dir(&folder)?;
             let answer = started
-                .request(
+                .request_within(
                     "initialize",
                     json!({"extension": {"id": id, "version": manifest.extension.version},
                         "kernel": {"version": env!("CARGO_PKG_VERSION"), "api": manifest::API},
                         "settings": settings, "folder": folder}),
+                    std::time::Duration::from_secs(part.start_seconds.unwrap_or(60)),
                 )
                 .await;
             let answer = match answer {
@@ -968,6 +969,20 @@ impl process::Kernel for Extensions {
                 Ok(json!({"result": self
                     .run(caller, &text("extension"), &text("action"), params["input"].clone())
                     .await?}))
+            }
+            // Who is in the workspace: its name, and its people and agents by name.
+            "workspace.actors" => {
+                let workspace = self.store.workspace().await?;
+                let actors: Vec<Value> = workspace
+                    .actors
+                    .iter()
+                    .filter(|actor| !actor.archived)
+                    .map(|actor| {
+                        json!({"id": actor.id, "name": actor.name,
+                            "kind": if actor.kind == "human" { "person" } else { "agent" }})
+                    })
+                    .collect();
+                Ok(json!({"name": workspace.workspace.name, "actors": actors}))
             }
             "points.implementations" => {
                 Ok(json!({"implementations": self.implementations(&text("point")).await?}))
