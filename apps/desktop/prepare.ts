@@ -99,10 +99,12 @@ if (!piExtension.success)
   throw new AggregateError(piExtension.logs, "Bundle the pi chat extension");
 
 // What a release's kernel carries inside itself (`ZEROLUX_CARRY` = this folder): beside the
-// web app, sign-in and runners above, the programs it starts.
+// web app, sign-in and runners above, the programs it starts: Bun, the LiveKit server, and uv
+// for the Python parts of extensions.
 for (const [name, path] of [
   ["bun", process.execPath],
   ["livekit-server", Bun.which("livekit-server")],
+  ["uv", Bun.which("uv")],
 ] as const) {
   if (!path)
     throw new Error(`${name} is not on the PATH: the kernel carries it`);
