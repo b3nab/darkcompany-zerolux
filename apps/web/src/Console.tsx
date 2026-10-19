@@ -1194,7 +1194,8 @@ function HistoryHits({
       })}
       {truncated && (
         <p className="px-2 text-xs text-faint">
-          The search stopped at its time limit: more may match.
+          Not all history was searched, because of the time limit or a computer
+          that is offline: more may match.
         </p>
       )}
     </section>
