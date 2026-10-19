@@ -4,6 +4,7 @@ import {
   ChevronRightIcon,
   FolderIcon,
   PhoneIcon,
+  PuzzleIcon,
   SettingsIcon,
   ShieldIcon,
   UserPlusIcon,
@@ -86,6 +87,12 @@ export default function More() {
             icon={PhoneIcon}
             label="Meetings"
             onPress={go("/meetings")}
+            trailing={next}
+          />
+          <Row
+            icon={PuzzleIcon}
+            label="Extensions"
+            onPress={go("/extensions")}
             trailing={next}
           />
         </Section>

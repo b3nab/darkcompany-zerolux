@@ -71,6 +71,9 @@ function Navigator() {
         <Stack.Screen name="file/[id]" />
         <Stack.Screen name="subagent/[id]" />
         <Stack.Screen name="accounts/[id]" />
+        <Stack.Screen name="extensions" />
+        <Stack.Screen name="extension/[id]" />
+        <Stack.Screen name="action" options={{ presentation: "modal" }} />
       </Stack.Protected>
       <Stack.Protected guard={Boolean(url) && !authorized}>
         <Stack.Screen name="auth" />
