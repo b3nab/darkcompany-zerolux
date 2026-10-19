@@ -13,6 +13,22 @@ export interface TerminalInfo {
   ended: boolean;
 }
 
+/**
+ * How one's own session goes on in a terminal of its computer: the command, the computer, and
+ * whether ZeroLux stops it first, as two processes never share one native session.
+ */
+export interface TerminalCommand {
+  command: string;
+  host_id: string | null;
+  stop_first: boolean;
+}
+
+export const terminalCommand = (sessionId: string, kernel = kernelUrl()) =>
+  request<TerminalCommand>(
+    kernel,
+    `/sessions/${encodeURIComponent(sessionId)}/terminal-command`,
+  );
+
 /** A piece of its output after an offset, base64, and where to read on. */
 export interface TerminalOutput {
   /** Where the output kept now begins: what came before it is gone. */
