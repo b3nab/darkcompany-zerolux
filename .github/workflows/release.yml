@@ -122,8 +122,57 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseDraft: true
 
+  # The mobile app for Android, as an APK for 64-bit ARM phones. Signed with the release key
+  # when its secrets are set; otherwise with the debug key, which installs but cannot be
+  # updated by a build signed with the release key later.
+  android:
+    needs: draft
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+      - name: Generate the Android project
+        working-directory: apps/mobile
+        run: bun x --bun expo prebuild --platform android --no-install
+      # Expo's template packs the Gradle wrapper so that `java -jar` cannot open it: Gradle
+      # writes its own again, of the version the project names.
+      - name: Write the Gradle wrapper again
+        working-directory: apps/mobile/android
+        run: |
+          version="$(sed -n 's/.*gradle-\(.*\)-bin\.zip/\1/p' gradle/wrapper/gradle-wrapper.properties)"
+          java -cp gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain wrapper --gradle-version "$version"
+      - name: Build the APK
+        working-directory: apps/mobile/android
+        run: ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon
+      - name: Sign it and upload it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          apk="zerolux-$GITHUB_REF_NAME-android-arm64.apk"
+          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk "$apk"
+          if [[ -n "$ANDROID_KEYSTORE" ]]; then
+            echo "$ANDROID_KEYSTORE" | base64 --decode > release.keystore
+            apksigner="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
+            "$apksigner" sign --ks release.keystore --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+              --ks-key-alias "$ANDROID_KEY_ALIAS" --key-pass env:ANDROID_KEY_PASSWORD "$apk"
+            rm release.keystore
+            "$apksigner" verify "$apk"
+          fi
+          gh release upload "$GITHUB_REF_NAME" "$apk"
+
   publish:
-    needs: [kernel, desktop]
+    needs: [kernel, desktop, android]
     runs-on: ubuntu-24.04
     steps:
       - name: Publish the release
