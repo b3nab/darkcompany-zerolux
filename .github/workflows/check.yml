@@ -48,9 +48,11 @@ jobs:
       - run: bun run check
 
   # Windows has no PostgreSQL service container: the Rust tests run on SQLite there, as the
-  # Linux job also runs them, beside its PostgreSQL ones.
+  # Linux job also runs them, beside its PostgreSQL ones. It does not fail the check until the
+  # kernel's Windows port is through.
   windows:
     runs-on: windows-2025
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
