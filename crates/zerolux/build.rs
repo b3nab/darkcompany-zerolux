@@ -1,7 +1,6 @@
 //! A release's kernel carries what it runs: with `ZEROLUX_CARRY` naming a folder, its web
 //! app, sign-in, runners, official extensions, `bun`, `uv` and `livekit-server` are packed into
-//! the kernel. Without it,
-//! nothing is: a checkout's kernel uses the checkout and the PATH.
+//! the kernel. Without it, nothing is: a checkout's kernel uses the checkout and the PATH.
 
 use std::{
     io::Write,
