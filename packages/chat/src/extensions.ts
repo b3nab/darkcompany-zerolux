@@ -5,11 +5,13 @@ import { errorMessage, kernelUrl, request } from "./client";
 /** A setting of an extension; a secret's value never comes back, only whether it has one. */
 export interface ExtensionSetting {
   key: string;
-  type: "text" | "number" | "boolean" | "secret";
+  type: "text" | "number" | "boolean" | "secret" | "choice";
   label: string;
   description: string;
   value: unknown;
   set: boolean;
+  /** A choice's values, each with its label. */
+  options?: { value: string; label: string }[];
 }
 
 /** An operation, defined once: a button, a tool for agents and an API. */
@@ -21,6 +23,8 @@ export interface ExtensionAction {
   input: JsonSchema;
   output: JsonSchema | null;
   effects: "read" | "write" | "destructive";
+  /** How long it may take, in seconds, when longer than a minute (at most 30 minutes). */
+  seconds?: number;
 }
 
 /** What an extension brings, as its build declared it. */
