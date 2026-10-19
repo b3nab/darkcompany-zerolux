@@ -175,6 +175,23 @@ async fn api_rejects_foreign_origins_rebinding_invalid_input_and_unknown_routes(
         .unwrap();
     assert!(plain.headers().get("content-encoding").is_none());
     assert_eq!(plain.text().await.unwrap(), "console.log(1)");
+    // A file with a hash in its name is kept; the app's page and every other file are asked
+    // again, so a new build reaches the browser at once.
+    std::fs::write(kernel.dir.path().join("web/index-91w2fqxe.js"), "built").unwrap();
+    for (path, cache) in [
+        ("/index-91w2fqxe.js", "public, max-age=31536000, immutable"),
+        ("/", "no-cache"),
+        ("/chats/some-chat", "no-cache"),
+        ("/app.js", "no-cache"),
+    ] {
+        let response = kernel
+            .client
+            .get(format!("{}{path}", kernel.url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.headers()["cache-control"], cache, "{path}");
+    }
     for path in ["/api/missing", "/api/tasks/missing/runs"] {
         assert_eq!(
             kernel

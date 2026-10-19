@@ -401,10 +401,39 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
                         .precompressed_gzip(),
                 ),
         )
+        .layer(middleware::from_fn(web_cache))
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), access))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// The web app's files with a hash in their names never change: a browser keeps them. Every
+/// other address, the app's page first, is asked again, so a new build reaches it at once.
+async fn web_cache(request: Request, next: Next) -> Response {
+    let path = request.uri().path().to_owned();
+    let mut response = next.run(request).await;
+    if path.starts_with("/api/") || !response.status().is_success() {
+        return response;
+    }
+    let file = path.rsplit('/').next().unwrap_or_default();
+    let hashed = file.split_once('.').is_some_and(|(stem, _)| {
+        stem.rsplit_once('-').is_some_and(|(_, hash)| {
+            hash.len() == 8
+                && hash
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        })
+    });
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static(if hashed {
+            "public, max-age=31536000, immutable"
+        } else {
+            "no-cache"
+        }),
+    );
+    response
 }
 
 /// Nothing of the API is cached by a browser or a device: discovery, identity and
