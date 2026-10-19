@@ -135,6 +135,7 @@ import { SubagentList, SubagentPanel } from "./SessionSubagents";
 import { AskOnTheSide, InputActions } from "./SessionFork";
 import { SessionSchedules } from "./SessionSchedules";
 import { SessionTriggers } from "./SessionTriggers";
+import { ContinueInTerminal } from "./ContinueInTerminal";
 import { GoalCard } from "./SessionGoal";
 import type { Fork } from "./SessionFork";
 import type { CodePane } from "./SessionCode";
@@ -566,6 +567,12 @@ export function SessionView({
   // A new session from this one, whole or before an input, with the owner's words, opened.
   const navigate = useNavigate();
   const [asking, setAsking] = useState(false);
+  // Its own terminal: for its person, on a computer of theirs.
+  const [continuing, setContinuing] = useState(false);
+  const ownComputer =
+    !session.host_id ||
+    !hosts ||
+    hosts.some((h) => h.id === session.host_id && h.person_id === me?.id);
   const fork: Fork = (at, text) =>
     perform(async () => {
       const { session: forked } = await chat.forkSession(
@@ -881,6 +888,12 @@ export function SessionView({
                     <MessageCircleQuestionIcon />
                     Ask on the side…
                   </DropdownMenuItem>
+                  {ownComputer && (
+                    <DropdownMenuItem onClick={() => setContinuing(true)}>
+                      <SquareTerminalIcon />
+                      Continue in terminal…
+                    </DropdownMenuItem>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -1099,6 +1112,15 @@ export function SessionView({
         close={() => setAsking(false)}
         fork={fork}
         busy={busy}
+      />
+      <ContinueInTerminal
+        session={session}
+        hosts={hosts}
+        open={continuing}
+        close={() => setContinuing(false)}
+        stop={() => chat.stop(session.id)}
+        busy={busy}
+        perform={perform}
       />
       {!wide && (
         <Sheet
