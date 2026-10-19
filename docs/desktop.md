@@ -2,7 +2,7 @@
 
 The ZeroLux desktop app keeps a list of workspace connections on this device. Each workspace has its own kernel and database; the desktop uses the same interface and HTTP API as the browser client.
 
-The desktop is part of the bootstrap release. Authentication, automatic updates and signed distribution packages are not included. macOS **14 or later** is required for persistent workspace browser isolation. macOS packaging has been exercised; Linux and Windows packaging and isolation remain unverified.
+The app runs on macOS **14 or later** (for each workspace's own browser storage), Linux and Windows. It does not update itself: install a new release over it.
 
 ## Run from source
 
@@ -27,7 +27,7 @@ A server on the same computer can still be **external to the desktop**. For exam
 
 The workspace's **name is shared** with everyone using it. Renaming does not change its identity or history. The saved **address belongs to this client**. Change an existing connection's address only when the new address serves the same workspace; add a different workspace separately. Identity continuity is not authentication.
 
-The desktop loads its packaged interface and calls the selected kernel's HTTP API. Each workspace window keeps its own verified kernel address. Browser clients still load the interface served by their kernel. The desktop uses what the kernel declares in `/api/health` (`capabilities`); sign-in is offered when the kernel declares `auth-v1`, and an older kernel is used as it is. macOS uses an overlay title bar with native traffic lights; Windows and Linux use controls in the interface (not yet verified on those systems).
+The desktop loads its packaged interface and calls the selected kernel's HTTP API. Each workspace window keeps its own verified kernel address. Browser clients still load the interface served by their kernel. The desktop uses what the kernel declares in `/api/health` (`capabilities`); sign-in is offered when the kernel declares `auth-v1`, and an older kernel is used as it is. macOS uses an overlay title bar with native traffic lights; Windows and Linux use window controls drawn in the interface.
 
 ## Switching, drafts and closing
 
@@ -53,13 +53,13 @@ On first launch after upgrading from the single-connection desktop, the app impo
 
 Only one kernel runtime may serve a database. Connect to its address rather than starting another kernel against the same data.
 
-## Services and security
+## Services
 
-Starting an app-managed kernel requires `livekit-server` on PATH or a complete external LiveKit configuration. Sessions ZeroLux starts or restores also require Bun and the harness itself (Claude Code, pi), are currently Unix-only, and owned Claude sessions remain tied to a single workspace. The app looks for them on PATH and in the usual install locations (`~/.bun/bin`, `~/.local/bin`, `~/.cargo/bin`, `~/.pi/agent/bin`, Homebrew, `/usr/local/bin`). Connecting to an existing kernel does not require those services on the client. See [chat setup](chat.md#livekit) and [agents and tasks](byoh.md).
+The app carries what its kernel starts: the LiveKit server, unless an external LiveKit is configured, and Bun, which runs sign-in and the session runners. Sessions use the harnesses installed on this computer (Claude Code, Codex, pi); owned Claude sessions remain tied to a single workspace. The app looks for the harnesses on PATH and in the usual install locations (`~/.bun/bin`, `~/.local/bin`, `~/.cargo/bin`, `~/.pi/agent/bin`, Homebrew, `/usr/local/bin`; on Windows also npm's global folder). Connecting to an existing kernel needs none of this on the client. See [chat setup](chat.md#livekit) and [agents and tasks](byoh.md).
 
 Use the matching, updated ZeroLux harness integrations. An older loaded pi extension may support only one workspace and may not recognize the desktop subscriber executable; updating source files does not reload an already running extension. Connecting to a remote kernel does not automatically make this computer's native sessions available to that kernel.
 
-The current kernel is unauthenticated and single-owner. Use a trusted local/private network; do not treat HTTPS or a saved workspace ID as permission to expose it to the public internet. Remote connections need the kernel's network and LiveKit addresses configured for those clients.
+Clients on other devices reach the kernel at an address it serves (`--expose`, or a public origin behind a reverse proxy) and at its LiveKit address.
 
 ## Build an application package
 
@@ -69,7 +69,7 @@ bun run desktop:build
 
 Tauri reports the generated application or package location. Open or install that output using your operating system's normal procedure. Building does not install or deploy the app, or sign it for distribution.
 
-The package includes web assets, the ZeroLux Claude runner, the ZeroLux pi host and the pi chat extension it loads into stock pi, but neither the Claude Code nor the pi executable: the app-managed kernel starts and restores Claude Code and pi sessions through the ones installed on this computer. Local-runtime requirements still apply after packaging.
+The package includes the web assets, Bun, the LiveKit server, the ZeroLux Claude runner, the ZeroLux pi host and the pi chat extension it loads into stock pi, but no harness: the app-managed kernel starts and restores Claude Code, Codex and pi sessions through the ones installed on this computer. Building it takes `livekit-server` on the PATH, which the package copies.
 
 ## For contributors
 
