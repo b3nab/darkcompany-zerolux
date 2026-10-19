@@ -39,11 +39,6 @@ export const capabilities: Capability[] = [
     name: "Storage",
     description: "Files uploaded or written by people and agents.",
   },
-  {
-    id: "transcription-v1",
-    name: "Voice to text",
-    description: "Dictation and voice messages, transcribed on the kernel.",
-  },
 ];
 
 /**

@@ -84,10 +84,9 @@ export function extensionsNotice() {
   readers.forEach((read) => read());
 }
 
-/** A list the kernel keeps, under `key`, read again whenever extensions change. */
-function useKernelList<T>(
-  path: string,
-  key: string,
+/** A list read from the kernel with `load`, read again whenever extensions change. */
+export function useKernelList<T>(
+  load: (kernel: string) => Promise<T[]>,
   kernel: string,
   enabled: boolean,
 ) {
@@ -99,8 +98,8 @@ function useKernelList<T>(
   const reload = useCallback(
     async () =>
       enabled
-        ? request<Record<string, T[]>>(kernel, path).then(
-            (body) => setRead({ kernel, items: body[key] ?? [] }),
+        ? load(kernel).then(
+            (items) => setRead({ kernel, items }),
             (error: unknown) =>
               setRead((was) => ({
                 ...(was?.kernel === kernel ? was : { kernel }),
@@ -108,7 +107,7 @@ function useKernelList<T>(
               })),
           )
         : undefined,
-    [kernel, path, key, enabled],
+    [load, kernel, enabled],
   );
   useEffect(() => {
     void reload();
@@ -122,25 +121,25 @@ function useKernelList<T>(
   return { items: current?.items, error: current?.error ?? "", reload };
 }
 
+const readExtensions = (kernel: string) =>
+  request<{ extensions?: Extension[] }>(kernel, "/extensions").then(
+    (body) => body.extensions ?? [],
+  );
+
+const readActions = (kernel: string) =>
+  request<{ actions?: ExtensionAction[] }>(kernel, "/actions").then(
+    (body) => body.actions ?? [],
+  );
+
 /** The workspace's extensions, read again whenever they change. */
 export function useExtensions(kernel = kernelUrl(), enabled = true) {
-  const { items, ...rest } = useKernelList<Extension>(
-    "/extensions",
-    "extensions",
-    kernel,
-    enabled,
-  );
+  const { items, ...rest } = useKernelList(readExtensions, kernel, enabled);
   return { extensions: items, ...rest };
 }
 
 /** The actions of the enabled extensions, read again whenever extensions change. */
 export function useActions(kernel = kernelUrl(), enabled = true) {
-  const { items, ...rest } = useKernelList<ExtensionAction>(
-    "/actions",
-    "actions",
-    kernel,
-    enabled,
-  );
+  const { items, ...rest } = useKernelList(readActions, kernel, enabled);
   return { actions: items, ...rest };
 }
 
@@ -182,9 +181,11 @@ export const runAction = (
   name: string,
   input: Record<string, unknown>,
   kernel = kernelUrl(),
+  signal?: AbortSignal,
 ) =>
   request<{ result: unknown }>(
     kernel,
     `/ext/${encodeURIComponent(extension)}/${encodeURIComponent(name)}`,
     input,
+    signal,
   ).then(({ result }) => result);
