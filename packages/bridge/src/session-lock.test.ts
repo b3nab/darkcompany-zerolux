@@ -42,10 +42,13 @@ test("untrusted permissions, hardlinks and oversized metadata fail without trunc
   const path = join(root, "session.lock");
   try {
     await writeFile(path, "evidence", { mode: 0o600 });
-    await chmod(path, 0o644);
-    expect(() => acquireSessionLock(path)).toThrow("private");
-    expect(await readFile(path, "utf8")).toBe("evidence");
-    await chmod(path, 0o600);
+    // On Windows the user's profile is private by its permissions; modes do not apply.
+    if (process.platform !== "win32") {
+      await chmod(path, 0o644);
+      expect(() => acquireSessionLock(path)).toThrow("private");
+      expect(await readFile(path, "utf8")).toBe("evidence");
+      await chmod(path, 0o600);
+    }
     const alias = join(root, "other.lock");
     await link(path, alias);
     expect(() => acquireSessionLock(alias)).toThrow("unaliased");
