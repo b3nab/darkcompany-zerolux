@@ -120,6 +120,23 @@ for (const [name, path] of [
   await chmod(target, 0o755);
 }
 
+// What a release's kernel carries inside itself (`ZEROLUX_CARRY` = this folder): beside the
+// web app, sign-in and runners above, the programs it starts.
+for (const [name, path] of [
+  ["bun", process.execPath],
+  ["livekit-server", Bun.which("livekit-server")],
+] as const) {
+  if (!path)
+    throw new Error(`${name} is not on the PATH: the kernel carries it`);
+  const target = join(
+    dist,
+    process.platform === "win32" ? `${name}.exe` : name,
+  );
+  await rm(target, { force: true });
+  await cp(await realpath(path), target);
+  await chmod(target, 0o755);
+}
+
 // Generate platform icons from the existing web favicon; no independent desktop branding.
 const source = await readFile(join(root, "apps/web/index.html"), "utf8");
 const favicon = source.match(/href="data:image\/svg\+xml,([^"]+)"/);
