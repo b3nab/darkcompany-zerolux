@@ -59,6 +59,8 @@ import {
   ProfileHead,
 } from "@/components/profile";
 import { agentPresence, sessionTone } from "./presence";
+import { AgentVoice } from "./AgentVoice";
+import { useMe } from "./AuthGate";
 
 /** Finds the owner's harness sessions and hires them. */
 export function Hire({
@@ -783,6 +785,7 @@ export function AgentProfile({
   perform: Perform;
 }) {
   const owner = workspace.actors.find((a) => a.id === agent.owner_id);
+  const { me } = useMe(workspace.actors);
   const { label, tone } = agentPresence(agent.id, chat.sessions);
   const { sessions, earlier, chats, answering, dm, waiting } = agentWork(
     agent,
@@ -920,6 +923,7 @@ export function AgentProfile({
           return ok ? actor : undefined;
         }}
       />
+      <AgentVoice agent={agent} mine={agent.owner_id === me?.id} />
       {current.length > 0 && (
         <section className="flex flex-col gap-3 border-b px-5 py-4">
           <Eyebrow>
