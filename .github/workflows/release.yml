@@ -40,7 +40,8 @@ jobs:
         include:
           - { os: macos-26, target: aarch64-apple-darwin }
           - { os: macos-26-intel, target: x86_64-apple-darwin }
-          - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
+          # The oldest supported Ubuntu, so the builds run with older glibc versions too.
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
           - { os: windows-2025, target: x86_64-pc-windows-msvc }
     runs-on: ${{ matrix.os }}
     steps:
@@ -84,7 +85,7 @@ jobs:
         include:
           - { os: macos-26 }
           - { os: macos-26-intel }
-          - { os: ubuntu-24.04 }
+          - { os: ubuntu-22.04 }
           - { os: windows-2025 }
     runs-on: ${{ matrix.os }}
     steps:

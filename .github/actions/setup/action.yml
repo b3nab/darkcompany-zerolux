@@ -11,7 +11,7 @@ runs:
   steps:
     # webrtc-sys uses Chromium's hermetic libc++, which requires Clang 21+.
     # https://github.com/livekit/rust-sdks#building
-    - name: Install Clang and the desktop's native libraries
+    - name: Install Clang and the desktop's native libraries and packaging tools
       if: runner.os == 'Linux'
       shell: bash
       run: |
@@ -21,10 +21,11 @@ runs:
         fingerprint="$(gpg --batch --show-keys --with-colons llvm.asc | awk -F: '$1 == "fpr" { print $10; exit }')"
         test "$fingerprint" = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
         sudo install -m 0644 llvm.asc /usr/share/keyrings/apt-llvm.asc
-        echo "deb [signed-by=/usr/share/keyrings/apt-llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
+        codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+        echo "deb [signed-by=/usr/share/keyrings/apt-llvm.asc] https://apt.llvm.org/$codename/ llvm-toolchain-$codename-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
         rm llvm.asc
         sudo apt-get update
-        sudo apt-get install -y --no-install-recommends build-essential clang-21 libclang-21-dev libc6-dev libglib2.0-dev libjpeg-turbo8-dev pkg-config libwebkit2gtk-4.1-dev libdbus-1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+        sudo apt-get install -y --no-install-recommends build-essential clang-21 libclang-21-dev libc6-dev libglib2.0-dev libjpeg-turbo8-dev pkg-config libwebkit2gtk-4.1-dev libdbus-1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils
         clang-21 --version
         pkg-config --exists glib-2.0 gobject-2.0 gio-2.0
         {
