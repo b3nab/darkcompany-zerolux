@@ -22,6 +22,7 @@ import {
   checksOf,
   closeTerminal,
   errorMessage,
+  ApiError,
   followTerminal,
   isStaged,
   isUnstaged,
@@ -1127,15 +1128,20 @@ function terminalTheme(dark: boolean) {
 function TerminalScreen({
   terminal,
   ended,
+  lost,
 }: {
   terminal: TerminalInfo;
   ended: () => void;
+  /** The kernel no longer knows it by this ID, as after a restart: the list is read again. */
+  lost: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const screen = useRef<Terminal>(null);
   const { resolved, theme } = useTheme();
   const done = useRef(ended);
   done.current = ended;
+  const gone = useRef(lost);
+  gone.current = lost;
   useEffect(() => {
     if (!host.current) return;
     const xterm = new Terminal({
@@ -1163,9 +1169,15 @@ function TerminalScreen({
       }).catch(() => {});
     const watch = new ResizeObserver(() => fit.fit());
     watch.observe(host.current);
+    const read = terminalReader(terminal.id);
     const stop = followTerminal(
       terminal.id,
-      terminalReader(terminal.id),
+      (after) =>
+        read(after).catch((failed: unknown) => {
+          if (failed instanceof ApiError && failed.status === 404)
+            gone.current();
+          throw failed;
+        }),
       (data) =>
         xterm.write(Uint8Array.from(atob(data), (c) => c.charCodeAt(0))),
       () => done.current(),
@@ -1212,6 +1224,8 @@ export function TerminalPanel({
       setTerminals((all) => [...(all ?? []), terminal]);
       setShown(terminal.id);
     });
+  // A restarted kernel finds a joined computer's terminals again when their list is read.
+  const [listed, setListed] = useState(0);
   useEffect(() => {
     let current = true;
     sessionTerminals(session.id).then(
@@ -1219,8 +1233,8 @@ export function TerminalPanel({
         if (!current) return;
         const live = found.filter((terminal) => !terminal.ended);
         setTerminals(live);
-        if (live.length) setShown(live[0]!.id);
-        else void add();
+        setShown((was) => (live.some((t) => t.id === was) ? was : live[0]?.id));
+        if (!live.length && !listed) void add();
       },
       (failed: unknown) => current && setError(errorMessage(failed)),
     );
@@ -1229,7 +1243,7 @@ export function TerminalPanel({
     };
     // The session's terminals are read when the panel opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id]);
+  }, [session.id, listed]);
   const terminal = terminals?.find((t) => t.id === shown);
   const ended = (id: string) =>
     setTerminals((all) =>
@@ -1294,9 +1308,10 @@ export function TerminalPanel({
       )}
       {terminal && (
         <TerminalScreen
-          key={terminal.id}
+          key={`${terminal.id}:${listed}`}
           terminal={terminal}
           ended={() => ended(terminal.id)}
+          lost={() => setListed((n) => n + 1)}
         />
       )}
       {terminals?.length === 0 && (

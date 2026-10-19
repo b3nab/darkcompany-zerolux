@@ -513,7 +513,7 @@ export function SessionView({
   busy: boolean;
   perform: Perform;
 }) {
-  // A joined computer runs it: its images, terminals and forks stay there.
+  // A joined computer runs it: its images and forks stay there.
   const computer = sessionComputer(session, hosts);
   const away = computer !== undefined;
   const name = sessionName(session, actors);
@@ -616,7 +616,7 @@ export function SessionView({
         chatTitle={chatTitle}
         close={() => setPane(undefined)}
       />
-    ) : pane === "terminal" && access.write && !away ? (
+    ) : pane === "terminal" && access.write ? (
       <TerminalPanel
         session={session}
         perform={perform}
@@ -805,7 +805,7 @@ export function SessionView({
                   <FileSearchIcon data-icon="inline-start" />
                   <span className="max-xl:sr-only">Files</span>
                 </Button>
-                {access.write && !away && (
+                {access.write && (
                   <Button
                     variant="outline"
                     size="sm"
