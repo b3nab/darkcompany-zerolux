@@ -2318,6 +2318,12 @@ async fn a_codex_session_runs_on_a_joined_computer() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     assert_eq!(session["status"], "connected", "{session}");
+    // Its native settings are read on the computer, from its Codex.
+    let settings = kernel.get(&format!("/sessions/{id}/settings"), None).await;
+    let status = settings.status();
+    let settings: Value = settings.json().await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{settings}");
+    assert_eq!(settings["values"]["model"], "fixture-model", "{settings}");
     let sent = kernel
         .post(
             &format!("/sessions/{id}/input"),

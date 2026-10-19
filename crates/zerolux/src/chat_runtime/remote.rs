@@ -119,9 +119,9 @@ impl CodexControl {
     pub async fn read(&self) -> Result<crate::agent_settings::NativeSettings> {
         match self {
             Self::Here(control) => control.read().await,
-            Self::There { .. } => {
-                bail!("The settings of a session on a joined computer are changed there")
-            }
+            Self::There { .. } => Ok(serde_json::from_value(
+                self.ask(json!({"method": "settings"})).await?["settings"].clone(),
+            )?),
         }
     }
 
@@ -132,9 +132,12 @@ impl CodexControl {
     ) -> Result<crate::agent_settings::NativeSettings> {
         match self {
             Self::Here(control) => control.apply(patch, check).await,
-            Self::There { .. } => {
-                bail!("The settings of a session on a joined computer are changed there")
-            }
+            Self::There { .. } => Ok(serde_json::from_value(
+                self.ask(json!({"method": "settings", "values": patch.patch_json(),
+                    "check": check}))
+                    .await?["settings"]
+                    .clone(),
+            )?),
         }
     }
 }

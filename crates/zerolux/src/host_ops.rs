@@ -97,6 +97,17 @@ pub async fn record(op: &str, record: &RecordRef, params: &Value) -> Result<Valu
                 end,
             })
         }
+        "at" => {
+            let at: u64 = param(params, "at")?;
+            let path = path.context("The session's native record is not there yet")?;
+            let (records, ..) = crate::native_output::read(&path, at).await?;
+            records
+                .into_iter()
+                .next()
+                .filter(|record| record.at == at)
+                .context("No record of this session starts there")?
+                .record
+        }
         "subagents" => json!({"subagents": crate::chat_runtime::subagents_of(&row).await?}),
         "subagent_events" => json!(
             crate::chat_runtime::subagent_events_of(

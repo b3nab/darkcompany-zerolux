@@ -239,6 +239,17 @@ impl CodexSettings {
                 self.clear_goal().await?;
                 json!({})
             }
+            // As the pi and Claude integrations answer it: read, or with `values` changed.
+            "settings" => {
+                let settings = match request.get("values").filter(|values| !values.is_null()) {
+                    Some(values) => {
+                        let patch: AgentSettings = serde_json::from_value(values.clone())?;
+                        self.apply(&patch, request["check"] == true).await?
+                    }
+                    None => self.read().await?,
+                };
+                json!({"settings": settings})
+            }
             other => bail!("This computer's Codex control does not know `{other}`; update it"),
         })
     }

@@ -148,6 +148,23 @@ impl ChatRuntime {
         at: u64,
     ) -> Result<(String, Value)> {
         let row = self.store.observed_session(who, id).await?;
+        // A session on a joined computer: its record is read there.
+        if let Some(host) = row
+            .host_id
+            .clone()
+            .filter(|host| Some(host.as_str()) != self.store.host())
+        {
+            let record = self
+                .hosts
+                .call(
+                    &host,
+                    "record",
+                    serde_json::json!({"op": "at", "record": crate::host_ops::RecordRef::of(&row),
+                        "params": {"at": at}}),
+                )
+                .await?;
+            return Ok((row.harness, record));
+        }
         let path = tokio::task::spawn_blocking({
             let row = row.clone();
             move || crate::native_output::locate(&row)
