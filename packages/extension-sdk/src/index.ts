@@ -18,6 +18,8 @@ export interface Caller {
 /** What an extension can ask the kernel, and what it knows of itself. */
 export interface Context {
   extension: { id: string; version: string };
+  /** Its own folder, for its files: private to it and the kernel, removed with it. */
+  folder: string;
   /** Its settings, without secrets; kept current as they change. */
   settings: Record<string, unknown>;
   /** Its settings with its secrets, read from the kernel when needed. */
@@ -57,6 +59,8 @@ export interface Action<I = any, O = unknown> {
   input?: Schema;
   output?: Schema;
   effects?: "read" | "write" | "destructive";
+  /** How long it may take, in seconds, when longer than a minute (up to 30 minutes). */
+  seconds?: number;
   run(input: I, context: Context & { caller: Caller }): O | Promise<O>;
 }
 
@@ -115,6 +119,7 @@ export function contributes(extension: Extension) {
       input: action.input ?? { type: "object" },
       ...(action.output ? { output: action.output } : {}),
       effects: action.effects ?? "read",
+      ...(action.seconds ? { seconds: action.seconds } : {}),
     })),
     points: Object.entries(extension.points ?? {}).map(([name, point]) => ({
       name,
@@ -191,6 +196,7 @@ export async function serve(
     });
   const context: Context = {
     extension: { id: "", version: "" },
+    folder: "",
     settings: {},
     secrets: async () => (await ask("settings.get")).settings,
     values: {
@@ -230,6 +236,7 @@ export async function serve(
     switch (message.method) {
       case "initialize":
         context.extension = params.extension;
+        context.folder = params.folder ?? "";
         context.settings = params.settings ?? {};
         await extension.start?.(context);
         return { contributes: contributes(extension) };
