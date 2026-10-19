@@ -26,7 +26,7 @@ store = { type = "text", label = "Store", default = "memory" }
 token = { type = "secret", label = "Token" }
 ```
 
-Settings are `text`, `number`, `boolean` or `secret`. A secret is never shown to clients; only the extension's own parts read it.
+Settings are `text`, `number`, `boolean`, `secret` or `choice`, with its `options` (`[{ value, label }]`). A secret is never shown to clients; only the extension's own parts read it.
 
 **Current limitation:** only process parts run. A manifest with a kernel module or a remote part is refused.
 
@@ -34,7 +34,7 @@ Settings are `text`, `number`, `boolean` or `secret`. A secret is never shown to
 
 When enabled, its process says what it brings:
 
-- **Actions**: named operations with a JSON Schema for their input and an effect (`read`, `write` or `destructive`). One action serves people, agents and the API. The kernel checks the input against the schema before the extension sees it, and records every call with who made it, how long it took and whether it succeeded.
+- **Actions**: named operations with a JSON Schema for their input and an effect (`read`, `write` or `destructive`). An action answers within a minute, or within the `seconds` it declares, up to 30 minutes. One action serves people, agents and the API. The kernel checks the input against the schema before the extension sees it, and records every call with who made it, how long it took and whether it succeeded.
 - **Extension points**: contracts it opens, `publisher.extension/point@version`, with operations and their input schemas. Other extensions implement them under a name; the kernel routes a call to the implementation and checks its input against the contract.
 - **Events**: what it publishes, named under its ID (`acme.notes/saved`), and what it hears.
 - **Triggers**: an action to run on `event:<extension>/<event>` or on `schedule:<cron>`. A trigger's call is recorded as `trigger:…`.
@@ -43,7 +43,7 @@ When enabled, its process says what it brings:
 
 The kernel starts the command in the extension's folder with a cleared environment (`PATH`, `HOME`, `TMPDIR`, `LANG`, `USER` and `ZEROLUX_EXTENSION`), and talks JSON-RPC 2.0 over standard input and output, one message per line. Standard error goes to `extensions/<id>.log` in the data folder.
 
-The kernel calls `initialize` (answered with what it brings), `action.run` and `point.call`, and notifies `event`, `settings` and `shutdown`. The extension calls `settings.get` (with its secrets), `values.get`, `values.set`, `values.list`, `events.publish`, `actions.run`, `points.implementations` and `points.call`, and notifies `log`. Requests time out after 60 seconds.
+Each extension has a private folder for its files, `extensions/<id>/` in the data folder, given to it in `initialize` and removed with it. The kernel calls `initialize` (answered with what it brings), `action.run` and `point.call`, and notifies `event`, `settings` and `shutdown`. The extension calls `settings.get` (with its secrets), `values.get`, `values.set`, `values.list`, `events.publish`, `actions.run`, `points.implementations` and `points.call`, and notifies `log`. The kernel's requests wait a minute, or an action's own `seconds`.
 
 `@zerolux/extension-sdk` (`packages/extension-sdk`) writes this in TypeScript:
 
@@ -72,7 +72,7 @@ await serve(
 
 ## Lifecycle
 
-The workspace owner installs, enables, disables, configures and removes extensions. Installing from a folder on the kernel's computer marks it as being worked on; installing the same folder again reloads it. Enabling starts its parts after its dependencies; a failure is kept as its error and it stays disabled. An extension cannot be disabled while an enabled one depends on it. Removing a disabled extension deletes its settings, secrets and stored values. Enabled extensions start again with the kernel, dependencies first.
+The workspace owner installs, enables, disables, configures and removes extensions. Installing from a folder on the kernel's computer marks it as being worked on; installing the same folder again reloads it. Enabling starts its parts after its dependencies; a failure is kept as its error and it stays disabled. An extension cannot be disabled while an enabled one depends on it. Removing a disabled extension deletes its settings, secrets, stored values and folder. Enabled extensions start again with the kernel, dependencies first.
 
 People and agents' sessions run actions. Clients hear `extensions.changed` and read the list again.
 
