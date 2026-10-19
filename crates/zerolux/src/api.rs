@@ -340,6 +340,20 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
             "/hosts/{id}/accounts/pi",
             axum::routing::put(set_pi_account),
         )
+        .route("/extensions", get(list_extensions))
+        .route("/extensions/folder", post(install_extension_folder))
+        .route("/extensions/{id}", axum::routing::delete(remove_extension))
+        .route("/extensions/{id}/enable", post(enable_extension))
+        .route("/extensions/{id}/disable", post(disable_extension))
+        .route(
+            "/extensions/{id}/settings",
+            axum::routing::patch(extension_settings),
+        )
+        .route("/actions", get(list_actions))
+        .route(
+            "/ext/{extension}/{action}",
+            post(run_action).layer(DefaultBodyLimit::max(4 * 1024 * 1024)),
+        )
         .route("/invites", get(list_invites).post(create_invite))
         .route("/invites/{id}", axum::routing::delete(revoke_invite))
         .route("/chat/approvals", get(approvals).post(create_approval))
@@ -2808,6 +2822,119 @@ async fn create_agent(
         return Err(Error::Forbidden);
     }
     Ok((StatusCode::CREATED, Json(store.create_agent(input).await?)))
+}
+
+/// The workspace's extensions, as they are now.
+async fn list_extensions(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+) -> Result<Json<Value>, ApiFailure> {
+    if !who.is_person() {
+        return Err(Error::Forbidden.into());
+    }
+    let extensions = runtime(&state)?.extensions.list().await.map_err(said)?;
+    Ok(Json(json!({ "extensions": extensions })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExtensionFolder {
+    folder: String,
+}
+
+/// An extension being worked on, from a folder on the kernel's computer: installed, or
+/// installed again, and enabled.
+async fn install_extension_folder(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    ChatJson(input): ChatJson<ExtensionFolder>,
+) -> Result<Json<Value>, ApiFailure> {
+    let extension = runtime(&state)?
+        .extensions
+        .install_folder(&who, &input.folder)
+        .await
+        .map_err(said)?;
+    Ok(Json(json!({ "extension": extension })))
+}
+
+async fn enable_extension(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let extension = runtime(&state)?
+        .extensions
+        .enable(&who, &id)
+        .await
+        .map_err(said)?;
+    Ok(Json(json!({ "extension": extension })))
+}
+
+async fn disable_extension(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let extension = runtime(&state)?
+        .extensions
+        .disable(&who, &id)
+        .await
+        .map_err(said)?;
+    Ok(Json(json!({ "extension": extension })))
+}
+
+async fn remove_extension(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    runtime(&state)?
+        .extensions
+        .remove(&who, &id)
+        .await
+        .map_err(said)?;
+    Ok(Json(json!({ "removed": true })))
+}
+
+async fn extension_settings(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(changes): ChatJson<serde_json::Map<String, Value>>,
+) -> Result<Json<Value>, ApiFailure> {
+    let extension = runtime(&state)?
+        .extensions
+        .set_settings(&who, &id, changes)
+        .await
+        .map_err(said)?;
+    Ok(Json(json!({ "extension": extension })))
+}
+
+/// The enabled extensions' actions, for people's clients and agents alike.
+async fn list_actions(State(state): State<AppState>) -> Result<Json<Value>, ApiFailure> {
+    Ok(Json(
+        json!({ "actions": runtime(&state)?.extensions.actions().await }),
+    ))
+}
+
+/// Runs an action, for a person or an agent's session: its input is the body.
+async fn run_action(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path((extension, action)): Path<(String, String)>,
+    ChatJson(input): ChatJson<Value>,
+) -> Result<Json<Value>, ApiFailure> {
+    let result = runtime(&state)?
+        .extensions
+        .run(
+            crate::extensions::Caller::of(&who),
+            &extension,
+            &action,
+            input,
+        )
+        .await
+        .map_err(said)?;
+    Ok(Json(json!({ "result": result })))
 }
 
 /// The computers that run the workspace's sessions, and which joined ones are connected now.

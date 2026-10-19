@@ -831,6 +831,18 @@ impl Store {
         })
     }
 
+    /// The workspace's people: whom notices about the workspace itself reach.
+    pub async fn everyone(&self) -> Result<Vec<String>> {
+        Ok(actors::Entity::find()
+            .filter(actors::Column::Kind.eq("human"))
+            .filter(actors::Column::Archived.eq(false))
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(|actor| actor.id)
+            .collect())
+    }
+
     /// Whom notices about a session reach: its person, or every person when it is shared.
     pub async fn readers(&self, session_id: &str) -> Result<Vec<String>> {
         ids(

@@ -298,6 +298,8 @@ pub struct ChatRuntime {
     pub hosts: Arc<crate::host_link::Links>,
     /// Terminals opened on those computers, by ID: the computer and the session.
     pub remote_terminals: std::sync::Mutex<HashMap<String, (String, String)>>,
+    /// The workspace's extensions.
+    pub extensions: Arc<crate::extensions::Extensions>,
     /// What those computers tell, to publish to whoever may read it.
     pub host_notices: mpsc::UnboundedSender<(String, Value)>,
     host_notice_task: Mutex<Option<JoinHandle<()>>>,
@@ -350,6 +352,24 @@ impl ChatRuntime {
             heard,
         ));
         let attachments = links.with_file_name("attachments");
+        let extensions = crate::extensions::Extensions::new(
+            store.clone(),
+            links.with_file_name("extensions"),
+            Box::new({
+                let (store, livekit) = (store.clone(), livekit.clone());
+                // People's clients read the extensions again.
+                move || {
+                    let (store, livekit) = (store.clone(), livekit.clone());
+                    tokio::spawn(async move {
+                        if let Ok(people) = store.everyone().await {
+                            let _ = livekit
+                                .notify(&serde_json::json!({"type": "extensions.changed"}), &people)
+                                .await;
+                        }
+                    });
+                }
+            }),
+        );
         let (host_notices, told) = mpsc::unbounded_channel();
         let host_notice_task =
             tokio::spawn(host_notices_task(store.clone(), livekit.clone(), told));
@@ -419,6 +439,7 @@ impl ChatRuntime {
             terminal_notices: Mutex::new(Some(terminal_notices)),
             hosts: Arc::default(),
             remote_terminals: Default::default(),
+            extensions,
             host_notices,
             host_notice_task: Mutex::new(Some(host_notice_task)),
         }))
@@ -1742,6 +1763,7 @@ impl ChatRuntime {
     pub async fn shutdown(&self) -> Result<()> {
         self.stop.send_replace(true);
         let mut error = None;
+        self.extensions.shutdown().await;
         if let Some(notices) = self.host_notice_task.lock().await.take() {
             notices.abort();
         }

@@ -219,6 +219,17 @@ impl Server {
                     }
                 }
             });
+            // The workspace's extensions, enabled as they were; their schedule triggers.
+            let extensions = runtime.extensions.clone();
+            let extension_schedules = tokio::spawn(async move {
+                extensions.start_enabled().await;
+                let mut interval = tokio::time::interval(Duration::from_secs(20));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    interval.tick().await;
+                    extensions.run_schedules().await;
+                }
+            });
             // Triggers: a session hears when the CI runs of its commit end.
             let watch = runtime.clone();
             let watcher = tokio::spawn(async move {
@@ -273,6 +284,8 @@ impl Server {
             let _ = scheduler.await;
             watcher.abort();
             let _ = watcher.await;
+            extension_schedules.abort();
+            let _ = extension_schedules.await;
             settings_observer.abort();
             let _ = relinker.await;
             let _ = sweeper.await;
