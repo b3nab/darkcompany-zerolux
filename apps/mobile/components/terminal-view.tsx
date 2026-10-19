@@ -157,6 +157,7 @@ export default function TerminalView({
     // The padding is outside the host: xterm fits the host's own size.
     <div
       style={{
+        width: "100vw",
         height: "100vh",
         padding: "4px 6px",
         boxSizing: "border-box",
