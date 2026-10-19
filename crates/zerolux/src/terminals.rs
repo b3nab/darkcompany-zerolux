@@ -285,7 +285,13 @@ mod tests {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(output.data)
                 .unwrap();
-            text.push_str(&String::from_utf8_lossy(&bytes));
+            let piece = String::from_utf8_lossy(&bytes);
+            // Windows' console asks where the cursor is before it starts, and waits for the
+            // answer a terminal on screen gives.
+            if piece.contains("\u{1b}[6n") {
+                terminals.write(id, "\u{1b}[1;1R").unwrap();
+            }
+            text.push_str(&piece);
             if text.contains(wanted) {
                 return text;
             }
