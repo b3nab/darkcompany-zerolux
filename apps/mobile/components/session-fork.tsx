@@ -49,8 +49,8 @@ const fileList = (rewind: FilesRewind) => {
  */
 export function useInputActions(session: ChatSession | undefined) {
   const { chat } = useSession();
-  // A fork is its person's; putting files back is working in it; both stay off a joined
-  // computer so far. Copying is reading.
+  // A fork is its person's, and stays off a joined computer so far; putting files back is
+  // working in it; copying is reading.
   const { mine, write, here } = useAccess(session);
   const router = useRouter();
   const forkWith = useForkWith();
@@ -108,7 +108,7 @@ export function useInputActions(session: ChatSession | undefined) {
           ]
         : []),
       // Only Claude Code keeps checkpoints; the others' files come back through their changes.
-      ...(write && here && session.harness === "claude-code"
+      ...(write && session.harness === "claude-code"
         ? [
             {
               label: "Put files back to before this",
