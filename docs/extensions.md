@@ -73,18 +73,20 @@ await serve(
 
 ## Lifecycle
 
-The workspace owner installs, enables, disables, configures and removes extensions. Installing from a folder on the kernel's computer marks it as being worked on; installing the same folder again reloads it. Enabling starts its parts after its dependencies; a failure is kept as its error and it stays disabled. An extension cannot be disabled while an enabled one depends on it. Removing a disabled extension deletes its settings, secrets, stored values and folder. Enabled extensions start again with the kernel, dependencies first.
+The workspace owner installs, enables, disables, configures and removes extensions. ZeroLux brings official extensions, such as [voice](voice.md): a release carries them, and a kernel run from a checkout finds them in `extensions/`. An installed official extension runs as the kernel that starts it brings it. Installing from a folder on the kernel's computer marks it as being worked on; installing the same folder again reloads it. Enabling starts its parts after its dependencies; a failure is kept as its error and it stays disabled. An extension cannot be disabled while an enabled one depends on it. Removing a disabled extension deletes its settings, secrets, stored values and folder. Enabled extensions start again with the kernel, dependencies first.
 
 People and agents' sessions run actions. Clients hear `extensions.changed` and read the list again.
 
 ## API
 
-| Route                                      | Purpose                                                         |
-| ------------------------------------------ | --------------------------------------------------------------- |
-| `GET /extensions`                          | Installed extensions, their state, settings and what they bring |
-| `POST /extensions/folder {folder}`         | Install, or install again, from a folder, and enable            |
-| `POST /extensions/{id}/enable`, `/disable` | Enable or disable                                               |
-| `PATCH /extensions/{id}/settings`          | Change settings and secrets; `null` removes one                 |
-| `DELETE /extensions/{id}`                  | Remove a disabled extension and its data                        |
-| `GET /actions`                             | The enabled extensions' actions                                 |
-| `POST /ext/{extension}/{action}`           | Run an action; the body is its input, the answer `{result}`     |
+| Route                                      | Purpose                                                               |
+| ------------------------------------------ | --------------------------------------------------------------------- |
+| `GET /extensions`                          | Installed extensions, their state, settings and what they bring       |
+| `GET /extensions/available`                | The official extensions ZeroLux brings, and whether each is installed |
+| `POST /extensions/available/{id}`          | Install an official extension, and enable it                          |
+| `POST /extensions/folder {folder}`         | Install, or install again, from a folder, and enable                  |
+| `POST /extensions/{id}/enable`, `/disable` | Enable or disable                                                     |
+| `PATCH /extensions/{id}/settings`          | Change settings and secrets; `null` removes one                       |
+| `DELETE /extensions/{id}`                  | Remove a disabled extension and its data                              |
+| `GET /actions`                             | The enabled extensions' actions                                       |
+| `POST /ext/{extension}/{action}`           | Run an action; the body is its input, the answer `{result}`           |
