@@ -66,18 +66,21 @@ toward, or a budget a session stops at.
 sessions are private, or shared to follow or to work in together. Join your other computers to
 run sessions there, and open a computer to the others, who use their own accounts.
 
-**Everywhere you are.** The web app, a desktop app for macOS with the kernel inside, and a
-mobile app for iPhone and Android. Four themes, each light and dark.
+**Everywhere you are.** The web app, a desktop app for macOS, Linux and Windows with the kernel
+inside, and a mobile app for iPhone and Android. Four themes, each light and dark.
 
 ## Get started
 
 ### Desktop app
 
-Download the app for your Mac from the [latest release](https://github.com/b3nab/darkcompany-zerolux/releases/latest):
-`aarch64` for Apple Silicon, `x64` for Intel. It needs macOS 14 or later.
+Download the app from the [latest release](https://github.com/b3nab/darkcompany-zerolux/releases/latest):
 
-The app is not notarized by Apple yet. The first time, macOS refuses to open it: open
-**System Settings › Privacy & Security** and choose **Open Anyway** for ZeroLux.
+- **macOS** 14 or later: the `.dmg`, `aarch64` for Apple Silicon or `x64` for Intel. The app is
+  not notarized by Apple yet: the first time, open **System Settings › Privacy & Security** and
+  choose **Open Anyway** for ZeroLux.
+- **Linux**: the `.AppImage`, `.deb` or `.rpm`.
+- **Windows**: the `.msi` or the `-setup.exe`. The installer is not signed yet: if SmartScreen
+  stops it, choose **More info › Run anyway**.
 
 The app runs its own kernel, or connects to one you already run. To run sessions it uses what
 is installed on your computer: [Bun](https://bun.sh), [`livekit-server`](https://docs.livekit.io/home/self-hosting/local/)
@@ -85,14 +88,14 @@ and the harnesses you use (Claude Code, Codex, pi). See [the desktop app](docs/d
 
 ### Kernel on a computer or server
 
-Each release has the kernel for macOS and Linux, with the web app, sign-in and runners beside
-it. It needs [Bun](https://bun.sh) and [`livekit-server`](https://docs.livekit.io/home/self-hosting/local/)
-on the PATH.
+Each release has the kernel for macOS, Linux and Windows: `bin/zerolux`, with the web app,
+sign-in and runners it serves in `share/zerolux`. It needs [Bun](https://bun.sh) and
+[`livekit-server`](https://docs.livekit.io/home/self-hosting/local/) on the PATH.
 
 ```sh
 tar -xzf zerolux-v0.0.1-aarch64-apple-darwin.tar.gz
 cd zerolux-v0.0.1-aarch64-apple-darwin
-./zerolux serve
+./bin/zerolux serve
 ```
 
 Open http://127.0.0.1:4310 and create your account: the first one owns the workspace, and
