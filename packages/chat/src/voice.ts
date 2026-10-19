@@ -122,6 +122,10 @@ export async function* readAloud(
   }
 }
 
+/** What an agent says to be heard: a greeting in the language its voice speaks best. */
+export const voiceGreeting = (name: string, language: string) =>
+  language === "it" ? `Ciao, sono ${name}.` : `Hi, I'm ${name}.`;
+
 /** Three voices for an agent from a description of it in English, each saying a greeting. */
 export const designVoice = (
   actorId: string,
