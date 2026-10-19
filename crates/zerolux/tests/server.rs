@@ -177,6 +177,8 @@ async fn dropping_the_server_requests_shutdown_and_a_second_start_reuses_the_por
     second.shutdown().await.unwrap();
 }
 
+// Aliases are made with Unix symlinks.
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn one_kernel_serves_a_workspace_at_a_time_and_the_lease_ends_with_it() {
     if !support::installed() {

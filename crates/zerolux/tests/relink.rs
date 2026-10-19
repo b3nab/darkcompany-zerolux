@@ -1,5 +1,7 @@
 //! Relinking after a lost link, with an in-process fake pi whose pairing answers when the
 //! test says so. Sets `PI_CODING_AGENT_DIR` for this process: it runs alone in this binary.
+//! The fake pi listens on a Unix socket.
+#![cfg(unix)]
 use std::{os::unix::fs::PermissionsExt, sync::Arc, time::Duration};
 
 use serde_json::{Value, json};

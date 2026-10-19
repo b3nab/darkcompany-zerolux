@@ -2247,6 +2247,7 @@ async fn a_computer_joins_as_a_host_and_answers_over_its_channel() {
 
 /// A Codex session started on a joined computer: the computer starts the thread and runs its
 /// adapter with the token the kernel issues; input and Stop reach it over its channel.
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_codex_session_runs_on_a_joined_computer() {
     if std::process::Command::new("livekit-server")

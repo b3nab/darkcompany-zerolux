@@ -316,6 +316,32 @@ mod tests {
         assert!(!alive(u32::MAX - 7));
     }
 
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_named_pipe_is_reached_as_a_local_endpoint() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::windows::named_pipe::ServerOptions;
+        let name = format!(r"\\.\pipe\zerolux-test-{}", std::process::id());
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&name)
+            .unwrap();
+        let answer = tokio::spawn(async move {
+            server.connect().await.unwrap();
+            let mut server = server;
+            let mut line = [0u8; 5];
+            server.read_exact(&mut line).await.unwrap();
+            server.write_all(&line).await.unwrap();
+        });
+        let mut client = Local::connect(&name).await.unwrap();
+        client.write_all(b"hello").await.unwrap();
+        let mut echoed = [0u8; 5];
+        client.read_exact(&mut echoed).await.unwrap();
+        assert_eq!(&echoed, b"hello");
+        answer.await.unwrap();
+        assert!(Local::connect("/not/a/pipe").await.is_err());
+    }
+
     #[test]
     fn a_private_folder_is_created_and_checked() {
         let dir = tempfile::tempdir().unwrap();

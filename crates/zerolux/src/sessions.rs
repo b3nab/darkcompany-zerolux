@@ -951,6 +951,7 @@ mod tests {
 
     /// The catalogue comes from a live pi and can be large; a live pi that cannot list keeps
     /// its own candidate and is reported; without a live pi the catalogue is unavailable.
+    #[cfg(unix)]
     #[tokio::test]
     async fn pi_catalogue_comes_from_a_live_pi_and_may_exceed_a_control_message() {
         use std::sync::{
