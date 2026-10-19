@@ -127,6 +127,8 @@ export function QuestionForm({
                 (q.options.length ? "Or write your answer" : undefined)
               }
               secureTextEntry={q.secret === true}
+              // A secret asked for by an agent, not a password iOS should offer to save.
+              textContentType={q.secret === true ? "oneTimeCode" : undefined}
               multiline={q.multiline === true}
               className={q.multiline ? "h-28 py-2" : undefined}
               value={texts[q.id] ?? ""}

@@ -134,6 +134,8 @@ function SecretField({
         value={value}
         onChangeText={setValue}
         secureTextEntry
+        // An API key or a token, not a password iOS should offer to save.
+        textContentType="oneTimeCode"
         autoCapitalize="none"
         autoCorrect={false}
         placeholder={placeholder}

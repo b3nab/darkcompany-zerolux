@@ -132,7 +132,12 @@ function Field({
       case "integer":
         return typed({ keyboardType: "number-pad" });
       case "secret":
-        return typed({ secureTextEntry: true, className: "font-mono" });
+        // A key or a token, not a password iOS should offer to save.
+        return typed({
+          secureTextEntry: true,
+          textContentType: "oneTimeCode",
+          className: "font-mono",
+        });
       case "list":
         return typed({
           multiline: true,
@@ -146,6 +151,7 @@ function Field({
           className: "h-auto min-h-24 py-2 font-mono text-[13px]",
         });
       default:
+        // A line is often a name or a key, kept as typed; a longer text is prose.
         return typed(
           field.multiline
             ? {
@@ -154,7 +160,7 @@ function Field({
                 autoCorrect: true,
                 className: "h-auto min-h-24 py-2",
               }
-            : { autoCapitalize: "sentences", autoCorrect: true },
+            : {},
         );
     }
   })();
