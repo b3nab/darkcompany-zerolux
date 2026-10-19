@@ -9,7 +9,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, Ordering},
@@ -191,14 +191,16 @@ fn render(app: &tauri::AppHandle, view: &View) {
     }
 }
 
+/// The kernel's files this app carries (web app, sign-in, runners, Bun, LiveKit server),
+/// written out once into its data folder; its programs are found there first from then on.
+fn carried(data: &Path) -> Result<PathBuf> {
+    zerolux::carry::unpack(data)?
+        .context("This build carries no kernel files: build the app with `bun run desktop:build`")
+}
+
 impl Host {
     fn resources(&self) -> Result<PathBuf> {
-        let resources = self
-            .app
-            .path()
-            .resource_dir()
-            .context("Locate packaged desktop resources")?;
-        local::resource_root(&resources)
+        carried(&self.root.root)
     }
 
     fn snapshot(&self, busy: bool, error: Option<String>) -> View {
@@ -271,7 +273,6 @@ impl Host {
             database: zerolux::db::Location::Sqlite(database),
             web_dir: resources.join("web"),
             livekit: None,
-            #[cfg(unix)]
             runner: Some(RunnerProgram::bundled(&resources)),
             auth: Some(zerolux::auth::AuthEntry {
                 bun: executable("bun"),
@@ -933,17 +934,12 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                     }
                 };
                 // The workspaces this computer joined connect again with the app.
-                let computers = task_handle
-                    .path()
-                    .resource_dir()
-                    .context("Locate packaged desktop resources")
-                    .and_then(|resources| local::resource_root(&resources))
-                    .map(|resources| {
-                        Links::start(
-                            root.root.join("computer"),
-                            &RunnerProgram::bundled(&resources),
-                        )
-                    });
+                let computers = carried(&root.root).map(|resources| {
+                    Links::start(
+                        root.root.join("computer"),
+                        &RunnerProgram::bundled(&resources),
+                    )
+                });
                 let computers = match computers {
                     Ok(computers) => computers,
                     // Without the app's runners, its sessions could not start: they wait.

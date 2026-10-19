@@ -43,13 +43,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/bun", "binaries/livekit-server"],
-    "resources": {
-      "../dist/web/": "web/",
-      "../dist/claude/": "claude/",
-      "../dist/pi/": "pi/",
-      "../dist/auth/": "auth/"
-    },
     "icon": [
       "../dist/icons/32x32.png",
       "../dist/icons/128x128.png",
