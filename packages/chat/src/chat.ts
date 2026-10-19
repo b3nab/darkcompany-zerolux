@@ -517,7 +517,9 @@ const eventTypes = new Set<string>([
   "session.output",
   "session.live",
   "terminal.output",
+  "extensions.changed",
 ]);
+let extensionNotices = 0;
 export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
   try {
     const event = JSON.parse(new TextDecoder().decode(payload)) as ChatEvent;
@@ -530,6 +532,13 @@ export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
     // A terminal's notice names where its output ends, and whether it ended there.
     if (event.type === "terminal.output" && typeof event.event_id !== "string")
       event.event_id = `terminal.output:${event.terminal_id}:${event.end}${event.ended ? ":ended" : ""}`;
+    // The extensions' notice says only that they changed: each one is its own, and reading
+    // them twice costs nothing.
+    if (
+      event.type === "extensions.changed" &&
+      typeof event.event_id !== "string"
+    )
+      event.event_id = `extensions.changed:${++extensionNotices}`;
     if (typeof event.event_id === "string" && eventTypes.has(event.type))
       return event;
   } catch {

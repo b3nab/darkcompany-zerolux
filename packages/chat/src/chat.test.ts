@@ -117,6 +117,12 @@ test("only well-formed chat events are accepted", () => {
   expect(parseEvent(bytes({ ...terminal, ended: true }))?.event_id).toBe(
     "terminal.output:t:7:ended",
   );
+  // The extensions' notice names nothing: each one arrives as a notice of its own.
+  const changed = { type: "extensions.changed" };
+  const first = parseEvent(bytes(changed))?.event_id;
+  const second = parseEvent(bytes(changed))?.event_id;
+  expect(first).toStartWith("extensions.changed:");
+  expect(second).not.toBe(first);
 });
 
 test("pages merge by sequence and newer copies replace delivery states", () => {
