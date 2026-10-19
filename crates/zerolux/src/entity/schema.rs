@@ -79,6 +79,9 @@ pub fn sql(backend: DatabaseBackend) -> String {
         invites,
         triggers,
         hosts,
+        extensions,
+        extension_values,
+        extension_calls,
     );
     tables.extend(indexes);
     tables.extend(foreign_keys);

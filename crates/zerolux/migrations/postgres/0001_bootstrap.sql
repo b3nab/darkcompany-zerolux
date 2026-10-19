@@ -20,6 +20,14 @@ CREATE UNIQUE INDEX "one_open_thread_per_root" ON "conversations" ("root_message
 CREATE TABLE "deliveries" ("id" text NOT NULL, "message_id" text NOT NULL, "actor_id" text NOT NULL, "session_id" text NOT NULL, "status" text NOT NULL, "native_request_id" text NULL, "last_error" text NULL, "created_at" bigint NOT NULL, "updated_at" bigint NOT NULL, PRIMARY KEY ("id"), CONSTRAINT "deliveries_message_id_actor_id_key" UNIQUE ("message_id", "actor_id"), CONSTRAINT "deliveries_status_check" CHECK (status = ANY (ARRAY['stored'::text, 'uncertain'::text, 'notified'::text, 'read'::text])));
 -- Create index "deliveries_session" to table: "deliveries"
 CREATE INDEX "deliveries_session" ON "deliveries" ("session_id", "status", "created_at");
+-- Create "extension_calls" table
+CREATE TABLE "extension_calls" ("id" text NOT NULL, "extension_id" text NOT NULL, "action" text NOT NULL, "actor_id" text NULL, "session_id" text NULL, "by" text NULL, "at" bigint NOT NULL, "duration_ms" bigint NOT NULL, "ok" boolean NOT NULL, "error" text NULL, PRIMARY KEY ("id"));
+-- Create index "extension_calls_by_extension" to table: "extension_calls"
+CREATE INDEX "extension_calls_by_extension" ON "extension_calls" ("extension_id", "at");
+-- Create "extension_values" table
+CREATE TABLE "extension_values" ("extension_id" text NOT NULL, "kind" text NOT NULL, "key" text NOT NULL, "value_json" text NOT NULL, "updated_at" bigint NOT NULL, PRIMARY KEY ("extension_id", "kind", "key"), CONSTRAINT "extension_values_kind_check" CHECK (kind = ANY (ARRAY['setting'::text, 'secret'::text, 'value'::text])));
+-- Create "extensions" table
+CREATE TABLE "extensions" ("id" text NOT NULL, "version" text NOT NULL, "source" text NOT NULL, "dev" boolean NOT NULL, "enabled" boolean NOT NULL, "error" text NULL, "manifest_json" text NOT NULL, "contributes_json" text NULL, "installed_at" bigint NOT NULL, "updated_at" bigint NOT NULL, PRIMARY KEY ("id"));
 -- Create "hosts" table
 CREATE TABLE "hosts" ("id" text NOT NULL, "name" text NOT NULL, "person_id" text NOT NULL, "open" boolean NOT NULL, "created_at" bigint NOT NULL, "seen_at" bigint NOT NULL, "secret_hash" text NULL, "link_hash" text NULL, "link_expires_at" bigint NULL, PRIMARY KEY ("id"), CONSTRAINT "hosts_link_hash_key" UNIQUE ("link_hash"), CONSTRAINT "hosts_secret_hash_key" UNIQUE ("secret_hash"));
 -- Create "invites" table
@@ -46,6 +54,8 @@ ALTER TABLE "conversation_members" ADD CONSTRAINT "conversation_members_actor_id
 ALTER TABLE "conversations" ADD CONSTRAINT "conversations_root_message_id_fkey" FOREIGN KEY ("root_message_id") REFERENCES "messages" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
 -- Modify "deliveries" table
 ALTER TABLE "deliveries" ADD CONSTRAINT "deliveries_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "deliveries_message_id_fkey" FOREIGN KEY ("message_id") REFERENCES "messages" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "deliveries_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "sessions" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
+-- Modify "extension_values" table
+ALTER TABLE "extension_values" ADD CONSTRAINT "extension_values_extension_id_fkey" FOREIGN KEY ("extension_id") REFERENCES "extensions" ("id") ON UPDATE NO ACTION ON DELETE CASCADE;
 -- Modify "hosts" table
 ALTER TABLE "hosts" ADD CONSTRAINT "hosts_person_id_fkey" FOREIGN KEY ("person_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
 -- Modify "invites" table
