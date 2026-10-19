@@ -72,6 +72,16 @@ export interface Extension {
   updated_at: number;
 }
 
+/** An official extension ZeroLux brings, installed or not. */
+export interface OfficialExtension {
+  id: string;
+  name: string;
+  version: string;
+  publisher: string;
+  description: string;
+  installed: boolean;
+}
+
 /** The kernel's notice that the workspace's extensions changed: they are read again. */
 export interface ExtensionsNotice {
   type: "extensions.changed";
@@ -131,10 +141,22 @@ const readActions = (kernel: string) =>
     (body) => body.actions ?? [],
   );
 
+const readOfficial = (kernel: string) =>
+  request<{ extensions?: OfficialExtension[] }>(
+    kernel,
+    "/extensions/available",
+  ).then((body) => body.extensions ?? []);
+
 /** The workspace's extensions, read again whenever they change. */
 export function useExtensions(kernel = kernelUrl(), enabled = true) {
   const { items, ...rest } = useKernelList(readExtensions, kernel, enabled);
   return { extensions: items, ...rest };
+}
+
+/** The official extensions this kernel brings, read again whenever extensions change. */
+export function useOfficialExtensions(kernel = kernelUrl(), enabled = true) {
+  const { items, ...rest } = useKernelList(readOfficial, kernel, enabled);
+  return { official: items, ...rest };
 }
 
 /** The actions of the enabled extensions, read again whenever extensions change. */
@@ -170,6 +192,12 @@ export const setExtensionSettings = (
   kernel = kernelUrl(),
 ) =>
   changed(request(kernel, `${path(id)}/settings`, changes, undefined, "PATCH"));
+
+/** The owner installs and enables an official extension, from where the kernel carries it. */
+export const installExtension = (id: string, kernel = kernelUrl()) =>
+  changed(
+    request(kernel, `/extensions/available/${encodeURIComponent(id)}`, {}),
+  );
 
 /** An extension from a folder on the kernel's computer, in development. */
 export const loadExtensionFolder = (folder: string, kernel = kernelUrl()) =>
