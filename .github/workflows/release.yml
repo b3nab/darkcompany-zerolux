@@ -1,9 +1,9 @@
 name: Release
 
 # A version tag, made by `bun run release <version>` and pushed by the owner: its release is
-# drafted with its changelog, then gets the kernel and the desktop app for macOS, Linux and
-# Windows, each with the Bun and the LiveKit server it starts, and the Android app. It is
-# published once every build is in; a build that fails leaves it a draft.
+# drafted with its changelog, then gets the kernel, a single file, and the desktop app for
+# macOS, Linux and Windows, each carrying the Bun and the LiveKit server it starts, and the
+# Android app. It is published once every build is in; a build that fails leaves it a draft.
 on:
   push:
     tags: ["v*"]
@@ -50,35 +50,23 @@ jobs:
         with:
           cache-key: release
       - uses: ./.github/actions/livekit
-      - name: Bundle the web app, sign-in and runners
+      - name: Prepare what the kernel carries
         run: bun run --cwd apps/desktop assets
+      # One file: the kernel with its web app, sign-in, runners, Bun and LiveKit server inside.
       - name: Build the kernel
+        env:
+          ZEROLUX_CARRY: ${{ github.workspace }}/apps/desktop/dist
         run: cargo build --release --locked -p zerolux
-      - name: Pack it with its bundles and upload it
+      - name: Upload it
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          name="zerolux-$GITHUB_REF_NAME-${{ matrix.target }}"
-          # As in /usr/local: in bin the kernel, with the Bun and the LiveKit server it starts;
-          # in share/zerolux what it serves and runs.
-          mkdir -p "$name/bin" "$name/share/zerolux"
           extension=""
           [[ "$RUNNER_OS" == Windows ]] && extension=".exe"
-          cp "target/release/zerolux$extension" "$name/bin/"
-          for program in bun livekit-server; do
-            cp "$(dirname "$(command -v "$program")")/$program$extension" "$name/bin/"
-          done
-          cp -R apps/desktop/dist/web apps/desktop/dist/auth apps/desktop/dist/claude apps/desktop/dist/pi "$name/share/zerolux/"
-          cp LICENSE README.md "$name/"
-          if [[ "$RUNNER_OS" == Windows ]]; then
-            archive="$name.zip"
-            7z a -bso0 "$archive" "$name"
-          else
-            archive="$name.tar.gz"
-            tar -czf "$archive" "$name"
-          fi
-          gh release upload "$GITHUB_REF_NAME" "$archive"
+          file="zerolux-$GITHUB_REF_NAME-${{ matrix.target }}$extension"
+          cp "target/release/zerolux$extension" "$file"
+          gh release upload "$GITHUB_REF_NAME" "$file"
 
   desktop:
     needs: draft
