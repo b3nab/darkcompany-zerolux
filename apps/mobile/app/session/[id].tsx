@@ -324,7 +324,7 @@ export default function SessionPage() {
               ) : null}
             </Pressable>
           ) : null}
-          {access.write && access.here ? (
+          {access.write ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Terminal"

@@ -57,8 +57,8 @@ const control = (text: string) =>
   /^[ @-~]$/.test(text) ? String.fromCharCode(text.charCodeAt(0) & 0x1f) : text;
 
 /**
- * A session's terminal: a login shell in its folder on the kernel's host, for its owner, as
- * a terminal app shows it. It opens on the shell the session has open, or a new one; the
+ * A session's terminal: a login shell in its folder, on the computer the session runs on, for
+ * its owner, as a terminal app shows it. It opens on the shell the session has open, or a new one; the
  * row above the keyboard has the keys a phone's lacks, with Ctrl for the next one.
  */
 export default function TerminalPage() {
@@ -126,7 +126,7 @@ export default function TerminalPage() {
     view.current?.reset();
     const stop = followTerminal(
       current,
-      terminalReader(current, url),
+      terminalReader(current, url, id),
       (data) => view.current?.write(data),
       () => setEnded(true),
     );

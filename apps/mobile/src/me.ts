@@ -26,8 +26,7 @@ export function useMe() {
 
 /**
  * What you may do with a session: follow it, work in it, or everything its person does. `here`:
- * it runs on the kernel's computer, whose terminals and forks are reached from here; on a
- * joined computer they stay there.
+ * it runs on the kernel's computer, where forks are made; on a joined computer, not yet.
  */
 export function useAccess(session: ChatSession | undefined) {
   const { me } = useMe();
