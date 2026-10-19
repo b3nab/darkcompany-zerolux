@@ -93,16 +93,18 @@ a workspace that runs elsewhere, to run your sessions there. See
 
 ### Kernel on a computer or server
 
-Each release has the kernel for macOS, Linux and Windows, with everything it runs: LiveKit,
-the web app, sign-in and the runners of the sessions it starts.
+Each release has the kernel for macOS, Linux and Windows as a single file, with everything it
+runs inside: LiveKit, the web app, sign-in and the runners of the sessions it starts. Download
+the one for your system and start it:
 
 ```sh
-tar -xzf zerolux-v0.0.1-aarch64-apple-darwin.tar.gz
-cd zerolux-v0.0.1-aarch64-apple-darwin
-./bin/zerolux serve
+chmod +x zerolux-v0.0.1-aarch64-apple-darwin
+./zerolux-v0.0.1-aarch64-apple-darwin serve
 ```
 
-On Windows, extract the `.zip` and run `bin\zerolux.exe serve`.
+On Windows, run `zerolux-v0.0.1-x86_64-pc-windows-msvc.exe serve`. On macOS, a file downloaded
+with a browser has to be allowed once: `xattr -d com.apple.quarantine <file>`. The first start
+unpacks what the kernel carries into its data folder.
 
 Open http://127.0.0.1:4310 and create your account: the first one owns the workspace, and
 invites the others. Data lives in `.zerolux/zerolux.db`, in the folder you start it from.
@@ -117,7 +119,7 @@ once, each with its own data directory, sharing one external LiveKit (`LIVEKIT_U
 
 To run sessions on another of your computers, add it under **My settings › Computers**. Then
 join it from the desktop app on that computer, or run the command shown there:
-`zerolux host join <kernel address> <code>`, then `zerolux host run`.
+`zerolux host join <kernel address> <code>`, then `zerolux host run`, with the same file.
 
 ### Phone
 
