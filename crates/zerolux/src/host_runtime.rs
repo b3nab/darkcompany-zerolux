@@ -33,6 +33,8 @@ pub struct HostRuntime {
     notices: mpsc::UnboundedSender<Value>,
     /// Terminals opened in this computer's session folders.
     terminals: Arc<crate::terminals::Terminals>,
+    /// Images sent with input, kept where this computer's harnesses read them.
+    attachments: std::path::PathBuf,
     /// The pi and Claude Code runners of this computer's sessions.
     #[cfg(unix)]
     pi: crate::pi_runner::Registry,
@@ -71,8 +73,9 @@ impl HostRuntime {
         );
         #[cfg(not(unix))]
         {
-            let _ = links;
             Arc::new(Self {
+                terminals: terminals(notices.clone()),
+                attachments: links.with_file_name("attachments"),
                 url,
                 codex,
                 pending: Mutex::default(),
@@ -102,6 +105,7 @@ impl HostRuntime {
             #[cfg(unix)]
             pi_links: Mutex::default(),
             terminals: terminals(notices.clone()),
+            attachments: links.with_file_name("attachments"),
             url,
             codex,
             pending: Mutex::default(),
@@ -134,7 +138,9 @@ impl HostRuntime {
                     .filter(|running| !running.task.is_finished())
                     .map(|running| running.control.clone())
                     .context("The session's Codex is not running on this computer")?;
-                control.request(&params["request"]).await
+                let mut request = params["request"].clone();
+                crate::chat_runtime::localize_images(&self.attachments, session, &mut request)?;
+                control.request(&request).await
             }
             #[cfg(unix)]
             "pi.create" => self.pi_create(params).await,
@@ -147,7 +153,9 @@ impl HostRuntime {
                 let paired = links
                     .get(session)
                     .context("The session's pi is not linked on this computer")?;
-                paired.control(params["request"].clone()).await
+                let mut request = params["request"].clone();
+                crate::chat_runtime::localize_images(&self.attachments, session, &mut request)?;
+                paired.control(request).await
             }
             #[cfg(unix)]
             "pi.stop" => {
@@ -179,7 +187,16 @@ impl HostRuntime {
                 let link = self.claude_link(&params).await?;
                 let given = &params["params"];
                 match params["op"].as_str().unwrap_or_default() {
-                    "request" => link.request(given.clone()).await,
+                    "request" => {
+                        let mut request = given.clone();
+                        let session = request["link_id"].as_str().unwrap_or_default().to_owned();
+                        crate::chat_runtime::localize_images(
+                            &self.attachments,
+                            &session,
+                            &mut request,
+                        )?;
+                        link.request(request).await
+                    }
                     "describe" => link.describe().await,
                     "settings" => {
                         let patch: Option<AgentSettings> =

@@ -2339,6 +2339,26 @@ async fn a_codex_session_runs_on_a_joined_computer() {
     );
     // Idle, it waits in Codex's own queue and starts the next turn there.
     assert_eq!(native.count("thread/queue/add"), 1);
+    // Images go with it, kept on the computer where its Codex reads them.
+    let pictured = kernel
+        .post(
+            &format!("/sessions/{id}/input"),
+            None,
+            json!({"text": "Look", "images": [{"media_type": "image/png", "data": "AQID"}]}),
+        )
+        .await;
+    assert_eq!(
+        pictured.status(),
+        StatusCode::OK,
+        "{}",
+        pictured.text().await.unwrap()
+    );
+    assert_eq!(native.count("thread/queue/add"), 2);
+    let kept: Vec<_> = std::fs::read_dir(host_dir.join("attachments").join(&id))
+        .unwrap()
+        .flatten()
+        .collect();
+    assert_eq!(kept.len(), 1);
     // A terminal in its folder runs on the computer.
     let opened: Value = kernel
         .post(

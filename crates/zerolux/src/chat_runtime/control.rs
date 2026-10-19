@@ -269,29 +269,27 @@ impl ChatRuntime {
         images: &[InputImage],
         decoded: Vec<(&'static str, Vec<u8>)>,
     ) -> Result<Vec<(String, String)>> {
-        let folder = self.attachments.join(id);
-        let mut builder = std::fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-        builder.create(&folder)?;
-        decoded
-            .into_iter()
-            .zip(images)
-            .map(|((extension, bytes), image)| {
-                use std::io::Write;
-                let path = folder.join(format!("{}.{extension}", uuid::Uuid::new_v4()));
-                let mut options = std::fs::OpenOptions::new();
-                options.write(true).create_new(true);
-                #[cfg(unix)]
-                std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-                options.open(&path)?.write_all(&bytes)?;
-                Ok((
-                    path.to_string_lossy().into_owned(),
-                    image.media_type.clone(),
-                ))
-            })
-            .collect()
+        save_images_in(&self.attachments, id, images, decoded)
+    }
+
+    async fn input_elsewhere(
+        &self,
+        session: &ChatSession,
+        control: Control,
+        text: &str,
+        mode: InputMode,
+        images: &[InputImage],
+    ) -> Result<()> {
+        // The images go with the input; the computer keeps them where its harness reads them.
+        let request = json!({"method":"input","link_id":session.id,"text":text,"mode":mode,
+            "images": images.iter().map(|image| json!({"media_type": image.media_type,
+                "data": image.data})).collect::<Vec<_>>()});
+        match control {
+            Control::Codex(control) => control.request(request).await.map(drop),
+            Control::Pi(record) => record.control(request).await.map(drop),
+            #[cfg(unix)]
+            Control::Claude(link) => link.request(request).await.map(drop),
+        }
     }
 
     async fn input_native(
@@ -345,6 +343,11 @@ impl ChatRuntime {
         };
         let decoded = decode_images(images)?;
         let control = self.native_control(who, &session, capability).await?;
+        if self.remote_host(&session).is_some() {
+            return self
+                .input_elsewhere(&session, control, text, mode, images)
+                .await;
+        }
         #[cfg(unix)]
         if let Control::Claude(link) = &control {
             runner_offers(link, capability).await?;
@@ -425,6 +428,71 @@ async fn runner_offers(link: &super::remote::ClaudeControl, capability: &str) ->
 }
 
 /// The owner's images, checked and decoded: each one's file extension and bytes.
+/// Keeps a session's images in `root`, readable by the kernel's user only: their paths and
+/// media types.
+pub(crate) fn save_images_in(
+    root: &std::path::Path,
+    id: &str,
+    images: &[InputImage],
+    decoded: Vec<(&'static str, Vec<u8>)>,
+) -> Result<Vec<(String, String)>> {
+    let folder = root.join(id);
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(&folder)?;
+    decoded
+        .into_iter()
+        .zip(images)
+        .map(|((extension, bytes), image)| {
+            use std::io::Write;
+            let path = folder.join(format!("{}.{extension}", uuid::Uuid::new_v4()));
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            options.open(&path)?.write_all(&bytes)?;
+            Ok((
+                path.to_string_lossy().into_owned(),
+                image.media_type.clone(),
+            ))
+        })
+        .collect()
+}
+
+/// A joined computer's images, sent with input: kept on it, and named by path in the request.
+pub(crate) fn localize_images(
+    root: &std::path::Path,
+    session: &str,
+    request: &mut Value,
+) -> Result<()> {
+    let images: Vec<InputImage> = request["images"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|image| image["data"].is_string())
+        .map(|image| {
+            Ok(InputImage {
+                media_type: image["media_type"].as_str().unwrap_or_default().to_owned(),
+                data: image["data"].as_str().unwrap_or_default().to_owned(),
+            })
+        })
+        .collect::<Result<_>>()?;
+    if images.is_empty() {
+        return Ok(());
+    }
+    let decoded = decode_images(&images)?;
+    let saved = save_images_in(root, session, &images, decoded)?;
+    request["images"] = json!(
+        saved
+            .iter()
+            .map(|(path, media_type)| json!({"path": path, "media_type": media_type}))
+            .collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
 fn decode_images(images: &[InputImage]) -> Result<Vec<(&'static str, Vec<u8>)>, Error> {
     use base64::Engine;
     if images.len() > 10 {

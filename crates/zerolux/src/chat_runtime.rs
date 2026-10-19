@@ -1768,6 +1768,7 @@ impl ChatRuntime {
 }
 
 mod control;
+pub(crate) use control::localize_images;
 mod fork;
 #[cfg(unix)]
 mod owned;

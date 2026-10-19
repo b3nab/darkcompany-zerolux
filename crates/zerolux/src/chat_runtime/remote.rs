@@ -34,6 +34,11 @@ impl CodexControl {
         }
     }
 
+    /// A control asked as the integrations are asked, `{method, ...}`.
+    pub async fn request(&self, request: Value) -> Result<Value> {
+        self.ask(request).await
+    }
+
     pub fn values(&self) -> AgentSettings {
         match self {
             Self::Here(control) => control.values(),
