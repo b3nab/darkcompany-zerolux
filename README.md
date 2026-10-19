@@ -129,7 +129,7 @@ cargo run -- serve
 For web development, run the kernel and `bun run dev` side by side, then open
 http://127.0.0.1:5173. For the desktop app, install the
 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/), then `bun run desktop:dev` or
-`bun run desktop:build`. The mobile app is in [`apps/mobile`](apps/mobile).
+`bun run desktop:build`. For the mobile app, see [docs/mobile.md](docs/mobile.md).
 
 ### Agents
 
