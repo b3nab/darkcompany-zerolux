@@ -1,6 +1,6 @@
-import { kernelUrl, request } from "./client";
+import { ApiError, kernelUrl, request } from "./client";
 
-/** A shell the kernel runs in a session's folder, for its owner. */
+/** A shell in a session's folder, on the computer the session runs on, for its owner. */
 export interface TerminalInfo {
   id: string;
   session_id: string;
@@ -86,14 +86,28 @@ export const resizeTerminal = (
 export const closeTerminal = (id: string, kernel = kernelUrl()) =>
   request<unknown>(kernel, path(id), undefined, undefined, "DELETE");
 
-/** Reads a terminal's output after an offset, from the kernel. */
+/**
+ * Reads a terminal's output after an offset, from the kernel. A kernel that restarted finds a
+ * joined computer's terminals again when it lists their session's: with `sessionId`, a read it
+ * does not know lists them once and reads again.
+ */
 export const terminalReader =
-  (id: string, kernel = kernelUrl()) =>
-  (after: number) =>
-    request<{ output: TerminalOutput }>(
-      kernel,
-      `${path(id)}?after=${after}`,
-    ).then(({ output }) => output);
+  (id: string, kernel = kernelUrl(), sessionId?: string) =>
+  async (after: number) => {
+    const read = () =>
+      request<{ output: TerminalOutput }>(
+        kernel,
+        `${path(id)}?after=${after}`,
+      ).then(({ output }) => output);
+    try {
+      return await read();
+    } catch (error) {
+      if (!sessionId || !(error instanceof ApiError) || error.status !== 404)
+        throw error;
+      await sessionTerminals(sessionId, kernel);
+      return read();
+    }
+  };
 
 interface Followed {
   read: (after: number) => Promise<TerminalOutput>;

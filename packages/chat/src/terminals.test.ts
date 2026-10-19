@@ -1,7 +1,9 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
+import { setKernelFetch } from "./client";
 import {
   followTerminal,
   terminalNotice,
+  terminalReader,
   terminalResync,
   terminalWriter,
 } from "./terminals";
@@ -93,4 +95,41 @@ test("what is typed while a write is out goes next, together, in order", async (
   await expect(failing("x")).rejects.toThrow("gone");
   await failing("y");
   expect(sent.at(-1)).toBe("y");
+});
+
+afterEach(() => setKernelFetch());
+
+test("a kernel that restarted finds a joined computer's terminal once its session's are listed", async () => {
+  // Until the session's terminals are listed, the kernel does not know the terminal.
+  let listed = false;
+  const asked: string[] = [];
+  setKernelFetch(async (url) => {
+    const path = new URL(String(url)).pathname;
+    asked.push(path);
+    if (path.endsWith("/sessions/aspen/terminals")) {
+      listed = true;
+      return Response.json({ terminals: [] });
+    }
+    return listed
+      ? Response.json({
+          output: { start: 0, data: btoa("hi"), next: 2, ended: false },
+        })
+      : new Response("No such terminal", { status: 404 });
+  });
+  const output = await terminalReader(
+    "t1",
+    "http://192.0.2.4:4400",
+    "aspen",
+  )(0);
+  expect(output.next).toBe(2);
+  expect(asked).toEqual([
+    "/api/terminals/t1",
+    "/api/sessions/aspen/terminals",
+    "/api/terminals/t1",
+  ]);
+  // Without its session, a terminal the kernel does not know stays an error.
+  listed = false;
+  await expect(
+    terminalReader("t1", "http://192.0.2.4:4400")(0),
+  ).rejects.toThrow();
 });
