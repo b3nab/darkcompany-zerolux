@@ -36,7 +36,6 @@ fn options(dir: &Path, database: Location) -> ServerOptions {
             data_dir: dir.join("livekit"),
         }),
         public: None,
-        #[cfg(unix)]
         runner: None,
         auth: Some(AuthEntry::checkout(&root)),
     }

@@ -34,7 +34,6 @@ fn options(dir: &std::path::Path, address: SocketAddr) -> ServerOptions {
             data_dir: dir.join("livekit"),
         }),
         public: None,
-        #[cfg(unix)]
         runner: None,
         auth: None,
     }
