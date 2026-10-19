@@ -502,7 +502,6 @@ export function App({
                           perform={perform}
                           hire={hire}
                           storage={storage}
-                          capabilities={capabilities}
                         />,
                       )
                     : chatHome

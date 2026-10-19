@@ -259,7 +259,6 @@ test("a group shows history and per-agent delivery states, and reaches every age
       perform={perform}
       hire={() => {}}
       storage={files()}
-      capabilities={[]}
     />,
   );
   expect(html).toContain("Show earlier messages");
@@ -300,7 +299,6 @@ test("a paused DM reaches its agent on resume and never shows IDs", () => {
       perform={perform}
       hire={() => {}}
       storage={files()}
-      capabilities={[]}
     />,
   );
   expect(html).toContain("Paused: no agent is woken.");
@@ -731,7 +729,6 @@ test("a message the kernel did not receive stays visible until it goes out", () 
       perform={perform}
       hire={() => {}}
       storage={files()}
-      capabilities={[]}
     />,
   );
   expect(html).toMatch(/<li data-mine="true" data-unsent="true"/);
@@ -757,7 +754,6 @@ test("Enter sends, Shift Enter adds a line, and nothing goes while a word is bei
       perform={perform}
       hire={() => {}}
       storage={files()}
-      capabilities={[]}
     />,
   );
   expect(html).toContain('aria-label="Message"');
@@ -784,7 +780,6 @@ test("the chat header shows how many messages have not reached each agent yet", 
       perform={perform}
       hire={() => {}}
       storage={files()}
-      capabilities={[]}
     />,
   );
   expect(html).toMatch(/<p class="[^"]*">2 waiting for birch<\/p>/);
@@ -813,7 +808,6 @@ test("activity is shown as working or idle, and unknown activity is never shown 
       perform={perform}
       hire={() => {}}
       storage={files()}
-      capabilities={[]}
     />,
   );
   expect(html).toMatch(
@@ -931,7 +925,6 @@ test("a chat shows the text you left unsent in it", () => {
       perform={perform}
       hire={() => {}}
       storage={files()}
-      capabilities={[]}
     />,
   );
   saveDraft(group.id, "");
@@ -957,7 +950,6 @@ test("chat forms are sent by their own submit button", () => {
           perform={perform}
           hire={() => {}}
           storage={files()}
-          capabilities={[]}
         />,
       ),
     ),
@@ -1014,7 +1006,6 @@ test("a bubble under the last message shows who is working on this chat", () => 
         perform={perform}
         hire={() => {}}
         storage={files()}
-        capabilities={[]}
       />,
     );
   const html = view([
@@ -1086,7 +1077,6 @@ test("a chat shows its threads under their message and lists the open ones; a th
       perform={perform}
       hire={() => {}}
       storage={files()}
-      capabilities={[]}
     />,
   );
   // Under the message it is about, with who coordinates in it.
@@ -1112,7 +1102,6 @@ test("a chat shows its threads under their message and lists the open ones; a th
       perform={perform}
       hire={() => {}}
       storage={files()}
-      capabilities={[]}
     />,
   );
   expect(view).toMatch(
@@ -1133,7 +1122,6 @@ test("a chat shows its threads under their message and lists the open ones; a th
       perform={perform}
       hire={() => {}}
       storage={files()}
-      capabilities={[]}
     />,
   );
   expect(resting).toContain(

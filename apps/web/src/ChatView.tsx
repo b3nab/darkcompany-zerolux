@@ -14,7 +14,9 @@ import {
   PaperclipIcon,
   PhoneIcon,
   SendIcon,
+  SquareIcon,
   SquarePenIcon,
+  Volume2Icon,
   XIcon,
 } from "lucide-react";
 import type { Actor } from "./api";
@@ -47,6 +49,7 @@ import {
   workingLabel,
   workingSessions,
   useChatWork,
+  useVoice,
 } from "@zerolux/chat";
 import type {
   Chat,
@@ -59,6 +62,7 @@ import type {
   Storage,
 } from "@zerolux/chat";
 import { ApprovalCard, openApprovals } from "./Approvals";
+import { useReadAloud } from "./read-aloud";
 import { canRecord, useRecorder } from "./recorder";
 import { useMe } from "./AuthGate";
 import { ChatAbout } from "@/components/chat-about";
@@ -257,7 +261,6 @@ export function ChatView({
   perform,
   hire,
   storage,
-  capabilities,
 }: {
   chat: Chat;
   conversation: Conversation;
@@ -267,9 +270,11 @@ export function ChatView({
   perform: Perform;
   hire: () => void;
   storage: Storage;
-  capabilities: string[];
 }) {
   const [adding, setAdding] = useState(false);
+  // Speech to text, and the agents that read their messages aloud in their own voice.
+  const voice = useVoice();
+  const aloud = useReadAloud();
   // Beside the chat on a wide screen; over it, on request, on a narrower one.
   const [about, setAbout] = useState(true);
   const [aboutSheet, setAboutSheet] = useState(false);
@@ -559,6 +564,21 @@ export function ChatView({
                       }
                       author={actor(m.author_id)}
                       name={name}
+                      listen={
+                        voice.voices?.some((v) => v.actor_id === m.author_id)
+                          ? {
+                              reading: aloud.reading === m.id,
+                              error:
+                                aloud.failed?.id === m.id
+                                  ? aloud.failed.error
+                                  : undefined,
+                              toggle: () =>
+                                aloud.reading === m.id
+                                  ? aloud.stop()
+                                  : void aloud.read(m.id, m.author_id, m.text),
+                            }
+                          : undefined
+                      }
                     >
                       {threadOn(m.id) && (
                         <ThreadLink thread={threadOn(m.id)!} name={name} />
@@ -692,7 +712,7 @@ export function ChatView({
               busy={busy}
               perform={perform}
               storage={storage}
-              capabilities={capabilities}
+              transcription={voice.available}
               sent={() => (following.current = true)}
             />
           )}
@@ -715,6 +735,7 @@ function MessageRow({
   continued,
   author,
   name,
+  listen,
   children,
 }: {
   message: Message;
@@ -722,6 +743,8 @@ function MessageRow({
   continued: boolean;
   author?: Actor;
   name: (actorId: string) => string;
+  /** Its author's voice reads it aloud. */
+  listen?: { reading: boolean; error?: string; toggle: () => void };
   children?: React.ReactNode;
 }) {
   const agent = author?.kind !== "human";
@@ -776,7 +799,27 @@ function MessageRow({
           </div>
         )}
         <MessageText text={m.text} />
-        <Stamp message={m} name={name} />
+        <div className="flex items-center gap-2">
+          <Stamp message={m} name={name} />
+          {listen && (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={listen.reading ? "Stop reading" : "Listen"}
+              title={listen.reading ? "Stop reading" : "Listen"}
+              aria-pressed={listen.reading}
+              onClick={listen.toggle}
+              className="text-faint hover:text-foreground aria-pressed:text-agent-foreground"
+            >
+              {listen.reading ? <SquareIcon /> : <Volume2Icon />}
+            </Button>
+          )}
+        </div>
+        {listen?.error && (
+          <p role="alert" className="text-xs text-destructive">
+            {listen.error}
+          </p>
+        )}
         {children}
       </div>
     </li>
@@ -837,7 +880,7 @@ function Composer({
   busy,
   perform,
   storage,
-  capabilities,
+  transcription,
   sent,
 }: {
   chat: Chat;
@@ -846,7 +889,8 @@ function Composer({
   busy: boolean;
   perform: Perform;
   storage: Storage;
-  capabilities: string[];
+  /** The workspace turns speech into text. */
+  transcription: boolean;
   sent: () => void;
 }) {
   // The unsent text waits in its chat while you are elsewhere.
@@ -907,7 +951,6 @@ function Composer({
       ? "No agents in this chat."
       : voiceError || storage.error;
   const microphone = canRecord();
-  const transcription = capabilities.includes("transcription-v1");
   const edit = (change: () => void) => {
     change();
     draft.current = newId();
@@ -948,12 +991,23 @@ function Composer({
         );
       });
     else {
-      const at = new Date().toTimeString().slice(0, 5).replace(":", ".");
-      // TODO: kernel: a file shared in a chat is announced to its members, as a message would be.
-      await storage.upload(
-        [new File([audio], `Voice message ${at}.webm`, { type: audio.type })],
-        { conversation_id: conversation.id },
-      );
+      // What was said goes as the message; the recording rides along where the kernel keeps
+      // files.
+      if (transcription) {
+        sent();
+        await perform(async () => {
+          const said = (await transcribe(audio)).trim();
+          if (said) await chat.send(conversation, { id: newId(), text: said });
+        });
+      }
+      if (storage.available) {
+        const at = new Date().toTimeString().slice(0, 5).replace(":", ".");
+        // TODO: kernel: a file shared in a chat is announced to its members, as a message would be.
+        await storage.upload(
+          [new File([audio], `Voice message ${at}.webm`, { type: audio.type })],
+          { conversation_id: conversation.id },
+        );
+      }
     }
   }
 
@@ -1058,7 +1112,7 @@ function Composer({
                 ? "Dictation needs a microphone on a secure address"
                 : transcription
                   ? "Dictate"
-                  : "Dictation needs speech to text on the kernel"
+                  : "Dictation needs the voice extension on the kernel"
             }
             disabled={!microphone || !transcription}
             onClick={() => void record("dictation")}
@@ -1074,11 +1128,11 @@ function Composer({
           title={
             !microphone
               ? "Voice messages need a microphone on a secure address"
-              : storage.available
+              : transcription || storage.available
                 ? "Record a voice message"
-                : "Voice messages need storage on the kernel"
+                : "Voice messages need the voice extension or storage on the kernel"
           }
-          disabled={!microphone || !storage.available}
+          disabled={!microphone || (!transcription && !storage.available)}
           onClick={() => void record("message")}
           className="h-10.5 w-10.5"
         >
