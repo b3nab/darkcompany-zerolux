@@ -342,6 +342,11 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         )
         .route("/extensions", get(list_extensions))
         .route("/extensions/folder", post(install_extension_folder))
+        .route("/extensions/available", get(available_extensions))
+        .route(
+            "/extensions/available/{id}",
+            post(install_official_extension),
+        )
         .route("/extensions/{id}", axum::routing::delete(remove_extension))
         .route("/extensions/{id}/enable", post(enable_extension))
         .route("/extensions/{id}/disable", post(disable_extension))
@@ -2829,6 +2834,36 @@ async fn install_extension_folder(
     let extension = runtime(&state)?
         .extensions
         .install_folder(&who, &input.folder)
+        .await
+        .map_err(said)?;
+    Ok(Json(json!({ "extension": extension })))
+}
+
+/// The official extensions ZeroLux brings, installed or not.
+async fn available_extensions(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+) -> Result<Json<Value>, ApiFailure> {
+    if !who.is_person() {
+        return Err(Error::Forbidden.into());
+    }
+    let available = runtime(&state)?
+        .extensions
+        .available()
+        .await
+        .map_err(said)?;
+    Ok(Json(json!({ "extensions": available })))
+}
+
+/// Installs and enables one of the official extensions.
+async fn install_official_extension(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let extension = runtime(&state)?
+        .extensions
+        .install_official(&who, &id)
         .await
         .map_err(said)?;
     Ok(Json(json!({ "extension": extension })))
