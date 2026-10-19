@@ -1,9 +1,9 @@
 name: Release
 
 # A version tag, made by `bun run release <version>` and pushed by the owner: its release is
-# drafted with its changelog, gets the kernel and the desktop app for each system, and is
-# published once every build is in: macOS, Linux and Windows. A build that fails leaves it a
-# draft.
+# drafted with its changelog, then gets the kernel and the desktop app for macOS, Linux and
+# Windows, each with the Bun and the LiveKit server it starts, and the Android app. It is
+# published once every build is in; a build that fails leaves it a draft.
 on:
   push:
     tags: ["v*"]
@@ -49,6 +49,7 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           cache-key: release
+      - uses: ./.github/actions/livekit
       - name: Bundle the web app, sign-in and runners
         run: bun run --cwd apps/desktop assets
       - name: Build the kernel
@@ -59,13 +60,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           name="zerolux-$GITHUB_REF_NAME-${{ matrix.target }}"
-          # As in /usr/local: the kernel in bin, what it serves and runs in share/zerolux.
+          # As in /usr/local: in bin the kernel, with the Bun and the LiveKit server it starts;
+          # in share/zerolux what it serves and runs.
           mkdir -p "$name/bin" "$name/share/zerolux"
-          if [[ "$RUNNER_OS" == Windows ]]; then
-            cp target/release/zerolux.exe "$name/bin/"
-          else
-            cp target/release/zerolux "$name/bin/"
-          fi
+          extension=""
+          [[ "$RUNNER_OS" == Windows ]] && extension=".exe"
+          cp "target/release/zerolux$extension" "$name/bin/"
+          for program in bun livekit-server; do
+            cp "$(dirname "$(command -v "$program")")/$program$extension" "$name/bin/"
+          done
           cp -R apps/desktop/dist/web apps/desktop/dist/auth apps/desktop/dist/claude apps/desktop/dist/pi "$name/share/zerolux/"
           cp LICENSE README.md "$name/"
           if [[ "$RUNNER_OS" == Windows ]]; then
@@ -93,6 +96,7 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           cache-key: release
+      - uses: ./.github/actions/livekit
       # Signed and notarized with the Apple Developer ID when its secrets are set; otherwise
       # signed ad hoc, which Apple Silicon needs to open it at all.
       - name: Choose how the macOS app is signed
