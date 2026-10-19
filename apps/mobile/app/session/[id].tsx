@@ -73,7 +73,6 @@ import {
   tokenCount,
   usdCost,
   useSessionLive,
-  sessionComputer,
   useSessionSettings,
 } from "@zerolux/chat";
 import type {
@@ -468,7 +467,7 @@ function Composer({
   children?: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
-  const { chat, url, hosts } = useSession();
+  const { chat, url } = useSession();
   const { write } = useAccess(session);
   const stop = useInterrupt(session);
   const harnessCommands = useSessionCommands(session.id, url);
@@ -541,11 +540,10 @@ function Composer({
       setSending(false);
     }
   };
-  // Claude Code in a terminal only takes words, into the running turn; photos reach
-  // sessions on the kernel's computer only.
-  const choosable =
-    !(session.harness === "claude-code" && session.origin !== "owned") &&
-    !sessionComputer(session, hosts.hosts);
+  // Claude Code in a terminal only takes words, into the running turn.
+  const choosable = !(
+    session.harness === "claude-code" && session.origin !== "owned"
+  );
   const filled = Boolean(draft.trim() || photos.length);
   const interrupting = !filled && stop.allowed;
   const room = MAX_INPUT_IMAGES - photos.length;
