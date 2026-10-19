@@ -155,6 +155,8 @@ pub(crate) enum PiControl {
         hosts: Arc<crate::host_link::Links>,
         host: String,
         session: String,
+        /// Its integration's control there, as the kernel last recorded it.
+        descriptor: Option<String>,
     },
 }
 
@@ -166,12 +168,14 @@ impl PiControl {
                 hosts,
                 host,
                 session,
+                descriptor,
             } => {
                 hosts
                     .call(
                         host,
                         "pi.control",
-                        json!({"session_id": session, "request": request}),
+                        json!({"session_id": session, "descriptor": descriptor,
+                            "request": request}),
                     )
                     .await
             }

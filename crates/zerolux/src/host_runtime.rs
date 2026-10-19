@@ -203,13 +203,18 @@ impl HostRuntime {
             #[cfg(unix)]
             "pi.control" => {
                 let session = params["session_id"].as_str().unwrap_or_default();
-                let links = self.pi_links.lock().await;
-                let paired = links
-                    .get(session)
-                    .context("The session's pi is not linked on this computer")?;
                 let mut request = params["request"].clone();
                 crate::chat_runtime::localize_images(&self.attachments, session, &mut request)?;
-                paired.control(request).await
+                if let Some(paired) = self.pi_links.lock().await.get(session) {
+                    return paired.control(request).await;
+                }
+                // Linked before this computer's ZeroLux restarted: its integration is still
+                // there, at the control the kernel recorded.
+                let descriptor = params["descriptor"]
+                    .as_str()
+                    .context("The session's pi is not linked on this computer")?;
+                let record = sessions::descriptor(std::path::Path::new(descriptor)).await?;
+                sessions::control(&record, request).await
             }
             #[cfg(unix)]
             "pi.stop" => {

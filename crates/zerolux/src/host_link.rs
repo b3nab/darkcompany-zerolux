@@ -229,13 +229,38 @@ pub async fn run(
     run_with(config, stop, host, told).await
 }
 
+/// Where a computer's connection to its workspace is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum HostLinkState {
+    Connecting,
+    Connected,
+    /// The connection broke or could not be made, and is tried again.
+    Reconnecting {
+        error: String,
+    },
+}
+
 /// The same, with a host runtime of the caller's.
 pub async fn run_with(
+    config: HostConfig,
+    stop: tokio::sync::watch::Receiver<bool>,
+    host: Arc<crate::host_runtime::HostRuntime>,
+    told: mpsc::UnboundedReceiver<Value>,
+) -> Result<()> {
+    let (state, _) = tokio::sync::watch::channel(HostLinkState::Connecting);
+    run_reporting(config, stop, host, told, state).await
+}
+
+/// The same, telling `state` where the connection is as it changes.
+pub async fn run_reporting(
     config: HostConfig,
     mut stop: tokio::sync::watch::Receiver<bool>,
     host: Arc<crate::host_runtime::HostRuntime>,
     mut told: mpsc::UnboundedReceiver<Value>,
+    state: tokio::sync::watch::Sender<HostLinkState>,
 ) -> Result<()> {
+    state.send_replace(HostLinkState::Connecting);
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
     let mut wait = Duration::from_secs(1);
@@ -249,6 +274,7 @@ pub async fn run_with(
         match tokio_tungstenite::connect_async(request).await {
             Ok((socket, _)) => {
                 tracing::info!(url = config.url, "Connected to the workspace");
+                state.send_replace(HostLinkState::Connected);
                 wait = Duration::from_secs(1);
                 let (sink, mut stream) = socket.split();
                 let sink = Arc::new(Mutex::new(sink));
@@ -281,6 +307,9 @@ pub async fn run_with(
                     }
                 }
                 tracing::warn!("The workspace's kernel closed the connection");
+                state.send_replace(HostLinkState::Reconnecting {
+                    error: "The workspace's kernel closed the connection".into(),
+                });
             }
             // Its secret is no longer the workspace's: trying again would never connect.
             Err(tokio_tungstenite::tungstenite::Error::Http(response))
@@ -292,6 +321,9 @@ pub async fn run_with(
             }
             Err(error) => {
                 tracing::warn!(error = %error, "The workspace's kernel cannot be reached");
+                state.send_replace(HostLinkState::Reconnecting {
+                    error: format!("The workspace's kernel cannot be reached: {error}"),
+                });
             }
         }
         tokio::select! {

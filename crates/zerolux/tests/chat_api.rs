@@ -2274,9 +2274,19 @@ async fn a_codex_session_runs_on_a_joined_computer() {
         tell,
     );
     let (stop, stopped) = tokio::sync::watch::channel(false);
-    let connected = tokio::spawn(zerolux::host_link::run_with(
-        config, stopped, computer, told,
+    let (state, mut seen) =
+        tokio::sync::watch::channel(zerolux::host_link::HostLinkState::Connecting);
+    let connected = tokio::spawn(zerolux::host_link::run_reporting(
+        config, stopped, computer, told, state,
     ));
+    // The computer says when it is connected.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        seen.wait_for(|state| *state == zerolux::host_link::HostLinkState::Connected),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     for _ in 0..100 {
         if runtime.hosts.online(&host).await {
             break;

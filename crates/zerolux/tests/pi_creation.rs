@@ -661,6 +661,42 @@ async fn a_pi_session_runs_on_a_joined_computer() {
     // Its record is read on the computer, where pi keeps it.
     let events = api(&client, &base, &format!("/sessions/{id}/events"), None).await;
     assert!(events["events"].is_array(), "{events}");
+    // Its controls reach its integration there, also after that computer's ZeroLux restarts.
+    let interrupted = api(
+        &client,
+        &base,
+        &format!("/sessions/{id}/interrupt"),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(interrupted["interrupted"], false, "{interrupted}");
+    drop(_running);
+    let log = fs::OpenOptions::new()
+        .append(true)
+        .open(root.join("joined.log"))
+        .unwrap();
+    let _running = Kernel(
+        computer(&["run"])
+            .stdout(Stdio::from(log.try_clone().unwrap()))
+            .stderr(Stdio::from(log))
+            .spawn()
+            .unwrap(),
+    );
+    let mut again = Value::Null;
+    for _ in 0..200 {
+        let answer = client
+            .post(format!("{base}/api/sessions/{id}/interrupt"))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        if answer.status().is_success() {
+            again = answer.json().await.unwrap();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(again["interrupted"], false, "{again}");
     api(
         &client,
         &base,

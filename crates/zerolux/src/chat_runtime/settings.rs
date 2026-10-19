@@ -238,6 +238,10 @@ impl ChatRuntime {
                     hosts,
                     host,
                     session: session.id.clone(),
+                    descriptor:
+                        self.store.chat_session_locator(who, &session.id).await?["descriptor"]
+                            .as_str()
+                            .map(str::to_owned),
                 }),
                 #[cfg(unix)]
                 _ => Control::Claude(super::remote::ClaudeControl::There {
