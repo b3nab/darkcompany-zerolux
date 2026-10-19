@@ -66,6 +66,10 @@ toward, or a budget a session stops at.
 sessions are private, or shared to follow or to work in together. Join your other computers to
 run sessions there, and open a computer to the others, who use their own accounts.
 
+**Extensions.** Add to your workspace what it does not do by itself: actions, events,
+triggers and settings, written in TypeScript. Each action works the same for people and agents.
+Load one from a folder while you write it. See [extensions](docs/extensions.md).
+
 **Everywhere you are.** The web app, a desktop app for macOS, Linux and Windows with the kernel
 inside, and a mobile app for iPhone and Android. Four themes, each light and dark.
 
@@ -172,17 +176,18 @@ kernel reads it as the harness wrote it, without a copy. Clients read through th
 and hear about changes over LiveKit. See [the architecture](docs/architecture.md).
 
 ```text
-crates/zerolux/      Kernel: API, store, chat runtime, harness drivers, sign-in
-apps/web/            Web app: React, Tailwind v4, shadcn/ui on Base UI
-apps/desktop/        Desktop app: Tauri, the web app and the kernel
-apps/mobile/         Mobile app: Expo, Uniwind, React Native Reusables
-packages/chat/       Chat logic shared by web and mobile
-packages/theme/      Themes shared by every client
-packages/bridge/     Chat bridge shared by the pi extension and the Claude Code runner
-extensions/pi/       pi extension
-extensions/claude/   Runner for Claude Code sessions started by ZeroLux
-services/auth/       Better Auth service, run by the kernel
-docs/                Architecture, agents, chats and the desktop
+crates/zerolux/          Kernel: API, store, chat runtime, harness drivers, sign-in
+apps/web/                Web app: React, Tailwind v4, shadcn/ui on Base UI
+apps/desktop/            Desktop app: Tauri, the web app and the kernel
+apps/mobile/             Mobile app: Expo, Uniwind, React Native Reusables
+packages/chat/           Chat logic shared by web and mobile
+packages/theme/          Themes shared by every client
+packages/bridge/         Chat bridge shared by the pi extension and the Claude Code runner
+packages/extension-sdk/  SDK for the TypeScript parts of ZeroLux extensions
+extensions/pi/           pi extension that links pi sessions to ZeroLux
+extensions/claude/       Runner for Claude Code sessions started by ZeroLux
+services/auth/           Better Auth service, run by the kernel
+docs/                    Architecture, agents, chats, extensions, desktop, mobile, themes
 ```
 
 ## Development
@@ -215,7 +220,8 @@ migrations with Atlas, using local Docker for a disposable database. See
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org). `bun run release
 <version>` sets the version everywhere, writes `CHANGELOG.md` from the commits
-and tags the release; pushing the tag builds the kernel and the desktop app and publishes them.
+and tags the release; pushing the tag builds the kernel, the desktop app and the Android app,
+and publishes them.
 
 ## License
 
