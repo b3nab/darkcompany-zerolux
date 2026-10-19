@@ -170,6 +170,9 @@ export function ActionDialog({
     result?: unknown;
     error?: string;
   }>({});
+  // An action that may run longer than a minute says so, and shows it is still running.
+  const minutes = Math.ceil((action.seconds ?? 0) / 60);
+  const long = minutes > 1 ? `${minutes} minutes` : "";
   return (
     <Dialog open onOpenChange={(open) => !open && close()}>
       <DialogContent className="sm:max-w-lg">
@@ -179,6 +182,7 @@ export function ActionDialog({
             {action.description}
             {action.effects === "destructive" &&
               " It deletes or overwrites data."}
+            {long && ` It can take up to ${long}.`}
           </DialogDescription>
         </DialogHeader>
         <ActionForm
@@ -193,6 +197,11 @@ export function ActionDialog({
             );
           }}
         />
+        {run.busy && long && (
+          <p role="status" className="text-sm text-muted-foreground">
+            Running…
+          </p>
+        )}
         {run.error && (
           <p role="alert" className="text-sm text-destructive">
             {run.error}
