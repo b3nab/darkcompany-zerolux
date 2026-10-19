@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm } from "node:fs/promises";
+import { chmod, cp, mkdir, readFile, realpath, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -97,6 +97,28 @@ const piExtension = await Bun.build({
 });
 if (!piExtension.success)
   throw new AggregateError(piExtension.logs, "Bundle the pi chat extension");
+
+// The programs the kernel starts, carried beside the app's own executable: Bun, which runs
+// sign-in and the runners, and the LiveKit server. Tauri wants each named for its target.
+const triple =
+  process.env.TAURI_ENV_TARGET_TRIPLE ??
+  /^host: (\S+)$/m.exec(await Bun.$`rustc -vV`.text())?.[1];
+if (!triple) throw new Error("rustc did not name the target to build for");
+const binaries = join(here, "src-tauri/binaries");
+await mkdir(binaries, { recursive: true });
+for (const [name, path] of [
+  ["bun", process.execPath],
+  ["livekit-server", Bun.which("livekit-server")],
+] as const) {
+  if (!path) throw new Error(`${name} is not on the PATH: the app carries it`);
+  const extension = triple.includes("windows") ? ".exe" : "";
+  // The program itself, not a link to where it is installed; writable, so the next build
+  // replaces it.
+  const target = join(binaries, `${name}-${triple}${extension}`);
+  await rm(target, { force: true });
+  await cp(await realpath(path), target);
+  await chmod(target, 0o755);
+}
 
 // Generate platform icons from the existing web favicon; no independent desktop branding.
 const source = await readFile(join(root, "apps/web/index.html"), "utf8");

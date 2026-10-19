@@ -43,6 +43,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": ["binaries/bun", "binaries/livekit-server"],
     "resources": {
       "../dist/web/": "web/",
       "../dist/claude/": "claude/",
