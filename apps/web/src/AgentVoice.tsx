@@ -7,6 +7,7 @@ import {
   useActions,
   useVoice,
   VOICE,
+  voiceGreeting,
 } from "@zerolux/chat";
 import type { JsonSchema, VoiceProposal } from "@zerolux/chat";
 import type { Actor } from "./api";
@@ -23,9 +24,18 @@ import { Textarea } from "@/components/ui/textarea";
 const languageName = (code: string) =>
   new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code;
 
-/** What the agent says to be heard: a greeting in the language its voice speaks best. */
-const greeting = (name: string, language: string) =>
-  language === "it" ? `Ciao, sono ${name}.` : `Hi, I'm ${name}.`;
+/** The languages a voice is made in, as the extension names them: its titles, else their names. */
+function languagesOf(schema: JsonSchema | undefined) {
+  if (schema?.oneOf?.length)
+    return schema.oneOf.map((option) => {
+      const code = String(option.const);
+      return { code, name: option.title ?? languageName(code) };
+    });
+  return (schema?.enum ?? []).map(String).map((code) => ({
+    code,
+    name: languageName(code),
+  }));
+}
 
 type Step =
   | { kind: "describe" }
@@ -51,9 +61,11 @@ export function AgentVoice({ agent, mine }: { agent: Actor; mine: boolean }) {
   const offered = actions?.find(
     (a) => a.extension === VOICE && a.name === "design",
   )?.input.properties?.language as JsonSchema | undefined;
-  const languages = (offered?.enum ?? []).map(String);
+  const languages = languagesOf(offered);
   const chosenLanguage =
-    language || String(offered?.default ?? languages[0] ?? "");
+    language || String(offered?.default ?? languages[0]?.code ?? "");
+  const nameOf = (code: string) =>
+    languages.find((one) => one.code === code)?.name ?? languageName(code);
 
   async function attempt(work: () => Promise<void>, back: Step) {
     setError("");
@@ -75,7 +87,7 @@ export function AgentVoice({ agent, mine }: { agent: Actor; mine: boolean }) {
         <>
           <p className="text-sm">{voice.description}</p>
           <p className="font-mono text-[11px] text-faint">
-            Speaks best in {languageName(voice.language)}
+            Speaks best in {nameOf(voice.language)}
           </p>
           <div className="flex gap-2">
             <Button
@@ -88,7 +100,7 @@ export function AgentVoice({ agent, mine }: { agent: Actor; mine: boolean }) {
                   : void aloud.read(
                       agent.id,
                       agent.id,
-                      greeting(agent.name, voice.language),
+                      voiceGreeting(agent.name, voice.language),
                     )
               }
             >
@@ -160,9 +172,9 @@ export function AgentVoice({ agent, mine }: { agent: Actor; mine: boolean }) {
                 value={chosenLanguage}
                 onChange={(event) => setLanguage(event.target.value)}
               >
-                {languages.map((code) => (
+                {languages.map(({ code, name }) => (
                   <NativeSelectOption key={code} value={code}>
-                    {languageName(code)}
+                    {name}
                   </NativeSelectOption>
                 ))}
               </NativeSelect>
