@@ -262,24 +262,16 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn desktop_path_preserves_overrides_and_does_not_duplicate_them() {
-        let result = desktop_path(
-            Some("/fixture/bin:/usr/local/bin".into()),
-            Some("/fixture/home".into()),
-        )
-        .unwrap();
+        let home = PathBuf::from("/fixture/home");
+        let given =
+            std::env::join_paths([PathBuf::from("/fixture/bin"), home.join(".bun/bin")]).unwrap();
+        let result = desktop_path(Some(given), Some(home.clone().into())).unwrap();
         let entries: Vec<_> = std::env::split_paths(&result).collect();
         assert_eq!(entries[0], PathBuf::from("/fixture/bin"));
-        assert_eq!(
-            entries
-                .iter()
-                .filter(|p| p.as_os_str() == "/usr/local/bin")
-                .count(),
-            1
-        );
-        assert!(entries.contains(&PathBuf::from("/fixture/home/.bun/bin")));
-        assert!(entries.contains(&PathBuf::from("/fixture/home/.pi/agent/bin")));
+        let bun = home.join(".bun/bin");
+        assert_eq!(entries.iter().filter(|p| **p == bun).count(), 1);
+        assert!(entries.contains(&home.join(".pi/agent/bin")));
     }
 }
