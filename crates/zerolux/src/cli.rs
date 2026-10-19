@@ -31,15 +31,14 @@ enum Command {
         /// The workspace's data: a SQLite file, or a postgresql:// URL.
         #[arg(long, env = "ZEROLUX_DATABASE", default_value = ".zerolux/zerolux.db")]
         database: String,
-        #[arg(long, default_value = "apps/web/dist")]
-        web_dir: PathBuf,
-        /// The authentication service to start, run with `bun`.
-        #[arg(
-            long,
-            env = "ZEROLUX_AUTH_ENTRY",
-            default_value = "services/auth/src/server.ts"
-        )]
-        auth_entry: PathBuf,
+        /// The web app's files: by default the ones packaged beside the kernel, or the
+        /// checkout's `apps/web/dist`.
+        #[arg(long)]
+        web_dir: Option<PathBuf>,
+        /// The authentication service to start, run with `bun`: by default the one packaged
+        /// beside the kernel, or the checkout's `services/auth/src/server.ts`.
+        #[arg(long, env = "ZEROLUX_AUTH_ENTRY")]
+        auth_entry: Option<PathBuf>,
         /// The origin a reverse proxy serves this kernel at, e.g. https://company.example.
         #[arg(long, env = "ZEROLUX_PUBLIC_ORIGIN")]
         public_origin: Option<String>,
@@ -77,6 +76,17 @@ enum HostAction {
     Run,
 }
 
+/// The folder of a release's kernel, with the web app, sign-in and runners it is packaged
+/// with; none for a kernel built in a checkout, which uses the checkout's.
+fn packaged() -> Option<PathBuf> {
+    let folder = std::env::current_exe().ok()?.canonicalize().ok()?;
+    let folder = folder.parent()?;
+    folder
+        .join("web/index.html")
+        .is_file()
+        .then(|| folder.to_path_buf())
+}
+
 pub fn init_logging() {
     let _ = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -109,6 +119,15 @@ pub async fn run() -> anyhow::Result<()> {
                     .map_or_else(|| PathBuf::from("."), PathBuf::from),
                 (None, crate::db::Location::Postgres(_)) => PathBuf::from(".zerolux"),
             };
+            let packaged = packaged();
+            let web_dir = web_dir.unwrap_or_else(|| match &packaged {
+                Some(resources) => resources.join("web"),
+                None => "apps/web/dist".into(),
+            });
+            let auth_entry = auth_entry.unwrap_or_else(|| match &packaged {
+                Some(resources) => resources.join("auth/server.js"),
+                None => "services/auth/src/server.ts".into(),
+            });
             Server::start(ServerOptions {
                 address: SocketAddr::new(host, port),
                 expose,
@@ -123,7 +142,9 @@ pub async fn run() -> anyhow::Result<()> {
                     None => None,
                 },
                 #[cfg(unix)]
-                runner: None,
+                runner: packaged
+                    .as_deref()
+                    .map(crate::claude_runner::RunnerProgram::bundled),
                 auth: Some(crate::auth::AuthEntry {
                     bun: "bun".into(),
                     entry: auth_entry,

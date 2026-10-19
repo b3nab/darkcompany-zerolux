@@ -113,19 +113,6 @@ pub fn desktop_path(path: Option<OsString>, home: Option<OsString>) -> Option<Os
     std::env::join_paths(entries).ok()
 }
 
-#[cfg(unix)]
-pub fn executable(name: &str) -> PathBuf {
-    std::env::var_os("PATH")
-        .as_deref()
-        .map(std::env::split_paths)
-        .into_iter()
-        .flatten()
-        .map(|directory| directory.join(name))
-        .find(|path| path.is_file())
-        .and_then(|path| path.canonicalize().ok())
-        .unwrap_or_else(|| PathBuf::from(name))
-}
-
 pub fn app_origin(url: &tauri::Url) -> bool {
     (url.scheme() == "tauri" && url.host_str() == Some("localhost")
         || url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))
@@ -168,17 +155,6 @@ pub fn same_origin(expected: &tauri::Url, requested: &tauri::Url) -> bool {
     requested.username().is_empty()
         && requested.password().is_none()
         && expected.origin() == requested.origin()
-}
-
-/** The runners the packaged app starts native sessions with: Claude Code's and pi's. */
-#[cfg(unix)]
-pub fn runner_program(resources: &Path) -> zerolux::claude_runner::RunnerProgram {
-    zerolux::claude_runner::RunnerProgram {
-        entry: resources.join("claude/runner.js"),
-        pi_entry: Some(resources.join("pi/runner.js")),
-        sdk_executable: Some(executable("claude")),
-        ..Default::default()
-    }
 }
 
 pub fn resource_root(resource_dir: &Path) -> Result<PathBuf> {

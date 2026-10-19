@@ -51,6 +51,32 @@ impl Default for RunnerProgram {
     }
 }
 
+impl RunnerProgram {
+    /// The runners a package carries in `resources`: Claude Code's and pi's, with the installed
+    /// `claude` in place of the SDK's own binary, which no package includes.
+    pub fn bundled(resources: &Path) -> Self {
+        Self {
+            entry: resources.join("claude/runner.js"),
+            pi_entry: Some(resources.join("pi/runner.js")),
+            sdk_executable: Some(executable("claude")),
+            ..Default::default()
+        }
+    }
+}
+
+/// An installed program, as the PATH finds it; its name alone when it is not there.
+pub fn executable(name: &str) -> PathBuf {
+    std::env::var_os("PATH")
+        .as_deref()
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .map(|directory| directory.join(name))
+        .find(|path| path.is_file())
+        .and_then(|path| path.canonicalize().ok())
+        .unwrap_or_else(|| PathBuf::from(name))
+}
+
 pub(crate) struct Registry {
     path: PathBuf,
     program: RunnerProgram,

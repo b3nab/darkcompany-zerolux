@@ -19,7 +19,10 @@ use std::{
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::{mpsc, oneshot, watch};
-use zerolux::server::{Server, ServerOptions};
+use zerolux::{
+    claude_runner::{RunnerProgram, executable},
+    server::{Server, ServerOptions},
+};
 
 const MANAGER: &str = "manager";
 
@@ -269,9 +272,9 @@ impl Host {
             web_dir: resources.join("web"),
             livekit: None,
             #[cfg(unix)]
-            runner: Some(local::runner_program(&resources)),
+            runner: Some(RunnerProgram::bundled(&resources)),
             auth: Some(zerolux::auth::AuthEntry {
-                bun: local::executable("bun"),
+                bun: executable("bun"),
                 entry: resources.join("auth/server.js"),
             }),
         })
@@ -688,7 +691,7 @@ impl Host {
             }
             Action::Edit { id, url } => self.edit(&id, &url).await?,
             Action::Join { url, code, name } => {
-                let program = local::runner_program(&self.resources()?);
+                let program = RunnerProgram::bundled(&self.resources()?);
                 self.computers.join(&url, &code, &name, program).await?;
             }
             Action::Leave { id } => self.computers.leave(&id).await?,
@@ -938,7 +941,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                     .map(|resources| {
                         Links::start(
                             root.root.join("computer"),
-                            &local::runner_program(&resources),
+                            &RunnerProgram::bundled(&resources),
                         )
                     });
                 let computers = match computers {
