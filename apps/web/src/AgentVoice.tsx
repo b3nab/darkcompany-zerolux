@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   chooseVoice,
   designVoice,
@@ -11,7 +11,7 @@ import {
 } from "@zerolux/chat";
 import type { JsonSchema, VoiceProposal } from "@zerolux/chat";
 import type { Actor } from "./api";
-import { useReadAloud } from "./read-aloud";
+import { audioUrl, useReadAloud } from "./read-aloud";
 import { Eyebrow } from "@/components/presence";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -35,6 +35,17 @@ function languagesOf(schema: JsonSchema | undefined) {
     code,
     name: languageName(code),
   }));
+}
+
+/** One proposed voice, to be heard. */
+function Proposal({ proposal }: { proposal: VoiceProposal }) {
+  const [url, setUrl] = useState<string>();
+  useEffect(() => {
+    const made = audioUrl(proposal.audio, proposal.type);
+    setUrl(made);
+    return () => URL.revokeObjectURL(made);
+  }, [proposal]);
+  return <audio controls src={url} className="h-8 min-w-0 flex-1" />;
 }
 
 type Step =
@@ -203,11 +214,7 @@ export function AgentVoice({ agent, mine }: { agent: Actor; mine: boolean }) {
                 <span className="w-16 font-mono text-[11px] text-faint">
                   Voice {index + 1}
                 </span>
-                <audio
-                  controls
-                  src={`data:${proposal.type};base64,${proposal.audio}`}
-                  className="h-8 min-w-0 flex-1"
-                />
+                <Proposal proposal={proposal} />
                 <Button
                   size="sm"
                   disabled={step.kind === "choosing"}

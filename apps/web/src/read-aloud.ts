@@ -2,6 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { errorMessage, readAloud } from "@zerolux/chat";
 
 /**
+ * Audio from the kernel as the page may play it: a blob URL, since its content policy allows
+ * no `data:` media. Revoke it once played.
+ */
+export function audioUrl(audio: string, type: string) {
+  const bytes = Uint8Array.from(atob(audio), (char) => char.charCodeAt(0));
+  return URL.createObjectURL(new Blob([bytes], { type }));
+}
+
+/**
  * One text read aloud at a time, in its agent's voice: each piece plays as soon as it is made,
  * while the next is made. Reading another, or stopping, ends the one that plays. What went
  * wrong stays with the text it was reading, without blocking the rest of the page.
@@ -37,14 +46,20 @@ export function useReadAloud() {
     try {
       for await (const piece of readAloud(actorId, text, signal)) {
         if (signal.aborted) return;
-        const audio = new Audio(`data:${piece.type};base64,${piece.audio}`);
+        const url = audioUrl(piece.audio, piece.type);
+        const audio = new Audio(url);
         playing.audio = audio;
-        await new Promise<void>((resolve, reject) => {
-          audio.onended = () => resolve();
-          audio.onerror = () => reject(new Error("The voice can't be played"));
-          signal.addEventListener("abort", () => resolve(), { once: true });
-          audio.play().catch(reject);
-        });
+        try {
+          await new Promise<void>((resolve, reject) => {
+            audio.onended = () => resolve();
+            audio.onerror = () =>
+              reject(new Error("The voice can't be played"));
+            signal.addEventListener("abort", () => resolve(), { once: true });
+            audio.play().catch(reject);
+          });
+        } finally {
+          URL.revokeObjectURL(url);
+        }
       }
     } catch (error) {
       // Stopped on purpose, a piece still being made fails: that is no error.
