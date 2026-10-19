@@ -944,6 +944,15 @@ async fn a_claude_session_runs_on_a_joined_computer() {
         .api(&format!("/sessions/{session}/settings"), None)
         .await;
     assert_eq!(view["values"]["permission_mode"], "plan");
+    // A fork is made there by Claude Code and opened there.
+    let forked = kernel
+        .api(&format!("/sessions/{session}/fork"), Some(json!({})))
+        .await;
+    assert_eq!(forked["session"]["host_id"], host);
+    assert_eq!(forked["session"]["created"], true);
+    fixture
+        .wait_trace(|rows| count(rows, "fork") == 1 && count(rows, "start") == 2)
+        .await;
     kernel
         .api(&format!("/sessions/{session}/stop"), Some(json!({})))
         .await;

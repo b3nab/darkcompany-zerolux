@@ -661,6 +661,17 @@ async fn a_pi_session_runs_on_a_joined_computer() {
     // Its record is read on the computer, where pi keeps it.
     let events = api(&client, &base, &format!("/sessions/{id}/events"), None).await;
     assert!(events["events"].is_array(), "{events}");
+    // A fork is made there by pi and opened there.
+    let forked = client
+        .post(format!("{base}/api/sessions/{id}/fork"))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    let status = forked.status();
+    let forked: Value = forked.json().await.unwrap();
+    assert!(status.is_success(), "{forked}");
+    assert_eq!(forked["session"]["host_id"], host);
     // Its controls reach its integration there, also after that computer's ZeroLux restarts.
     let interrupted = api(
         &client,

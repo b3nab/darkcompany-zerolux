@@ -216,6 +216,13 @@ function scripted(
   }) as unknown as Query;
 }
 
+// Claude Code's own fork of a saved session, as the runner's `fork` answers: a new ID.
+if (process.argv[2] === "fork") {
+  trace("fork", { session: process.argv[3], up_to: process.argv[4] ?? null });
+  console.log(JSON.stringify({ session_id: randomUUID() }));
+  process.exit(0);
+}
+
 launch(
   {
     start: ({ prompt, options }) => scripted(prompt, options),
