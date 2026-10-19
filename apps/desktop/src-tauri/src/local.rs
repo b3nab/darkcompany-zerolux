@@ -170,6 +170,17 @@ pub fn same_origin(expected: &tauri::Url, requested: &tauri::Url) -> bool {
         && expected.origin() == requested.origin()
 }
 
+/** The runners the packaged app starts native sessions with: Claude Code's and pi's. */
+#[cfg(unix)]
+pub fn runner_program(resources: &Path) -> zerolux::claude_runner::RunnerProgram {
+    zerolux::claude_runner::RunnerProgram {
+        entry: resources.join("claude/runner.js"),
+        pi_entry: Some(resources.join("pi/runner.js")),
+        sdk_executable: Some(executable("claude")),
+        ..Default::default()
+    }
+}
+
 pub fn resource_root(resource_dir: &Path) -> Result<PathBuf> {
     ensure!(
         resource_dir.join("web/index.html").is_file(),

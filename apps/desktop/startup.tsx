@@ -15,10 +15,20 @@ export type Profile = {
     | { kind: "existing"; url: string };
   running: boolean;
 };
+/** A workspace this computer joined, to run its person's sessions here. */
+export type JoinedWorkspace = {
+  id: string;
+  url: string;
+  /** Connected, or connecting again after a break. */
+  running: boolean;
+  /** Why it stopped, as when the workspace removed this computer. */
+  error: string | null;
+};
 export type DesktopState = {
   revision: number;
   profiles: Profile[];
   active: string | null;
+  computers: JoinedWorkspace[];
   ready: boolean;
   busy: boolean;
   error: string | null;
@@ -28,11 +38,14 @@ type Action =
   | { action: "open" | "forget"; id: string }
   | { action: "add"; url: string }
   | { action: "create"; name: string }
-  | { action: "edit"; id: string; url: string };
+  | { action: "edit"; id: string; url: string }
+  | { action: "join"; url: string; code: string; name: string }
+  | { action: "leave"; id: string };
 const initial: DesktopState = {
   revision: 0,
   profiles: [],
   active: null,
+  computers: [],
   ready: false,
   busy: false,
   error: null,
@@ -62,6 +75,8 @@ export function WorkspaceManager({
   const [name, setName] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
   const [forgetting, setForgetting] = useState<string | null>(null);
+  const [joining, setJoining] = useState({ url: "", code: "", name: "" });
+  const [leaving, setLeaving] = useState<string | null>(null);
   const disabled = !state.ready || state.busy || pending;
   const edited = state.profiles.find((profile) => profile.id === editing);
 
@@ -336,6 +351,147 @@ export function WorkspaceManager({
             disabled={disabled || !name.trim()}
           >
             Create workspace
+          </Button>
+        </form>
+      </section>
+      <section
+        className="space-y-4 border-t pt-6"
+        aria-labelledby="computer-heading"
+      >
+        <div className="space-y-1">
+          <h2 id="computer-heading" className="text-sm font-semibold">
+            This computer in a workspace
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            Join a workspace as one of its computers: you start and follow your
+            sessions here from any of its apps, with this computer's Claude
+            Code, Codex and pi. It stays connected while this app runs.
+          </p>
+        </div>
+        {state.computers.length > 0 && (
+          <ul aria-label="Joined workspaces" className="space-y-2">
+            {state.computers.map((joined) => (
+              <li
+                key={joined.id}
+                className="space-y-2 rounded-xl border bg-card p-3 text-sm"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 space-y-1">
+                    <p className="break-all font-medium">{joined.url}</p>
+                    <p
+                      className={
+                        joined.error
+                          ? "text-xs text-destructive"
+                          : "text-xs text-muted-foreground"
+                      }
+                    >
+                      {joined.error ??
+                        (joined.running
+                          ? "Joined: connected, or connecting again"
+                          : "Not connected")}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={disabled}
+                    onClick={() => setLeaving(joined.id)}
+                  >
+                    Leave
+                  </Button>
+                </div>
+                {leaving === joined.id && (
+                  <div className="space-y-3 border-t pt-3">
+                    <p className="text-sm text-muted-foreground">
+                      Leave this workspace? This computer disconnects and
+                      forgets it; joining again needs a new code. Its sessions
+                      here stop being reachable from the workspace.
+                    </p>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        disabled={disabled}
+                        onClick={async () => {
+                          if (await act({ action: "leave", id: joined.id }))
+                            setLeaving(null);
+                        }}
+                      >
+                        Leave
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        disabled={disabled}
+                        onClick={() => setLeaving(null)}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        <form
+          className="space-y-3"
+          aria-label="Join a workspace"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (!disabled && (await act({ action: "join", ...joining })))
+              setJoining({ url: "", code: "", name: "" });
+          }}
+        >
+          <div className="space-y-2">
+            <Label htmlFor="join-address">Workspace address</Label>
+            <Input
+              id="join-address"
+              type="url"
+              required
+              placeholder="http://192.0.2.10:4310"
+              disabled={disabled}
+              value={joining.url}
+              onChange={(event) =>
+                setJoining({ ...joining, url: event.target.value })
+              }
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="join-code">Code</Label>
+            <Input
+              id="join-code"
+              required
+              autoComplete="off"
+              disabled={disabled}
+              value={joining.code}
+              onChange={(event) =>
+                setJoining({ ...joining, code: event.target.value })
+              }
+              className="font-mono"
+            />
+            <p className="text-xs text-muted-foreground">
+              From the workspace, in Settings › Computers › Add a computer. It
+              works once, within ten minutes.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="join-name">Name · optional</Label>
+            <Input
+              id="join-name"
+              maxLength={200}
+              placeholder="The one given with the code"
+              disabled={disabled}
+              value={joining.name}
+              onChange={(event) =>
+                setJoining({ ...joining, name: event.target.value })
+              }
+            />
+          </div>
+          <Button
+            type="submit"
+            variant="outline"
+            disabled={disabled || !joining.url.trim() || !joining.code.trim()}
+          >
+            Join workspace
           </Button>
         </form>
       </section>

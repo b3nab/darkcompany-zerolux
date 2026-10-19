@@ -22,6 +22,7 @@ const state: DesktopState = {
     },
   ],
   active: "profile-a",
+  computers: [],
   ready: true,
   busy: false,
   error: null,
@@ -48,6 +49,37 @@ test("the manager distinguishes saved connections from local kernel ownership", 
   expect(html).toContain(
     "Quitting only shuts down local kernels started by this app",
   );
+});
+
+test("this computer joins a workspace with a code, and says how each joined one stands", () => {
+  const html = renderToStaticMarkup(
+    <WorkspaceManager
+      initialState={{
+        ...state,
+        computers: [
+          {
+            id: "link-a",
+            url: "http://192.0.2.10:4310",
+            running: true,
+            error: null,
+          },
+          {
+            id: "link-b",
+            url: "http://192.0.2.11:4310",
+            running: false,
+            error:
+              "This computer was removed from the workspace; join it again with a new code",
+          },
+        ],
+      }}
+    />,
+  );
+  expect(html).toContain("This computer in a workspace");
+  expect(html).toContain('aria-label="Join a workspace"');
+  expect(html).toContain("http://192.0.2.10:4310");
+  expect(html).toContain("Joined: connected, or connecting again");
+  expect(html).toContain("join it again with a new code");
+  expect(html.match(/>Leave</g)).toHaveLength(2);
 });
 
 test("errors and names are text, and a failed setup does not present enabled actions", () => {

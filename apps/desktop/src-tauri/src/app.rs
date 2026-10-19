@@ -1,5 +1,6 @@
 use crate::{
     catalog::{Catalog, Profile, Source},
+    computer::{LinkView, Links},
     connection,
     local::{self, LocalWorkspace},
     preferences::LaunchOptions,
@@ -27,6 +28,8 @@ struct View {
     revision: u64,
     profiles: Vec<ProfileView>,
     active: Option<String>,
+    /// Other workspaces this computer joined, to run their person's sessions here.
+    computers: Vec<LinkView>,
     ready: bool,
     busy: bool,
     error: Option<String>,
@@ -43,11 +46,32 @@ struct ProfileView {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Action {
     List,
-    Open { id: String },
-    Add { url: String },
-    Create { name: String },
-    Edit { id: String, url: String },
-    Forget { id: String },
+    Open {
+        id: String,
+    },
+    Add {
+        url: String,
+    },
+    Create {
+        name: String,
+    },
+    Edit {
+        id: String,
+        url: String,
+    },
+    Forget {
+        id: String,
+    },
+    /// Joins a workspace as one of its computers, with the code its person made there.
+    Join {
+        url: String,
+        code: String,
+        name: String,
+    },
+    /// Leaves a workspace this computer joined.
+    Leave {
+        id: String,
+    },
 }
 
 type Reply = oneshot::Sender<Result<View, String>>;
@@ -123,6 +147,7 @@ struct Host {
     generation: u64,
     view: Arc<Mutex<View>>,
     stopped: watch::Receiver<bool>,
+    computers: Links,
 }
 
 fn open_external(handle: &tauri::AppHandle, url: &tauri::Url) {
@@ -164,6 +189,15 @@ fn render(app: &tauri::AppHandle, view: &View) {
 }
 
 impl Host {
+    fn resources(&self) -> Result<PathBuf> {
+        let resources = self
+            .app
+            .path()
+            .resource_dir()
+            .context("Locate packaged desktop resources")?;
+        local::resource_root(&resources)
+    }
+
     fn snapshot(&self, busy: bool, error: Option<String>) -> View {
         View {
             revision: 0,
@@ -180,6 +214,7 @@ impl Host {
                 })
                 .collect(),
             active: self.active.clone(),
+            computers: self.computers.views(),
             ready: true,
             busy,
             error,
@@ -221,12 +256,7 @@ impl Host {
         } else {
             Arc::new(LocalWorkspace::open(directory)?)
         };
-        let resources = self
-            .app
-            .path()
-            .resource_dir()
-            .context("Locate packaged desktop resources")?;
-        let resources = local::resource_root(&resources)?;
+        let resources = self.resources()?;
         let server = Server::start(ServerOptions {
             address: ([127, 0, 0, 1], workspace.port()?).into(),
             expose: None,
@@ -239,12 +269,7 @@ impl Host {
             web_dir: resources.join("web"),
             livekit: None,
             #[cfg(unix)]
-            runner: Some(zerolux::claude_runner::RunnerProgram {
-                entry: resources.join("claude/runner.js"),
-                pi_entry: Some(resources.join("pi/runner.js")),
-                sdk_executable: Some(local::executable("claude")),
-                ..Default::default()
-            }),
+            runner: Some(local::runner_program(&resources)),
             auth: Some(zerolux::auth::AuthEntry {
                 bun: local::executable("bun"),
                 entry: resources.join("auth/server.js"),
@@ -662,6 +687,11 @@ impl Host {
                 self.open(&id).await?;
             }
             Action::Edit { id, url } => self.edit(&id, &url).await?,
+            Action::Join { url, code, name } => {
+                let program = local::runner_program(&self.resources()?);
+                self.computers.join(&url, &code, &name, program).await?;
+            }
+            Action::Leave { id } => self.computers.leave(&id).await?,
             Action::Forget { id } => {
                 ensure!(
                     !self
@@ -733,6 +763,7 @@ impl Host {
     }
 
     async fn shutdown(self) {
+        self.computers.shutdown().await;
         for runtime in self.runtimes.values() {
             runtime.stop.send_replace(true);
         }
@@ -898,6 +929,26 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                         return;
                     }
                 };
+                // The workspaces this computer joined connect again with the app.
+                let computers = task_handle
+                    .path()
+                    .resource_dir()
+                    .context("Locate packaged desktop resources")
+                    .and_then(|resources| local::resource_root(&resources))
+                    .map(|resources| {
+                        Links::start(
+                            root.root.join("computer"),
+                            &local::runner_program(&resources),
+                        )
+                    });
+                let computers = match computers {
+                    Ok(computers) => computers,
+                    // Without the app's runners, its sessions could not start: they wait.
+                    Err(error) => {
+                        eprintln!("Joined workspaces are not connected: {error:#}");
+                        Links::new(root.root.join("computer"))
+                    }
+                };
                 let mut host = Host {
                     app: task_handle,
                     root,
@@ -908,6 +959,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                     generation: 0,
                     view,
                     stopped: stopped.clone(),
+                    computers,
                 };
                 host.publish(true, None);
                 let error = host

@@ -3,6 +3,7 @@
 mod app;
 mod catalog;
 mod chrome;
+mod computer;
 mod connection;
 mod local;
 mod preferences;
