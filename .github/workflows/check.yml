@@ -46,3 +46,29 @@ jobs:
           sudo install -m 0755 "$RUNNER_TEMP/livekit-server" /usr/local/bin/livekit-server
           livekit-server --version
       - run: bun run check
+
+  # Windows has no PostgreSQL service container: the Rust tests run on SQLite there, as the
+  # Linux job also runs them, beside its PostgreSQL ones.
+  windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          cache-key: check
+      - name: Install LiveKit server for integration tests
+        shell: bash
+        # Official v1.13.7 Windows amd64 asset and SHA-256:
+        # https://github.com/livekit/livekit/releases/expanded_assets/v1.13.7
+        run: |
+          livekit_archive="$RUNNER_TEMP/livekit_1.13.7_windows_amd64.zip"
+          curl --fail --silent --show-error --location https://github.com/livekit/livekit/releases/download/v1.13.7/livekit_1.13.7_windows_amd64.zip -o "$livekit_archive"
+          printf '%s  %s\n' 'e539e7d2f75807b9c9202cd2a0bf2cb3d52fc4c52978a6953e0f47bc339fe77f' "$livekit_archive" | sha256sum --check --strict
+          7z x -bso0 "$livekit_archive" -o"$RUNNER_TEMP/livekit"
+          echo "$RUNNER_TEMP/livekit" >> "$GITHUB_PATH"
+      - run: livekit-server --version
+      - run: bun run --cwd apps/desktop assets
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: bun run typecheck
+      - run: bun run test
