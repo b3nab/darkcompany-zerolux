@@ -10,7 +10,8 @@ mod preferences;
 
 fn main() -> anyhow::Result<()> {
     // Before starting Tokio or Tauri threads. Never source the user's shell configuration.
-    if let Some(path) = local::desktop_path(std::env::var_os("PATH"), std::env::var_os("HOME")) {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    if let Some(path) = local::desktop_path(std::env::var_os("PATH"), home) {
         // SAFETY: this is the executable's single-threaded bootstrap, before any runtime starts.
         unsafe { std::env::set_var("PATH", path) };
     }

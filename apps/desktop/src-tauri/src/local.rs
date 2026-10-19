@@ -77,8 +77,9 @@ impl LocalWorkspace {
     }
 }
 
-/// Preserve explicitly configured PATH precedence, then add conventional GUI-launch locations.
-/// No shell execution, shell startup files, or runtime mutation by the kernel.
+/// Preserve explicitly configured PATH precedence, then add the conventional install locations
+/// a GUI launch may lack, on each system. No shell execution, shell startup files, or runtime
+/// mutation by the kernel.
 pub fn desktop_path(path: Option<OsString>, home: Option<OsString>) -> Option<OsString> {
     let mut entries: Vec<PathBuf> = path
         .as_deref()
@@ -86,28 +87,31 @@ pub fn desktop_path(path: Option<OsString>, home: Option<OsString>) -> Option<Os
         .into_iter()
         .flatten()
         .collect();
-    if cfg!(unix) {
-        let mut additions = Vec::new();
-        if let Some(home) = home {
-            let home = PathBuf::from(home);
-            additions.extend([
-                home.join(".bun/bin"),
-                home.join(".local/bin"),
-                home.join(".cargo/bin"),
-                // pi's own installer puts its launcher here.
-                home.join(".pi/agent/bin"),
-            ]);
-        }
+    let mut additions = Vec::new();
+    if let Some(home) = home {
+        let home = PathBuf::from(home);
+        additions.extend([
+            home.join(".bun/bin"),
+            home.join(".local/bin"),
+            home.join(".cargo/bin"),
+            // pi's own installer puts its launcher here.
+            home.join(".pi/agent/bin"),
+        ]);
+    }
+    if cfg!(windows) {
+        // npm's global commands: Claude Code, Codex or pi installed with npm.
+        additions.extend(std::env::var_os("APPDATA").map(|data| PathBuf::from(data).join("npm")));
+    } else {
         additions.extend([
             PathBuf::from("/opt/homebrew/bin"),
             PathBuf::from("/usr/local/bin"),
             PathBuf::from("/usr/bin"),
             PathBuf::from("/bin"),
         ]);
-        for entry in additions {
-            if !entries.contains(&entry) {
-                entries.push(entry);
-            }
+    }
+    for entry in additions {
+        if !entries.contains(&entry) {
+            entries.push(entry);
         }
     }
     std::env::join_paths(entries).ok()
