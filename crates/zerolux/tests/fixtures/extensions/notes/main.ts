@@ -58,6 +58,17 @@ await serve(
           );
         },
       },
+      folder: {
+        title: "Its folder",
+        description: "Writes a file in its own folder",
+        effects: "write",
+        seconds: 120,
+        async run(_input, context) {
+          const path = `${context.folder}/hello.txt`;
+          await Bun.write(path, "hello");
+          return { path, tone: context.settings.tone };
+        },
+      },
       secret: {
         title: "Has a token",
         description: "Whether its secret is set",

@@ -11,3 +11,7 @@ command = ["bun", "run", "main.ts"]
 [settings]
 store = { type = "text", label = "Store", default = "memory" }
 token = { type = "secret", label = "Token" }
+tone = { type = "choice", label = "Tone", default = "plain", options = [
+  { value = "plain", label = "Plain" },
+  { value = "warm", label = "Warm" },
+] }

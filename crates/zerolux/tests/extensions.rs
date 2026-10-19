@@ -224,6 +224,38 @@ async fn extensions_bring_actions_points_events_triggers_and_settings() {
         )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+    // A choice takes one of its options.
+    let tone = &changed["extension"]["settings"][2];
+    assert_eq!(tone["options"][1]["value"], "warm");
+    for (value, expected) in [("loud", StatusCode::BAD_REQUEST), ("warm", StatusCode::OK)] {
+        let (status, _) = kernel
+            .call(
+                Method::PATCH,
+                "/extensions/zerolux.notes/settings",
+                Some(json!({"tone": value})),
+            )
+            .await;
+        assert_eq!(status, expected, "{value}");
+    }
+
+    // Its own folder, inside the kernel's data; an action may say it takes longer.
+    let (_, actions) = kernel.call(Method::GET, "/actions", None).await;
+    let slow = actions["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|action| action["name"] == "folder")
+        .unwrap();
+    assert_eq!(slow["seconds"], 120);
+    let (status, wrote) = kernel
+        .call(Method::POST, "/ext/zerolux.notes/folder", Some(json!({})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{wrote}");
+    let written = std::path::PathBuf::from(wrote["result"]["path"].as_str().unwrap());
+    assert!(written.starts_with(dir.path().join("extensions/zerolux.notes")));
+    assert_eq!(std::fs::read_to_string(&written).unwrap(), "hello");
+    // The new value reached its running part.
+    assert_eq!(wrote["result"]["tone"], "warm");
 
     // Notes cannot be disabled while Memory depends on it; disabled, Memory's actions go.
     let (status, _) = kernel
@@ -254,6 +286,16 @@ async fn extensions_bring_actions_points_events_triggers_and_settings() {
     assert_eq!(status, StatusCode::OK);
     let (_, listed) = kernel.call(Method::GET, "/extensions", None).await;
     assert_eq!(listed["extensions"].as_array().unwrap().len(), 1);
+    // Removed, Notes takes its folder with it.
+    let (status, _) = kernel
+        .call(Method::POST, "/extensions/zerolux.notes/disable", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = kernel
+        .call(Method::DELETE, "/extensions/zerolux.notes", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!dir.path().join("extensions/zerolux.notes").exists());
 
     runtime.shutdown().await.unwrap();
     server.abort();
