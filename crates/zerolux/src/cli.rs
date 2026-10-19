@@ -31,12 +31,12 @@ enum Command {
         /// The workspace's data: a SQLite file, or a postgresql:// URL.
         #[arg(long, env = "ZEROLUX_DATABASE", default_value = ".zerolux/zerolux.db")]
         database: String,
-        /// The web app's files: by default the ones packaged beside the kernel, or the
+        /// The web app's files: by default the ones a release packages with the kernel, or the
         /// checkout's `apps/web/dist`.
         #[arg(long)]
         web_dir: Option<PathBuf>,
-        /// The authentication service to start, run with `bun`: by default the one packaged
-        /// beside the kernel, or the checkout's `services/auth/src/server.ts`.
+        /// The authentication service to start, run with `bun`: by default the one a release
+        /// packages with the kernel, or the checkout's `services/auth/src/server.ts`.
         #[arg(long, env = "ZEROLUX_AUTH_ENTRY")]
         auth_entry: Option<PathBuf>,
         /// The origin a reverse proxy serves this kernel at, e.g. https://company.example.
@@ -76,15 +76,16 @@ enum HostAction {
     Run,
 }
 
-/// The folder of a release's kernel, with the web app, sign-in and runners it is packaged
-/// with; none for a kernel built in a checkout, which uses the checkout's.
+/// The web app, sign-in and runners a release packages in `share/zerolux`, beside the `bin`
+/// folder of its kernel, as in `/usr/local`; none for a kernel built in a checkout, which uses
+/// the checkout's.
 fn packaged() -> Option<PathBuf> {
-    let folder = std::env::current_exe().ok()?.canonicalize().ok()?;
-    let folder = folder.parent()?;
-    folder
+    let kernel = std::env::current_exe().ok()?.canonicalize().ok()?;
+    let resources = kernel.parent()?.parent()?.join("share/zerolux");
+    resources
         .join("web/index.html")
         .is_file()
-        .then(|| folder.to_path_buf())
+        .then_some(resources)
 }
 
 pub fn init_logging() {
