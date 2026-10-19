@@ -4,12 +4,7 @@ import { useRouter } from "expo-router";
 import { PlusIcon } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Alert, Platform, Pressable, Switch, View } from "react-native";
-import {
-  ago,
-  errorMessage,
-  joinCommand,
-  useHostJoining,
-} from "@zerolux/chat";
+import { ago, errorMessage, joinCommand, useHostJoining } from "@zerolux/chat";
 import type { Host, HostLink } from "@zerolux/chat";
 import { Row } from "@/components/settings";
 import { Text } from "@/components/ui/text";

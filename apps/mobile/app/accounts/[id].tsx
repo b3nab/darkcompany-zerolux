@@ -5,11 +5,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Linking, Pressable, ScrollView, TextInput, View } from "react-native";
 import { useCSSVariable } from "uniwind";
-import {
-  errorMessage,
-  piProviders,
-  useHostAccounts,
-} from "@zerolux/chat";
+import { errorMessage, piProviders, useHostAccounts } from "@zerolux/chat";
 import type { DeviceCode } from "@zerolux/chat";
 import { Screen } from "@/components/screen";
 import { Segmented } from "@/components/segmented";
