@@ -1446,10 +1446,54 @@ async fn session_terminals(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
     let who = state.store.acting_for(&who, &id, Access::Read).await?;
+    let session = state.store.chat_session(&who, &id).await?;
+    let runtime = runtime(&state)?;
+    // On a joined computer: its terminals there, remembered here by ID.
+    if let Some(host) = remote(&state, &session) {
+        let terminals = runtime
+            .hosts
+            .call(&host, "terminal.list", json!({ "session_id": id }))
+            .await
+            .map_err(said)?;
+        let mut known = runtime.remote_terminals.lock().expect("terminals");
+        for terminal in terminals.as_array().into_iter().flatten() {
+            if let Some(terminal) = terminal["id"].as_str() {
+                known.insert(terminal.to_owned(), (host.clone(), id.clone()));
+            }
+        }
+        return Ok(Json(json!({ "terminals": terminals })));
+    }
     session_folder(&state, &who, &id).await?;
-    Ok(Json(
-        json!({ "terminals": runtime(&state)?.terminals.of(&id) }),
-    ))
+    Ok(Json(json!({ "terminals": runtime.terminals.of(&id) })))
+}
+
+/// The joined computer a session runs on, if it is not this kernel's.
+fn remote(state: &AppState, session: &ChatSession) -> Option<String> {
+    session
+        .host_id
+        .clone()
+        .filter(|host| Some(host.as_str()) != state.store.host())
+}
+
+/// A terminal on a joined computer that `who` may use as `need` asks: its computer.
+async fn remote_terminal(
+    state: &AppState,
+    who: &ChatIdentity,
+    terminal: &str,
+    need: Access,
+) -> Result<Option<String>, ApiFailure> {
+    let runtime = runtime(state)?;
+    let known = runtime
+        .remote_terminals
+        .lock()
+        .expect("terminals")
+        .get(terminal)
+        .cloned();
+    let Some((host, session)) = known else {
+        return Ok(None);
+    };
+    state.store.acting_for(who, &session, need).await?;
+    Ok(Some(host))
 }
 
 /// A shell in the session's folder, on the kernel host.
@@ -1460,6 +1504,28 @@ async fn open_terminal(
     ChatJson(size): ChatJson<TerminalSize>,
 ) -> Result<Json<Value>, ApiFailure> {
     let who = state.store.acting_for(&who, &id, Access::Write).await?;
+    let session = state.store.chat_session(&who, &id).await?;
+    if let Some(host) = remote(&state, &session) {
+        let runtime = runtime(&state)?;
+        let terminal = runtime
+            .hosts
+            .call(
+                &host,
+                "terminal.open",
+                json!({"session_id": id, "folder": session.workspace,
+                    "cols": size.cols, "rows": size.rows}),
+            )
+            .await
+            .map_err(said)?;
+        if let Some(terminal) = terminal["id"].as_str() {
+            runtime
+                .remote_terminals
+                .lock()
+                .expect("terminals")
+                .insert(terminal.to_owned(), (host, id.clone()));
+        }
+        return Ok(Json(json!({ "terminal": terminal })));
+    }
     let folder = session_folder(&state, &who, &id).await?;
     let terminal = runtime(&state)?
         .terminals
@@ -1495,6 +1561,18 @@ async fn terminal_output(
     Path(terminal): Path<String>,
     Query(input): Query<TerminalRead>,
 ) -> Result<Json<Value>, ApiFailure> {
+    if let Some(host) = remote_terminal(&state, &who, &terminal, Access::Read).await? {
+        let read = runtime(&state)?
+            .hosts
+            .call(
+                &host,
+                "terminal.output",
+                json!({"id": terminal, "after": input.after}),
+            )
+            .await
+            .map_err(said)?;
+        return Ok(Json(read));
+    }
     let info = owned_terminal(&state, &who, &terminal, Access::Read).await?;
     let output = runtime(&state)?.terminals.output(&terminal, input.after)?;
     Ok(Json(json!({ "terminal": info, "output": output })))
@@ -1513,6 +1591,18 @@ async fn terminal_input(
     Path(terminal): Path<String>,
     ChatJson(input): ChatJson<TerminalInput>,
 ) -> Result<Json<Value>, ApiFailure> {
+    if let Some(host) = remote_terminal(&state, &who, &terminal, Access::Write).await? {
+        runtime(&state)?
+            .hosts
+            .call(
+                &host,
+                "terminal.input",
+                json!({"id": terminal, "data": input.data}),
+            )
+            .await
+            .map_err(said)?;
+        return Ok(Json(json!({ "sent": true })));
+    }
     owned_terminal(&state, &who, &terminal, Access::Write).await?;
     runtime(&state)?
         .terminals
@@ -1527,6 +1617,18 @@ async fn resize_terminal(
     Path(terminal): Path<String>,
     ChatJson(size): ChatJson<TerminalSize>,
 ) -> Result<Json<Value>, ApiFailure> {
+    if let Some(host) = remote_terminal(&state, &who, &terminal, Access::Write).await? {
+        let info = runtime(&state)?
+            .hosts
+            .call(
+                &host,
+                "terminal.resize",
+                json!({"id": terminal, "cols": size.cols, "rows": size.rows}),
+            )
+            .await
+            .map_err(said)?;
+        return Ok(Json(json!({ "terminal": info })));
+    }
     owned_terminal(&state, &who, &terminal, Access::Write).await?;
     let info = runtime(&state)?
         .terminals
@@ -1541,6 +1643,20 @@ async fn close_terminal(
     Extension(who): Extension<ChatIdentity>,
     Path(terminal): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
+    if let Some(host) = remote_terminal(&state, &who, &terminal, Access::Write).await? {
+        let runtime = runtime(&state)?;
+        runtime
+            .hosts
+            .call(&host, "terminal.close", json!({ "id": terminal }))
+            .await
+            .map_err(said)?;
+        runtime
+            .remote_terminals
+            .lock()
+            .expect("terminals")
+            .remove(&terminal);
+        return Ok(Json(json!({ "closed": true })));
+    }
     owned_terminal(&state, &who, &terminal, Access::Write).await?;
     runtime(&state)?.terminals.close(&terminal)?;
     Ok(Json(json!({ "closed": true })))

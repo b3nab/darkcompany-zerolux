@@ -31,6 +31,8 @@ pub struct HostRuntime {
     wake: broadcast::Sender<()>,
     /// What this computer tells the kernel on its own.
     notices: mpsc::UnboundedSender<Value>,
+    /// Terminals opened in this computer's session folders.
+    terminals: Arc<crate::terminals::Terminals>,
     /// The pi and Claude Code runners of this computer's sessions.
     #[cfg(unix)]
     pi: crate::pi_runner::Registry,
@@ -99,6 +101,7 @@ impl HostRuntime {
             pi_pending: Mutex::default(),
             #[cfg(unix)]
             pi_links: Mutex::default(),
+            terminals: terminals(notices.clone()),
             url,
             codex,
             pending: Mutex::default(),
@@ -198,6 +201,42 @@ impl HostRuntime {
                 let session = params["session_id"].as_str().unwrap_or_default();
                 self.claude_link(&params).await?.stop(session).await?;
                 Ok(json!({"stopped": true}))
+            }
+            "terminal.open" => {
+                let folder = params["folder"].as_str().context("Choose a folder")?;
+                let size = |key: &str| params[key].as_u64().unwrap_or(24) as u16;
+                Ok(json!(self.terminals.open(
+                    params["session_id"].as_str().context("Name the session")?,
+                    folder,
+                    size("cols"),
+                    size("rows"),
+                )?))
+            }
+            "terminal.list" => Ok(json!(
+                self.terminals
+                    .of(params["session_id"].as_str().unwrap_or_default())
+            )),
+            "terminal.output" => {
+                let id = params["id"].as_str().unwrap_or_default();
+                Ok(json!({"terminal": self.terminals.info(id)?,
+                    "output": self.terminals.output(id, params["after"].as_u64().unwrap_or(0))?}))
+            }
+            "terminal.input" => {
+                self.terminals.write(
+                    params["id"].as_str().unwrap_or_default(),
+                    params["data"].as_str().unwrap_or_default(),
+                )?;
+                Ok(json!({"sent": true}))
+            }
+            "terminal.resize" => Ok(json!(self.terminals.resize(
+                params["id"].as_str().unwrap_or_default(),
+                params["cols"].as_u64().unwrap_or(80) as u16,
+                params["rows"].as_u64().unwrap_or(24) as u16,
+            )?)),
+            "terminal.close" => {
+                self.terminals
+                    .close(params["id"].as_str().unwrap_or_default())?;
+                Ok(json!({"closed": true}))
             }
             other => crate::host_ops::answer(other, params).await,
         }
@@ -461,4 +500,31 @@ impl HostRuntime {
         let _ = tokio::time::timeout(Duration::from_secs(10), running.task).await;
         true
     }
+}
+
+/// This computer's terminals; what grows in them is told to the kernel, at most every 100 ms
+/// per terminal, as the kernel tells its own.
+fn terminals(notices: mpsc::UnboundedSender<Value>) -> Arc<crate::terminals::Terminals> {
+    let (grown, mut heard) = mpsc::unbounded_channel::<String>();
+    let terminals = Arc::new(crate::terminals::Terminals::new(grown));
+    let watched = Arc::downgrade(&terminals);
+    tokio::spawn(async move {
+        while let Some(first) = heard.recv().await {
+            let mut ids = std::collections::HashSet::from([first]);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            while let Ok(id) = heard.try_recv() {
+                ids.insert(id);
+            }
+            let Some(terminals) = watched.upgrade() else {
+                break;
+            };
+            for id in ids {
+                if let Ok(info) = terminals.info(&id) {
+                    let _ = notices.send(json!({"type": "terminal.output", "terminal_id": id,
+                        "session_id": info.session_id, "end": info.end, "ended": info.ended}));
+                }
+            }
+        }
+    });
+    terminals
 }

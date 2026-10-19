@@ -2339,6 +2339,61 @@ async fn a_codex_session_runs_on_a_joined_computer() {
     );
     // Idle, it waits in Codex's own queue and starts the next turn there.
     assert_eq!(native.count("thread/queue/add"), 1);
+    // A terminal in its folder runs on the computer.
+    let opened: Value = kernel
+        .post(
+            &format!("/sessions/{id}/terminals"),
+            None,
+            json!({"cols": 80, "rows": 24}),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    let terminal = opened["terminal"]["id"].as_str().unwrap().to_owned();
+    kernel
+        .post(
+            &format!("/terminals/{terminal}/input"),
+            None,
+            json!({"data": "echo from-$((6*7))\n"}),
+        )
+        .await
+        .error_for_status()
+        .unwrap();
+    let mut seen = String::new();
+    for _ in 0..100 {
+        let read: Value = kernel
+            .get(&format!("/terminals/{terminal}?after=0"), None)
+            .await
+            .json()
+            .await
+            .unwrap();
+        let bytes = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            read["output"]["data"].as_str().unwrap_or_default(),
+        )
+        .unwrap();
+        seen = String::from_utf8_lossy(&bytes).into_owned();
+        if seen.contains("from-42") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(seen.contains("from-42"), "{seen}");
+    let listed: Value = kernel
+        .get(&format!("/sessions/{id}/terminals"), None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed["terminals"][0]["id"], terminal);
+    kernel
+        .request(Method::DELETE, &format!("/terminals/{terminal}"), None)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
     // Its computer goes offline: the session waits for it.
     stop.send_replace(true);
     connected.await.unwrap().unwrap();

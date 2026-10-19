@@ -289,6 +289,8 @@ pub struct ChatRuntime {
     terminal_notices: Mutex<Option<JoinHandle<()>>>,
     /// The people's computers joined to the workspace and connected now.
     pub hosts: Arc<crate::host_link::Links>,
+    /// Terminals opened on those computers, by ID: the computer and the session.
+    pub remote_terminals: std::sync::Mutex<HashMap<String, (String, String)>>,
     /// What those computers tell, to publish to whoever may read it.
     pub host_notices: mpsc::UnboundedSender<(String, Value)>,
     host_notice_task: Mutex<Option<JoinHandle<()>>>,
@@ -409,6 +411,7 @@ impl ChatRuntime {
             terminals,
             terminal_notices: Mutex::new(Some(terminal_notices)),
             hosts: Arc::default(),
+            remote_terminals: Default::default(),
             host_notices,
             host_notice_task: Mutex::new(Some(host_notice_task)),
         }))
