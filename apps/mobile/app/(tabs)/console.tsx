@@ -272,7 +272,8 @@ function HistoryResults({ query, kernel }: { query: string; kernel: string }) {
       ))}
       {truncated ? (
         <Text className="px-5 pt-1 text-xs text-faint">
-          The search stopped before the end: type more words to narrow it.
+          Not every session was searched: the search ran out of time, or a
+          computer with sessions is offline.
         </Text>
       ) : null}
     </View>
