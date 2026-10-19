@@ -2191,6 +2191,26 @@ async fn a_computer_joins_as_a_host_and_answers_over_its_channel() {
         .await
         .unwrap();
     assert_eq!(files["files"], json!(["notes.md"]), "{files}");
+    // Its terminal command goes on there, in its folder, once stopped here.
+    let command: Value = kernel
+        .get(
+            &format!("/sessions/{}/terminal-command", issued.session.id),
+            None,
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        command["command"],
+        format!(
+            "cd '{}' && pi --session '{}'",
+            work.display(),
+            record.display()
+        )
+    );
+    assert_eq!(command["host_id"], host);
+    assert_eq!(command["stop_first"], true);
     // Its history is searched there too.
     let searched: Value = kernel
         .get("/sessions/search?q=from%20the%20LAPTOP", None)

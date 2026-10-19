@@ -249,6 +249,10 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/sessions/{id}/events", get(session_events))
         .route("/sessions/{id}/subagents", get(session_subagents))
         .route(
+            "/sessions/{id}/terminal-command",
+            get(session_terminal_command),
+        )
+        .route(
             "/sessions/{id}/subagents/{agent}/events",
             get(subagent_events),
         )
@@ -1798,6 +1802,40 @@ async fn session_files(
         json!({ "query": input.query, "limit": input.limit }),
     )
     .await
+}
+
+/// The command that opens the session in its harness's own terminal, in its folder, on the
+/// computer it runs on: to go on there. A session ZeroLux runs is stopped here first.
+async fn session_terminal_command(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Own).await?;
+    let session = state.store.chat_session(&who, &id).await?;
+    let locator = state.store.chat_session_locator(&who, &id).await?;
+    if crate::homes::Homes::of_locator(&locator).is_guest() {
+        return Err(Error::Invalid(
+            "This session runs with your harness folders on another person's computer; go on in ZeroLux"
+                .into(),
+        )
+        .into());
+    }
+    let quoted = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
+    let command = match session.harness.as_str() {
+        "claude-code" => format!("claude --resume {}", quoted(&session.native_session_id)),
+        "codex" => format!("codex resume {}", quoted(&session.native_session_id)),
+        _ => match locator["session_file"].as_str() {
+            Some(file) => format!("pi --session {}", quoted(file)),
+            None => format!("pi --session {}", quoted(&session.native_session_id)),
+        },
+    };
+    Ok(Json(json!({
+        "command": format!("cd {} && {command}", quoted(&session.workspace)),
+        "host_id": session.host_id,
+        // Two processes never run one native session: it is stopped in ZeroLux first.
+        "stop_first": session.stopped_at.is_none(),
+    })))
 }
 
 /// The subagents the session's harness started, newest first.
