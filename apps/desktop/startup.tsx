@@ -19,8 +19,11 @@ export type Profile = {
 export type JoinedWorkspace = {
   id: string;
   url: string;
-  /** Connected, or connecting again after a break. */
-  running: boolean;
+  /** Where its connection is; none once it stopped. */
+  link:
+    | { state: "connecting" | "connected" }
+    | { state: "reconnecting"; error: string }
+    | null;
   /** Why it stopped, as when the workspace removed this computer. */
   error: string | null;
 };
@@ -56,6 +59,13 @@ declare global {
     zeroluxDesktopState?: (state: DesktopState) => void;
     zeroluxDesktopFocus?: (id: string) => void;
   }
+}
+
+/** Where a joined workspace's connection is, in words. */
+export function linkState(link: JoinedWorkspace["link"]) {
+  if (!link) return "Not connected";
+  if (link.state === "reconnecting") return `Reconnecting: ${link.error}`;
+  return link.state === "connected" ? "Connected" : "Connecting…";
 }
 
 export function newerDesktopState(current: DesktopState, next: DesktopState) {
@@ -382,13 +392,12 @@ export function WorkspaceManager({
                       className={
                         joined.error
                           ? "text-xs text-destructive"
-                          : "text-xs text-muted-foreground"
+                          : joined.link?.state === "connected"
+                            ? "text-xs text-success"
+                            : "text-xs text-muted-foreground"
                       }
                     >
-                      {joined.error ??
-                        (joined.running
-                          ? "Joined: connected, or connecting again"
-                          : "Not connected")}
+                      {joined.error ?? linkState(joined.link)}
                     </p>
                   </div>
                   <Button

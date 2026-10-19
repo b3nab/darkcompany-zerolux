@@ -60,15 +60,21 @@ test("this computer joins a workspace with a code, and says how each joined one 
           {
             id: "link-a",
             url: "http://192.0.2.10:4310",
-            running: true,
+            link: { state: "connected" },
             error: null,
           },
           {
             id: "link-b",
             url: "http://192.0.2.11:4310",
-            running: false,
+            link: null,
             error:
               "This computer was removed from the workspace; join it again with a new code",
+          },
+          {
+            id: "link-c",
+            url: "http://192.0.2.12:4310",
+            link: { state: "reconnecting", error: "connection refused" },
+            error: null,
           },
         ],
       }}
@@ -77,9 +83,10 @@ test("this computer joins a workspace with a code, and says how each joined one 
   expect(html).toContain("This computer in a workspace");
   expect(html).toContain('aria-label="Join a workspace"');
   expect(html).toContain("http://192.0.2.10:4310");
-  expect(html).toContain("Joined: connected, or connecting again");
+  expect(html).toContain(">Connected<");
+  expect(html).toContain("Reconnecting: connection refused");
   expect(html).toContain("join it again with a new code");
-  expect(html.match(/>Leave</g)).toHaveLength(2);
+  expect(html.match(/>Leave</g)).toHaveLength(3);
 });
 
 test("errors and names are text, and a failed setup does not present enabled actions", () => {

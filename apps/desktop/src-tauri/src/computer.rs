@@ -9,10 +9,10 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 use zerolux::{
     claude_runner::RunnerProgram,
-    host_link::{self, HostConfig},
+    host_link::{self, HostConfig, HostLinkState},
     host_runtime::HostRuntime,
 };
 
@@ -21,8 +21,8 @@ use zerolux::{
 pub struct LinkView {
     pub id: String,
     pub url: String,
-    /// Connected, or connecting again after a break.
-    pub running: bool,
+    /// Connecting, connected, or connecting again after a break; none once it stopped.
+    pub link: Option<HostLinkState>,
     /// Why it stopped, as when the workspace removed this computer.
     pub error: Option<String>,
 }
@@ -31,12 +31,15 @@ struct Link {
     url: String,
     stop: watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
+    state: watch::Receiver<HostLinkState>,
     error: Arc<Mutex<Option<String>>>,
 }
 
 pub struct Links {
     root: PathBuf,
     links: HashMap<String, Link>,
+    /// Told whenever a link's state changes or it stops, to show it.
+    changed: Arc<Notify>,
 }
 
 impl Links {
@@ -45,7 +48,13 @@ impl Links {
         Self {
             root,
             links: HashMap::new(),
+            changed: Arc::new(Notify::new()),
         }
+    }
+
+    /// When a link's state has changed, or a link has stopped.
+    pub async fn changed(&self) {
+        self.changed.notified().await;
     }
 
     /// The workspaces joined before, under `root`, each connected again.
@@ -89,14 +98,26 @@ impl Links {
         let url = config.url.clone();
         let (stop, stopped) = watch::channel(false);
         let (tell, told) = mpsc::unbounded_channel();
+        let (report, state) = watch::channel(HostLinkState::Connecting);
         let host =
             HostRuntime::with_runners(url.clone(), folder.join("links"), None, program, tell);
         let error = Arc::new(Mutex::new(None));
         let failed = error.clone();
+        let (changed, mut watched) = (self.changed.clone(), state.clone());
         let task = tokio::spawn(async move {
-            if let Err(error) = host_link::run_with(config, stopped, host, told).await {
+            let link = host_link::run_reporting(config, stopped, host, told, report);
+            tokio::pin!(link);
+            // Each state it reaches is shown; so is its end.
+            let result = loop {
+                tokio::select! {
+                    result = &mut link => break result,
+                    Ok(()) = watched.changed() => changed.notify_one(),
+                }
+            };
+            if let Err(error) = result {
                 *failed.lock().expect("link error lock") = Some(format!("{error:#}"));
             }
+            changed.notify_one();
         });
         self.links.insert(
             id.to_owned(),
@@ -104,6 +125,7 @@ impl Links {
                 url,
                 stop,
                 task,
+                state,
                 error,
             },
         );
@@ -129,7 +151,7 @@ impl Links {
             .map(|(id, link)| LinkView {
                 id: id.clone(),
                 url: link.url.clone(),
-                running: !link.task.is_finished(),
+                link: (!link.task.is_finished()).then(|| link.state.borrow().clone()),
                 error: link.error.lock().expect("link error lock").clone(),
             })
             .collect();

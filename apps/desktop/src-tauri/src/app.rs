@@ -977,6 +977,13 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                     }
                     let command = tokio::select! {
                         _=stopped.wait_for(|stop| *stop)=>break,
+                        // A joined workspace connected, broke or stopped: shown as it is,
+                        // keeping what the last action said.
+                        _=host.computers.changed()=>{
+                            let error = host.view.lock().expect("desktop view lock").error.clone();
+                            host.publish(false, error);
+                            continue;
+                        }
                         command=commands.recv()=>command,
                     };
                     let Some((action, reply)) = command else {
