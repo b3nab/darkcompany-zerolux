@@ -42,6 +42,7 @@ import {
   transcribe,
   useChatWork,
   workingSessions,
+  sessionAccess,
 } from "@zerolux/chat";
 import type {
   Actor,
@@ -122,13 +123,18 @@ export default function ChatScreen() {
     [conversation, chat.conversations],
   );
   const openThreads = threads.filter((t) => !t.closed_at);
-  // What each agent did for this chat, read back as far as the messages shown.
+  // What each agent did for this chat, read back as far as the messages shown: only from
+  // the sessions one may read, since another person's are private unless shared.
   const sessionIds = useMemo(
     () =>
-      conversation?.members.flatMap((m) =>
-        m.session_id ? [m.session_id] : [],
-      ) ?? [],
-    [conversation],
+      chat.sessions
+        .filter(
+          (s) =>
+            conversation?.members.some((m) => m.session_id === s.id) &&
+            sessionAccess(s, me).read,
+        )
+        .map((s) => s.id),
+    [conversation, chat.sessions, me],
   );
   const work = useChatWork(
     id,
