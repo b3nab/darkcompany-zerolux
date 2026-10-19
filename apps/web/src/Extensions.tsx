@@ -180,6 +180,16 @@ export function ActionDialog({
     result?: unknown;
     error?: string;
   }>({});
+  // A destructive action runs only once its input is confirmed.
+  const [confirm, setConfirm] = useState<Record<string, unknown>>();
+  const start = (input: Record<string, unknown>) => {
+    setConfirm(undefined);
+    setRun({ busy: true });
+    runAction(action.extension, action.name, input).then(
+      (result) => setRun({ result }),
+      (failed: unknown) => setRun({ error: errorMessage(failed) }),
+    );
+  };
   // An action that may run longer than a minute says so, and shows it is still running.
   const minutes = Math.ceil((action.seconds ?? 0) / 60);
   const long = minutes > 1 ? `${minutes} minutes` : "";
@@ -199,14 +209,35 @@ export function ActionDialog({
           schema={action.input as JsonSchema}
           submit={action.title}
           busy={run.busy === true}
-          run={(input) => {
-            setRun({ busy: true });
-            runAction(action.extension, action.name, input).then(
-              (result) => setRun({ result }),
-              (failed: unknown) => setRun({ error: errorMessage(failed) }),
-            );
-          }}
+          run={(input) =>
+            action.effects === "destructive" ? setConfirm(input) : start(input)
+          }
         />
+        {confirm && (
+          <div
+            role="alertdialog"
+            aria-label="Confirm"
+            className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 p-3"
+          >
+            <p className="flex-1 text-sm">
+              It deletes or overwrites data. Run it?
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setConfirm(undefined)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => start(confirm)}
+            >
+              {action.title}
+            </Button>
+          </div>
+        )}
         {run.busy && long && (
           <p role="status" className="text-sm text-muted-foreground">
             Running…
