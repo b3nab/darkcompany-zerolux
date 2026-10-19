@@ -18,10 +18,7 @@ impl ChatRuntime {
             return Err(Error::Forbidden.into());
         }
         let session = self.store.chat_session(who, id).await?;
-        ensure!(
-            session.host_id.as_deref() == self.store.host(),
-            "This session runs on another kernel host; fork it there"
-        );
+        let elsewhere = self.remote_host(&session);
         let harness = match session.harness.as_str() {
             "codex" => Harness::Codex,
             "pi" => Harness::Pi,
@@ -40,6 +37,12 @@ impl ChatRuntime {
             .chars()
             .take(200)
             .collect::<String>();
+        // On a joined computer: forked and opened there.
+        if let Some(host) = elsewhere {
+            return self
+                .fork_on(who, &host, &session, before, title, name, actor_id)
+                .await;
+        }
         match harness {
             Harness::Codex => {
                 let homes = crate::homes::Homes::of_locator(

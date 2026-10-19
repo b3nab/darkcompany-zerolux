@@ -2414,6 +2414,16 @@ async fn a_codex_session_runs_on_a_joined_computer() {
         .unwrap()
         .error_for_status()
         .unwrap();
+    // A fork is made there, by its Codex, and runs there.
+    let forked = kernel
+        .post(&format!("/sessions/{id}/fork"), None, json!({}))
+        .await;
+    let status = forked.status();
+    let forked: Value = forked.json().await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{forked}");
+    assert_eq!(forked["session"]["host_id"], host);
+    assert_eq!(forked["session"]["created"], true);
+    assert_eq!(native.count("thread/fork"), 1);
     // A new session's worktree is made on the computer, under its own data.
     let repository = work.join("repository");
     std::fs::create_dir_all(&repository).unwrap();

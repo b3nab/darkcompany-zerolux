@@ -546,6 +546,163 @@ impl ChatRuntime {
         Ok((issued.actor, session))
     }
 
+    /// A fork of a session on a joined computer, made there with its harness's own fork, and
+    /// opened as a new session there: without an agent, or with the one named.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn fork_on(
+        &self,
+        who: &ChatIdentity,
+        host: &str,
+        session: &ChatSession,
+        before: Option<String>,
+        title: String,
+        name: &str,
+        actor_id: Option<String>,
+    ) -> Result<(Option<Actor>, ChatSession)> {
+        let harness = match session.harness.as_str() {
+            "codex" => Harness::Codex,
+            "pi" => Harness::Pi,
+            _ => Harness::ClaudeCode,
+        };
+        let hire = |native: String, workspace: String, native_locator: Value| HireChatSession {
+            name: name.into(),
+            actor_id: actor_id.clone(),
+            harness,
+            native_session_id: native,
+            title: title.clone(),
+            workspace,
+            native_locator,
+            resume: false,
+        };
+        let (issued, bind, op) = match harness {
+            Harness::Codex => {
+                let forked = self
+                    .hosts
+                    .call(
+                        host,
+                        "codex.fork",
+                        json!({"thread_id": session.native_session_id, "before": before,
+                            "workspace": session.workspace}),
+                    )
+                    .await?;
+                let issued = self
+                    .store
+                    .hire_chat_session(
+                        who,
+                        hire(
+                            forked["thread_id"]
+                                .as_str()
+                                .context("The computer did not name the fork")?
+                                .to_owned(),
+                            session.workspace.clone(),
+                            json!({"endpoint": forked["endpoint"]}),
+                        ),
+                    )
+                    .await?;
+                let bind = json!({"pending": forked["pending"], "session_id": issued.session.id,
+                    "token": issued.token});
+                (issued, bind, "codex.bind")
+            }
+            Harness::Pi => {
+                let locator = self.store.chat_session_locator(who, &session.id).await?;
+                let forked = self
+                    .hosts
+                    .call(
+                        host,
+                        "pi.fork",
+                        json!({"file": locator["session_file"], "workspace": session.workspace,
+                            "before": before}),
+                    )
+                    .await?;
+                let issued = self
+                    .store
+                    .hire_chat_session(
+                        who,
+                        hire(
+                            forked["native_session_id"]
+                                .as_str()
+                                .context("The computer did not name the fork")?
+                                .to_owned(),
+                            session.workspace.clone(),
+                            forked["native_locator"].clone(),
+                        ),
+                    )
+                    .await?;
+                let workspace = self.store.workspace_info().await?;
+                let bind = json!({"pending": forked["pending"], "session_id": issued.session.id,
+                    "token": issued.token, "workspace_id": workspace.id});
+                (issued, bind, "pi.bind")
+            }
+            Harness::ClaudeCode => {
+                let mode = self
+                    .owned_mode(who, &session.id)
+                    .await?
+                    .context("Claude Code in a terminal is forked there")?;
+                let forked = self
+                    .hosts
+                    .call(
+                        host,
+                        "claude.fork",
+                        json!({"native": session.native_session_id,
+                            "workspace": session.workspace, "before": before}),
+                    )
+                    .await?;
+                let native = forked["native"]
+                    .as_str()
+                    .context("The computer did not name the fork")?
+                    .to_owned();
+                let place = json!({"native": native, "workspace": session.workspace,
+                    "mode": mode});
+                let mut launch = place.clone();
+                launch["system_prompt"] = json!("claude_code");
+                launch["settings"] = json!({});
+                self.hosts.call(host, "claude.launch", launch).await?;
+                let issued = self
+                    .store
+                    .hire_chat_session(
+                        who,
+                        hire(
+                            native,
+                            session.workspace.clone(),
+                            json!({"kind":"claude-runner","permission_mode":mode,
+                                "system_prompt":"claude_code"}),
+                        ),
+                    )
+                    .await?;
+                let mut bind = place;
+                bind["session_id"] = json!(issued.session.id);
+                bind["token"] = json!(issued.token);
+                // The fork's history is in its transcript already: it continues from it.
+                bind["resume"] = json!(true);
+                (issued, bind, "claude.bind")
+            }
+        };
+        self.store.place_session(&issued.session.id, host).await?;
+        self.changed();
+        let bound = self.hosts.call(host, op, bind).await;
+        match bound {
+            Ok(bound) if op == "pi.bind" => {
+                self.store
+                    .remember_pi_locator(
+                        &issued.session.id,
+                        &issued.session.native_session_id,
+                        &bound["native_locator"],
+                    )
+                    .await?;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                self.store
+                    .fail_chat_link(who, &issued.session.id, crate::chat::LINK_FAILED)
+                    .await?;
+                self.changed();
+                return Err(error);
+            }
+        }
+        let forked = self.store.chat_session(who, &issued.session.id).await?;
+        Ok((issued.actor, forked))
+    }
+
     /// Stops a session on a joined computer: its adapter or runner there ends.
     pub(super) async fn stop_on(&self, host: &str, session: &ChatSession) -> Result<()> {
         let place = json!({"session_id": session.id, "native": session.native_session_id,

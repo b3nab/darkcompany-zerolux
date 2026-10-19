@@ -128,6 +128,23 @@ impl HostRuntime {
             "codex.start" => self.codex_start(params).await,
             "codex.resume" => self.codex_resume(params).await,
             "codex.bind" => self.codex_bind(params).await,
+            // Codex's own fork of a thread, whole or before a turn: the new thread, waiting.
+            "codex.fork" => {
+                let thread = params["thread_id"].as_str().context("Name the thread")?;
+                let endpoint = self.codex_endpoint().await?;
+                let rpc = crate::codex::CodexRpc::connect(&endpoint).await?;
+                let mut fork = json!({"threadId": thread});
+                if let Some(turn) = params["before"].as_str() {
+                    fork["beforeTurnId"] = json!(turn);
+                }
+                let forked = rpc.request("thread/fork", fork).await?;
+                let forked = forked["thread"]["id"]
+                    .as_str()
+                    .context("Codex did not name the fork")?;
+                self.codex_resume(json!({"thread_id": forked,
+                    "workspace": params["workspace"]}))
+                    .await
+            }
             "codex.stop" => {
                 let session = params["session_id"].as_str().unwrap_or_default();
                 Ok(json!({"stopped": self.stop(session).await}))
@@ -148,6 +165,39 @@ impl HostRuntime {
             }
             #[cfg(unix)]
             "pi.create" => self.pi_create(params).await,
+            // pi's own fork of a saved session, opened under a runner here, waiting.
+            #[cfg(unix)]
+            "pi.fork" => {
+                let file = params["file"].as_str().context("Name the session's file")?;
+                let workspace = params["workspace"].as_str().context("Choose a folder")?;
+                let own = crate::homes::Homes::own();
+                let (native, file) = self
+                    .pi
+                    .fork(file, workspace, params["before"].as_str(), &own)
+                    .await?;
+                let link = self.pi.open(&native, workspace, &file, &own).await?;
+                let target = link.target().await?;
+                let pending = uuid::Uuid::new_v4().to_string();
+                self.pi_pending.lock().await.insert(pending.clone(), link);
+                Ok(
+                    json!({"pending": pending, "native_session_id": target.native_session_id,
+                    "workspace": target.workspace, "native_locator": target.native_locator}),
+                )
+            }
+            // Claude Code's own fork of a saved session: the new session's ID.
+            #[cfg(unix)]
+            "claude.fork" => {
+                let native = self
+                    .claude
+                    .fork(
+                        params["native"].as_str().context("Name the session")?,
+                        params["workspace"].as_str().context("Choose a folder")?,
+                        params["before"].as_str(),
+                        &crate::homes::Homes::own(),
+                    )
+                    .await?;
+                Ok(json!({"native": native}))
+            }
             #[cfg(unix)]
             "pi.bind" => self.pi_bind(params).await,
             #[cfg(unix)]
