@@ -111,6 +111,7 @@ import {
   useSubagentLinks,
 } from "@/components/subagents";
 import { ForkSession, useInputActions } from "@/components/session-fork";
+import { ContinueInTerminal } from "@/components/continue-terminal";
 import { SettingSelect } from "@/components/setting-select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -956,6 +957,7 @@ function About({
         {access.mine ? <Organize session={session} /> : null}
         <GoalSection session={session} />
         <ForkSession session={session} close={close} />
+        <ContinueInTerminal session={session} />
         <Schedules session={session} />
         <CiTrigger session={session} />
         <UsageFacts sessionId={session.id} />
