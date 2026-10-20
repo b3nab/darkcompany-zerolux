@@ -37,13 +37,17 @@ export function desktopSignIn() {
     async read(_kernel: string, workspaceId: string) {
       const saved = await call<string | null>("read_workspace_credential", {
         workspaceId,
-      }).catch(() => null);
+      }).catch((error: unknown) => {
+        console.warn("The saved sign-in could not be read:", error);
+        return null;
+      });
       return saved ?? kept;
     },
     async write(_kernel: string, workspaceId: string, token: string | null) {
       kept = token;
       await call("write_workspace_credential", { workspaceId, token }).catch(
-        () => {},
+        (error: unknown) =>
+          console.warn("The sign-in could not be kept:", error),
       );
     },
   };

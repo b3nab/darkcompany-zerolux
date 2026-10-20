@@ -26,6 +26,8 @@
           "windows": ["workspace-*"],
           "permissions": [
             "allow-window-control",
+            "allow-read-workspace-credential",
+            "allow-write-workspace-credential",
             "core:window:allow-start-dragging",
             "core:window:allow-internal-toggle-maximize",
             "core:window:allow-is-fullscreen",
