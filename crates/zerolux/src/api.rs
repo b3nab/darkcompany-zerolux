@@ -2982,6 +2982,7 @@ async fn extension_ui_address(
 async fn extension_ui_file(
     State(state): State<AppState>,
     Path((key, path)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiFailure> {
     let file = runtime(&state)?
         .extensions
@@ -3008,14 +3009,33 @@ async fn extension_ui_file(
         Some("txt") => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     };
+    // A sandboxed page's own origin is opaque: WebKit matches `'self'` against that, not the
+    // kernel's, so the page's files are allowed by the kernel's origin, named.
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|host| host.to_str().ok());
+    let origin = match state.public.as_ref().filter(|public| public.serves(host)) {
+        Some(public) => public.origin.clone(),
+        None => host
+            .filter(|host| {
+                host.bytes().all(|b| {
+                    b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':' | b'[' | b']')
+                })
+            })
+            .map(|host| format!("http://{host}"))
+            .unwrap_or_else(|| "'self'".into()),
+    };
+    let policy = format!(
+        "sandbox allow-scripts allow-forms; default-src {origin} 'unsafe-inline' data: blob:"
+    );
     Ok((
         [
-            (axum::http::header::CONTENT_TYPE, kind),
+            (axum::http::header::CONTENT_TYPE, kind.to_owned()),
+            (axum::http::header::CONTENT_SECURITY_POLICY, policy),
             (
-                axum::http::header::CONTENT_SECURITY_POLICY,
-                "sandbox allow-scripts allow-forms; default-src 'self' 'unsafe-inline' data: blob:",
+                axum::http::header::X_CONTENT_TYPE_OPTIONS,
+                "nosniff".to_owned(),
             ),
-            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
         bytes,
     )

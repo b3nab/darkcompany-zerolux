@@ -561,11 +561,18 @@ async fn an_extension_shows_pieces_in_the_clients_spaces() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    // Sandboxed, with the kernel's origin named: WebKit matches `'self'` against the frame's own.
+    let policy = response.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .to_owned();
     assert!(
-        response.headers()["content-security-policy"]
-            .to_str()
-            .unwrap()
-            .starts_with("sandbox")
+        policy.starts_with("sandbox allow-scripts allow-forms"),
+        "{policy}"
+    );
+    assert!(
+        policy.contains(&format!("default-src {}", kernel.url)),
+        "{policy}"
     );
     assert!(response.text().await.unwrap().contains("tools/call"));
     let style = page.replace("index.html", "style.css");
