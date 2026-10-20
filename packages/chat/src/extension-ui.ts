@@ -15,8 +15,11 @@ export interface UiAction {
 
 /** How a piece is drawn. */
 export type UiView =
-  /** The client's own component, registered as `<extension>/<name>`. */
-  | { kind: "native" }
+  /**
+   * Drawn with the app's own components: the view `entry` names in the extension's package,
+   * or, without it, the app's own for `<extension>/<name>`.
+   */
+  | { kind: "native"; entry?: string }
   /** A tree the action returns, drawn again after each action and at `refresh_on`. */
   | { kind: "described"; action: string; refresh_on?: string[] }
   /** As `described`, and the extension sends new trees itself. */
@@ -302,20 +305,27 @@ export const runPieceAction = (
     : Promise.reject(new Error(`${piece.title} is not an action`));
 
 /**
- * A web piece's page: an address the kernel opens for an hour, to that extension's `ui/`
- * folder only. Shown isolated, `sandbox="allow-scripts allow-forms"`, never same-origin.
+ * Where a piece's own file is: a web page, or a native view's bundle. The kernel opens the
+ * address for an hour, to that extension's `ui/` folder only. A web page is shown isolated,
+ * `sandbox="allow-scripts allow-forms"`, never same-origin.
  */
-export async function webPieceUrl(piece: UiPiece, kernel = kernelUrl()) {
-  if (piece.view.kind !== "web")
-    throw new Error(`${piece.title} is not a web page`);
+export async function pieceUrl(piece: UiPiece, kernel = kernelUrl()) {
+  const entry =
+    piece.view.kind === "web" || piece.view.kind === "native"
+      ? piece.view.entry
+      : undefined;
+  if (!entry) throw new Error(`${piece.title} has no file of its own`);
   const { url } = await request<{ url: string }>(
     kernel,
     `/extensions/${encodeURIComponent(piece.extension)}/ui`,
-    { entry: piece.view.entry },
+    { entry },
   );
   // On the web the kernel is the page's own origin, and its path is already the address.
   return kernel ? new URL(url, kernel).toString() : url;
 }
+
+// TODO: web: call pieceUrl, then drop this.
+export const webPieceUrl = pieceUrl;
 
 /** The app's answer to a web piece, as JSON-RPC. */
 export interface BridgeReply {
@@ -389,6 +399,17 @@ export type UiNotice =
     };
 
 const listeners = new Set<(notice: UiNotice | { type: "resync" }) => void>();
+
+/**
+ * Hears every extension's event and tree, and `resync` when notices may have been missed:
+ * what an interface reads must be read again. It stops when the returned function is called.
+ */
+export function listenUi(
+  listen: (notice: UiNotice | { type: "resync" }) => void,
+) {
+  listeners.add(listen);
+  return () => void listeners.delete(listen);
+}
 
 /** Every shown view hears an extension's event or tree. */
 export function uiNotice(notice: UiNotice) {

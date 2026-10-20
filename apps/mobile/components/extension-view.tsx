@@ -20,7 +20,7 @@ import {
   runPieceAction,
   useActionForm,
   useExtensionView,
-  webPieceUrl,
+  pieceUrl,
   withoutContext,
 } from "@zerolux/chat";
 import type {
@@ -153,7 +153,7 @@ function Web({
   const [page, setPage] = useState<{ url?: string; error?: string }>({});
   useEffect(() => {
     let shown = true;
-    webPieceUrl(piece, url).then(
+    pieceUrl(piece, url).then(
       (address) => shown && setPage({ url: address }),
       (e: unknown) => shown && setPage({ error: errorMessage(e) }),
     );

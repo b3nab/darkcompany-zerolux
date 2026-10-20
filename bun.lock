@@ -198,6 +198,20 @@
         "typescript": "^5.9.0",
       },
     },
+    "packages/ui": {
+      "name": "@zerolux/ui",
+      "dependencies": {
+        "@zerolux/chat": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.3.0",
+        "@types/react": "^19.2.0",
+        "typescript": "^5.9.0",
+      },
+      "peerDependencies": {
+        "react": "^19.2.0",
+      },
+    },
     "services/auth": {
       "name": "@zerolux/auth",
       "dependencies": {
@@ -1117,6 +1131,8 @@
     "@zerolux/pi": ["@zerolux/pi@workspace:harnesses/pi"],
 
     "@zerolux/theme": ["@zerolux/theme@workspace:packages/theme"],
+
+    "@zerolux/ui": ["@zerolux/ui@workspace:packages/ui"],
 
     "@zerolux/web": ["@zerolux/web@workspace:apps/web"],
 

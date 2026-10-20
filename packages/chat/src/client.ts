@@ -89,6 +89,35 @@ export async function request<T>(
   signal?: AbortSignal,
   method?: "PUT" | "PATCH" | "DELETE",
 ): Promise<T> {
+  const response = await send(kernel, path, body, signal, method);
+  return response.json() as Promise<T>;
+}
+
+/** A file the kernel gives, by GET, with the name it gives it. */
+export async function requestFile(
+  kernel: string,
+  path: string,
+  signal?: AbortSignal,
+) {
+  const response = await send(kernel, path, undefined, signal);
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const name =
+    /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1] ??
+    /filename="?([^";]+)"?/i.exec(disposition)?.[1];
+  return {
+    blob: await response.blob(),
+    name: name ? decodeURIComponent(name) : undefined,
+  };
+}
+
+/** The kernel's answer to a call, once it is known to be no refusal. */
+async function send(
+  kernel: string,
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+  method?: "PUT" | "PATCH" | "DELETE",
+) {
   // A file goes as it is, with its own type; anything else as JSON.
   const file = body instanceof Blob;
   const health = path === "/health";
@@ -132,5 +161,5 @@ export async function request<T>(
     }
     throw new ApiError(message, response.status);
   }
-  return response.json() as Promise<T>;
+  return response;
 }

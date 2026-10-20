@@ -7,7 +7,7 @@ import {
   runPieceAction,
   uiPieces,
   validTree,
-  webPieceUrl,
+  pieceUrl,
   withContext,
   withoutContext,
 } from "./extension-ui";
@@ -260,11 +260,11 @@ test("a web piece opens at the address the kernel gives, and its tools/call runs
     title: "Options",
     view: { kind: "web", entry: "index.html" },
   };
-  expect(await webPieceUrl(piece, kernel)).toBe(
+  expect(await pieceUrl(piece, kernel)).toBe(
     `${kernel}/api/extension-ui/k1/index.html`,
   );
   // On the web the kernel is the page's origin: the path is the address.
-  expect(await webPieceUrl(piece, "")).toBe("/api/extension-ui/k1/index.html");
+  expect(await pieceUrl(piece, "")).toBe("/api/extension-ui/k1/index.html");
   const ran: unknown[] = [];
   const call = async (name: string, input: Record<string, unknown>) => {
     ran.push([name, input]);
