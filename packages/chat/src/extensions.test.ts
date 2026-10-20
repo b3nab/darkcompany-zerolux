@@ -1,6 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { setKernelFetch } from "./client";
 import {
+  installOffer,
+  offerAction,
   disableExtension,
   enableExtension,
   installExtension,
@@ -9,6 +11,7 @@ import {
   runAction,
   setExtensionSettings,
 } from "./extensions";
+import type { MarketplaceOffer } from "./extensions";
 
 afterEach(() => setKernelFetch());
 
@@ -64,6 +67,47 @@ test("the owner's changes go to the kernel's extension routes", async () => {
       method: "POST",
       path: "/api/ext/acme.notes/notes.add",
       body: { text: "a/b" },
+    },
+  ]);
+});
+
+const offer: MarketplaceOffer = {
+  index: "https://example.test/index.json",
+  id: "aspen.notes",
+  name: "Notes",
+  description: "Notes kept where you choose",
+  publisher: "aspen",
+  version: "1.2.0",
+  installed: null,
+};
+
+test("an offer is installed, updated to its newest version, or already there", () => {
+  expect(offerAction(offer)).toBe("install");
+  expect(offerAction({ ...offer, installed: "1.1.0" })).toBe("update");
+  expect(offerAction({ ...offer, installed: "1.2.0" })).toBe("installed");
+});
+
+test("installing an offer asks its index for that version, and gives the extension", async () => {
+  const asked: { url: string; body: unknown }[] = [];
+  setKernelFetch(async (url, init) => {
+    asked.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+    return Response.json({
+      extension: { id: "aspen.notes", version: "1.2.0" },
+    });
+  });
+  const installed = await installOffer(
+    { ...offer, installed: "1.1.0" },
+    kernel,
+  );
+  expect(installed).toMatchObject({ id: "aspen.notes", version: "1.2.0" });
+  expect(asked).toEqual([
+    {
+      url: `${kernel}/api/extensions/marketplace/install`,
+      body: {
+        index: "https://example.test/index.json",
+        id: "aspen.notes",
+        version: "1.2.0",
+      },
     },
   ]);
 });

@@ -97,15 +97,15 @@ export function extensionsNotice() {
   readers.forEach((read) => read());
 }
 
-/** A list read from the kernel with `load`, read again whenever extensions change. */
+/** What `load` reads from the kernel, read again whenever extensions change. */
 export function useKernelList<T>(
-  load: (kernel: string) => Promise<T[]>,
+  load: (kernel: string) => Promise<T>,
   kernel: string,
   enabled: boolean,
 ) {
   const [read, setRead] = useState<{
     kernel: string;
-    items?: T[];
+    items?: T;
     error?: string;
   }>();
   const reload = useCallback(
@@ -195,6 +195,59 @@ export const setExtensionSettings = (
   kernel = kernelUrl(),
 ) =>
   changed(request(kernel, `${path(id)}/settings`, changes, undefined, "PATCH"));
+
+/** An extension an index offers, and what of it is installed. */
+export interface MarketplaceOffer {
+  /** The index that offers it, by its address. */
+  index: string;
+  id: string;
+  name: string;
+  description: string;
+  publisher: string;
+  /** Its newest version that runs on this kernel. */
+  version: string;
+  installed: string | null;
+  /** Its parts, where the index says: `kernel` runs inside the kernel. */
+  parts?: string[];
+}
+
+export interface Marketplace {
+  offers: MarketplaceOffer[];
+  /** Indexes that could not be read, each with why. */
+  errors: { index: string; error: string }[];
+}
+
+const readMarketplace = (kernel: string) =>
+  request<Partial<Marketplace>>(kernel, "/extensions/marketplace").then(
+    (body): Marketplace => ({
+      offers: body.offers ?? [],
+      errors: body.errors ?? [],
+    }),
+  );
+
+/** What the indexes offer, read again whenever extensions change. */
+export function useMarketplace(kernel = kernelUrl(), enabled = true) {
+  const { items, ...rest } = useKernelList(readMarketplace, kernel, enabled);
+  return { marketplace: items, ...rest };
+}
+
+/** What an offer's button does: install it, update it to its newest version, or nothing. */
+export const offerAction = (offer: MarketplaceOffer) =>
+  offer.installed === null || offer.installed === undefined
+    ? "install"
+    : offer.installed === offer.version
+      ? "installed"
+      : "update";
+
+/** The owner installs an extension from an index, or updates it, and enables it. */
+export const installOffer = (offer: MarketplaceOffer, kernel = kernelUrl()) =>
+  changed(
+    request(kernel, "/extensions/marketplace/install", {
+      index: offer.index,
+      id: offer.id,
+      version: offer.version,
+    }),
+  );
 
 /** The owner installs and enables an official extension, from where the kernel carries it. */
 export const installExtension = (id: string, kernel = kernelUrl()) =>
