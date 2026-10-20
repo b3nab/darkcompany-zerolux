@@ -3,7 +3,7 @@ import { errorMessage, kernelUrl, request } from "./client";
 import { spanLabel } from "./session-events";
 
 /** A command a session runs in the background, in its folder on the kernel's computer. */
-export interface Task {
+export interface BackgroundCommand {
   id: string;
   session_id: string;
   command: string;
@@ -17,8 +17,8 @@ export interface Task {
   error: string | null;
 }
 
-/** A piece of a task's output from an offset, and where to read on. */
-export interface TaskOutput {
+/** A piece of a background command's output from an offset, and where to read on. */
+export interface BackgroundOutput {
   start: number;
   text: string;
   next: number;
@@ -26,29 +26,29 @@ export interface TaskOutput {
   end: number;
 }
 
-/** The kernel's notice that a task started, ended or was stopped. */
-export interface TaskNotice {
-  type: "task.changed";
-  task_id: string;
+/** The kernel's notice that a background command started, ended or was stopped. */
+export interface BackgroundNotice {
+  type: "background_command.changed";
+  background_command_id: string;
   session_id: string;
-  status: Task["status"];
+  status: BackgroundCommand["status"];
 }
 
-const states: Record<Task["status"], string> = {
+const states: Record<BackgroundCommand["status"], string> = {
   running: "Running",
   exited: "Exited",
   stopped: "Stopped",
   lost: "Lost",
 };
 
-/** A task in a few words: how it stands, with its exit code, and how long it ran. */
-export function taskState(task: Task, now = Date.now()) {
-  const end = task.status === "running" ? now : task.ended_at;
+/** A background command in a few words: how it stands, with its exit code, and how long it ran. */
+export function backgroundState(command: BackgroundCommand, now = Date.now()) {
+  const end = command.status === "running" ? now : command.ended_at;
   return [
-    task.status === "exited" && task.exit_code !== null
-      ? `Exited ${task.exit_code}`
-      : states[task.status],
-    end === null ? null : spanLabel(end - task.started_at),
+    command.status === "exited" && command.exit_code !== null
+      ? `Exited ${command.exit_code}`
+      : states[command.status],
+    end === null ? null : spanLabel(end - command.started_at),
   ]
     .filter(Boolean)
     .join(" · ");
@@ -69,37 +69,39 @@ export const plainOutput = (text: string) =>
     .map((line) => line.split("\r").filter(Boolean).at(-1) ?? "")
     .join("\n");
 
-/** How much of a task's output is kept to show: its end. */
+/** How much of a background command's output is kept to show: its end. */
 const KEPT = 200_000;
-/** How often a running task's output is read. */
+/** How often a running background command's output is read. */
 const EVERY = 1000;
 
 const listeners = new Map<string, Set<() => void>>();
 
-/** A session's task changed: its lists read again. */
-export function taskNotice(notice: TaskNotice) {
+/** A session's background command changed: its lists read again. */
+export function backgroundNotice(notice: BackgroundNotice) {
   listeners.get(notice.session_id)?.forEach((read) => read());
 }
 
 /** Notices may have been missed, as after a reconnection: every list reads again. */
-export function tasksResync() {
+export function backgroundResync() {
   listeners.forEach((reads) => reads.forEach((read) => read()));
 }
 
-const sessionPath = (id: string) => `/sessions/${encodeURIComponent(id)}/tasks`;
-const taskPath = (id: string) => `/tasks/${encodeURIComponent(id)}`;
+const sessionPath = (id: string) =>
+  `/sessions/${encodeURIComponent(id)}/background-commands`;
+const commandPath = (id: string) =>
+  `/background-commands/${encodeURIComponent(id)}`;
 
 /**
- * A session's tasks, newest first, read again when one changes; and its person's way to
- * start and stop them. Nothing is read without a session.
+ * A session's background commands, newest first, read again when one changes; and its
+ * person's way to run and stop them. Nothing is read without a session.
  */
-export function useSessionTasks(
+export function useBackgroundCommands(
   sessionId: string | undefined,
   kernel = kernelUrl(),
 ) {
   const [read, setRead] = useState<{
     session: string;
-    tasks?: Task[];
+    commands?: BackgroundCommand[];
     error?: string;
   }>();
   const session = `${kernel}\n${sessionId}`;
@@ -107,8 +109,12 @@ export function useSessionTasks(
     async () =>
       sessionId === undefined
         ? undefined
-        : request<{ tasks: Task[] }>(kernel, sessionPath(sessionId)).then(
-            ({ tasks }) => setRead({ session, tasks }),
+        : request<{ background_commands: BackgroundCommand[] }>(
+            kernel,
+            sessionPath(sessionId),
+          ).then(
+            ({ background_commands }) =>
+              setRead({ session, commands: background_commands }),
             (error: unknown) =>
               setRead((was) => ({
                 ...(was?.session === session ? was : { session }),
@@ -130,43 +136,45 @@ export function useSessionTasks(
     };
   }, [sessionId, reload]);
   const current = read?.session === session ? read : undefined;
-  // The task as the kernel answered, once the list has it too.
-  const andReload = async (work: Promise<{ task: Task }>) => {
-    const { task } = await work;
+  // The command as the kernel answered, once the list has it too.
+  const andReload = async (
+    work: Promise<{ background_command: BackgroundCommand }>,
+  ) => {
+    const { background_command } = await work;
     await reload();
-    return task;
+    return background_command;
   };
   return {
-    tasks: current?.tasks,
+    commands: current?.commands,
     error: current?.error ?? "",
     reload,
-    start: (command: string) =>
+    run: (command: string) =>
       andReload(request(kernel, sessionPath(sessionId!), { command })),
-    stop: (taskId: string) =>
-      andReload(request(kernel, `${taskPath(taskId)}/stop`, {})),
+    stop: (id: string) =>
+      andReload(request(kernel, `${commandPath(id)}/stop`, {})),
   };
 }
 
-/** Where reading a task's output stands: the last part of it read, and the offset to go on. */
-export interface TaskReading {
+/** Where reading a background command's output stands: the last part read, and the offset to go on. */
+export interface BackgroundReading {
   text: string;
   next: number;
 }
 
 /**
- * Reads a task's output on from where `at` stands to the end there is now, in the kernel's
+ * Reads a background command's output on from where `at` stands to the end there is now, in the kernel's
  * bounded pieces, keeping its last part.
  */
-export async function readTaskOutput(
-  taskId: string,
-  at: TaskReading,
+export async function readBackgroundOutput(
+  id: string,
+  at: BackgroundReading,
   kernel = kernelUrl(),
 ) {
   for (;;) {
     const from = at.next;
-    const { output } = await request<{ output: TaskOutput }>(
+    const { output } = await request<{ output: BackgroundOutput }>(
       kernel,
-      `${taskPath(taskId)}?after=${from}`,
+      `${commandPath(id)}?after=${from}`,
     );
     // Another read took this piece meanwhile, and goes on from there.
     if (at.next !== from) return at;
@@ -179,24 +187,24 @@ export async function readTaskOutput(
 }
 
 /**
- * A task's output as it grows, its last part kept: read on every second while the task runs,
+ * A background command's output as it grows, its last part kept: read on every second while it runs,
  * and once more when it has ended.
  */
-export function useTaskOutput(
-  taskId: string | undefined,
+export function useBackgroundOutput(
+  id: string | undefined,
   running: boolean,
   kernel = kernelUrl(),
 ) {
-  const key = `${kernel}\n${taskId}`;
+  const key = `${kernel}\n${id}`;
   const [shown, setShown] = useState<{
     key: string;
     text: string;
     error?: string;
   }>();
-  // Where reading goes on: kept across the end of the task, started over for another one.
+  // Where reading goes on: kept across the command's end, started over for another one.
   const reading = useRef({ key: "", text: "", next: 0 });
   useEffect(() => {
-    if (taskId === undefined) return;
+    if (id === undefined) return;
     if (reading.current.key !== key)
       reading.current = { key, text: "", next: 0 };
     const at = reading.current;
@@ -204,7 +212,7 @@ export function useTaskOutput(
     let timer: ReturnType<typeof setTimeout> | undefined;
     const readOn = async () => {
       try {
-        await readTaskOutput(taskId, at, kernel);
+        await readBackgroundOutput(id, at, kernel);
         if (!stopped) setShown({ key, text: at.text });
       } catch (error) {
         if (!stopped)
@@ -217,7 +225,7 @@ export function useTaskOutput(
       stopped = true;
       clearTimeout(timer);
     };
-  }, [taskId, running, kernel, key]);
+  }, [id, running, kernel, key]);
   const current = shown?.key === key ? shown : undefined;
   return { text: current?.text ?? "", error: current?.error ?? "" };
 }

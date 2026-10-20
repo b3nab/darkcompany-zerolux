@@ -8,7 +8,7 @@ import type {
 } from "./client";
 import type { LiveNotice } from "./live";
 import type { ExtensionsNotice } from "./extensions";
-import type { TaskNotice } from "./tasks";
+import type { BackgroundNotice } from "./background";
 import type { TerminalNotice } from "./terminals";
 
 export const PAGE = 100;
@@ -209,7 +209,7 @@ export type ChatEvent = { event_id: string } & (
   | LiveNotice
   | TerminalNotice
   | ExtensionsNotice
-  | TaskNotice
+  | BackgroundNotice
 );
 /** How a session's native record ends, as the kernel's watcher last read it. */
 export type SessionTail = Partial<
@@ -520,7 +520,7 @@ const eventTypes = new Set<string>([
   "session.live",
   "terminal.output",
   "extensions.changed",
-  "task.changed",
+  "background_command.changed",
 ]);
 let extensionNotices = 0;
 export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
@@ -542,9 +542,12 @@ export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
       typeof event.event_id !== "string"
     )
       event.event_id = `extensions.changed:${++extensionNotices}`;
-    // A task changes state once per state: its state names the notice.
-    if (event.type === "task.changed" && typeof event.event_id !== "string")
-      event.event_id = `task.changed:${event.task_id}:${event.status}`;
+    // A background command changes state once per state: its state names the notice.
+    if (
+      event.type === "background_command.changed" &&
+      typeof event.event_id !== "string"
+    )
+      event.event_id = `background_command.changed:${event.background_command_id}:${event.status}`;
     if (typeof event.event_id === "string" && eventTypes.has(event.type))
       return event;
   } catch {

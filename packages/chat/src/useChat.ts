@@ -40,7 +40,7 @@ import { unseenInputs } from "./inputs";
 import type { SentInput } from "./inputs";
 import type { QueuedInput } from "./live";
 import type { SessionBlock } from "./session-events";
-import { taskNotice, tasksResync } from "./tasks";
+import { backgroundNotice, backgroundResync } from "./background";
 import { terminalNotice, terminalResync } from "./terminals";
 
 /** Chat state for the owner: LiveKit events say what to refetch from the kernel. */
@@ -248,8 +248,8 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
         return terminalNotice(event);
       case "extensions.changed":
         return extensionsNotice();
-      case "task.changed":
-        return taskNotice(event);
+      case "background_command.changed":
+        return backgroundNotice(event);
       case "session.output": {
         const { session_id, end, type: _, event_id: __, ...tail } = event;
         setOutputs((all) => ({
@@ -273,12 +273,12 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       kernel: server,
       event: onEvent,
       sync: () => {
-        // Notices may have been missed meanwhile: live state, terminals, extensions and tasks
-        // are read again too.
+        // Notices may have been missed meanwhile: live state, terminals, extensions and
+        // background commands are read again too.
         liveResync();
         terminalResync();
         extensionsNotice();
-        tasksResync();
+        backgroundResync();
         void background(sync());
       },
       status: setRealtime,
