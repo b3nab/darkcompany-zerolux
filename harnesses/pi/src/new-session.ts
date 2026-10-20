@@ -51,11 +51,14 @@ export async function newPiSession(
   } finally {
     await handle.close();
   }
-  const directory = await open(dirname(file), "r");
-  try {
-    await directory.sync();
-  } finally {
-    await directory.close();
+  // Windows cannot open a folder to flush it; its file system journals the new file itself.
+  if (process.platform !== "win32") {
+    const directory = await open(dirname(file), "r");
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
   }
   file = await realpath(file);
   const nativeSessionId = manager.getSessionId();

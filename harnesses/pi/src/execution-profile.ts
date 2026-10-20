@@ -171,11 +171,15 @@ export async function savePiProfile(
       await handle.close();
     }
     await rename(temporary, path);
-    const directory = await open(root, "r");
-    try {
-      await directory.sync();
-    } finally {
-      await directory.close();
+    // The rename is durable once its folder is flushed; Windows cannot open a folder to
+    // flush it, and its file system journals the rename itself.
+    if (process.platform !== "win32") {
+      const directory = await open(root, "r");
+      try {
+        await directory.sync();
+      } finally {
+        await directory.close();
+      }
     }
   } finally {
     await unlink(temporary).catch(() => {});
