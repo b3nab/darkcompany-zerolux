@@ -1,6 +1,6 @@
+import { openNoFollow } from "@zerolux/bridge";
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { open, realpath, stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import {
   CURRENT_SESSION_VERSION,
@@ -53,7 +53,7 @@ async function inspectPi(
   const cwd = await realpath(workspace);
   if (!(await stat(cwd)).isDirectory())
     throw new Error("The saved pi workspace is not a directory");
-  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const handle = await openNoFollow(file);
   try {
     const before = await handle.stat();
     if (!before.isFile() || before.nlink !== 1 || before.size === 0)

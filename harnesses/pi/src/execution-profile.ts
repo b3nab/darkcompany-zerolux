@@ -1,7 +1,6 @@
-import { privateMode } from "@zerolux/bridge";
+import { openNoFollow, privateMode } from "@zerolux/bridge";
 // Native launch configuration stays on the execution host, never in a chat or kernel row.
 import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
 import { lstat, mkdir, open, realpath, rename, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 
@@ -192,7 +191,7 @@ export async function loadPiProfile(
   expected: { nativeSessionId: string; workspace: string; file: string },
 ): Promise<PiExecutionProfile> {
   if (!isAbsolute(path)) throw new Error("Pi profile path must be absolute");
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const handle = await openNoFollow(path);
   try {
     const info = await handle.stat();
     if (

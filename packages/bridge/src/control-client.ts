@@ -1,7 +1,6 @@
-import { constants } from "node:fs";
-import { open } from "node:fs/promises";
 import { connect } from "node:net";
 import { isAbsolute } from "node:path";
+import { openNoFollow } from "./no-follow";
 import { privateMode } from "./private-mode";
 
 export interface ControlDescriptor extends Record<string, unknown> {
@@ -16,7 +15,7 @@ export async function readControlDescriptor(
 ): Promise<ControlDescriptor> {
   if (!isAbsolute(path))
     throw new Error("Native control descriptor must be absolute");
-  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const file = await openNoFollow(path);
   try {
     const stat = await file.stat();
     if (

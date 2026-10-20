@@ -31,9 +31,10 @@ export async function waitAndExec(harness = "pi") {
     // Windows cannot exec in place. The gate starts it as its child, on the same input and
     // output, and lives exactly as long as it does: the recorded PID stays the one whose
     // end is the native end, and ending the gate ends its child with it.
-    const child = Bun.spawn([exec, ...(args as string[])], {
+    const child = Bun.spawn(windowsCommand(exec, args as string[]), {
       stdio: ["inherit", "inherit", "inherit"],
       env: process.env,
+      windowsVerbatimArguments: /\.(cmd|bat)$/i.test(exec),
     });
     process.exit(await child.exited);
   }
@@ -42,6 +43,20 @@ export async function waitAndExec(harness = "pi") {
       `This host cannot exec ${harness} without changing its PID`,
     );
   process.execve(exec, [exec, ...(args as string[])], process.env);
+}
+
+/**
+ * A command file, such as the `pi.cmd` npm installs, runs through the command interpreter,
+ * with its arguments quoted as one line; anything the interpreter would read as its own
+ * (a quote, a `%`, a line break) is refused rather than escaped.
+ */
+function windowsCommand(exec: string, args: string[]) {
+  if (!/\.(cmd|bat)$/i.test(exec)) return [exec, ...args];
+  const parts = [exec, ...args];
+  if (parts.some((part) => /["%\r\n]/.test(part)))
+    throw new Error("This command cannot be passed to a command file safely");
+  const line = parts.map((part) => `"${part}"`).join(" ");
+  return [process.env.ComSpec ?? "cmd.exe", "/d", "/s", "/c", `"${line}"`];
 }
 
 if (import.meta.main) waitAndExec();
