@@ -60,7 +60,7 @@ An extension shows pieces of its interface in the clients' spaces, each `{space,
 
 A piece's `view` says how it is drawn:
 
-- `{kind: "native"}`: by the clients' own component for it, registered as `<extension>/<name>`; a client without one does not show it. ZeroLux's official extensions use it.
+- `{kind: "native", entry}`: by its own interface, `ui/native/<piece>.js` in its package, which the apps run inside themselves. It is written once with `@zerolux/ui` (React and ZeroLux's components and hooks, never HTML elements or React Native views), and each app draws it with its own components: the web and desktop apps with theirs, the phone apps with theirs. `zerolux ext build` makes it from `ui/src/<piece>.tsx`: one script, `globalThis.__zeroluxModule(entry, function (module, exports, require) {…})`, needing only `react`, `react/jsx-runtime` and `@zerolux/ui`, which the app gives it; `module.exports.default` is its component. The app loads it from the address `POST /extensions/{id}/ui {entry}` gives. Such an interface runs with the rights of the person using the app, so an extension that brings one counts `interface` among its parts, and people see it before installing.
 - `{kind: "described", action, refresh_on?}`: from the tree its action returns, drawn with the clients' components. Buttons and forms in it run its actions, then it is drawn again, and again on each event named in `refresh_on`.
 - `{kind: "remote", action}`: from its action's tree first, then from the trees the extension sends with `views.update {name, context, tree}` (`context.updateView` in the SDK). Clients hear `extension.view {extension, name, context, tree}`.
 - `{kind: "web", entry}`: its own page, `ui/…` in its folder. `POST /extensions/{id}/ui {entry}` gives the address to open it: under a key good for an hour, which serves the files of its `ui/` folder only, sandboxed (`Content-Security-Policy: sandbox allow-scripts allow-forms`). The page talks to the client as MCP Apps do, JSON-RPC over `postMessage`: `tools/call {name, arguments}` runs one of the extension's actions.
@@ -144,7 +144,7 @@ An action can take a file and give one, without either passing through its messa
 
 ## Packages and indexes
 
-`zerolux ext build` builds an extension's kernel module, a Cargo package, for this computer and puts it in `kernel/<platform>/`. `zerolux ext key <publisher>` makes a publisher's Ed25519 key, kept in `~/.zerolux/keys/<publisher>.json` and readable only by its user; it prints the public key. `zerolux ext pack --key <file>` packs the extension into a signed `<id>-<version>.zlx` and prints its SHA-256. A package is a gzipped tar of the extension's files, without what tools make and download (`target`, `dist`, `node_modules`, `.venv`, `__pycache__`, `.git`), with `files.json` (each file's path, size and SHA-256) and `SIGNATURE` (the publisher's signature of `files.json`).
+`zerolux ext build` builds what an extension brings: its kernel module, a Cargo package, for this computer into `kernel/<platform>/`, and its interface from `ui/src/*.tsx` into `ui/native/`. `zerolux ext key <publisher>` makes a publisher's Ed25519 key, kept in `~/.zerolux/keys/<publisher>.json` and readable only by its user; it prints the public key. `zerolux ext pack --key <file>` packs the extension into a signed `<id>-<version>.zlx` and prints its SHA-256. A package is a gzipped tar of the extension's files, without what tools make and download (`target`, `dist`, `node_modules`, `.venv`, `__pycache__`, `.git`), with `files.json` (each file's path, size and SHA-256) and `SIGNATURE` (the publisher's signature of `files.json`).
 
 An index is a JSON file on HTTPS that anyone may host:
 
@@ -180,7 +180,7 @@ An index is a JSON file on HTTPS that anyone may host:
 }
 ```
 
-`parts` says what the package runs, `kernel` or `process`, so that people see it before installing; a package whose manifest says otherwise is refused. A package is listed for each computer (`macos-aarch64`, `linux-x86_64`, `windows-x86_64`…) or for `any`; its URL is absolute or relative to the index. A kernel reads ZeroLux's own index, or those `ZEROLUX_EXTENSION_INDEXES` names, separated by commas. It offers each extension's newest version that works with it and has a package for its computer. Installing downloads the package, checks it against the index's SHA-256 and its publisher's key in that index, unpacks it in `extensions/packages/<id>/` in the data folder and enables it; an older version's files go.
+`parts` says what the package runs, `kernel`, `process` and `interface` (an interface run inside the apps), so that people see it before installing; a package that runs otherwise is refused. A package is listed for each computer (`macos-aarch64`, `linux-x86_64`, `windows-x86_64`…) or for `any`; its URL is absolute or relative to the index. A kernel reads ZeroLux's own index, or those `ZEROLUX_EXTENSION_INDEXES` names, separated by commas. It offers each extension's newest version that works with it and has a package for its computer. Installing downloads the package, checks it against the index's SHA-256 and its publisher's key in that index, unpacks it in `extensions/packages/<id>/` in the data folder and enables it; an older version's files go.
 
 ## Lifecycle
 
