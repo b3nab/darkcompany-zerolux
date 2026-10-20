@@ -37,3 +37,4 @@ export * from "./action-form";
 export * from "./extensions";
 export * from "./background";
 export * from "./inputs";
+export * from "./composer";
