@@ -77,27 +77,7 @@ impl Process {
             .args(args)
             .current_dir(folder)
             .env_clear()
-            .envs(
-                [
-                    "PATH",
-                    "HOME",
-                    "TMPDIR",
-                    "LANG",
-                    "USER",
-                    // What programs on Windows need to start and find the user's folders.
-                    "SystemRoot",
-                    "SystemDrive",
-                    "USERPROFILE",
-                    "APPDATA",
-                    "LOCALAPPDATA",
-                    "TEMP",
-                    "TMP",
-                    "PATHEXT",
-                    "ComSpec",
-                ]
-                .into_iter()
-                .filter_map(|name| std::env::var_os(name).map(|value| (name, value))),
-            )
+            .envs(crate::platform::essential_env())
             .env("ZEROLUX_EXTENSION", extension)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

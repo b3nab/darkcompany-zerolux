@@ -60,6 +60,35 @@ pub fn alive(pid: u32) -> bool {
     }
 }
 
+/// What a program started with a cleared environment still needs from the kernel's: where
+/// programs are and the user's folders, and on Windows what its system needs to start one,
+/// open a socket and find temporary files.
+pub fn essential_env() -> Vec<(&'static str, std::ffi::OsString)> {
+    let names: &[&str] = if cfg!(windows) {
+        &[
+            "PATH",
+            "PATHEXT",
+            "SystemRoot",
+            "SystemDrive",
+            "windir",
+            "ComSpec",
+            "TEMP",
+            "TMP",
+            "USERPROFILE",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "HOMEDRIVE",
+            "HOMEPATH",
+        ]
+    } else {
+        &["PATH", "HOME", "TMPDIR", "LANG", "USER"]
+    };
+    names
+        .iter()
+        .filter_map(|name| std::env::var_os(name).map(|value| (*name, value)))
+        .collect()
+}
+
 /// Starts `command` on its own: it outlives the kernel and has no terminal.
 pub fn detach(command: &mut tokio::process::Command) {
     #[cfg(unix)]

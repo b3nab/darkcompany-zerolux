@@ -42,7 +42,7 @@ When enabled, its process says what it brings:
 
 ## Process parts
 
-The kernel starts the command in the extension's folder with a cleared environment (`PATH`, `HOME`, `TMPDIR`, `LANG`, `USER` and `ZEROLUX_EXTENSION`), and talks JSON-RPC 2.0 over standard input and output, one message per line. Standard error goes to `extensions/<id>.log` in the data folder.
+The kernel starts the command in the extension's folder with a cleared environment (`PATH`, `HOME`, `TMPDIR`, `LANG` and `USER`, on Windows also what its system needs, such as `SystemRoot`, `TEMP` and `USERPROFILE`; and `ZEROLUX_EXTENSION`), and talks JSON-RPC 2.0 over standard input and output, one message per line. Standard error goes to `extensions/<id>.log` in the data folder.
 
 Each extension has a private folder for its files, `extensions/<id>/` in the data folder, given to it in `initialize` and removed with it. The kernel calls `initialize` (answered with what it brings), `action.run` and `point.call`, and notifies `event`, `settings` and `shutdown`. The extension calls `settings.get` (with its secrets), `workspace.actors` (the workspace's name, and its people and agents), `values.get`, `values.set`, `values.list`, `events.publish`, `actions.run`, `points.implementations` and `points.call`, and notifies `log`. The kernel's requests wait a minute, or an action's own `seconds`.
 
