@@ -2,8 +2,11 @@ import { afterEach, expect, test } from "bun:test";
 import { setKernelFetch } from "./client";
 import {
   installOffer,
+  newProposals,
   offerAction,
   offerWarning,
+  proposalWarning,
+  proposer,
   disableExtension,
   enableExtension,
   installExtension,
@@ -12,7 +15,9 @@ import {
   runAction,
   setExtensionSettings,
 } from "./extensions";
-import type { MarketplaceOffer } from "./extensions";
+import type { Actor } from "./client";
+import type { ChatSession } from "./chat";
+import type { Extension, MarketplaceOffer } from "./extensions";
 
 afterEach(() => setKernelFetch());
 
@@ -125,4 +130,39 @@ test("an offer warns before it is installed only of what runs beyond its own pro
   expect(offerWarning({ ...offer, parts: ["kernel", "interface"] })).toBe(
     `${kernel} ${ui}`,
   );
+});
+
+const proposal = (id: string, proposed_by: string | null) =>
+  ({ id, parts: ["process"], proposed_by }) as Extension;
+
+test("the owner hears of an agent's proposal once, and of none at the first look", () => {
+  const notes = proposal("aspen.notes", "birch");
+  expect(newProposals(undefined, [notes])).toEqual([]);
+  expect(newProposals([], [notes])).toEqual([notes]);
+  expect(newProposals([notes], [notes])).toEqual([]);
+  // Proposed again by another agent.
+  const cedar = proposal("aspen.notes", "cedar");
+  expect(newProposals([notes], [cedar])).toEqual([cedar]);
+  // Enabled by the owner, it is no proposal.
+  expect(newProposals([notes], [proposal("aspen.notes", null)])).toEqual([]);
+  expect(newProposals([], [proposal("aspen.tasks", null)])).toEqual([]);
+});
+
+test("a proposal names its agent, or the session it came from", () => {
+  const actors = [{ id: "a1", name: "birch" }] as Actor[];
+  const sessions = [{ id: "s1", title: "Notes" }] as ChatSession[];
+  expect(proposer(proposal("aspen.notes", "a1"), actors, sessions)).toBe(
+    "birch",
+  );
+  expect(proposer(proposal("aspen.notes", "s1"), actors, sessions)).toBe(
+    "Notes",
+  );
+});
+
+test("a proposal warns before it is enabled only of what runs beyond its own process", () => {
+  const notes = proposal("aspen.notes", "a1");
+  expect(proposalWarning(notes, "birch")).toBeUndefined();
+  expect(
+    proposalWarning({ ...notes, parts: ["kernel", "interface"] }, "birch"),
+  ).toContain("birch");
 });

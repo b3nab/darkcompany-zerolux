@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import type { JsonSchema } from "./action-form";
+import type { ChatSession } from "./chat";
 import type { UiPiece } from "./extension-ui";
 import { errorMessage, kernelUrl, request } from "./client";
+import type { Actor } from "./client";
 
 /** A setting of an extension; a secret's value never comes back, only whether it has one. */
 export interface ExtensionSetting {
@@ -73,7 +75,34 @@ export interface Extension {
   contributes: ExtensionContributes | null;
   installed_at: number;
   updated_at: number;
+  /** The agent that proposed it, until the owner enables it: its actor, or its session. */
+  proposed_by?: string | null;
 }
+
+/** Who proposed an extension, by name: its agent, or the session it came from. */
+export const proposer = (
+  extension: Extension,
+  actors: Actor[],
+  sessions: ChatSession[],
+) =>
+  actors.find((a) => a.id === extension.proposed_by)?.name ??
+  (sessions.find((s) => s.id === extension.proposed_by)?.title || "an agent");
+
+/**
+ * Extensions agents proposed since the last look, to tell the owner: one proposed anew, or by
+ * another agent. The first look tells nothing.
+ */
+export const newProposals = (
+  before: Extension[] | undefined,
+  after: Extension[],
+) =>
+  before
+    ? after.filter(
+        (e) =>
+          e.proposed_by &&
+          !before.some((b) => b.id === e.id && b.proposed_by === e.proposed_by),
+      )
+    : [];
 
 /** An official extension ZeroLux brings, installed or not. */
 export interface OfficialExtension {
@@ -240,19 +269,26 @@ export const offerAction = (offer: MarketplaceOffer) =>
       : "update";
 
 /**
- * What installing an offer lets run beyond its own process, said before it is installed:
- * code inside the kernel, an interface inside the apps; nothing when it is neither.
+ * What parts let run beyond their own process, and from whom: code inside the kernel, an
+ * interface inside the apps; nothing when they are neither.
  */
-export function offerWarning(offer: MarketplaceOffer) {
-  const by = `signed by ${offer.publisher}.`;
+function partsWarning(parts: string[] | undefined, from: string) {
   const said = [
-    offer.parts?.includes("kernel") ? `It runs inside the kernel, ${by}` : "",
-    offer.parts?.includes("interface")
-      ? `Its interface runs inside the app with your access, ${by}`
+    parts?.includes("kernel") ? `It runs inside the kernel, ${from}.` : "",
+    parts?.includes("interface")
+      ? `Its interface runs inside the app with your access, ${from}.`
       : "",
   ].filter(Boolean);
   return said.length ? said.join(" ") : undefined;
 }
+
+/** What installing an offer lets run beyond its own process, said before it is installed. */
+export const offerWarning = (offer: MarketplaceOffer) =>
+  partsWarning(offer.parts, `signed by ${offer.publisher}`);
+
+/** What enabling an agent's proposal lets run beyond its own process, said before it is enabled. */
+export const proposalWarning = (extension: Extension, agent: string) =>
+  partsWarning(extension.parts, `proposed by ${agent}`);
 
 /** The owner installs an extension from an index, or updates it, and enables it. */
 export const installOffer = (offer: MarketplaceOffer, kernel = kernelUrl()) =>
