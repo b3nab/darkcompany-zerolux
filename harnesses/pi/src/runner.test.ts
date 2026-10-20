@@ -10,7 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   ChatHttpError,
@@ -34,7 +34,7 @@ async function fixture(
   await mkdir(agent);
   const env = {
     HOME: root,
-    PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+    PATH: [dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter),
     TMPDIR: root,
     FAKE_PI_ROOT: root,
     FAKE_PI_FAULT: fault,
@@ -107,6 +107,7 @@ if (process.env.FAKE_PI_EXTENSION_CONTROL) {
   }, "fixture-ext");
   await control.start();
   await controlRequest(descriptor, "links", { native_pid: Number(process.env.ZEROLUX_NATIVE_PID ?? process.pid), link_ids: ["link"], control: join(root, "ext-control", control.instanceId + ".json") });
+  appendFileSync(join(root, "linked"), "1\\n");
 }
 let buffer = "";
 process.stdin.on("data", bytes => {
@@ -236,6 +237,17 @@ setInterval(() => {
     runner,
     approvals,
     kernelCalls,
+    /** Once the native has said where its extension answers, and a moment for the rest. */
+    settled: async () => {
+      if (options.extensionControl)
+        for (
+          let n = 0;
+          n < 200 && !(await Bun.file(join(root, "linked")).exists());
+          n++
+        )
+          await Bun.sleep(50);
+      await Bun.sleep(150);
+    },
     /** What the native extension answers about the turn: `null` to refuse. */
     turn: (value: Record<string, unknown> | null) =>
       value === null
@@ -515,7 +527,7 @@ test("pi's yes/no question in one chat's turn reaches the owner as that delivery
       link_id: "link",
       fingerprint: nativeFingerprint(carrier),
     });
-    await Bun.sleep(150);
+    await f.settled();
     await f.ask({
       type: "extension_ui_request",
       id: "q1",
@@ -598,7 +610,7 @@ test("a dialog outside one chat's turn still asks the owner, for the session; an
     };
     await f.ask({ type: "agent_start" });
     await f.ask({ type: "message_start", message: carrier });
-    await Bun.sleep(150);
+    await f.settled();
     // Private or mixed turn: the extension says no delivery.
     await f.turn({ ok: true, delivery: null, link_id: "link" });
     await f.ask({
@@ -661,7 +673,7 @@ test("a dialog outside one chat's turn still asks the owner, for the session; an
         timestamp: 1733234402000,
       },
     });
-    await Bun.sleep(150);
+    await f.settled();
     await f.ask({
       type: "extension_ui_request",
       id: "p5",
@@ -671,7 +683,7 @@ test("a dialog outside one chat's turn still asks the owner, for the session; an
     await until(() => f.approvals.length === 5);
     // A proof without fingerprint, or a turn whose inputs the host never saw: nothing.
     await f.ask({ type: "agent_settled" });
-    await Bun.sleep(150);
+    await f.settled();
     await f.turn({ ok: true, delivery: "turn-delivery", link_id: "link" });
     await f.ask({
       type: "extension_ui_request",
@@ -745,7 +757,7 @@ test("without an extension control report a confirmation asks the owner for the 
       link_id: "link",
       fingerprint: nativeFingerprint(carrier),
     });
-    await Bun.sleep(150);
+    await f.settled();
     await g.ask({
       type: "extension_ui_request",
       id: "q1",
@@ -786,7 +798,7 @@ test("a question names the chat delivery only for the input pi was on when it as
     await f.ask({ type: "agent_start" });
     await f.ask({ type: "message_start", message: carrier });
     await f.turn(proof);
-    await Bun.sleep(150);
+    await f.settled();
     // While the extension is still answering, the turn takes another input: the proof,
     // though matching what pi was on when it asked, is for a question of a turn that moved.
     await f.slowTurn(600);
@@ -813,7 +825,7 @@ test("a question names the chat delivery only for the input pi was on when it as
     await f.slowTurn(0);
     await f.ask({ type: "agent_start" });
     await f.ask({ type: "message_start", message: carrier });
-    await Bun.sleep(150);
+    await f.settled();
     await f.ask({
       type: "extension_ui_request",
       id: "t1",
