@@ -1019,6 +1019,29 @@ while IFS= read -r line; do :; done
       expect(lost.ok).toBe(false);
       expect(lost.error).toContain("did not accept");
       expect(sent.filter((s) => s.content === "dropped")).toHaveLength(1);
+      // Received while pi works through a long tool call: queued for the running turn,
+      // accepted at once though it enters the context only when the call ends.
+      const waiting = control({
+        method: "input",
+        link_id: "link-b",
+        text: "while the build runs",
+      });
+      for (
+        let i = 0;
+        i < 100 && sent.at(-1)?.content !== "while the build runs";
+        i++
+      )
+        await Bun.sleep(20);
+      await handlers.get("input")!(
+        {
+          type: "input",
+          text: "while the build runs",
+          source: "extension",
+          streamingBehavior: "steer",
+        },
+        ctx,
+      );
+      expect((await waiting).ok).toBe(true);
       // Queued: it waits for the end of the turn, in pi's own follow-up queue.
       const queued = control({
         method: "input",

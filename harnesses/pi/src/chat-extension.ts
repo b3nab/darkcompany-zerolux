@@ -154,6 +154,7 @@ export default function chatExtension(pi: ExtensionAPI) {
     text: string;
     expanded: boolean;
     seen: () => void;
+    queued: () => void;
   }>();
   const bridges = () => [...links.values()].map((link) => link.bridge);
   let pairing = false;
@@ -989,18 +990,24 @@ export default function chatExtension(pi: ExtensionAPI) {
           return;
         }
         let seen = false;
+        let queued = false;
         // A skill or a prompt template enters the context expanded, not as typed.
         const waiter = {
           text,
           expanded: command !== undefined,
           seen: () => (seen = true),
+          queued: () => (queued = true),
         };
         ownerInputs.add(waiter);
         try {
           pi.sendUserMessage(content, options);
           for (let waited = 0; waited < 3000 && !seen; waited += 50) {
             await new Promise((resolve) => setTimeout(resolve, 50));
-            if (!seen && !ctx.isIdle() && ctx.hasPendingMessages()) {
+            // pi says it queues an input for the running turn as it receives it.
+            if (
+              !seen &&
+              (queued || (!ctx.isIdle() && ctx.hasPendingMessages()))
+            ) {
               // Waiting in pi's queue: shown as such until it enters the context.
               ownerQueue.push({
                 id: randomUUID(),
@@ -1256,6 +1263,11 @@ export default function chatExtension(pi: ExtensionAPI) {
   pi.on("input", (event) => {
     if (event.source !== "extension")
       for (const bridge of bridges()) bridge.privateInput();
+    // Received while pi works: it waits in pi's queue for the running turn.
+    else if (event.streamingBehavior)
+      for (const waiter of ownerInputs)
+        if (waiter.expanded || waiter.text.trim() === event.text.trim())
+          waiter.queued();
   });
   // Receipts go out in the background: pi's turn never waits on ZeroLux.
   pi.on("message_start", (event) => {
