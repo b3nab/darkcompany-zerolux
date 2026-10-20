@@ -2,7 +2,7 @@
 // Read exactly one LF-terminated record: buffered reads would swallow RPC commands
 // that must remain on stdin across exec. No shell, prompt, credentials or retry logic.
 import { readSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 export async function waitAndExec(harness = "pi") {
   const bytes: number[] = [];
@@ -56,7 +56,15 @@ function windowsCommand(exec: string, args: string[]) {
   if (parts.some((part) => /["%\r\n]/.test(part)))
     throw new Error("This command cannot be passed to a command file safely");
   const line = parts.map((part) => `"${part}"`).join(" ");
-  return [process.env.ComSpec ?? "cmd.exe", "/d", "/s", "/c", `"${line}"`];
+  // The interpreter by its full path: the environment a host passes may not name it.
+  const shell =
+    process.env.ComSpec ??
+    join(
+      process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows",
+      "System32",
+      "cmd.exe",
+    );
+  return [shell, "/d", "/s", "/c", `"${line}"`];
 }
 
 if (import.meta.main) waitAndExec();
