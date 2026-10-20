@@ -186,8 +186,10 @@ impl Extensions {
     pub async fn ui_address(&self, who: &ChatIdentity, id: &str, entry: &str) -> Result<String> {
         ensure!(who.is_person(), Error::Forbidden);
         let shown = self.loaded.read().await.get(id).is_some_and(|loaded| {
-            loaded.contributes.ui.iter().any(|piece| {
-                matches!(&piece.view, manifest::UiView::Web { entry: known } if known == entry)
+            loaded.contributes.ui.iter().any(|piece| match &piece.view {
+                manifest::UiView::Web { entry: known } => known == entry,
+                manifest::UiView::Native { entry: Some(known) } => known == entry,
+                _ => false,
             })
         });
         ensure!(shown, Error::NotFound);
@@ -298,16 +300,7 @@ impl Extensions {
                 .get(&row.id)
                 .is_some_and(|loaded| loaded.process.as_ref().is_none_or(|p| p.running()));
             let settings = self.setting_views(&row.id, &manifest).await?;
-            let mut parts = Vec::new();
-            if manifest.kernel.is_some() {
-                parts.push("kernel");
-            }
-            if manifest.process.is_some() {
-                parts.push("process");
-            }
-            if manifest.remote.is_some() {
-                parts.push("remote");
-            }
+            let parts = manifest::parts_of(&manifest, Path::new(&row.source));
             result.push(Installed {
                 id: row.id.clone(),
                 name: manifest.extension.name.clone(),
@@ -447,16 +440,10 @@ impl Extensions {
             let manifest =
                 tokio::task::spawn_blocking(move || package::unpack(&bytes, &key, &target))
                     .await??;
-            let mut parts = Vec::new();
-            if manifest.kernel.is_some() {
-                parts.push("kernel".to_owned());
-            }
-            if manifest.process.is_some() {
-                parts.push("process".to_owned());
-            }
-            if manifest.remote.is_some() {
-                parts.push("remote".to_owned());
-            }
+            let mut parts: Vec<String> = manifest::parts_of(&manifest, &into)
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
             let mut listed = release.parts.clone();
             listed.sort();
             parts.sort();

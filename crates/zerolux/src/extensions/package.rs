@@ -277,17 +277,29 @@ pub fn unpack(package: &[u8], public: &str, into: &Path) -> Result<Manifest> {
     Ok(manifest)
 }
 
-/// Builds the kernel module of the extension in `folder`, a Cargo package, for this computer,
-/// and puts it in `kernel/<platform>/`, where a package carries it.
-pub fn build(folder: &Path) -> Result<PathBuf> {
+/// Builds what the extension in `folder` brings for this computer: its kernel module, a
+/// Cargo package, into `kernel/<platform>/`, and its interface, each `ui/src/<piece>.tsx`, into
+/// `ui/native/<piece>.js`, where a package carries them. What it built.
+pub fn build(folder: &Path) -> Result<Vec<PathBuf>> {
+    let folder =
+        &dunce::canonicalize(folder).with_context(|| format!("No folder {}", folder.display()))?;
     let manifest = Manifest::parse(
         &std::fs::read_to_string(folder.join(FILE))
             .with_context(|| format!("The folder has no {FILE}"))?,
     )?;
-    let library = manifest
-        .kernel
-        .context("The extension has no kernel module to build")?
-        .library;
+    let mut built = Vec::new();
+    if let Some(kernel) = &manifest.kernel {
+        built.push(build_module(folder, &kernel.library)?);
+    }
+    built.extend(build_interface(folder)?);
+    ensure!(
+        !built.is_empty(),
+        "Nothing to build: no kernel module, and no ui/src/*.tsx"
+    );
+    Ok(built)
+}
+
+fn build_module(folder: &Path, library: &str) -> Result<PathBuf> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = std::process::Command::new(cargo)
         .args([
@@ -300,7 +312,7 @@ pub fn build(folder: &Path) -> Result<PathBuf> {
         .output()
         .context("Cannot run cargo")?;
     ensure!(output.status.success(), "The build failed");
-    let file = super::library::file_name(&library);
+    let file = super::library::file_name(library);
     let built = String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
@@ -312,6 +324,56 @@ pub fn build(folder: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(&into)?;
     std::fs::copy(&built, into.join(&file))?;
     Ok(into.join(file))
+}
+
+/// Each `ui/src/<piece>.tsx` as one script, `globalThis.__zeroluxModule(entry, function (module,
+/// exports, require) {…})`, which the apps load as a script and run with their own React and
+/// `@zerolux/ui`; `module.exports.default` is its component.
+fn build_interface(folder: &Path) -> Result<Vec<PathBuf>> {
+    let Ok(sources) = std::fs::read_dir(folder.join("ui/src")) else {
+        return Ok(Vec::new());
+    };
+    let mut built = Vec::new();
+    for source in sources.flatten() {
+        let path = source.path();
+        if path.extension().is_none_or(|kind| kind != "tsx") {
+            continue;
+        }
+        let name = path
+            .file_stem()
+            .context("A file without a name")?
+            .to_string_lossy()
+            .into_owned();
+        let out = folder.join("ui/native").join(format!("{name}.js"));
+        let status = std::process::Command::new(crate::platform::executable("bun"))
+            .args(["build", "--production", "--format=cjs", "--target=browser"])
+            .args([
+                "--external",
+                "react",
+                "--external",
+                "react/jsx-runtime",
+                "--external",
+                "@zerolux/ui",
+            ])
+            .arg("--outfile")
+            .arg(&out)
+            .arg(&path)
+            .current_dir(folder)
+            .status()
+            .context("Cannot run bun")?;
+        ensure!(status.success(), "The interface {name} did not build");
+        // Loaded as a script by the apps, which give it their own `require`.
+        let code = std::fs::read_to_string(&out)?;
+        let entry = format!("ui/native/{name}.js");
+        std::fs::write(
+            &out,
+            format!(
+                "globalThis.__zeroluxModule({entry:?}, function (module, exports, require) {{\n{code}\n}});\n"
+            ),
+        )?;
+        built.push(out);
+    }
+    Ok(built)
 }
 
 #[cfg(test)]

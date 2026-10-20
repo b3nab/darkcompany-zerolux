@@ -493,7 +493,33 @@ async fn an_extension_shows_pieces_in_the_clients_spaces() {
         .iter()
         .map(|piece| piece["space"].as_str().unwrap())
         .collect();
-    assert_eq!(spaces, ["page", "session", "chat", "settings", "message"]);
+    assert_eq!(
+        spaces,
+        ["page", "page", "session", "chat", "settings", "message"]
+    );
+    // Its own interface, run inside the apps, is one of its parts.
+    assert_eq!(body["extension"]["parts"], json!(["process", "interface"]));
+    let (status, script) = kernel
+        .call(
+            Method::POST,
+            "/extensions/zerolux.board/ui",
+            Some(json!({"entry": "ui/native/cards.js"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{script}");
+    let code = kernel
+        .client
+        .get(format!("{}{}", kernel.url, script["url"].as_str().unwrap()))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        code.starts_with("globalThis.__zeroluxModule(\"ui/native/cards.js\""),
+        "{code}"
+    );
     // A described view is the tree its action returns, in the space's context.
     let (_, tree) = kernel
         .call(

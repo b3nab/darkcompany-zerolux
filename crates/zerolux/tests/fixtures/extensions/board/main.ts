@@ -86,6 +86,13 @@ await serve(
           return { done: input.id };
         },
       },
+      cards: {
+        title: "Cards",
+        description: "The board's cards",
+        async run(_input: unknown, context) {
+          return { cards: await cards(context) };
+        },
+      },
       pin: {
         title: "Pin to the board",
         description: "Puts a message on the board",
@@ -143,6 +150,13 @@ await serve(
       },
     },
     ui: [
+      {
+        space: "page",
+        name: "cards",
+        title: "Cards",
+        icon: "layout-list",
+        view: { kind: "native", entry: "ui/native/cards.js" },
+      },
       {
         space: "page",
         name: "board",

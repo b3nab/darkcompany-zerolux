@@ -88,7 +88,8 @@ enum ExtAction {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Build the extension's kernel module for this computer, into `kernel/<platform>/`.
+    /// Build what the extension brings for this computer: its kernel module into
+    /// `kernel/<platform>/`, its interface from `ui/src/*.tsx` into `ui/native/`.
     Build {
         #[arg(default_value = ".")]
         folder: PathBuf,
@@ -299,7 +300,9 @@ pub async fn run() -> anyhow::Result<()> {
                 println!("{}", key.public);
             }
             ExtAction::Build { folder } => {
-                println!("{}", crate::extensions::package::build(&folder)?.display());
+                for built in crate::extensions::package::build(&folder)? {
+                    println!("{}", built.display());
+                }
             }
             ExtAction::Pack { folder, key, out } => {
                 let manifest = crate::extensions::manifest::Manifest::parse(

@@ -84,6 +84,25 @@ pub struct SettingOption {
     pub label: String,
 }
 
+/// What an extension in `folder` runs, as people see it before enabling it: a kernel module, a
+/// process, a remote part, an interface run inside the apps.
+pub fn parts_of(manifest: &Manifest, folder: &std::path::Path) -> Vec<&'static str> {
+    let mut parts = Vec::new();
+    if manifest.kernel.is_some() {
+        parts.push("kernel");
+    }
+    if manifest.process.is_some() {
+        parts.push("process");
+    }
+    if manifest.remote.is_some() {
+        parts.push("remote");
+    }
+    if folder.join("ui/native").is_dir() {
+        parts.push("interface");
+    }
+    parts
+}
+
 /// This kernel's version as extensions' ranges are matched against it: a build before a
 /// release, such as `0.0.1-dev`, counts as that release.
 pub fn kernel_version() -> semver::Version {
@@ -266,8 +285,12 @@ pub struct UiPiece {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum UiView {
-    /// By the clients' own component for it, when they have one.
-    Native,
+    /// By its own interface code, `ui/native/<piece>.js` in its package, written with
+    /// `@zerolux/ui` and run inside the clients, which draw it with their components.
+    Native {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry: Option<String>,
+    },
     /// From the tree an action of its returns, drawn again after its own actions and on the
     /// events it names.
     Described {
@@ -438,7 +461,23 @@ impl Contributes {
                 )));
             }
             let action = match &piece.view {
-                UiView::Native => None,
+                UiView::Native { entry } => {
+                    if let Some(entry) = entry {
+                        let path = std::path::Path::new(entry);
+                        if !entry.starts_with("ui/native/")
+                            || !entry.ends_with(".js")
+                            || path
+                                .components()
+                                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+                        {
+                            return Err(invalid(format!(
+                                "`{}` runs a script in its `ui/native/` folder",
+                                piece.name
+                            )));
+                        }
+                    }
+                    None
+                }
                 UiView::Described { action, .. } | UiView::Remote { action } => Some(action),
                 UiView::Web { entry } => {
                     let path = std::path::Path::new(entry);
