@@ -38,9 +38,8 @@ impl LocalWorkspace {
             .create(true)
             .truncate(false)
             .open(path)?;
-        lock.try_lock_exclusive().context(
-            "This desktop workspace is already open. Close its other ZeroLux window first.",
-        )?;
+        lock.try_lock_exclusive()
+            .context("This workspace is already open in another ZeroLux window")?;
         Ok(Self { root, _lock: lock })
     }
 
@@ -49,11 +48,8 @@ impl LocalWorkspace {
         let path = self.root.join("port");
         match fs::read_to_string(&path) {
             Ok(text) => {
-                let port: u16 = text
-                    .trim()
-                    .parse()
-                    .context("Invalid desktop port file; it was not reset")?;
-                ensure!(port != 0, "Invalid desktop port file; it was not reset");
+                let port: u16 = text.trim().parse().context("Invalid desktop port file")?;
+                ensure!(port != 0, "Invalid desktop port file");
                 Ok(port)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),

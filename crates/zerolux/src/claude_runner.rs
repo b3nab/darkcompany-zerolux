@@ -200,9 +200,10 @@ impl Registry {
             };
             // A failed control request is not evidence that this live claimant ended.
             // Even a free helper lease or an empty native catalogue cannot erase it.
-            let description = link.describe().await.context(
-                "The live Claude runner could not be verified; no replacement was started",
-            )?;
+            let description = link
+                .describe()
+                .await
+                .context("The running Claude runner could not be verified")?;
             ensure!(
                 link.record.workspace == workspace && link.record.permission_mode == mode,
                 "The owned session's workspace or permission mode changed"
@@ -267,7 +268,7 @@ impl Registry {
         if let Some(executable) = &self.program.sdk_executable {
             ensure!(
                 executable.is_absolute() && executable.is_file(),
-                "Claude Code executable was not found. Install Claude Code and restart ZeroLux with its directory on PATH."
+                "Claude Code is not installed: install it and restart ZeroLux"
             );
         }
         let log = private_file(&self.path.join(format!("{native_id}.log")), true)?;
@@ -314,7 +315,7 @@ impl Registry {
             loop {
                 ensure!(
                     child.try_wait()?.is_none(),
-                    "Owned Claude runner exited before becoming ready; inspect its private log"
+                    "The Claude runner stopped while starting; see its log"
                 );
                 if let Some(link) = self.find(native_id, workspace, mode).await? {
                     // Setting an env flag is not negotiation: an old asset can ignore it.
@@ -322,7 +323,7 @@ impl Registry {
                     // own guarded, unbound waiting host before any token/bind is sent.
                     ensure!(
                         child.id() == Some(link.record.pid as u32),
-                        "A different Claude runner claimed this launch; no bind was sent"
+                        "Another Claude runner took this launch"
                     );
                     let state = link.describe().await?;
                     ensure!(
@@ -330,7 +331,7 @@ impl Registry {
                             && state["bound"] == false
                             && state["native_phase"] == "waiting"
                             && state.get("native_pid") == Some(&Value::Null),
-                        "The new Claude runner did not confirm the native ownership protocol; no bind was sent"
+                        "The Claude runner needs an update"
                     );
                     return Ok::<_, anyhow::Error>(link);
                 }
@@ -352,9 +353,7 @@ impl Registry {
                 let _ = child.wait().await;
                 match other {
                     Ok(Err(error)) => Err(error),
-                    _ => anyhow::bail!(
-                        "Owned Claude runner did not become ready; no input was submitted"
-                    ),
+                    _ => anyhow::bail!("The Claude runner did not start"),
                 }
             }
         }
@@ -509,7 +508,7 @@ impl RunnerLink {
             description["capabilities"]
                 .as_array()
                 .is_some_and(|values| values.iter().any(|value| value == "agent-settings-v1")),
-            "The Claude runner needs an update before its settings can be controlled"
+            "Update the Claude runner to change its settings"
         );
         let mut request = json!({"method":"settings","link_id":session_id,"check":check});
         if let Some(patch) = patch {

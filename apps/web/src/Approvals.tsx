@@ -114,7 +114,7 @@ export function ApprovalCard({
           className="h-auto self-start p-0"
           onClick={() => show(conversation)}
         >
-          While answering in «{conversation.title}»
+          Open «{conversation.title}»
         </Button>
       )}
       {approval.kind === "permission" && (
@@ -200,8 +200,8 @@ function PermissionChoice({
         }}
       >
         <Input
-          aria-label="Why not, or what to do instead"
-          placeholder="Why not, or what to do instead (optional)"
+          aria-label="Reason"
+          placeholder="Reason (optional)"
           value={reason}
           maxLength={2000}
           onChange={(event) => setReason(event.target.value)}
@@ -211,9 +211,6 @@ function PermissionChoice({
           Deny
         </Button>
       </form>
-      <span className="text-xs text-faint">
-        Only you can answer. The chat sees the decision.
-      </span>
     </div>
   );
 }

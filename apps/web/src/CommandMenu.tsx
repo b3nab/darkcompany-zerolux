@@ -214,9 +214,7 @@ export function CommandMenu({
                       className="truncate font-mono text-[11px] text-faint data-attention:text-attention"
                     >
                       {harnessLabels[d.harness]} ·{" "}
-                      {ready
-                        ? d.workspace
-                        : (d.reason ?? "Cannot be connected right now")}
+                      {ready ? d.workspace : (d.reason ?? "Unavailable")}
                     </span>
                   </span>
                   {ready && <CommandShortcut>Hire ↵</CommandShortcut>}

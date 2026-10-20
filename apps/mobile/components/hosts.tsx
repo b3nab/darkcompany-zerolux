@@ -75,21 +75,17 @@ export function Hosts() {
               onPress={() =>
                 host.here
                   ? rename(host)
-                  : Alert.alert(
-                      host.name,
-                      "Removing it disconnects it from the workspace, and its secret stops working.",
-                      [
-                        ...(Platform.OS === "ios"
-                          ? [{ text: "Rename", onPress: () => rename(host) }]
-                          : []),
-                        {
-                          text: "Remove",
-                          style: "destructive",
-                          onPress: () => act(() => hosts.remove(host.id)),
-                        },
-                        { text: "Cancel", style: "cancel" },
-                      ],
-                    )
+                  : Alert.alert(host.name, undefined, [
+                      ...(Platform.OS === "ios"
+                        ? [{ text: "Rename", onPress: () => rename(host) }]
+                        : []),
+                      {
+                        text: "Remove",
+                        style: "destructive",
+                        onPress: () => act(() => hosts.remove(host.id)),
+                      },
+                      { text: "Cancel", style: "cancel" },
+                    ])
               }
             >
               <Text numberOfLines={1} className="text-[15px]">
@@ -158,16 +154,11 @@ export function Hosts() {
           />
         </View>
       ) : null}
-      <Text
-        className={cn(
-          "border-t border-border px-4 py-3 text-xs",
-          error || hosts.error ? "text-destructive" : "text-faint",
-        )}
-      >
-        {error ||
-          hosts.error ||
-          "Sessions run on a computer of their person's. Open yours with the switch, and the others start their own sessions on it, with their own harness accounts."}
-      </Text>
+      {error || hosts.error ? (
+        <Text className="border-t border-border px-4 py-3 text-xs text-destructive">
+          {error || hosts.error}
+        </Text>
+      ) : null}
     </>
   );
 }
@@ -215,7 +206,7 @@ function Joining({
       <Text className="text-xs text-faint">
         {joined
           ? "Waiting for it to connect…"
-          : "Tap to copy. The code works once, within ten minutes; then zerolux host run connects it."}
+          : "Tap to copy. Valid once, for ten minutes."}
       </Text>
     </View>
   );

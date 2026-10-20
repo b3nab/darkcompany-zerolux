@@ -66,7 +66,7 @@ export default function MySettings() {
           <DeviceNotices />
           {/* TODO: kernel: push when the app is closed, email, per chat exceptions and quiet hours. */}
           <Unavailable>
-            Not yet: when the app is closed, by email, with quiet hours.
+            When the app is closed, by email, quiet hours: not available yet.
           </Unavailable>
         </Section>
         <Section title="Devices">
@@ -289,11 +289,11 @@ function DeviceNotices() {
   if (!permission.granted)
     return (
       <View className="items-start gap-3 px-4 py-3">
-        <Text className="text-sm text-muted-foreground">
-          {permission.canAskAgain
-            ? "Get a notification on this phone when a session needs you or finishes, unless you are looking at it."
-            : "Notifications for ZeroLux are off in the phone's Settings."}
-        </Text>
+        {permission.canAskAgain ? null : (
+          <Text className="text-sm text-muted-foreground">
+            Notifications for ZeroLux are off in the phone's Settings.
+          </Text>
+        )}
         <Button
           size="sm"
           onPress={() =>
@@ -309,14 +309,11 @@ function DeviceNotices() {
       </View>
     );
   return (
-    <View className="pt-3">
-      <Text className="px-4 text-sm text-muted-foreground">
-        On this phone, unless you are looking at the session:
-      </Text>
+    <View>
       {(
         [
-          ["needs", "When a session needs you: approvals, questions, errors"],
-          ["finished", "When a session finishes its work"],
+          ["needs", "When a session needs you"],
+          ["finished", "When a session finishes"],
         ] as const
       ).map(([key, label]) => (
         <View key={key} className="flex-row items-center gap-3 px-4 py-3">

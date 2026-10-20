@@ -111,9 +111,6 @@ export function ApprovalCard({
               <Text>Deny</Text>
             </Button>
           </View>
-          <Text className="text-xs text-faint">
-            Only you can answer. The chat sees the decision.
-          </Text>
         </View>
       ) : (
         <Text className="text-sm text-muted-foreground">

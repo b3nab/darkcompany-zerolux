@@ -84,10 +84,7 @@ export function useInputActions(session: ChatSession | undefined) {
                   ? void Haptics.notificationAsync(
                       Haptics.NotificationFeedbackType.Success,
                     )
-                  : Alert.alert(
-                      "The files can't be put back",
-                      done.error ?? "Claude Code did not say why.",
-                    ),
+                  : Alert.alert("The files can't be put back", done.error),
               )
               .catch(failed("The files can't be put back")),
         },
@@ -143,7 +140,6 @@ export function useInputActions(session: ChatSession | undefined) {
   const sheet = (
     <ForkEditor
       title="Edit and resend"
-      caption="A new session goes on from before this message, with your new words. This one stays as it is."
       text={editing?.text}
       setText={(text) =>
         setEditing((current) => current && { ...current, text })
@@ -175,7 +171,6 @@ function useForkWith() {
 /** The words a fork starts with, in a sheet: shown while there is `text`. */
 function ForkEditor({
   title,
-  caption,
   placeholder,
   text,
   setText,
@@ -183,7 +178,6 @@ function ForkEditor({
   close,
 }: {
   title: string;
-  caption: string;
   placeholder?: string;
   text: string | undefined;
   setText: (text: string) => void;
@@ -229,7 +223,6 @@ function ForkEditor({
           </Pressable>
         </View>
         <View className="gap-3 px-5 py-4">
-          <Text className="text-sm text-muted-foreground">{caption}</Text>
           <TextInput
             value={text ?? ""}
             onChangeText={setText}
@@ -301,15 +294,9 @@ export function ForkSession({
           <Text>Side chat</Text>
         </Button>
       </View>
-      <Text
-        className={error ? "text-xs text-destructive" : "text-xs text-faint"}
-      >
-        {error ||
-          "Both go on from all of this session's work in a new one, a side chat with your question. This one stays as it is."}
-      </Text>
+      {error ? <Text className="text-xs text-destructive">{error}</Text> : null}
       <ForkEditor
         title="Side chat"
-        caption="Your question goes to a new session with all of this one's work. This one stays as it is."
         placeholder="Ask about this session"
         text={asking}
         setText={setAsking}

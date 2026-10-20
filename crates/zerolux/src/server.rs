@@ -59,9 +59,12 @@ impl Server {
             bail!("--expose takes one address of this computer on a private network");
         }
         // Bind before opening storage: a busy port must not recover another kernel's sessions.
-        let listener = TcpListener::bind(options.address)
-            .await
-            .with_context(|| format!("Cannot listen on {}. Close the service using this address and retry; no other server was used.", options.address))?;
+        let listener = TcpListener::bind(options.address).await.with_context(|| {
+            format!(
+                "Cannot listen on {}: another program uses this address",
+                options.address
+            )
+        })?;
         let address = listener.local_addr()?;
         let exposed = match options.expose {
             Some(ip) => Some(

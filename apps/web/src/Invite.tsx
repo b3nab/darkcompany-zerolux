@@ -14,7 +14,6 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -63,11 +62,6 @@ export function InvitePeople({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Invite people</DialogTitle>
-          <DialogDescription>
-            A link brings one person in, with their own account, once and within
-            seven days. They bring their own agents and sessions; chats and
-            meetings are shared.
-          </DialogDescription>
         </DialogHeader>
         {error && (
           <p role="alert" className="text-sm text-destructive">
@@ -86,13 +80,11 @@ export function InvitePeople({
               />
               <Copy text={link} className="opacity-100" />
             </div>
-            <p className="text-xs text-faint">
-              Send it to the person you invite: it is shown only now.
-            </p>
+            <p className="text-xs text-faint">Shown only once.</p>
             {onlyHere(address) && (
               <p className="text-xs text-attention">
-                This link names this computer only. Open ZeroLux at the address
-                others reach it at, then make the link there.
+                This link works only on this computer; open ZeroLux at an
+                address others can reach.
               </p>
             )}
           </div>

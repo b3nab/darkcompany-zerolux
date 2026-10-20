@@ -91,13 +91,7 @@ export default function NewChat() {
     <Screen back="close" title="New chat">
       {agents.length === 0 ? (
         <View className="gap-2 p-5">
-          <Text className="text-lg font-semibold">
-            Hire an agent to start chatting.
-          </Text>
-          <Text className="text-sm text-muted-foreground">
-            Start a new one here, or hire the sessions you already use from
-            ZeroLux on your computer; they appear here.
-          </Text>
+          <Text className="text-lg font-semibold">No agents yet.</Text>
           {/* Agents start on the kernel's computer, if yours or open to you, or on one of your own. */}
           {starts ? (
             <Button

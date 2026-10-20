@@ -91,7 +91,7 @@ class Ears:
 
                 self.models[name] = onnx_asr.load_model(spec["other"])
             else:
-                raise ValueError("Qwen3-ASR runs only on a Mac with Apple silicon: choose Whisper or Parakeet")
+                raise ValueError("Qwen3-ASR runs only on a Mac with Apple silicon")
         return self.models[name]
 
     def _hear(self, name: str, audio: np.ndarray, vocabulary: list[str]) -> tuple[str, str | None]:

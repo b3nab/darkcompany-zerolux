@@ -399,11 +399,9 @@ impl CodexSettings {
         }
         let turn = self.turn.borrow().clone();
         if turn.is_some() && (policy.is_some() || sandbox.is_some()) {
-            return Err(Error::Invalid(
-                "Codex changes approval policy and sandbox between turns; nothing was applied"
-                    .into(),
-            )
-            .into());
+            return Err(
+                Error::Invalid("Change approval policy and sandbox between turns".into()).into(),
+            );
         }
         let mut params = json!({"threadId":self.thread_id});
         if let Some(value) = &patch.model
@@ -464,14 +462,22 @@ impl CodexSettings {
         }
         let confirmed = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                let snapshot = NativeSettings { values: self.values(), models: before.models.clone(), editable: before.editable.clone() };
-                if snapshot.confirm(patch).is_ok() { return Ok::<_, anyhow::Error>(snapshot); }
+                let snapshot = NativeSettings {
+                    values: self.values(),
+                    models: before.models.clone(),
+                    editable: before.editable.clone(),
+                };
+                if snapshot.confirm(patch).is_ok() {
+                    return Ok::<_, anyhow::Error>(snapshot);
+                }
                 observed.changed().await?;
             }
-        }).await.context("Codex accepted the change but its resulting settings were not confirmed; refresh before making another change")??;
+        })
+        .await
+        .context("Codex did not confirm its settings; refresh before changing them again")??;
         ensure!(
             !permissions_changed || self.turn.borrow().is_none(),
-            "Codex changed the thread settings, but a turn started before confirmation; its running permissions were not changed"
+            "Codex changed the settings; the running turn keeps its permissions"
         );
         Ok(confirmed)
     }

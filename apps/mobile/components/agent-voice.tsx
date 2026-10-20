@@ -96,7 +96,7 @@ export function AgentVoice({
           proposals={proposals}
           busy={Boolean(busy)}
           choose={(proposal) =>
-            act("Making the voice: it reads a long text first.", async () => {
+            act("Making the voice…", async () => {
               await chooseVoice(agent.id, proposal.id, url);
               setProposals(undefined);
               setAnother(false);
@@ -118,7 +118,7 @@ export function AgentVoice({
           busy={Boolean(busy)}
           cancel={current ? () => setAnother(false) : undefined}
           design={(input) =>
-            act("Designing three voices.", async () =>
+            act("Designing three voices…", async () =>
               setProposals(
                 await designVoice(
                   agent.id,
@@ -131,30 +131,22 @@ export function AgentVoice({
           }
         />
       ) : null}
-      {busy ? (
-        <Text className="text-xs text-faint">
-          {busy} It can take a few minutes.
-        </Text>
-      ) : null}
+      {busy ? <Text className="text-xs text-faint">{busy}</Text> : null}
       {error ? <Text className="text-sm text-destructive">{error}</Text> : null}
       {editable && current && !proposals && !another ? (
         <Pressable
           accessibilityRole="button"
           disabled={Boolean(busy)}
           onPress={() =>
-            Alert.alert(
-              `Forget ${agent.name}'s voice?`,
-              "It goes back to having no voice.",
-              [
-                { text: "Cancel", style: "cancel" },
-                {
-                  text: "Forget",
-                  style: "destructive",
-                  onPress: () =>
-                    act("Forgetting it.", () => forgetVoice(agent.id, url)),
-                },
-              ],
-            )
+            Alert.alert(`Forget ${agent.name}'s voice?`, undefined, [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Forget",
+                style: "destructive",
+                onPress: () =>
+                  act("Forgetting it.", () => forgetVoice(agent.id, url)),
+              },
+            ])
           }
           className="self-start"
         >

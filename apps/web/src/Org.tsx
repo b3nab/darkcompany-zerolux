@@ -28,17 +28,11 @@ import { useMe } from "./AuthGate";
 import { InvitePeople } from "./Invite";
 
 type View = "everyone" | "people" | "agents" | "shift";
-const views: Record<View, { label: string; note: string }> = {
-  everyone: {
-    label: "Everyone",
-    note: "People report to people. Each person's agents hang off them.",
-  },
-  people: { label: "People", note: "Who reports to whom." },
-  agents: {
-    label: "Agents",
-    note: "The agent org mirrors the people org: an agent sits where its owner sits.",
-  },
-  shift: { label: "Shift", note: "Who worked when, over the last 16 hours." },
+const views: Record<View, string> = {
+  everyone: "Everyone",
+  people: "People",
+  agents: "Agents",
+  shift: "Shift",
 };
 
 /**
@@ -139,7 +133,7 @@ export function Organization({
                 onClick={() => setView(id)}
                 className="h-7 rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground aria-pressed:bg-accent aria-pressed:text-foreground"
               >
-                {views[id].label}
+                {views[id]}
               </button>
             ))}
           </div>
@@ -169,9 +163,6 @@ export function Organization({
               />
             </>
           )}
-          <p className="max-w-md flex-[1_1_16rem] text-xs text-faint">
-            {views[view].note}
-          </p>
         </div>
         {view === "shift" ? (
           <Shift
@@ -296,7 +287,6 @@ function PersonProfile({
   presence: (agent: Actor) => string;
   select: (actor: Actor) => void;
 }) {
-  const first = person.name.split(" ")[0];
   return (
     <>
       <ProfileHead
@@ -337,9 +327,6 @@ function PersonProfile({
           <p className="text-sm text-muted-foreground">No agents yet.</p>
         )}
         {/* TODO: kernel: each agent's monthly spend against its budget, one meter per agent here. */}
-        <p className="mt-2 text-xs text-pretty text-muted-foreground">
-          {first}'s agents sit where {first} sits in the organization.
-        </p>
       </section>
     </>
   );

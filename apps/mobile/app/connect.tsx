@@ -45,10 +45,6 @@ export default function Connect() {
       <Text className="text-[34px] font-light tracking-tight">
         Where is your kernel?
       </Text>
-      <Text className="text-base leading-6 text-muted-foreground">
-        Use your PC’s kernel address on the same local network, or an HTTPS
-        address for a workspace elsewhere. Invited? Paste the link you received.
-      </Text>
       <Input
         className="h-12 text-lg"
         value={address}

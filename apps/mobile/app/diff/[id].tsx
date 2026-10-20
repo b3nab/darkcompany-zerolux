@@ -107,7 +107,7 @@ export default function DiffPage() {
           >
             {readError ||
               (diff?.binary
-                ? "A binary file: git shows no lines."
+                ? "Binary file"
                 : diff
                   ? "No changes here now."
                   : "Reading the diff…")}

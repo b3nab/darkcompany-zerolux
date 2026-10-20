@@ -583,7 +583,7 @@ async fn host_open(state: &AppState, who: &ChatIdentity) -> Result<(), ApiFailur
         Some(_) => Ok(()),
         None => Err(failure(
             StatusCode::FORBIDDEN,
-            "This computer is not open to you; start your sessions on your own computer",
+            "This computer is not open to you",
         )),
     }
 }
@@ -651,7 +651,11 @@ fn runtime_error(error: anyhow::Error) -> ApiFailure {
         Ok(error) => error.into_response(),
         Err(error) => {
             tracing::error!(error = %error, "Chat runtime operation failed");
-            (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "The chat service could not complete this operation; check the session status and kernel diagnostics" }))).into_response()
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "The operation failed; check the session's status" })),
+            )
+                .into_response()
         }
     }))
 }
@@ -1152,22 +1156,23 @@ async fn stop_session(
         match runtime.stop_session(&id).await {
             Ok(note) => note,
             Err(error) => {
-                state.store.note_chat_stop(&who, &id,
-                    "The chat link is stopped and its token revoked. Native cancellation was not confirmed; work may still be running in the harness.")
+                state
+                    .store
+                    .note_chat_stop(
+                        &who,
+                        &id,
+                        "Stopped. Its harness did not confirm it stopped working.",
+                    )
                     .await?;
                 runtime.changed();
                 return Err(runtime_error(error));
             }
         }
     } else {
-        Some(
-            "The chat link is stopped and its token revoked. Native cancellation was not confirmed because this kernel had no active adapter.",
-        )
+        Some("Stopped. Its harness did not confirm it stopped working.")
     };
     let note = if session.harness == "claude-code" && session.origin != ChatSessionOrigin::Owned {
-        Some(
-            "The chat link is stopped and its token revoked. Claude Code may continue working in its terminal; native cancellation is not available.",
-        )
+        Some("Stopped. Claude Code may go on in its terminal.")
     } else {
         note
     };
@@ -1841,8 +1846,7 @@ async fn session_terminal_command(
     let locator = state.store.chat_session_locator(&who, &id).await?;
     if crate::homes::Homes::of_locator(&locator).is_guest() {
         return Err(Error::Invalid(
-            "This session runs with your harness folders on another person's computer; go on in ZeroLux"
-                .into(),
+            "This session runs on another person's computer; continue it in ZeroLux".into(),
         )
         .into());
     }

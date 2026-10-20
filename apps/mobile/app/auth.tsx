@@ -108,11 +108,11 @@ export default function Authenticate() {
                   ? auth.identity
                     ? "Join this workspace with the account you are signed in to."
                     : invitation
-                      ? `${invitation.invited_by} invited you. Create your account, or sign in with one you already have.`
+                      ? `${invitation.invited_by} invited you.`
                       : "Reading the invitation…"
                   : auth.identity
                     ? enrollment
-                      ? "Bind your account to this workspace’s existing owner. Nothing in the company is recreated."
+                      ? "Bind your account to this workspace’s owner."
                       : "This account is not a member of this workspace. Sign out to use another account."
                     : signup
                       ? "Create your account to become this workspace’s owner."

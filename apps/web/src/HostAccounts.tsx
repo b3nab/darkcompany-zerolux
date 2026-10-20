@@ -97,17 +97,13 @@ export function HostAccounts({
       className="flex flex-col gap-2 rounded-lg bg-muted/40 p-3"
     >
       <h3 className="text-sm font-medium">Your accounts here</h3>
-      <p className="text-xs text-muted-foreground">
-        Sessions you start on {host.name} use these, never its person's. ZeroLux
-        keeps them for you on that computer and never shows them again.
-      </p>
       <Account
         name="Claude Code"
         status={
           accounts.claude.method === "api_key"
-            ? "With an API key"
+            ? "API key"
             : accounts.claude.method === "oauth_token"
-              ? "With a subscription token"
+              ? "Subscription token"
               : "Not connected"
         }
       >
@@ -129,7 +125,7 @@ export function HostAccounts({
         >
           <NativeSelect
             size="sm"
-            aria-label="Claude Code with"
+            aria-label="Credential"
             value={claude.kind}
             onChange={(event) =>
               setClaudeSecret({
@@ -147,7 +143,7 @@ export function HostAccounts({
             label={
               claude.kind === "api_key"
                 ? "Anthropic API key"
-                : "Token from claude setup-token"
+                : "Subscription token"
             }
             value={claude.value}
             set={(value) => setClaudeSecret({ ...claude, value })}
@@ -173,12 +169,6 @@ export function HostAccounts({
             </Button>
           )}
         </form>
-        {claude.kind === "oauth_token" && (
-          <p className="text-xs text-attention">
-            Anthropic's terms limit using claude.ai subscriptions through other
-            products; an API key is always within them.
-          </p>
-        )}
       </Account>
       <Account
         name="Codex"
@@ -186,7 +176,7 @@ export function HostAccounts({
           accounts.codex.signed_in
             ? accounts.codex.method === "chatgpt"
               ? `ChatGPT${accounts.codex.email ? ` · ${accounts.codex.email}` : ""}${accounts.codex.plan ? ` · ${accounts.codex.plan}` : ""}`
-              : "With an API key"
+              : "API key"
             : "Not connected"
         }
       >
@@ -240,7 +230,6 @@ export function HostAccounts({
                 </a>{" "}
                 and enter{" "}
                 <span className="font-mono font-medium">{code.user_code}</span>.
-                This page notices when you are in.
               </p>
             ) : (
               <Button
@@ -263,7 +252,7 @@ export function HostAccounts({
         status={
           accounts.pi.providers.length
             ? accounts.pi.providers.join(", ")
-            : "No provider yet"
+            : "No provider"
         }
       >
         {accounts.pi.providers.map((provider) => (

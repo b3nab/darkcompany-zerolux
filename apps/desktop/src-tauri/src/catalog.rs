@@ -61,7 +61,7 @@ impl Profile {
             .join("zerolux.db");
         ensure!(
             self.workspace_id.is_none() || database.is_file(),
-            "This saved local workspace's database is missing. It was not recreated. Restore its data before opening it."
+            "This local workspace's database is missing"
         );
         Ok(database)
     }
@@ -78,7 +78,7 @@ impl Profile {
             self.workspace_id
                 .as_ref()
                 .is_none_or(|id| id == &verified.id),
-            "This connection now points to a different workspace. Add it separately instead."
+            "This connection now points to a different workspace"
         );
         self.workspace_id = Some(verified.id.clone());
         self.name = verified.name.clone();
@@ -110,8 +110,7 @@ impl Default for Catalog {
 impl Catalog {
     pub fn load(root: &Path) -> Result<Self> {
         let mut catalog: Self = match std::fs::read(root.join(FILE)) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .context("Invalid workspace connections; the file was not reset")?,
+            Ok(bytes) => serde_json::from_slice(&bytes).context("Invalid workspace connections")?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 Self::import_previous(root)?
             }
@@ -183,7 +182,7 @@ impl Catalog {
                 .profiles
                 .iter()
                 .any(|profile| profile.workspace_id.as_ref() == Some(&verified.id)),
-            "This workspace is already saved. Open its connection to change the address."
+            "This workspace is already saved"
         );
         let mut profile = Profile {
             id: Uuid::new_v4().to_string(),

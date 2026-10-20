@@ -48,10 +48,6 @@ export default function Extensions() {
   return (
     <Screen back title="Extensions">
       <ScrollView contentContainerClassName="gap-4 px-5 pb-10 pt-2">
-        <Text className="text-[15px] leading-[22px] text-muted-foreground">
-          Extensions add actions, settings and tools for agents to the
-          workspace.
-        </Text>
         {error || failure ? (
           <Text className="text-sm text-destructive">{failure || error}</Text>
         ) : null}
@@ -132,11 +128,6 @@ export default function Extensions() {
                 </View>
               ))}
             </View>
-            {busy ? (
-              <Text className="text-xs text-faint">
-                Its first start can take a few minutes.
-              </Text>
-            ) : null}
           </View>
         ) : null}
         {owner && Platform.OS === "ios" ? (
@@ -146,7 +137,7 @@ export default function Extensions() {
             onPress={() =>
               Alert.prompt(
                 "Load from a folder",
-                "A folder with an extension, on the kernel's computer.",
+                "On the kernel's computer",
                 load,
                 "plain-text",
               )

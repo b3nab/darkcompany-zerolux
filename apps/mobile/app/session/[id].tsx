@@ -637,7 +637,7 @@ function Composer({
               style={{ transform: [{ scale: 0.7 }] }}
             />
             <Text className="flex-1 text-xs text-muted-foreground">
-              Compacting: the summary, or why it failed, appears in the work.
+              Compacting…
             </Text>
           </View>
         ) : null}
@@ -826,13 +826,13 @@ function Composer({
           </View>
         ) : (
           <Text className="px-1.5 pb-1 text-xs text-muted-foreground">
-            Shared with you to read: its person works in it.
+            Shared with you to read
           </Text>
         )}
         {write && stop.allowed && filled && !sessionCommand(draft) ? (
           <Text className="px-1.5 text-xs text-faint">
             {choosable
-              ? "Joins the turn in progress. Hold Send to send it when the turn ends, or to stop the turn and send."
+              ? "Joins the turn in progress. Hold Send for more."
               : "Joins the turn in progress."}
           </Text>
         ) : null}
@@ -1276,11 +1276,11 @@ function Organize({ session }: { session: ChatSession }) {
   const cost = usage?.cost_usd ?? null;
   const spent =
     session.harness === "codex"
-      ? "Codex does not report its cost, so a budget cannot stop it."
+      ? "Codex reports no cost"
       : cost === null
         ? session.budget_usd
-          ? "The harness has not reported a cost yet."
-          : "No limit. Set one, and the session stops when its cost reaches it."
+          ? "No cost reported yet"
+          : "No limit"
         : session.budget_usd
           ? `${usdCost(cost)} of ${usdCost(session.budget_usd)}`
           : `${usdCost(cost)} so far, no limit`;

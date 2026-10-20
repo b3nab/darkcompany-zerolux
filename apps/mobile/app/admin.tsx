@@ -78,14 +78,7 @@ export default function Administration() {
                 i > 0 && "border-t border-border",
               )}
             >
-              <View className="min-w-0 flex-1 gap-0.5">
-                <Text className="text-base">{feature.name}</Text>
-                {feature.description ? (
-                  <Text className="text-sm text-muted-foreground">
-                    {feature.description}
-                  </Text>
-                ) : null}
-              </View>
+              <Text className="min-w-0 flex-1 text-base">{feature.name}</Text>
               <Text
                 className={cn(
                   "text-sm",

@@ -73,7 +73,7 @@ def vocabulary() -> list[str]:
 def agent(actor_id: str) -> dict:
     found = next((a for a in actors()["actors"] if a["id"] == actor_id and a["kind"] == "agent"), None)
     if found is None:
-        raise ValueError("No agent of this workspace has this ID")
+        raise ValueError("No such agent")
     return found
 
 
@@ -83,9 +83,9 @@ def described(actor_id: str) -> dict | None:
 
 
 @extension.action(
-    "transcribe", "Transcribe", "What was said in a recording, as text, with the workspace's names written right",
+    "transcribe", "Transcribe", "Recording to text",
     input={"type": "object", "required": ["audio"], "properties": {
-        "audio": {"type": "string", "description": "The recording, in base64: WebM, Ogg, MP4 or WAV"},
+        "audio": {"type": "string", "description": "Base64 WebM, Ogg, MP4 or WAV"},
     }},
     seconds=300,
 )
@@ -96,7 +96,7 @@ def transcribe(input: dict, caller: dict) -> dict:
 
 
 @extension.action(
-    "sentences", "Sentences", "A text in the sentences a voice says one after another",
+    "sentences", "Sentences", "Text split into sentences",
     input={"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}}},
 )
 def split(input: dict, caller: dict) -> dict:
@@ -104,23 +104,23 @@ def split(input: dict, caller: dict) -> dict:
 
 
 @extension.action(
-    "speak", "Speak", "A sentence or a few, said by an agent with its own voice, as WAV in base64",
+    "speak", "Speak", "Text in an agent's voice, as base64 WAV",
     input={"type": "object", "required": ["actor_id", "text"], "properties": {
-        "actor_id": {"type": "string", "description": "The agent whose voice it is"},
+        "actor_id": {"type": "string", "description": "Agent"},
         "text": {"type": "string", "minLength": 1, "maxLength": 2000},
-        "language": {"type": "string", "oneOf": CHOICES, "description": "Otherwise the text's own"},
+        "language": {"type": "string", "oneOf": CHOICES},
     }},
     seconds=300,
 )
 def speak(input: dict, caller: dict) -> dict:
     voice = described(input["actor_id"])
     if voice is None:
-        raise ValueError("This agent has no voice yet: create one first")
+        raise ValueError("This agent has no voice")
     said = voices.speak(input["actor_id"], input["text"], input.get("language"), voice["language"])
     return {**said, "audio": base64.b64encode(said["audio"]).decode()}
 
 
-@extension.action("voices", "Voices", "The agents that have a voice, and how each was described")
+@extension.action("voices", "Voices", "Agents with a voice")
 def listed(input: dict, caller: dict) -> dict:
     root = voices.path("x").parent
     found = []
@@ -132,14 +132,12 @@ def listed(input: dict, caller: dict) -> dict:
 
 
 @extension.action(
-    "design", "Design a voice",
-    "Three voices for an agent from a description of it, in English, each saying a greeting",
+    "design", "Design a voice", "Three voice proposals from a description",
     input={"type": "object", "required": ["actor_id", "description"], "properties": {
         "actor_id": {"type": "string"},
         "description": {"type": "string", "minLength": 3, "maxLength": 500,
-                        "description": "In English, e.g. a warm, calm adult voice with a slight rasp"},
-        "language": {"type": "string", "oneOf": CHOICES, "default": "it",
-                     "description": "The language it speaks best: its greeting and reference are in it"},
+                        "description": "In English"},
+        "language": {"type": "string", "oneOf": CHOICES, "default": "it"},
     }},
     effects="write", seconds=1800,
 )
@@ -162,8 +160,7 @@ def design(input: dict, caller: dict) -> dict:
 
 
 @extension.action(
-    "choose", "Choose a voice",
-    "One of the proposals becomes the agent's voice: it reads a text with every sound of its language",
+    "choose", "Choose a voice", "Make a proposal the agent's voice",
     input={"type": "object", "required": ["actor_id", "proposal"], "properties": {
         "actor_id": {"type": "string"}, "proposal": {"type": "string", "pattern": "^[0-9a-f]{8}$"},
     }},
@@ -174,7 +171,7 @@ def choose(input: dict, caller: dict) -> dict:
     folder = voices.path(input["actor_id"])
     proposal = folder / "proposals" / f"{input['proposal']}.wav"
     if not proposal.is_file():
-        raise ValueError("No such proposal: design the voice again")
+        raise ValueError("No such proposal")
     about = json.loads(proposal.with_suffix(".json").read_text())
     audio, rate = designer.reference(name, str(proposal), about["text"], about["language"])
     voices.forget(input["actor_id"])
@@ -188,7 +185,7 @@ def choose(input: dict, caller: dict) -> dict:
 
 
 @extension.action(
-    "forget", "Forget a voice", "The agent goes back to having no voice",
+    "forget", "Remove the voice", "Remove the agent's voice",
     input={"type": "object", "required": ["actor_id"], "properties": {"actor_id": {"type": "string"}}},
     effects="destructive",
 )

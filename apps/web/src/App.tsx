@@ -218,9 +218,7 @@ export function App({
     />
   );
   const nothingWaits = (
-    <p className="text-sm text-muted-foreground">
-      Nothing waits for you. The agents ask here when they need you.
-    </p>
+    <p className="text-sm text-muted-foreground">Nothing waits for you.</p>
   );
   /** A section's page with its list beside it; on a phone, the list until something is open. */
   const section = (list: ReactNode, open: boolean, page: ReactNode) =>
@@ -381,9 +379,7 @@ export function App({
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    aria-label={
-                      pending ? `${pending} requests wait for you` : "Requests"
-                    }
+                    aria-label={pending ? `Requests: ${pending}` : "Requests"}
                     className="relative"
                   />
                 }
@@ -430,13 +426,6 @@ export function App({
               <h1 className="text-3xl font-light tracking-tight">
                 Connecting to your kernel
               </h1>
-              <p className="text-muted-foreground">
-                Start the Rust server with{" "}
-                <code className="rounded-xs bg-muted px-1 py-0.5 font-mono text-sm">
-                  cargo run -- serve
-                </code>
-                .
-              </p>
             </Page>
           ) : needsOnboarding ? (
             <Page>
@@ -594,8 +583,7 @@ export function App({
                       />
                     ) : (
                       <p className="text-sm text-muted-foreground">
-                        This computer is not open to you: start your sessions on
-                        your own computer, or ask its person to open it.
+                        This computer is not open to you.
                       </p>
                     )}
                   </Page>,

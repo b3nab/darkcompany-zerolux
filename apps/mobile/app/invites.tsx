@@ -64,11 +64,6 @@ export default function Invites() {
   return (
     <Screen back title="Invite people">
       <ScrollView contentContainerClassName="gap-6 px-5 py-5">
-        <Text className="text-[15px] leading-[22px] text-muted-foreground">
-          Who you invite signs up with their own account and brings their own
-          agents and sessions. Chats and meetings are shared; sessions stay
-          private until their person shares them.
-        </Text>
         <Button
           disabled={busy}
           onPress={() =>
@@ -90,8 +85,7 @@ export default function Invites() {
               {link}
             </Text>
             <Text className="text-xs text-faint">
-              Send it now: it is shown only once. It works once, for seven days,
-              wherever this kernel's address can be reached.
+              Shown only once. Valid for one use, for seven days.
             </Text>
             <View className="flex-row gap-2">
               <Button

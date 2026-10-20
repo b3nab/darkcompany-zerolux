@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import type { SubmitEvent } from "react";
-import { Link } from "react-router";
 import {
   ago,
   ApiError,
@@ -126,11 +125,7 @@ function Password({ account }: { account: AuthConnection }) {
       setCurrent("");
       setNext("");
       setAgain("");
-      setNote(
-        others
-          ? "Password changed. Your other devices have to sign in again."
-          : "Password changed.",
-      );
+      setNote("Password changed.");
     } catch (error) {
       setError(errorMessage(error));
     } finally {
@@ -238,9 +233,7 @@ export function MySettingsPage({
       <Section title="Notifications">
         <DeviceNotices />
         {/* TODO: kernel: notifications per channel (in app, push, email) with presets such as approvals only, exceptions per chat and quiet hours. */}
-        <NotYet>
-          What reaches you on the phone and by email, with quiet hours.
-        </NotYet>
+        <NotYet>Phone and email notifications, quiet hours.</NotYet>
       </Section>
       {authentication && (
         <Devices
@@ -278,11 +271,6 @@ function Computers({
   if (!hosts?.length && !error) return null;
   return (
     <Section title="Computers">
-      <p className="text-sm text-muted-foreground">
-        Sessions run on these computers. On yours, only you start and see
-        sessions, unless you open it: then the others start their own there,
-        with their own accounts, never yours.
-      </p>
       {error && <p className="text-sm text-destructive">{error}</p>}
       <ul className="flex flex-col divide-y">
         {hosts?.map((host) => {
@@ -365,10 +353,7 @@ function Computers({
               )}
               {removing === host.id && (
                 <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-2 text-sm">
-                  <span className="flex-1">
-                    Remove {host.name}? It disconnects, and joining again needs
-                    a new code.
-                  </span>
+                  <span className="flex-1">Remove {host.name}?</span>
                   <Button
                     size="sm"
                     variant="destructive"
@@ -405,9 +390,7 @@ function Computers({
                 </label>
               ) : (
                 <p className="text-xs text-muted-foreground">
-                  {host.open
-                    ? "Open to you: your sessions run there with your own accounts."
-                    : "Closed: only its person starts sessions there."}
+                  {host.open ? "Open" : "Closed"}
                 </p>
               )}
               {!mine && host.open && host.here && (
@@ -462,10 +445,7 @@ function AddComputer({
     return (
       <div className="flex flex-col gap-2 rounded-md border p-3 text-sm">
         <p className="font-medium">Add {made.host.name}</p>
-        <p className="text-muted-foreground">
-          On that computer, with ZeroLux installed, run this within ten minutes;
-          the code works once and is shown only now:
-        </p>
+        <p className="text-muted-foreground">Valid for 10 minutes, once.</p>
         <div className="flex items-center gap-2">
           <code className="min-w-0 flex-1 overflow-x-auto rounded-sm bg-muted px-2 py-1.5 font-mono text-[12px] whitespace-nowrap">
             {command}
@@ -473,21 +453,21 @@ function AddComputer({
           <Copy text={command} className="opacity-100" />
         </div>
         <p className="text-muted-foreground">
-          Then keep it connected with{" "}
+          Then run{" "}
           <code className="font-mono text-[12px]">zerolux host run</code>.
         </p>
         {onlyHere(address) && (
           <p className="text-xs text-attention">
-            This address names this computer only: open ZeroLux at the address
-            the other computer reaches it at, then add it from there.
+            This address works only on this computer; open ZeroLux at an address
+            the other computer can reach.
           </p>
         )}
         <p className="font-mono text-[11px] text-faint">
           {joining?.online
-            ? "Joined and online."
+            ? "Online"
             : joining?.joined
-              ? "Joined: waiting for it to come online…"
-              : "Waiting for it to join…"}
+              ? "Joined, offline"
+              : "Waiting to join…"}
         </p>
         <Button
           size="sm"
@@ -513,8 +493,8 @@ function AddComputer({
         }}
       >
         <Input
-          aria-label="Its name"
-          placeholder="Its name, e.g. Studio Mac"
+          aria-label="Computer name"
+          placeholder="Studio Mac"
           value={naming}
           autoFocus
           maxLength={100}
@@ -560,12 +540,11 @@ function DeviceNotices() {
   if (permission !== "granted")
     return (
       <div className="flex flex-wrap items-center gap-3">
-        <p className="text-sm text-muted-foreground">
-          {permission === "denied"
-            ? "Notifications are blocked for this page in the browser's settings."
-            : "Get a notification on this device when a session needs you or finishes, unless you are looking at it."}
-        </p>
-        {permission !== "denied" && (
+        {permission === "denied" ? (
+          <p className="text-sm text-muted-foreground">
+            Notifications are blocked in this browser.
+          </p>
+        ) : (
           <Button
             size="sm"
             onClick={() =>
@@ -581,13 +560,10 @@ function DeviceNotices() {
     );
   return (
     <fieldset className="flex flex-col gap-3">
-      <legend className="mb-3 text-sm text-muted-foreground">
-        On this device, unless you are looking at the session:
-      </legend>
       {(
         [
-          ["needs", "When a session needs you: approvals, questions, errors"],
-          ["finished", "When a session finishes its work"],
+          ["needs", "Session needs you"],
+          ["finished", "Session finished"],
         ] as const
       ).map(([key, label]) => (
         <Label key={key} className="font-normal">
@@ -659,9 +635,7 @@ function Devices({
             });
           }}
         >
-          <Label htmlFor="devices-password">
-            Confirm your password to see where you are signed in
-          </Label>
+          <Label htmlFor="devices-password">Password</Label>
           <div className="flex gap-2">
             <Input
               id="devices-password"
@@ -754,7 +728,6 @@ function Appearance() {
               key={t.id}
               role="radio"
               aria-checked={theme === t.id}
-              title={t.description}
               variant={choice(theme === t.id)}
               size="sm"
               onClick={() => chooseTheme(t.id)}
@@ -827,13 +800,11 @@ export function AdministrationPage({
         />
       </Section>
       <Section title="Features">
-        <p className="text-sm text-muted-foreground">
-          What this workspace's kernel
-          {kernel.version && (
-            <span className="font-mono"> {kernel.version}</span>
-          )}{" "}
-          can do today.
-        </p>
+        {kernel.version && (
+          <p className="text-sm text-muted-foreground">
+            Kernel <span className="font-mono">{kernel.version}</span>
+          </p>
+        )}
         <ul className="divide-y rounded-lg border">
           {capabilityStatus(kernel.capabilities).map((feature) => (
             <li
@@ -843,11 +814,6 @@ export function AdministrationPage({
             >
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="text-sm font-medium">{feature.name}</span>
-                {feature.description && (
-                  <span className="text-xs text-muted-foreground">
-                    {feature.description}
-                  </span>
-                )}
               </span>
               <span
                 className={
@@ -864,31 +830,19 @@ export function AdministrationPage({
       </Section>
       <Section title="People">
         {/* TODO: kernel: invite people, give them roles and say who reports to whom. */}
-        <NotYet>Inviting people, their roles and who reports to whom.</NotYet>
+        <NotYet>Invitations, roles and reporting lines.</NotYet>
       </Section>
       <Section title="Agents">
         {/* TODO: kernel: instructions for every agent, and the model and effort new agents start with. */}
-        <NotYet>
-          Instructions for every agent, and the model and effort new agents
-          start with.
-        </NotYet>
-        <p className="text-sm text-muted-foreground">
-          Each agent's own model and effort are on its profile in{" "}
-          <Link to="/team" className="underline underline-offset-4">
-            Team
-          </Link>
-          .
-        </p>
+        <NotYet>Instructions for every agent, default model and effort.</NotYet>
       </Section>
       <Section title="Modules">
         {/* TODO: kernel: modules the workspace turns on, and themes beyond the four built in. */}
-        <NotYet>The modules this workspace uses, and community themes.</NotYet>
+        <NotYet>Modules and community themes.</NotYet>
       </Section>
       <Section title="Storage and updates">
         {/* TODO: kernel: where files are kept, signed updates and the backup taken before each. */}
-        <NotYet>
-          Where files are kept, signed updates and the backup before each one.
-        </NotYet>
+        <NotYet>File storage, signed updates and backups.</NotYet>
       </Section>
     </Settings>
   );

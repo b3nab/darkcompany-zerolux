@@ -160,16 +160,13 @@ export function ScheduleForm({
       </div>
       <Textarea
         aria-label="Prompt"
-        placeholder="What the session receives each time"
+        placeholder="Prompt"
         value={prompt}
         rows={3}
         onChange={(event) => setPrompt(event.target.value)}
         className="text-sm"
       />
-      <p className="text-xs text-faint">
-        {scheduleWords(cron)}, in the time of the computer running ZeroLux. The
-        session receives it after the turn in progress.
-      </p>
+      <p className="text-xs text-faint">{scheduleWords(cron)}</p>
       <div className="flex gap-2">
         <Button
           type="submit"
@@ -234,10 +231,7 @@ export function SessionSchedules({
       </div>
       {error && <p className="text-xs text-attention">{error}</p>}
       {schedules?.length === 0 && !editing && (
-        <p className="text-sm text-muted-foreground">
-          Nothing is scheduled. A schedule sends the session your words at the
-          times you choose.
-        </p>
+        <p className="text-sm text-muted-foreground">Nothing scheduled.</p>
       )}
       {!!schedules?.length && (
         <ul className="flex flex-col divide-y">

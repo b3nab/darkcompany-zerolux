@@ -152,9 +152,7 @@ impl ChatRuntime {
                     Some(text) => control.requeue(item, text).await,
                     None => control.unqueue(item).await,
                 },
-                _ => bail!(
-                    "This harness keeps its queue to itself: a waiting input cannot be changed from ZeroLux"
-                ),
+                _ => bail!("This harness's queue cannot be changed from ZeroLux"),
             }
         }
         .await
@@ -324,7 +322,7 @@ impl ChatRuntime {
                 .context("The Claude Code inbox is unavailable")?;
             ensure!(
                 mode == InputMode::Steer && images.is_empty(),
-                "Claude Code in a terminal takes text as it comes, without images, queueing or interrupting"
+                "Claude Code in a terminal takes text only"
             );
             return crate::claude::write_inbox(std::path::Path::new(socket), text).await;
         }

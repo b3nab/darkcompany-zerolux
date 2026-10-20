@@ -40,11 +40,11 @@ impl std::fmt::Display for CodexStartFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Uncertain => f.write_str(
-                "Codex did not confirm the new session; whether it started one is uncertain. Look again under Hire before starting another.",
+                "Codex did not confirm the new session; check Hire before starting another.",
             ),
             Self::Unlinked { thread_id } => write!(
                 f,
-                "Codex started thread {thread_id} but ZeroLux could not link it; it is live in Codex and can be hired under Hire"
+                "Codex started thread {thread_id} but it could not be linked; hire it from Hire"
             ),
         }
     }
@@ -808,12 +808,12 @@ impl CodexDriver {
         ] {
             ensure!(
                 created[field] == current[field],
-                "New Codex context did not preserve {field}; no prompt was submitted"
+                "Codex did not keep {field} in the new session"
             );
         }
         ensure!(
             created["thread"]["environments"] == current["thread"]["environments"],
-            "New Codex context did not preserve environments; no prompt was submitted"
+            "Codex did not keep the environments in the new session"
         );
         Self::attached(self.rpc.clone(), events, created, None)
     }
@@ -917,7 +917,14 @@ impl CodexDriver {
         // Every exit attempts cancellation, scoped to this link's known native delivery IDs.
         let cancellation = self.cancel_owned().await;
         if result.is_err() || cancellation.is_err() {
-            let _ = kernel.status("attention", Some("Codex needs attention. Uncertain messages and decisions have not been resent.")).await;
+            let _ = kernel
+                .status(
+                    "attention",
+                    Some(
+                        "Needs attention. Unconfirmed messages and decisions were not sent again.",
+                    ),
+                )
+                .await;
         }
         cancellation?;
         if *stop.borrow() { Ok(()) } else { result }
@@ -1241,7 +1248,7 @@ impl CodexDriver {
             .map(|d| d.id.clone())
             .collect();
         for id in lost {
-            kernel.receipt(&id, json!({"status":"uncertain","reason":"Codex no longer holds this message: it left its queue before being read. It was not resent."})).await?;
+            kernel.receipt(&id, json!({"status":"uncertain","reason":"Codex dropped this message before reading it; it was not sent again."})).await?;
             for carried in self.deliveries.values_mut() {
                 if carried.native_request_id.as_ref() == Some(&id) {
                     self.settled.insert(carried.id.clone());
@@ -1463,7 +1470,7 @@ impl CodexDriver {
             }
             "mcpServer/elicitation/request" => {
                 let Some(form) = codex_form(params) else {
-                    kernel.status("attention", Some("An MCP server asks for a verification only the native session can give. Open it to answer.")).await?;
+                    kernel.status("attention", Some("An MCP server asks for verification: answer it in the Codex session.")).await?;
                     return Ok(());
                 };
                 (
@@ -1477,7 +1484,12 @@ impl CodexDriver {
                 )
             }
             _ => {
-                kernel.status("attention", Some("Codex is asking for native input this bridge cannot represent. Open the native session to answer.")).await?;
+                kernel
+                    .status(
+                        "attention",
+                        Some("Codex asks for input: answer it in the Codex session."),
+                    )
+                    .await?;
                 return Ok(());
             }
         };
@@ -1673,7 +1685,7 @@ impl CodexDriver {
         }
         ensure!(
             !failed,
-            "Codex link stopped, but cancellation of its native work could not be confirmed"
+            "Stopped. Codex did not confirm it stopped working."
         );
         Ok(())
     }
@@ -1683,7 +1695,7 @@ fn context_params(settings: &Value) -> Result<Value> {
     let profile = settings["activePermissionProfile"]["id"]
         .as_str()
         .filter(|id| !id.is_empty())
-        .context("This Codex session does not expose a reusable permission profile")?;
+        .context("This Codex session has no permission profile to reuse")?;
     for field in [
         "cwd",
         "model",

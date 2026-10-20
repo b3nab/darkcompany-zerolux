@@ -42,7 +42,7 @@ const shownLabels: Record<Shown, string> = {
   archived: "Archived",
 };
 const empty: Record<Shown, string> = {
-  live: "No live sessions. Start one with the pen above.",
+  live: "No live sessions.",
   stopped: "No stopped sessions.",
   archived: "Nothing archived.",
 };
@@ -165,9 +165,7 @@ export default function Console() {
           <Text className="p-5 text-base leading-6 text-faint">
             {query.trim()
               ? `No ${shownLabels[shown].toLowerCase()} session matches "${query.trim()}".`
-              : shown === "live" && !starts
-                ? "No live sessions. Those shared with you appear here."
-                : empty[shown]}
+              : empty[shown]}
           </Text>
         }
         renderItem={({ item, index }) => {
@@ -228,9 +226,7 @@ function HistoryResults({ query, kernel }: { query: string; kernel: string }) {
       ) : searching && !results ? (
         <Text className="px-5 text-sm text-faint">Searching…</Text>
       ) : results && !results.length ? (
-        <Text className="px-5 text-sm text-faint">
-          Nothing they said or did matches.
-        </Text>
+        <Text className="px-5 text-sm text-faint">No matches.</Text>
       ) : null}
       {results?.map((hit) => (
         <Pressable
@@ -272,8 +268,7 @@ function HistoryResults({ query, kernel }: { query: string; kernel: string }) {
       ))}
       {truncated ? (
         <Text className="px-5 pt-1 text-xs text-faint">
-          Not every session was searched: the search ran out of time, or a
-          computer with sessions is offline.
+          Some sessions were not searched.
         </Text>
       ) : null}
     </View>

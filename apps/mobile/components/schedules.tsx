@@ -111,10 +111,7 @@ export function Schedules({ session }: { session: ChatSession }) {
           ))}
         </View>
       ) : schedules.schedules ? (
-        <Text className="text-xs text-faint">
-          Nothing scheduled. A schedule sends this session your words at the
-          times you choose.
-        </Text>
+        <Text className="text-xs text-faint">Nothing scheduled.</Text>
       ) : null}
       <Modal
         visible={editing !== undefined}
@@ -285,12 +282,9 @@ function ScheduleForm({
             textAlignVertical="top"
             className="min-h-32 rounded-md border border-input bg-card px-3 py-2.5 font-sans text-[15px] leading-[21px] text-foreground"
           />
-          <Text className="text-xs text-faint">
-            {cron
-              ? `${scheduleWords(cron)}, in the time of the computer running ZeroLux. `
-              : ""}
-            The words reach the session as yours, after the turn in progress.
-          </Text>
+          {cron ? (
+            <Text className="text-xs text-faint">{scheduleWords(cron)}</Text>
+          ) : null}
         </View>
         {error ? (
           <Text className="text-sm text-destructive">{error}</Text>

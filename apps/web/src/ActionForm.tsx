@@ -132,7 +132,6 @@ function Field({
           id={id}
           value={text}
           rows={field.kind === "json" ? 5 : 3}
-          placeholder={field.kind === "list" ? "One per line" : undefined}
           onChange={(event) => form.set(field.key, event.target.value)}
           className={
             field.kind === "json" ? "font-mono text-[12.5px]" : undefined

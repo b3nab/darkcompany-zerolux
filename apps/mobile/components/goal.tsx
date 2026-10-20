@@ -140,12 +140,7 @@ export function GoalSection({ session }: { session: ChatSession }) {
       ) : (
         <Text className="text-xs text-faint">No goal.</Text>
       )}
-      <Text
-        className={error ? "text-xs text-destructive" : "text-xs text-faint"}
-      >
-        {error ||
-          "Codex works toward it on its own, turn after turn, until it is done or reaches its budget."}
-      </Text>
+      {error ? <Text className="text-xs text-destructive">{error}</Text> : null}
       <Modal
         visible={editing}
         animationType="slide"

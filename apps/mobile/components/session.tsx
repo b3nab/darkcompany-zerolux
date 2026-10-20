@@ -214,13 +214,6 @@ export function SessionRow({
   );
 }
 
-const shareHints: Record<ShareChoice, string> = {
-  private: "Only you see it.",
-  read: "The workspace's people follow it: its work, its code and its requests.",
-  write:
-    "The workspace's people also work in it, as you do. Its title, budget, sharing, forks and requests stay yours.",
-};
-
 /**
  * In About: who sees the session. Its person keeps it private or shares it with the
  * workspace's people, to read or to work in it; the others see how it was shared with them.
@@ -256,11 +249,7 @@ export function Sharing({ session }: { session: ChatSession }) {
             .catch((e: unknown) => setError(errorMessage(e)));
         }}
       />
-      <Text
-        className={cn("text-xs", error ? "text-destructive" : "text-faint")}
-      >
-        {error || shareHints[choice]}
-      </Text>
+      {error ? <Text className="text-xs text-destructive">{error}</Text> : null}
     </View>
   );
 }
@@ -416,30 +405,22 @@ export function SessionCard({
     }
   };
   const confirmStop = () =>
-    Alert.alert(
-      `Stop ${name}?`,
-      "It will no longer reply in ZeroLux or resume this session. Your chats and their history stay.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Stop",
-          style: "destructive",
-          onPress: () => void perform(() => chat.stop(session.id)),
-        },
-      ],
-    );
+    Alert.alert(`Stop ${name}?`, undefined, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Stop",
+        style: "destructive",
+        onPress: () => void perform(() => chat.stop(session.id)),
+      },
+    ]);
   const confirmTakeover = () =>
-    Alert.alert(
-      `Take over ${name}?`,
-      "The idle terminal closes and the same session continues under ZeroLux: same history, same verified launch profile. Refused if it is working, has queued input or its profile cannot be verified; nothing is killed.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Take over",
-          onPress: () => void perform(() => chat.takeoverPi(session.id)),
-        },
-      ],
-    );
+    Alert.alert(`Take over ${name}?`, "Its terminal closes.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Take over",
+        onPress: () => void perform(() => chat.takeoverPi(session.id)),
+      },
+    ]);
   const harness = harnessLabels[session.harness] ?? session.harness;
   return (
     <View className="gap-2 rounded-lg border border-border bg-card p-3">

@@ -37,17 +37,12 @@ export function TriggerForm({
       </label>
       <Textarea
         aria-label="Prompt"
-        placeholder="What to do then, e.g. Fix what failed"
+        placeholder="Fix what failed"
         value={prompt}
         rows={2}
         onChange={(event) => setPrompt(event.target.value)}
         className="text-sm"
       />
-      <p className="text-xs text-faint">
-        When the CI runs of its current commit have all ended, the session hears{" "}
-        {failuresOnly ? "of a failure" : "how they went"}, each run with its
-        link, then these words, after the turn in progress.
-      </p>
       <div className="flex gap-2">
         <Button type="submit" size="sm" disabled={busy}>
           Save
@@ -189,12 +184,6 @@ export function SessionTriggers({
         )}
       </div>
       {error && <p className="text-xs text-attention">{error}</p>}
-      {triggers?.length === 0 && !editing && (
-        <p className="text-sm text-muted-foreground">
-          The session can hear when the CI of its commit ends, and pick up from
-          there.
-        </p>
-      )}
       {!!triggers?.length && (
         <ul className="flex flex-col divide-y">
           {triggers.map((trigger) =>

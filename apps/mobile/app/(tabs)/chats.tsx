@@ -88,7 +88,7 @@ export default function Chats() {
               ? "Nothing is waiting for you."
               : filter === "groups"
                 ? "No group chats yet."
-                : "No chats yet. Start one with the pencil above."}
+                : "No chats yet."}
           </Text>
         }
         renderItem={({ item: c }) => {

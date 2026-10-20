@@ -130,7 +130,7 @@ export default function Tonight() {
           <Eyebrow>Needs you · {needs.length}</Eyebrow>
           {needs.length === 0 && (
             <Text className="text-sm text-muted-foreground">
-              Nothing is waiting on you. Agents ask here when that changes.
+              Nothing is waiting on you.
             </Text>
           )}
           {needs.map((need) => {
@@ -269,7 +269,7 @@ export default function Tonight() {
           <Eyebrow>Agent spend · this month</Eyebrow>
           {/* TODO: kernel: each agent's monthly spend and budget, from its harness usage; one meter per owner here. */}
           <Text className="text-sm text-muted-foreground">
-            Spend and budgets are not tracked yet.
+            Not tracked yet.
           </Text>
         </View>
       </ScrollView>

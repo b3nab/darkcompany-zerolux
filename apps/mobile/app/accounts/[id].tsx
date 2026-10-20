@@ -46,10 +46,6 @@ export default function AccountsPage() {
         contentContainerClassName="gap-6 px-5 py-5"
         keyboardShouldPersistTaps="handled"
       >
-        <Text className="text-[15px] leading-[22px] text-muted-foreground">
-          The sessions you start on this computer run with these accounts, with
-          their own settings and history, never with the computer's.
-        </Text>
         {error || accounts.error ? (
           <Text className="text-sm text-destructive">
             {error || accounts.error}
@@ -173,10 +169,10 @@ function Claude({
       ready={method !== null}
       status={
         method === "api_key"
-          ? "Connected with your API key."
+          ? "Connected with your API key"
           : method === "oauth_token"
-            ? "Connected with your subscription token."
-            : "Not connected: an API key, or a subscription token."
+            ? "Connected with your subscription token"
+            : "Not connected"
       }
     >
       <Segmented<"api_key" | "oauth_token">
@@ -196,12 +192,6 @@ function Claude({
           save(kind === "api_key" ? { api_key: value } : { oauth_token: value })
         }
       />
-      {kind === "oauth_token" ? (
-        <Text className="text-xs text-attention">
-          Anthropic's terms limit using claude.ai subscriptions through other
-          products; an API key is always within them.
-        </Text>
-      ) : null}
       {method !== null ? (
         <Pressable
           accessibilityRole="button"
@@ -266,7 +256,7 @@ function Codex({
               ]
                 .filter(Boolean)
                 .join(" · ")
-            : "Not connected: sign in with ChatGPT, or an API key."
+            : "Not connected"
       }
     >
       {codex.signed_in ? (
@@ -305,10 +295,7 @@ function Codex({
               {code.verification_url}
             </Text>
           </Pressable>
-          <Text className="text-xs text-faint">
-            Waiting for the sign-in… ChatGPT asks to allow device codes in its
-            security settings.
-          </Text>
+          <Text className="text-xs text-faint">Waiting for the sign-in…</Text>
         </View>
       ) : (
         <>
@@ -341,9 +328,7 @@ function Pi({
       title="pi"
       ready={providers.length > 0}
       status={
-        providers.length
-          ? `Keys for ${providers.join(", ")}.`
-          : "Not connected: a key for one of its providers."
+        providers.length ? `Keys for ${providers.join(", ")}` : "Not connected"
       }
     >
       {providers.map((name) => (

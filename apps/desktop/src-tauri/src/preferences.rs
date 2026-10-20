@@ -16,7 +16,7 @@ pub enum SavedConnection {
 pub fn load(root: &Path) -> Result<Option<SavedConnection>> {
     let value = match std::fs::read(root.join("connection.json")) {
         Ok(bytes) => serde_json::from_slice::<SavedConnection>(&bytes)
-            .context("Invalid desktop connection settings; they were not reset")?,
+            .context("Invalid desktop connection settings")?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).context("Read desktop connection settings"),
     };

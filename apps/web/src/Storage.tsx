@@ -217,7 +217,7 @@ export function Storage({
         )}
       >
         <CloudUploadIcon className="size-4.5" />
-        Drop files here to share them with the company
+        Drop files here
       </div>
     </Page>
   );

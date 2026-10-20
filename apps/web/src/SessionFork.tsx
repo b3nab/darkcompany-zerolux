@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -55,10 +54,6 @@ export function InputActions({
           onChange={(event) => setEditing(event.target.value)}
           className="text-sm"
         />
-        <p className="text-xs text-faint">
-          A new session goes on from before this input, with these words; this
-          one stays as it is.
-        </p>
         <div className="flex justify-end gap-2">
           <Button
             type="button"
@@ -83,12 +78,12 @@ export function InputActions({
         {rewinding.canRewind ? (
           <>
             <p>
-              Put {rewinding.filesChanged?.length ?? 0}{" "}
-              {rewinding.filesChanged?.length === 1 ? "file" : "files"} back as
-              they were before this input
+              Rewind {rewinding.filesChanged?.length ?? 0}{" "}
+              {rewinding.filesChanged?.length === 1 ? "file" : "files"} to
+              before this input
               {rewinding.insertions !== undefined &&
                 ` (+${rewinding.insertions} −${rewinding.deletions ?? 0})`}
-              ? The session's conversation stays as it is.
+              ?
             </p>
             {!!rewinding.filesChanged?.length && (
               <ul className="font-mono text-[11px] text-muted-foreground">
@@ -101,7 +96,7 @@ export function InputActions({
             )}
           </>
         ) : (
-          <p>The files cannot be put back: {rewinding.error}</p>
+          <p>Cannot rewind: {rewinding.error}</p>
         )}
         <div className="flex gap-2">
           {rewinding.canRewind && (
@@ -161,13 +156,11 @@ export function InputActions({
 
 /** A question asked in a fork of the session, so the session itself is not touched. */
 export function AskOnTheSide({
-  name,
   open,
   close,
   fork,
   busy,
 }: {
-  name: string;
   open: boolean;
   close: () => void;
   fork: Fork;
@@ -179,10 +172,6 @@ export function AskOnTheSide({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Ask on the side</DialogTitle>
-          <DialogDescription>
-            A new session goes on from all of {name}'s work and takes the
-            question; {name}'s session is not touched.
-          </DialogDescription>
         </DialogHeader>
         <form
           className="flex flex-col gap-3"
@@ -198,7 +187,7 @@ export function AskOnTheSide({
         >
           <Textarea
             aria-label="Question"
-            placeholder="What do you want to ask?"
+            placeholder="Question"
             value={question}
             rows={3}
             autoFocus

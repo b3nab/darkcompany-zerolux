@@ -131,10 +131,7 @@ export function ChatAbout({
         </ul>
         {files.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            {storage.error ||
-              (storage.available
-                ? "No files shared here yet."
-                : "This kernel has no storage yet.")}
+            {storage.error || (storage.available ? "No files" : "No storage")}
           </p>
         )}
       </section>

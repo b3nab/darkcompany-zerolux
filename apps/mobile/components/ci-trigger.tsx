@@ -131,16 +131,11 @@ export function CiTrigger({ session }: { session: ChatSession }) {
           <Text>Tell it when CI ends</Text>
         </Button>
       ) : null}
-      <Text
-        className={cn(
-          "text-xs",
-          error || triggers.error ? "text-destructive" : "text-faint",
-        )}
-      >
-        {error ||
-          triggers.error ||
-          "Each minute ZeroLux asks GitHub about the CI of its folder's current commit; when all runs end, the session hears the results after its turn."}
-      </Text>
+      {error || triggers.error ? (
+        <Text className="text-xs text-destructive">
+          {error || triggers.error}
+        </Text>
+      ) : null}
     </View>
   );
 }

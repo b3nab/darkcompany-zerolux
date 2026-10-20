@@ -3,20 +3,18 @@ id = "zerolux.voice"
 name = "Voice"
 version = "0.1.0"
 publisher = "zerolux"
-description = "Speech to text with the model you choose, and each agent's own voice"
+description = "Speech to text and agents' voices"
 
-# Its models run in Python, in an environment uv prepares the first time it starts.
 [process]
 command = ["uv", "run", "--quiet", "--script", "main.py"]
 start_seconds = 1800
 
 [settings.transcription]
 type = "choice"
-label = "Transcription"
-description = "The model that turns speech into text"
+label = "Transcription model"
 default = "whisper"
 options = [
-  { value = "whisper", label = "Whisper large-v3 turbo: writes names right" },
-  { value = "parakeet", label = "Parakeet v3: the fastest, quiet on noise" },
-  { value = "qwen3", label = "Qwen3-ASR 0.6B: steady on noise (Mac only)" },
+  { value = "whisper", label = "Whisper large-v3 turbo" },
+  { value = "parakeet", label = "Parakeet v3" },
+  { value = "qwen3", label = "Qwen3-ASR 0.6B (Mac)" },
 ]

@@ -34,7 +34,7 @@ pub enum Error {
     OnboardingRequired,
     #[error("Not found")]
     NotFound,
-    #[error("The requested operation conflicts with the current state; refresh and try again")]
+    #[error("This changed meanwhile; refresh and try again")]
     Conflict,
     #[error("The owner stopped this session while it was being relinked")]
     StoppedByOwner,

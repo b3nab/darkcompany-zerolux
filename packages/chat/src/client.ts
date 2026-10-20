@@ -8,28 +8,25 @@ export const harnessLabels: Record<Harness, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
 };
-/** How a Claude Code session ZeroLux runs asks for permission, as the owner chooses it. */
+/** Claude Code's permission modes, by their names. */
 export const claudeModes = {
-  default: "Asks you when Claude Code needs your permission",
-  acceptEdits: "Edits files without asking",
-  plan: "Plans and explains; changes nothing",
-  auto: "Claude Code decides on its own",
+  default: "Default",
+  acceptEdits: "Accept edits",
+  plan: "Plan",
+  auto: "Auto",
 } as const;
 export type ClaudeMode = keyof typeof claudeModes;
-/**
- * What the owner may choose for a Codex session ZeroLux starts, in Codex's own terms. Left
- * unset, Codex applies the user's own configuration: ZeroLux names no default of its own.
- */
+/** Codex's approval policies and sandboxes, by their names; unset, Codex uses its own configuration. */
 export const codexApprovalPolicies = {
-  untrusted: "Asks you before anything not known to be safe",
-  "on-request": "Asks you when Codex decides it needs to",
-  never: "Never asks you",
+  untrusted: "Untrusted",
+  "on-request": "On request",
+  never: "Never",
 } as const;
 export type CodexApprovalPolicy = keyof typeof codexApprovalPolicies;
 export const codexSandboxes = {
-  "read-only": "Reads only",
-  "workspace-write": "Writes inside the folder",
-  "danger-full-access": "Full access, no sandbox",
+  "read-only": "Read only",
+  "workspace-write": "Workspace write",
+  "danger-full-access": "Full access",
 } as const;
 export type CodexSandbox = keyof typeof codexSandboxes;
 export interface Actor extends CreationDate {

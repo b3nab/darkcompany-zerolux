@@ -295,9 +295,9 @@ async fn live_pi_with_descriptors(registry: &Path) -> Result<(Vec<Candidate>, Ve
             None,
             ready,
             if taking_over {
-                "This terminal pi is handing over its execution; recovery waits for its process to exit."
+                "Taking over: waiting for pi to exit in its terminal."
             } else {
-                "Existing session ready. Native extension dialogs may still require pi."
+                "Ready"
             },
         );
         found.resumable = !taking_over;
@@ -364,11 +364,18 @@ async fn discover_pi_in(registry: &Path) -> Result<(Vec<Candidate>, Option<Strin
             continue;
         };
         let workspace = info["workspace"].as_str().unwrap_or("").to_owned();
-        candidates.push(candidate(NativeSessionTarget {
-            harness: Harness::Pi, native_session_id: id, title: title(info, "title", "pi session"),
-            workspace, native_locator: json!({"session_file":path}),
-        }, info["last_activity_at"].as_i64(), false,
-        "No live ZeroLux extension was found for this session. Loading the extension requires native pi trust/reload; this release will not start a replacement process."));
+        candidates.push(candidate(
+            NativeSessionTarget {
+                harness: Harness::Pi,
+                native_session_id: id,
+                title: title(info, "title", "pi session"),
+                workspace,
+                native_locator: json!({"session_file":path}),
+            },
+            info["last_activity_at"].as_i64(),
+            false,
+            "ZeroLux's pi extension is not loaded in this session",
+        ));
     }
     Ok((candidates, None))
 }
@@ -485,7 +492,7 @@ async fn claude_history_in(projects: &Path) -> Result<Vec<Candidate>> {
 }
 
 /// What a connected Claude Code session can and cannot do, stated up front.
-const CLAUDE_READY: &str = "Claude Code inbox verified. This terminal connection receives messages but has no ZeroLux send or thread tools. After the terminal exits, ZeroLux resumes the saved conversation through the SDK. Stop prevents recovery but cannot interrupt a turn in the terminal.";
+const CLAUDE_READY: &str = "Ready";
 
 async fn discover_claude(saved: bool) -> Result<Vec<Candidate>> {
     let mut candidates = claude_candidates(&command_json("claude", &["agents", "--json"]).await?)?;
@@ -574,13 +581,24 @@ async fn codex_candidates(endpoint: &str) -> Result<Vec<Candidate>> {
                 && matches!(actual["status"]["type"].as_str(), Some("idle" | "active"))
                 && actual["canAcceptDirectInput"] == true
                 && actual["ephemeral"] == false;
-            candidates.push(candidate(NativeSessionTarget {
-                harness: Harness::Codex, native_session_id: id,
-                title: title(actual, "name", "Codex thread"), workspace: text(actual, "cwd")?,
-                native_locator: json!({"endpoint":endpoint}),
-            }, actual["updatedAt"].as_i64().and_then(|time| time.checked_mul(1000)), ready,
-            if ready { "Loaded in this Codex runtime. A new isolated context requires a verified launch profile." }
-            else { "Not currently attachable in the discovered Codex runtime. No runtime or thread will be started implicitly." }));
+            candidates.push(candidate(
+                NativeSessionTarget {
+                    harness: Harness::Codex,
+                    native_session_id: id,
+                    title: title(actual, "name", "Codex thread"),
+                    workspace: text(actual, "cwd")?,
+                    native_locator: json!({"endpoint":endpoint}),
+                },
+                actual["updatedAt"]
+                    .as_i64()
+                    .and_then(|time| time.checked_mul(1000)),
+                ready,
+                if ready {
+                    "Running in Codex"
+                } else {
+                    "Not available in Codex now"
+                },
+            ));
         }
         cursor = page["nextCursor"].clone();
         if cursor.is_null() {
@@ -654,7 +672,7 @@ pub async fn ensure_codex_daemon_with(
         }
     })
     .await
-    .context("The Codex daemon started but its control socket does not answer")?;
+    .context("Codex's server does not answer")?;
     Ok(())
 }
 
@@ -759,7 +777,7 @@ pub(crate) async fn ensure_pi_stopped(agent: &Path, native: &str) -> Result<()> 
             .context("Pi discovery cannot establish native process death")?;
         ensure!(
             !crate::platform::alive(pid as u32),
-            "A native pi process still claims this session; no replacement was started"
+            "pi is still running this session"
         );
     }
     Ok(())

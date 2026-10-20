@@ -172,9 +172,7 @@ function Lobby({
         ))}
         {meetings.meetings.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            {ready
-              ? "No meeting right now."
-              : "This kernel has no meeting rooms yet."}
+            {ready ? "No live meetings" : "Meetings unavailable"}
           </p>
         )}
       </section>
@@ -350,10 +348,6 @@ function Room({
               Invite agent
             </PopoverTrigger>
             <PopoverContent side="top">
-              <p className="px-1 text-xs text-muted-foreground">
-                Agents join with their owner's place in the company: they listen
-                and answer.
-              </p>
               {invitable.map((agent) => (
                 <button
                   key={agent.id}

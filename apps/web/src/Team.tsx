@@ -137,7 +137,7 @@ export function Hire({
             </Presence>
           ) : d.availability === "attention" ? (
             <Presence tone="attention" className="max-w-sm">
-              {d.reason ?? "Cannot be connected right now"}
+              {d.reason ?? "Unavailable"}
             </Presence>
           ) : hiring !== d.id ? (
             <Button disabled={busy} onClick={() => setHiring(d.id)}>
@@ -211,18 +211,8 @@ export function Hire({
         busy={busy}
         perform={perform}
         heading="Start a new agent"
-        intro="ZeroLux runs it in the folder you choose. What you write in your chats reaches it as yours."
       />
-      <div className="flex flex-col gap-2">
-        <h2 className="text-base font-semibold">
-          Or hire a session you already have
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          ZeroLux looks for your pi, Claude Code and Codex sessions. Pick one:
-          that agent joins your chats with everything it already knows. It can
-          reply and resume this session until you press Stop.
-        </p>
-      </div>
+      <h2 className="text-base font-semibold">Hire an existing session</h2>
       {error && (
         <p role="alert" className="text-sm text-destructive">
           {error}
@@ -234,22 +224,19 @@ export function Hire({
         </p>
       ))}
       {discovery && found.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No sessions found. Start pi, Claude Code or Codex in a project folder,
-          then look again.
-        </p>
+        <p className="text-sm text-muted-foreground">No sessions found</p>
       )}
       {projects(ready)}
       {discovery && ready.length === 0 && unavailable.length > 0 && (
         <p className="text-sm text-muted-foreground">
-          None of your sessions can be hired right now.
+          No sessions can be hired
         </p>
       )}
       {unavailable.length > 0 && (
         <details className="group flex flex-col gap-3">
           <summary className="cursor-pointer text-sm text-muted-foreground">
             {unavailable.length} other session
-            {unavailable.length === 1 ? "" : "s"} can't be hired right now
+            {unavailable.length === 1 ? "" : "s"} can't be hired
           </summary>
           <div className="mt-3 flex flex-col gap-6">
             {projects(unavailable)}
@@ -277,7 +264,6 @@ export function StartSession({
   perform,
   agent: initial = "new",
   heading,
-  intro,
   created,
   className,
   ready,
@@ -299,7 +285,6 @@ export function StartSession({
   /** Who it works for at first: no agent, or a new one. */
   agent?: "none" | "new";
   heading: string;
-  intro: string;
   /** The session just started, e.g. to open it. */
   created?: (session: ChatSession) => void;
   className?: string;
@@ -384,7 +369,6 @@ export function StartSession({
     >
       <div className="flex flex-col gap-1">
         <h2 className="text-base font-semibold">{heading}</h2>
-        <p className="text-sm text-muted-foreground">{intro}</p>
       </div>
       {computers.length > 0 && (
         <div className="flex flex-col gap-2">
@@ -406,12 +390,6 @@ export function StartSession({
               </NativeSelectOption>
             ))}
           </NativeSelect>
-          {away && (
-            <p className="text-xs text-muted-foreground">
-              On your computer, with its own harnesses: its folders, accounts
-              and settings.
-            </p>
-          )}
         </div>
       )}
       <div className="flex flex-col gap-2">
@@ -453,13 +431,11 @@ export function StartSession({
             setSandbox((agent?.sandbox as CodexSandbox) || "");
           }}
         >
-          <NativeSelectOption value={NO_AGENT}>
-            No agent: only in the Console
-          </NativeSelectOption>
+          <NativeSelectOption value={NO_AGENT}>No agent</NativeSelectOption>
           <NativeSelectOption value="">A new agent</NativeSelectOption>
           {agents.map((a, i) => (
             <NativeSelectOption key={a.id} value={String(i)}>
-              Another session of {a.name}
+              {a.name}
             </NativeSelectOption>
           ))}
         </NativeSelect>
@@ -506,7 +482,7 @@ export function StartSession({
             aria-label="Branch"
             value={branch}
             onChange={(e) => setBranch(e.target.value)}
-            placeholder="Branch: ZeroLux names one if empty"
+            placeholder="Branch"
             maxLength={200}
             className="font-mono"
           />
@@ -545,8 +521,7 @@ export function StartSession({
       </div>
       {!catalog.loading && catalog.data?.models.length === 0 && (
         <p className="text-xs text-muted-foreground">
-          Connect this harness to load its model choices. You can start with its
-          own settings.
+          Connect this harness to load its models.
         </p>
       )}
       {catalog.error && (
@@ -607,15 +582,10 @@ export function StartSession({
             </NativeSelect>
           </div>
         </>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          Uses pi's own tools and project settings.
-        </p>
-      )}
+      ) : null}
       {ready && !away && !ready(harness) && (
         <p className="rounded-md bg-attention/10 p-3 text-sm">
-          Your sessions on this computer use your own accounts, and{" "}
-          {harnessLabels[harness]} has none of yours yet:{" "}
+          {harnessLabels[harness]} has no account of yours on this computer:{" "}
           <Link to="/settings" className="underline underline-offset-4">
             connect it in Settings
           </Link>
@@ -1060,7 +1030,7 @@ export function AgentSettingsForm({
               <NativeSelectOption value="" disabled>
                 {changes.model && key === "effort"
                   ? "Native choice"
-                  : "The harness's own default"}
+                  : "Harness default"}
               </NativeSelectOption>
               {value && !Object.hasOwn(options, value) && (
                 <NativeSelectOption value={value} disabled>
@@ -1076,9 +1046,6 @@ export function AgentSettingsForm({
           </div>
         );
       })}
-      <p className="text-xs text-muted-foreground">
-        For its new sessions; each session changes its own in the Console.
-      </p>
       {native.error && (
         <p role="alert" className="text-sm text-destructive">
           {native.error}
@@ -1160,14 +1127,10 @@ export function HireForm({
           <NativeSelectOption value="">A new agent</NativeSelectOption>
           {agents.map((a) => (
             <NativeSelectOption key={a.id} value={a.id}>
-              {a.id === previous
-                ? `${a.name} again, back in their chats`
-                : `Another session of ${a.name}`}
+              {a.name}
             </NativeSelectOption>
           ))}
-          <NativeSelectOption value={NO_AGENT}>
-            No agent: only in the Console
-          </NativeSelectOption>
+          <NativeSelectOption value={NO_AGENT}>No agent</NativeSelectOption>
         </NativeSelect>
       </div>
       {!actorId && (
@@ -1191,15 +1154,6 @@ export function HireForm({
           Cancel
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground">
-        {actorId === NO_AGENT
-          ? "It opens in the Console: you follow and steer it there, no agent joins your chats."
-          : `${
-              actorId
-                ? agents.find((a) => a.id === actorId)?.name
-                : name.trim() || label
-            } will be able to reply and resume this session until you press Stop.`}
-      </p>
     </form>
   );
 }
@@ -1437,9 +1391,7 @@ export function SessionCard({
       {confirming && (
         <div className="flex flex-col gap-3 rounded-lg bg-attention/10 p-3">
           <p className="text-sm">
-            {confirming === "takeover"
-              ? `Close ${name}'s idle pi terminal and continue the same session under ZeroLux? Work and queued messages must finish first; clear terminal drafts and dialogs. Its saved history and launch profile must be verified. No process is force-killed.`
-              : `Stop ${name}? It will no longer reply in ZeroLux or resume this session. Your chats and their history stay.`}
+            {confirming === "takeover" ? `Take over ${name}?` : `Stop ${name}?`}
           </p>
           <div className="flex gap-2">
             <Button
@@ -1450,7 +1402,7 @@ export function SessionCard({
               {confirming === "stop" ? "Stop" : "Take over"} {name}
             </Button>
             <Button variant="outline" onClick={() => setConfirming(undefined)}>
-              Keep working
+              Cancel
             </Button>
           </div>
         </div>

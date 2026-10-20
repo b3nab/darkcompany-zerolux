@@ -133,7 +133,7 @@ export default function ExtensionPage() {
                 onPress={() =>
                   Alert.alert(
                     `Remove ${extension.name}?`,
-                    "Its actions, settings and parts go away from the workspace.",
+                    "Its settings and data are deleted.",
                     [
                       { text: "Cancel", style: "cancel" },
                       {

@@ -125,7 +125,7 @@ function QuestionInput({
             type={question.secret ? "password" : "text"}
             placeholder={
               question.placeholder ??
-              (question.options.length ? "Or write your answer" : undefined)
+              (question.options.length ? "Other" : undefined)
             }
             value={text}
             onChange={(e) => setText(e.target.value)}

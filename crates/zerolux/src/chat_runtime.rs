@@ -249,13 +249,9 @@ impl NativeDriver {
 
 #[derive(Debug, thiserror::Error)]
 pub enum PiStartFailure {
-    #[error(
-        "Pi creation was not confirmed. Inspect native sessions before starting another; no creation was retried."
-    )]
+    #[error("pi did not confirm the new session; check Hire before starting another")]
     Uncertain,
-    #[error(
-        "Pi prepared session {native_session_id}, but ZeroLux could not link it. Its identity was retained; no replacement was created."
-    )]
+    #[error("pi started session {native_session_id} but it could not be linked; hire it from Hire")]
     Unlinked { native_session_id: String },
 }
 
@@ -470,7 +466,7 @@ impl ChatRuntime {
         }
         let interrupted = self.interrupt(&owner, id).await;
         let reason = format!(
-            "The session reached its budget of ${budget:.2} (${cost:.2} so far){}. Raise the budget to let it go on.",
+            "Budget of ${budget:.2} reached (${cost:.2} spent){}. Raise it to continue.",
             match interrupted {
                 Ok(true) => "; its turn was stopped",
                 Ok(false) => "",
@@ -1108,7 +1104,7 @@ impl ChatRuntime {
             .await?;
         let live = sessions::resolve_linked("pi", &session.native_session_id)
             .await
-            .context("The terminal pi is unavailable; no native process was closed or started")?;
+            .context("The terminal pi is unavailable")?;
         let target = self.pi_target(who, &session, Some(live)).await?;
         let path = target.native_locator["descriptor"]
             .as_str()
@@ -1122,7 +1118,7 @@ impl ChatRuntime {
         let state = sessions::control(&record, serde_json::json!({"method":"describe"})).await?;
         ensure!(
             state["instance_id"] == record.instance_id && state["takeover"] == 1,
-            "This native pi does not support terminal takeover; update its extension first"
+            "Update pi's ZeroLux extension to take over its terminal"
         );
         let workspace = self.store.workspace_info().await?;
         let mut request = serde_json::json!({"method":"takeover", "check":true,
@@ -1130,24 +1126,31 @@ impl ChatRuntime {
             "native_session_id":session.native_session_id, "workspace":session.workspace,
             "session_file":target.native_locator["session_file"]});
         if sessions::control(&record, request.clone()).await?["accepted"] != true {
-            return Err(Error::Invalid("Let terminal pi finish its work, queue, drafts and dialogs. Its saved history and launch profile must be verifiable and no other workspace may be linked.".into()).into());
+            return Err(Error::Invalid(
+                "Finish pi's work, queue, drafts and dialogs in its terminal first".into(),
+            )
+            .into());
         }
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
         // Durable recovery intent precedes shutdown. Owner Stop wins this write and the
         // extension's final authenticated inbox check. No token or input is replayed.
-        self.store.set_chat_session_status(who, id, ChatSessionStatus {
-            status: "attention".into(),
-            reason: Some("Moving this idle terminal pi under ZeroLux; recovery waits for its native process to exit.".into()),
-        }).await?;
+        self.store
+            .set_chat_session_status(
+                who,
+                id,
+                ChatSessionStatus {
+                    status: "attention".into(),
+                    reason: Some("Taking over: waiting for pi to exit in its terminal.".into()),
+                },
+            )
+            .await?;
         self.changed();
         request["check"] = serde_json::json!(false);
-        let outcome = sessions::control(&record, request).await.context(
-            "Pi takeover was not confirmed; inspect the session before repeating it. No native closure was retried.")?;
+        let outcome = sessions::control(&record, request)
+            .await
+            .context("pi did not confirm the takeover; check the session before trying again")?;
         if outcome["accepted"] != true {
-            return Err(Error::Invalid(
-                "The terminal could not confirm an idle takeover; no shutdown was retried.".into(),
-            )
-            .into());
+            return Err(Error::Invalid("pi did not confirm the takeover".into()).into());
         }
         self.store.chat_session(who, id).await.map_err(Into::into)
     }
@@ -1176,14 +1179,11 @@ impl ChatRuntime {
                 native_locator: locator,
             }
         };
-        ensure!(
-            target.workspace == session.workspace,
-            "The entrusted pi workspace changed; no other folder was selected"
-        );
+        ensure!(target.workspace == session.workspace, "pi's folder changed");
         if let Some(file) = saved["session_file"].as_str() {
             ensure!(
                 target.native_locator["session_file"].as_str() == Some(file),
-                "The entrusted pi history locator changed; no other file was selected"
+                "pi's session file changed"
             );
         }
         // Still with the person's own pi.
@@ -1273,7 +1273,7 @@ impl ChatRuntime {
                         Ok(target) => target,
                         Err(error) => {
                             self.retried(&session.id, false);
-                            tracing::warn!(session_id=session.id, error=%error, "Pi continuity metadata unavailable; no native process started");
+                            tracing::warn!(session_id=session.id, error=%error, "pi's saved session is unavailable");
                             continue;
                         }
                     }
@@ -1522,10 +1522,18 @@ impl ChatRuntime {
                 && !*stop.borrow()
                 && let Ok(owner) = store.session_person(&session_id).await
             {
-                let _ = store.set_chat_session_status(&owner, &session_id, ChatSessionStatus {
-                        status: "attention".into(),
-                        reason: Some("The native link needs attention. Uncertain messages have not been resent.".into()),
-                    }).await;
+                let _ = store
+                    .set_chat_session_status(
+                        &owner,
+                        &session_id,
+                        ChatSessionStatus {
+                            status: "attention".into(),
+                            reason: Some(
+                                "Needs attention. Unconfirmed messages were not sent again.".into(),
+                            ),
+                        },
+                    )
+                    .await;
                 changed.notify_one();
             }
             finished.send_replace(true);
@@ -1628,7 +1636,11 @@ impl ChatRuntime {
                 stop: stopper,
                 task,
                 subscriber: None,
-                stop_note: if owned { None } else { Some("The chat link is stopped and its token revoked. Native cancellation was not confirmed; pi may continue its native turn.") },
+                stop_note: if owned {
+                    None
+                } else {
+                    Some("Stopped. pi did not confirm it stopped working.")
+                },
                 settings: None,
             },
         );
@@ -1646,7 +1658,7 @@ impl ChatRuntime {
             // no longer works there.
             if !self.hosts.online(&host).await {
                 return Ok(Some(
-                    "Its computer is offline: the session is stopped in ZeroLux and its token revoked. Its harness there loses its link; native cancellation was not confirmed.",
+                    "Stopped. Its computer is offline, so its harness did not confirm it stopped working.",
                 ));
             }
             self.stop_on(&host, &session).await?;
@@ -1671,7 +1683,7 @@ impl ChatRuntime {
                 }
             }
             return Ok(Some(
-                "The chat link is stopped and its token revoked. Native cancellation was not confirmed because this kernel had no active adapter.",
+                "Stopped. Its harness did not confirm it stopped working.",
             ));
         };
         // An adapter that had already ended (its link lost) before the owner's Stop is not a
@@ -1693,7 +1705,7 @@ impl ChatRuntime {
             );
             subscriber?;
             return Ok(Some(
-                "The chat link is stopped and its token revoked. Native cancellation was not confirmed because its adapter had already ended; work may still be running in the harness.",
+                "Stopped. Its harness did not confirm it stopped working.",
             ));
         }
         // The stop revokes the token before it reaches the adapter: a request the adapter made
@@ -1769,7 +1781,7 @@ async fn finish(task: &mut JoinHandle<Result<()>>) -> Result<()> {
         Err(_) => {
             task.abort();
             let _ = task.await;
-            bail!("The link was stopped, but native cancellation was not confirmed");
+            bail!("Stopped. Its harness did not confirm it stopped working.");
         }
     }
 }

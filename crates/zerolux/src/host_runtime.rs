@@ -521,7 +521,7 @@ impl HostRuntime {
                 );
                 // The kernel marks the session for attention.
                 let _ = notices.send(json!({"type":"session.ended","session_id":id,
-                    "reason":"The native link needs attention. Uncertain messages have not been resent."}));
+                    "reason":"Needs attention. Unconfirmed messages were not sent again."}));
             }
         });
         self.running.lock().await.insert(

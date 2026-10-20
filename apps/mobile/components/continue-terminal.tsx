@@ -65,27 +65,20 @@ export function ContinueInTerminal({ session }: { session: ChatSession }) {
           </Text>
           <Text className="text-xs text-faint">
             {`Run it on ${host?.name ?? "the session's computer"}.`}
-            {found.stop_first
-              ? " ZeroLux stops the session first, so two processes never share it."
-              : ""}
           </Text>
           <Button
             variant="outline"
             disabled={busy}
             onPress={() =>
               found.stop_first
-                ? Alert.alert(
-                    "Stop it in ZeroLux?",
-                    "It goes on in your terminal; Resume brings it back here.",
-                    [
-                      { text: "Cancel", style: "cancel" },
-                      {
-                        text: "Stop and copy",
-                        style: "destructive",
-                        onPress: () => void act(() => copy(found)),
-                      },
-                    ],
-                  )
+                ? Alert.alert("Stop it in ZeroLux?", undefined, [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Stop and copy",
+                      style: "destructive",
+                      onPress: () => void act(() => copy(found)),
+                    },
+                  ])
                 : void act(() => copy(found))
             }
           >

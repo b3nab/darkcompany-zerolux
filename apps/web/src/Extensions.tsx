@@ -46,7 +46,7 @@ function State({ extension }: { extension: Extension }) {
   return extension.running ? (
     <Badge className="bg-human/10 text-human-foreground">Running</Badge>
   ) : (
-    <Badge variant="outline">Starting again</Badge>
+    <Badge variant="outline">Restarting</Badge>
   );
 }
 
@@ -76,9 +76,7 @@ export const settingsSchema = (settings: ExtensionSetting[]): JsonSchema => ({
         description:
           [
             setting.description,
-            setting.type === "secret" && setting.set
-              ? "Saved: type a new one to replace it."
-              : "",
+            setting.type === "secret" && setting.set ? "Saved" : "",
           ]
             .filter(Boolean)
             .join(" ") || undefined,
@@ -120,10 +118,6 @@ function SettingsDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{extension.name} settings</DialogTitle>
-          <DialogDescription>
-            Secrets stay in the kernel: the extension uses them, and nobody sees
-            them again.
-          </DialogDescription>
         </DialogHeader>
         <ActionForm
           schema={settingsSchema(settings)}
@@ -201,12 +195,9 @@ export function ActionDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{action.title}</DialogTitle>
-          <DialogDescription>
-            {action.description}
-            {action.effects === "destructive" &&
-              " It deletes or overwrites data."}
-            {long && ` It can take up to ${long}.`}
-          </DialogDescription>
+          {action.description && (
+            <DialogDescription>{action.description}</DialogDescription>
+          )}
         </DialogHeader>
         <ActionForm
           schema={action.input as JsonSchema}
@@ -223,7 +214,7 @@ export function ActionDialog({
             className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 p-3"
           >
             <p className="flex-1 text-sm">
-              It deletes or overwrites data. Run it?
+              Run {action.title}? It deletes or overwrites data.
             </p>
             <Button
               variant="outline"
@@ -278,7 +269,7 @@ function RemoveDialog({
         <DialogHeader>
           <DialogTitle>Remove {extension.name}?</DialogTitle>
           <DialogDescription>
-            Its settings, secrets and stored values go with it.
+            Its settings, secrets and stored values are deleted.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -470,9 +461,6 @@ function Available({
   if (!offered.length) return null;
   return (
     <Section title="Available">
-      <p className="text-sm text-muted-foreground">
-        Official extensions that come with ZeroLux.
-      </p>
       <ul className="flex flex-col divide-y">
         {offered.map((extension) => (
           <li key={extension.id} className="flex items-center gap-3 py-2.5">
@@ -522,11 +510,6 @@ function LoadFolder({ busy, perform }: { busy: boolean; perform: Perform }) {
   const [folder, setFolder] = useState("");
   return (
     <Section title="Load from a folder">
-      <p className="text-sm text-muted-foreground">
-        For an extension you are writing: the folder with its
-        zerolux-extension.toml, on the computer the kernel runs on. Load it
-        again after each change.
-      </p>
       <form
         className="flex gap-2"
         onSubmit={(event) => {
@@ -581,15 +564,9 @@ export function ExtensionList({
       : undefined;
   return (
     <Settings eyebrow="Workspace" title="Extensions">
-      <p className="-mt-3 text-sm text-muted-foreground">
-        Extensions add actions, data and pages to ZeroLux. Each action is the
-        same for people and agents.
-      </p>
       {error && <p className="text-sm text-destructive">{error}</p>}
       {extensions?.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No extensions in this workspace yet.
-        </p>
+        <p className="text-sm text-muted-foreground">No extensions.</p>
       )}
       {!!extensions?.length && (
         <ul className="flex flex-col gap-4">

@@ -48,7 +48,7 @@ function GoalForm({
     >
       <Textarea
         aria-label="Objective"
-        placeholder="What it works toward on its own, until it is done"
+        placeholder="Objective"
         value={objective}
         rows={3}
         autoFocus
@@ -237,10 +237,7 @@ export function GoalCard({
           )}
         </>
       ) : (
-        <p className="text-sm text-muted-foreground">
-          No goal. With one, Codex keeps working toward it on its own, turn
-          after turn, until it is done or reaches its budget.
-        </p>
+        <p className="text-sm text-muted-foreground">No goal.</p>
       )}
     </section>
   );

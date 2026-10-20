@@ -204,18 +204,20 @@ impl ChatRuntime {
                     ensure!(
                         actual["capabilities"]
                             .as_array()
-                            .is_some_and(|values| values.iter().any(|value| value == "rewind-files-v1")),
+                            .is_some_and(|values| values
+                                .iter()
+                                .any(|value| value == "rewind-files-v1")),
                         "The Claude runner needs an update for this control"
                     );
                     let reply = link
-                        .request(serde_json::json!({"method":"rewind_files","link_id":session.id,
-                            "message_id":message,"dry_run":dry_run}))
+                        .request(
+                            serde_json::json!({"method":"rewind_files","link_id":session.id,
+                            "message_id":message,"dry_run":dry_run}),
+                        )
                         .await?;
                     Ok(reply["result"].clone())
                 }
-                _ => bail!(
-                    "Only Claude Code keeps checkpoints of the files; restore them from the session's changes"
-                ),
+                _ => bail!("Only Claude Code sessions restore files"),
             }
         }
         .await

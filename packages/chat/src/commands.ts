@@ -20,7 +20,7 @@ export const sessionCommands: SessionCommand[] = [
   {
     name: "compact",
     invoke: "/compact",
-    description: "Summarize the older work, so the session has room again",
+    description: "Summarize the older work",
     hint: "what to keep",
   },
 ];

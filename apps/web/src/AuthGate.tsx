@@ -109,7 +109,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       .then(setInvitation, (failed: unknown) =>
         setInvitationError(
           failed instanceof ApiError && failed.status === 410
-            ? "This invitation can no longer be used: it was used, withdrawn or has expired. Ask for a new one."
+            ? "This invitation can no longer be used."
             : errorMessage(failed),
         ),
       );
@@ -288,11 +288,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
             {invitationError}
           </p>
         )}
-        {loading ? (
-          <p className="text-sm text-muted-foreground">
-            No workspace data is loaded before you sign in.
-          </p>
-        ) : !health ? (
+        {loading ? null : !health ? (
           <Button
             onClick={() => {
               setLoading(true);
@@ -304,8 +300,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
         ) : identity && !enrolling ? (
           <>
             <p className="text-sm text-muted-foreground">
-              This account is not a member of this workspace. Signing in does
-              not grant access.
+              This account is not a member of this workspace.
             </p>
             <Button
               variant="outline"
@@ -317,21 +312,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
           </>
         ) : (
           <>
-            <p className="text-sm text-muted-foreground">
-              {invitation
-                ? `${invitation.invited_by} invited you. ${
-                    identity
-                      ? "Join with this account"
-                      : existing
-                        ? "Sign in to join"
-                        : "Create your account to join"
-                  }: you bring your own agents and sessions, and share the workspace’s chats and meetings.`
-                : creating
-                  ? "Create your account to become this workspace’s owner. Its people and history stay unchanged."
-                  : enrolling
-                    ? "Connect your account to the workspace’s owner. Its people and history stay unchanged."
-                    : "Use your account for this workspace."}
-            </p>
+            {invitation && (
+              <p className="text-sm text-muted-foreground">
+                Invited by {invitation.invited_by}
+              </p>
+            )}
             <form
               className="flex flex-col gap-3"
               onSubmit={(event) => {
@@ -440,9 +425,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
                   setError("");
                 }}
               >
-                {existing
-                  ? "Create an account"
-                  : "Already have an account? Sign in"}
+                {existing ? "Create an account" : "Sign in instead"}
               </Button>
             )}
             {identity && (

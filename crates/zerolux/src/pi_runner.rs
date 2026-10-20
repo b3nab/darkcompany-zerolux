@@ -244,9 +244,7 @@ impl Registry {
                 let _ = child.wait().await;
                 match result {
                     Ok(Err(error)) => Err(error),
-                    _ => anyhow::bail!(
-                        "Pi host startup was not confirmed; no native input was submitted"
-                    ),
+                    _ => anyhow::bail!("pi did not confirm its start"),
                 }
             }
         }
@@ -332,7 +330,7 @@ pub(crate) async fn recovery_locator(native: &str, workspace: &str, saved: Value
         .await?;
         ensure!(
             locator["session_file"] == saved["session_file"],
-            "The entrusted pi history locator changed; no other file was selected"
+            "pi's session file changed"
         );
         return Ok(locator);
     }
@@ -355,7 +353,7 @@ pub(crate) async fn recovery_locator(native: &str, workspace: &str, saved: Value
             found = Some(profile_locator(&path, native, workspace).await?);
         }
     }
-    found.context("The entrusted pi execution profile is missing; no defaults were substituted")
+    found.context("pi's saved launch settings are missing")
 }
 async fn private_profile(path: &Path) -> Result<Value> {
     let info = tokio::fs::symlink_metadata(path).await?;
@@ -375,7 +373,7 @@ async fn profile_locator(path: &Path, native: &str, workspace: &str) -> Result<V
             && value["nativeSessionId"] == native
             && value["workspace"] == workspace
             && value["unavailable"].is_null(),
-        "The saved pi launch profile cannot be restored without native verification"
+        "pi's saved launch settings cannot be verified"
     );
     let file = value["file"].as_str().context("Missing native pi file")?;
     let agent_dir = value["agentDir"]

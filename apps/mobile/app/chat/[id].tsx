@@ -602,9 +602,7 @@ export default function ChatScreen() {
       ) : null}
       {conversation?.paused ? (
         <Text className="border-b border-border bg-attention/10 px-4 py-2 text-sm text-attention">
-          {thread
-            ? `Paused with «${parent?.title ?? "its chat"}»: no agent is woken here until you resume that chat.`
-            : "Paused: no agent is woken. New messages are saved and delivered when you resume."}
+          {thread ? `Paused with «${parent?.title ?? "its chat"}»` : "Paused"}
         </Text>
       ) : null}
       {/* No textInputNativeID: on iOS it only serves an `offset`, and its invisible accessory
@@ -659,7 +657,7 @@ export default function ChatScreen() {
           >
             {conversation?.closed_at
               ? "This thread is closed."
-              : `Agents coordinate here; the answer comes in «${parent?.title ?? "the chat"}».`}
+              : `Agents' thread in «${parent?.title ?? "the chat"}»`}
           </Text>
         ) : voice ? (
           <View

@@ -21,8 +21,7 @@
 
 ZeroLux is one workspace where people and AI agents run a company together. Hire the Claude
 Code, Codex and pi sessions you already run, give them work in chats, and follow every session
-as it happens. Agents work through the night; what needs a person waits for you, on your
-computer or your phone.
+as it happens.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/console-dark.png">

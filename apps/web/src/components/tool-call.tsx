@@ -95,7 +95,7 @@ export function ToolCall({
             />
           ) : state === "stopped" ? (
             <CircleSlashIcon
-              aria-label="Stopped before it finished"
+              aria-label="Stopped"
               className="size-3.5 text-faint"
             />
           ) : (
@@ -292,7 +292,7 @@ export function SubagentCard({
               <MessageText text={outcome.text} />
             </div>
           ) : running ? (
-            <p className="text-[12.5px] text-faint">Working on it…</p>
+            <p className="text-[12.5px] text-faint">Working…</p>
           ) : null}
         </div>
       </Reveal>

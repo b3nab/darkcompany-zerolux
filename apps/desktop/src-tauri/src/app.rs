@@ -429,8 +429,8 @@ impl Host {
         let result = async {
             tokio::time::timeout(Duration::from_secs(10), ready)
                 .await
-                .context("The previous draft store did not load; it was left unchanged")??;
-            ensure!(window.url()? == url.join("api/health")?, "The previous draft origin did not load; its store was left unchanged");
+                .context("The previous draft store did not load")??;
+            ensure!(window.url()? == url.join("api/health")?, "The previous draft origin did not load");
             let (send, receive) = oneshot::channel();
             let send = Mutex::new(Some(send));
             window.eval_with_callback("(() => { try { const drafts=localStorage.getItem('zerolux-drafts'); if (drafts!==null && drafts.length>4194304) return {status:'too-large'}; return {status:'ok',drafts}; } catch { return {status:'unavailable'}; } })()", move |value| {
@@ -440,18 +440,18 @@ impl Host {
             })?;
             let json = tokio::time::timeout(Duration::from_secs(5), receive)
                 .await
-                .context("The previous draft store did not answer; it was left unchanged")??;
+                .context("The previous draft store did not answer")??;
             ensure!(
                 json.len() <= 4 * 1024 * 1024,
-                "Previous drafts are too large to import; their store was left unchanged"
+                "Previous drafts are too large to import"
             );
             let envelope: serde_json::Value = serde_json::from_str(&json)?;
-            ensure!(envelope["status"] == "ok", "The previous drafts could not be read; their store was left unchanged");
+            ensure!(envelope["status"] == "ok", "The previous drafts could not be read");
             let saved: Option<String> = serde_json::from_value(envelope.get("drafts").context("Missing previous draft snapshot")?.clone())?;
             saved
                 .map(|text| serde_json::from_str(&text))
                 .transpose()
-                .context("Read previous drafts; their store was left unchanged")
+                .context("Read previous drafts")
                 .map(Option::unwrap_or_default)
         }
         .await;
@@ -544,7 +544,7 @@ impl Host {
         let window = self
             .browser_store(builder, profile, false)?
             .build()
-            .context("Open this workspace's isolated view")?;
+            .context("Open the workspace view")?;
         let handle = self.app.clone();
         window.on_window_event(move |event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event
@@ -556,20 +556,27 @@ impl Host {
         });
         let view = WorkspaceView { window, closing };
         let result = async {
-            tokio::time::timeout(Duration::from_secs(10), ready).await
-                .context("The packaged workspace interface did not load")??;
+            tokio::time::timeout(Duration::from_secs(10), ready)
+                .await
+                .context("The workspace view did not load")??;
             if !profile.app_ui {
                 let (send, receive) = oneshot::channel();
                 let send = Mutex::new(Some(send));
-                view.window.eval_with_callback("window.zeroluxDraftImportSaved === true", move |value| {
-                    if let Some(send) = send.lock().expect("draft persistence lock").take() { let _ = send.send(value); }
-                })?;
+                view.window.eval_with_callback(
+                    "window.zeroluxDraftImportSaved === true",
+                    move |value| {
+                        if let Some(send) = send.lock().expect("draft persistence lock").take() {
+                            let _ = send.send(value);
+                        }
+                    },
+                )?;
                 let value = tokio::time::timeout(Duration::from_secs(5), receive).await??;
-                ensure!(value == "true", "Imported drafts could not be saved. The previous browser store was left unchanged.");
+                ensure!(value == "true", "Imported drafts could not be saved");
             }
             ensure!(!*self.stopped.borrow(), "The desktop is closing");
             Ok::<(), anyhow::Error>(())
-        }.await;
+        }
+        .await;
         if let Err(error) = result {
             let _ = view.close();
             return Err(error);
@@ -597,20 +604,20 @@ impl Host {
         })?;
         let json = tokio::time::timeout(Duration::from_secs(5), receive)
             .await
-            .context("The workspace did not answer; its view was kept open")??;
+            .context("The workspace did not answer")??;
         ensure!(
             json.len() <= 4 * 1024 * 1024,
-            "The draft snapshot is too large; the workspace was kept open"
+            "The draft snapshot is too large"
         );
         let saved: SavedView =
             serde_json::from_str(&json).context("Read the workspace's navigation state")?;
         ensure!(
             saved.can_leave.is_some(),
-            "Update this kernel's web interface before changing its open connection"
+            "Update this kernel's web interface first"
         );
         ensure!(
             saved.can_leave == Some(true),
-            "This workspace has messages waiting to be sent. Keep it open until they are confirmed."
+            "This workspace has messages waiting to be sent"
         );
         Ok(Some(saved))
     }
@@ -625,7 +632,7 @@ impl Host {
         let mut profile = self.catalog.profile(id)?.clone();
         ensure!(
             matches!(profile.source, Source::Existing { .. }),
-            "An app-managed workspace uses its own local address"
+            "An app-managed workspace's address cannot be changed"
         );
         let verified = connection::verify(url, profile.workspace_id.as_deref()).await?;
         if profile.existing_url() == Some(verified.url.as_str()) {
@@ -636,7 +643,7 @@ impl Host {
         }
         ensure!(
             profile.app_ui,
-            "Open this saved workspace once to import its previous drafts before changing its address. The previous browser store was left unchanged."
+            "Open this workspace once before changing its address"
         );
         let prepared = self.prepare_view(id).await;
         let result: Result<()> = async {
@@ -702,7 +709,7 @@ impl Host {
                         .runtimes
                         .get(&id)
                         .is_some_and(|runtime| !runtime.task.is_finished()),
-                    "This local kernel is still running. Its saved connection must stay available until the kernel is closed."
+                    "This local kernel is still running"
                 );
                 if let Err(error) = self.prepare_view(&id).await {
                     self.unfreeze(&id);

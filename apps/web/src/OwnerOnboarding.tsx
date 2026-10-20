@@ -19,6 +19,7 @@ export function OwnerOnboarding({
 }) {
   const [name, setName] = useState("");
   const error = ownerNameError(name);
+  const invalid = name.length > 0 && !!error;
   async function submit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!busy && !error) await save(name.trim());
@@ -39,12 +40,8 @@ export function OwnerOnboarding({
       )}
       <Eyebrow>Welcome / your workspace</Eyebrow>
       <h1 id="owner-heading" className="text-3xl font-semibold tracking-tight">
-        First, what should we call you?
+        What should we call you?
       </h1>
-      <p className="text-muted-foreground">
-        You are the owner of this workspace. Set your name before hiring your
-        first agent. No placeholder agents will be added.
-      </p>
       <form
         className="flex flex-col gap-3"
         onSubmit={(event) => void submit(event)}
@@ -60,16 +57,16 @@ export function OwnerOnboarding({
           value={name}
           onChange={(event) => setName(event.target.value)}
           placeholder="Your name"
-          aria-describedby="owner-name-help"
-          aria-invalid={name.length > 0 && !!error}
+          aria-describedby={invalid ? "owner-name-help" : undefined}
+          aria-invalid={invalid}
           disabled={busy}
           className="h-10"
         />
-        <p id="owner-name-help" className="text-sm text-muted-foreground">
-          {name.length > 0 && error
-            ? error
-            : "Your agents will be shown as owned by you. You can use your preferred display name."}
-        </p>
+        {invalid && (
+          <p id="owner-name-help" className="text-sm text-muted-foreground">
+            {error}
+          </p>
+        )}
         <Button
           type="submit"
           size="lg"

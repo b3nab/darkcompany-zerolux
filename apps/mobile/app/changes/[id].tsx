@@ -330,11 +330,7 @@ export default function ChangesPage() {
               onChangeText={setMessage}
               multiline
               editable={!busy}
-              placeholder={
-                staged.length
-                  ? "Commit message"
-                  : "Stage changes to commit them"
-              }
+              placeholder={staged.length ? "Commit message" : "Nothing staged"}
               placeholderTextColor={faint}
               accessibilityLabel="Commit message"
               className="max-h-28 flex-1 rounded-md border border-input bg-card px-3 py-2 font-sans text-[15px] text-foreground"
@@ -520,9 +516,7 @@ function PullRequestView({
         <Text>Open a pull request</Text>
       </Button>
     ) : (
-      <Text className="text-xs text-faint">
-        Push the branch to open a pull request.
-      </Text>
+      <Text className="text-xs text-faint">No pushed branch</Text>
     );
   const checks = checksOf(pullRequest);
   const facts = [

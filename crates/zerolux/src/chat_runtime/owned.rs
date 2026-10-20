@@ -268,7 +268,7 @@ impl ChatRuntime {
                 ChatSessionStatus {
                     status: "attention".into(),
                     reason: Some(
-                        "The owned runner needs attention. No attempted input was resent.".into(),
+                        "Needs attention. Unconfirmed messages were not sent again.".into(),
                     ),
                 },
             )
@@ -308,7 +308,7 @@ impl ChatRuntime {
         else {
             ensure!(
                 !self.runners.is_leased(&session.native_session_id)?,
-                "The owned runner is still leased; no replacement was started"
+                "The Claude runner is still running"
             );
             self.runners
                 .check_native_stopped(&session.native_session_id, &session.workspace)
@@ -410,8 +410,13 @@ impl ChatRuntime {
             if matches!(error.downcast_ref::<Error>(), Some(Error::StoppedByOwner)) {
                 return Ok(());
             }
-            self.store.fail_chat_link(who, &session.id,
-                &format!("The native session could not be restored ({error}); no attempted input was resent.")).await?;
+            self.store
+                .fail_chat_link(
+                    who,
+                    &session.id,
+                    &format!("The session could not be restored: {error}"),
+                )
+                .await?;
             self.changed();
         }
         result.map(|_| ())
@@ -446,9 +451,18 @@ impl ChatRuntime {
                 && !*stop.borrow()
                 && let Ok(owner) = store.session_person(&id).await
             {
-                let _ = store.set_chat_session_status(&owner, &id, ChatSessionStatus {
-                    status: "attention".into(), reason: Some("The Claude runner ended or became unreachable. Waiting to restore the saved session.".into()),
-                }).await;
+                let _ = store
+                    .set_chat_session_status(
+                        &owner,
+                        &id,
+                        ChatSessionStatus {
+                            status: "attention".into(),
+                            reason: Some(
+                                "The Claude runner stopped. Waiting to restore the session.".into(),
+                            ),
+                        },
+                    )
+                    .await;
                 changed.notify_one();
             }
             result

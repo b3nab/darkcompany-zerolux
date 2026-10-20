@@ -114,7 +114,6 @@ import { Toggle } from "@/components/ui/toggle";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -294,10 +293,6 @@ export function ConsoleList({
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>New session</DialogTitle>
-            <DialogDescription>
-              ZeroLux runs it in the folder you choose. You follow and steer it
-              here; give it an agent to bring it into your chats too.
-            </DialogDescription>
           </DialogHeader>
           <StartSession
             chat={chat}
@@ -314,7 +309,6 @@ export function ConsoleList({
                 : undefined
             }
             heading="New session"
-            intro=""
             className="border-0 bg-transparent p-0 [&>div:first-child]:hidden"
             created={(session) => {
               setStarting(false);
@@ -494,7 +488,7 @@ export function ConsoleHome({ chat }: { chat: Chat }) {
       <h1 className="text-2xl font-semibold tracking-tight">Agent console.</h1>
       <p className="text-sm text-muted-foreground">
         {live.length
-          ? `${live.length} live${working ? ` · ${working} working` : ""}. Choose a session to follow its work.`
+          ? `${live.length} live${working ? ` · ${working} working` : ""}`
           : "No live sessions."}
       </p>
     </div>
@@ -1140,7 +1134,6 @@ export function SessionView({
         </section>
       </SidePanel>
       <AskOnTheSide
-        name={name}
         open={asking}
         close={() => setAsking(false)}
         fork={fork}
@@ -1216,9 +1209,7 @@ function HistoryHits({
       </h3>
       {error && <p className="px-2 text-xs text-attention">{error}</p>}
       {results?.length === 0 && (
-        <p className="px-2 py-2 text-sm text-faint">
-          Nothing said or done matches.
-        </p>
+        <p className="px-2 py-2 text-sm text-faint">No matches.</p>
       )}
       {results?.map((hit) => {
         const session = chat.sessions.find((s) => s.id === hit.session_id);
@@ -1248,10 +1239,7 @@ function HistoryHits({
         );
       })}
       {truncated && (
-        <p className="px-2 text-xs text-faint">
-          Not all history was searched, because of the time limit or a computer
-          that is offline: more may match.
-        </p>
+        <p className="px-2 text-xs text-faint">Not all history was searched.</p>
       )}
     </section>
   );
@@ -1285,13 +1273,6 @@ function ShareChoice({
         }}
         options={Object.entries(shareLabels) as [ShareChoiceValue, string][]}
       />
-      <p className="w-full text-xs text-faint">
-        {choice === "private"
-          ? "Only you see it."
-          : choice === "read"
-            ? "Everyone in the workspace follows it: its work, code and requests."
-            : "Everyone in the workspace works in it as you do: input, terminals, git and schedules. Its title, budget, sharing, forks and requests stay yours."}
-      </p>
     </section>
   );
 }
@@ -1415,7 +1396,6 @@ function SessionInput({
   const [chosen, setChosen] = useState(0);
   // Esc closes the list until the text changes, and only then interrupts.
   const [dismissed, setDismissed] = useState(false);
-  const [started, setStarted] = useState(false);
   const place = (next: string, at: number) => {
     write(next);
     setChosen(0);
@@ -1477,7 +1457,6 @@ function SessionInput({
     );
     if (!done) return;
     going.forEach(({ url }) => remove(url));
-    setStarted(run?.name === "compact");
     // What was typed meanwhile stays.
     if (draftOf(session.id) === sent) write("");
     if (box.current) box.current.style.height = "auto";
@@ -1591,7 +1570,7 @@ function SessionInput({
           disabled={!open}
           placeholder={
             !owner
-              ? "Shared with you to read: you follow it, without writing to it"
+              ? "Read only"
               : open
                 ? working
                   ? `Add to ${name}'s turn`
@@ -1604,7 +1583,6 @@ function SessionInput({
             event.target.style.height = `${event.target.scrollHeight}px`;
             write(event.target.value);
             setCursor(event.target.selectionStart);
-            setStarted(false);
             setChosen(0);
             setDismissed(false);
           }}
@@ -1682,7 +1660,7 @@ function SessionInput({
                   render={
                     <Button
                       type="button"
-                      aria-label="Other ways to send"
+                      aria-label="Send options"
                       className="h-10.5 rounded-l-none border-l border-l-background/30 px-2"
                     />
                   }
@@ -1715,17 +1693,13 @@ function SessionInput({
             ? "Too long: up to 64 KB."
             : imagesError
               ? imagesError
-              : !owner
-                ? "Shared with you to read"
-                : command?.name === "compact"
-                  ? "Summarizes the older work; anything after /compact says what to keep"
-                  : started
-                    ? "Compacting: the summary, or why it failed, appears above"
-                    : working
-                      ? modes
-                        ? "Joins the turn in progress · ⌥Enter sends when it ends · Esc interrupts"
-                        : "Joins the turn in progress · Esc interrupts"
-                      : "Straight into the session, not into a chat · / for commands · @ for files"}
+              : !owner || command?.name === "compact"
+                ? null
+                : working
+                  ? modes
+                    ? "⌥Enter sends when the turn ends · Esc interrupts"
+                    : "Esc interrupts"
+                  : "/ for commands · @ for files"}
         </p>
         <ContextMeter
           usage={usage}
@@ -1761,7 +1735,7 @@ export function ContextMeter({
       aria-valuenow={Math.round(share * 100)}
       aria-valuemin={0}
       aria-valuemax={100}
-      title={`${tokenCount(usage.context_tokens ?? 0)} of ${tokenCount(usage.context_window ?? 0)} tokens${full ? " · /compact makes room" : ""}`}
+      title={`${tokenCount(usage.context_tokens ?? 0)} of ${tokenCount(usage.context_window ?? 0)} tokens`}
       className={cn(
         "flex shrink-0 items-center gap-1.5",
         full && "text-attention",
@@ -1892,7 +1866,7 @@ function SessionSettings({
           >
             {!value && (
               <NativeSelectOption value="" disabled>
-                {label}: the harness's own
+                {label}
               </NativeSelectOption>
             )}
             {value && !Object.hasOwn(options, value) && (
@@ -1915,7 +1889,7 @@ function SessionSettings({
           size="sm"
           variant="outline"
           pressed={plan.on}
-          title={plan.on ? "It plans before it acts" : "Plan before acting"}
+          title="Plan mode"
           onPressedChange={(on) =>
             void perform(
               async () => void (await settings.apply(plan.change(on))),
@@ -1952,7 +1926,7 @@ export function QueueCards({
   const [editing, setEditing] = useState<{ id: string; text: string }>();
   return (
     <ul
-      aria-label="Waiting for the turn to end"
+      aria-label="Queue"
       className="mx-auto flex w-full max-w-3xl flex-col gap-1.5"
     >
       {queue.map((item) => (

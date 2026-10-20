@@ -515,8 +515,8 @@ export function ChatView({
           {conversation.paused && (
             <p className="border-b bg-attention/10 px-3 py-2 text-sm text-attention md:px-5">
               {thread
-                ? `Paused with «${parent?.title ?? "its chat"}»: no agent is woken here until you resume that chat.`
-                : "Paused: no agent is woken. New messages are saved and delivered when you resume."}
+                ? `Paused with «${parent?.title ?? "its chat"}»`
+                : "Paused"}
             </p>
           )}
           <div
@@ -614,7 +614,7 @@ export function ChatView({
                     {m.text}
                   </p>
                   <span className="flex items-center justify-end gap-1 font-mono text-[11px] text-faint">
-                    Not sent yet: it goes out when ZeroLux is back
+                    Not sent yet
                     <ClockIcon aria-hidden className="size-3" />
                   </span>
                 </li>
@@ -671,7 +671,7 @@ export function ChatView({
                 </li>
               )}
               {chat.messages.length === 0 && conversation.last_seq === 0 && (
-                <DayLabel>No messages yet. Say hello.</DayLabel>
+                <DayLabel>No messages yet</DayLabel>
               )}
             </ol>
             {/* No height of its own: it rides the bottom edge without moving the content. */}
@@ -697,11 +697,11 @@ export function ChatView({
             )}
           </div>
           {thread ? (
-            <p className="border-t px-3 py-3 text-xs text-muted-foreground md:px-5">
-              {conversation.closed_at
-                ? "This thread is closed."
-                : `Agents coordinate here; the answer comes in «${parent?.title ?? "the chat"}».`}
-            </p>
+            conversation.closed_at && (
+              <p className="border-t px-3 py-3 text-xs text-muted-foreground md:px-5">
+                This thread is closed.
+              </p>
+            )
           ) : (
             <Composer
               key={conversation.id}
@@ -1037,11 +1037,7 @@ function Composer({
             variant="ghost"
             size="icon"
             aria-label="Attach a file"
-            title={
-              storage.available
-                ? "Attach a file"
-                : "Files need storage on the kernel"
-            }
+            title="Attach a file"
             disabled={!storage.available}
             onClick={() => files.current?.click()}
           >
@@ -1089,13 +1085,7 @@ function Composer({
             variant="ghost"
             size="icon"
             aria-label="Dictate"
-            title={
-              !microphone
-                ? "Dictation needs a microphone on a secure address"
-                : transcription
-                  ? "Dictate"
-                  : "Dictation needs the voice extension on the kernel"
-            }
+            title="Dictate"
             disabled={!microphone || !transcription}
             onClick={() => void record("dictation")}
           >
@@ -1107,13 +1097,7 @@ function Composer({
           variant="outline"
           size="icon"
           aria-label="Record a voice message"
-          title={
-            !microphone
-              ? "Voice messages need a microphone on a secure address"
-              : transcription || storage.available
-                ? "Record a voice message"
-                : "Voice messages need the voice extension or storage on the kernel"
-          }
+          title="Record a voice message"
           disabled={!microphone || (!transcription && !storage.available)}
           onClick={() => void record("message")}
           className="h-10.5 w-10.5"
@@ -1336,7 +1320,7 @@ export function NewConversation({
       <Card className="max-w-xl">
         <CardHeader>
           <Eyebrow>New chat</Eyebrow>
-          <CardTitle>Hire an agent to start chatting.</CardTitle>
+          <CardTitle>No agents</CardTitle>
         </CardHeader>
         <CardContent>
           <Button onClick={hire}>Hire an agent</Button>
@@ -1346,8 +1330,7 @@ export function NewConversation({
   return (
     <Card className="max-w-xl">
       <CardHeader>
-        <Eyebrow>New chat</Eyebrow>
-        <CardTitle>Who do you want to talk to?</CardTitle>
+        <CardTitle>New chat</CardTitle>
       </CardHeader>
       <CardContent>
         <form className="flex flex-col gap-5" onSubmit={(e) => void submit(e)}>
@@ -1422,9 +1405,7 @@ export function NewConversation({
                     <span className="font-mono">{agent.name}</span>
                   </label>
                   {checked && !current && (
-                    <p className="text-xs text-attention">
-                      {agent.name} has no live session now.
-                    </p>
+                    <p className="text-xs text-attention">No live session</p>
                   )}
                   {checked && current && sessions.length > 1 && (
                     <NativeSelect
@@ -1480,7 +1461,7 @@ export function ChatHome({
       <div className="flex flex-col gap-2">
         <Eyebrow>Chats</Eyebrow>
         <h1 className="text-4xl font-light tracking-tight">
-          {chats.length ? "Pick a chat." : "Talk with your agents."}
+          {chats.length ? "No chat selected" : "No chats yet"}
         </h1>
       </div>
       <ol className="grid gap-3 sm:grid-cols-2">
@@ -1490,18 +1471,14 @@ export function ChatHome({
           text={
             hired
               ? `${hired} agent session${hired === 1 ? "" : "s"} hired.`
-              : "Pick the pi, Claude Code or Codex sessions you already use, or start a new Claude Code agent."
+              : undefined
           }
         >
           <Button variant={hired ? "outline" : "default"} onClick={hire}>
             {hired ? "Hire another agent" : "Hire an agent"}
           </Button>
         </Step>
-        <Step
-          done={chats.length > 0}
-          title="Start a chat"
-          text="With one agent, or a group such as your whole team."
-        >
+        <Step done={chats.length > 0} title="Start a chat">
           <Button
             variant={hired && !chats.length ? "default" : "outline"}
             disabled={!hired}
@@ -1523,7 +1500,7 @@ function Step({
 }: {
   done: boolean;
   title: string;
-  text: string;
+  text?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -1537,7 +1514,7 @@ function Step({
         )}
         {title}
       </strong>
-      <p className="text-sm text-muted-foreground">{text}</p>
+      {text && <p className="text-sm text-muted-foreground">{text}</p>}
       {children}
     </li>
   );

@@ -137,7 +137,7 @@ export function Tonight({
             <ul className="divide-y">
               {needs.length === 0 && (
                 <li className="px-4 py-3.5 text-sm text-muted-foreground">
-                  Nothing is waiting on you. Agents ask here when that changes.
+                  Nothing is waiting on you.
                 </li>
               )}
               {needs.map((need) => (

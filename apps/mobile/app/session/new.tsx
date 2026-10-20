@@ -163,11 +163,6 @@ export default function NewSessionScreen() {
         contentContainerClassName="gap-5 p-5"
         keyboardShouldPersistTaps="handled"
       >
-        <Text className="text-sm text-muted-foreground">
-          ZeroLux starts it in a folder on{" "}
-          {elsewhere?.name ?? "the kernel's computer"} and opens it here. What
-          you write to it reaches it as yours.
-        </Text>
         {computers.length ? (
           <View className="gap-2">
             <Choice
@@ -181,13 +176,10 @@ export default function NewSessionScreen() {
                   : undefined
               }
             />
-            {elsewhere ? (
+            {elsewhere && joinable.length < Object.keys(startable).length ? (
               <Text className="text-xs text-muted-foreground">
-                {joinable.length < Object.keys(startable).length
-                  ? `Only ${joinable.map((h) => startable[h]).join(" and ")} run there so far. `
-                  : ""}
-                It runs with {elsewhere.name}'s own harness accounts and
-                settings.
+                Only {joinable.map((h) => startable[h]).join(" and ")} run
+                there.
               </Text>
             ) : null}
           </View>
@@ -299,8 +291,7 @@ export default function NewSessionScreen() {
         ))}
         {!catalog.loading && catalog.data?.models.length === 0 && (
           <Text className="text-xs text-muted-foreground">
-            Connect a session of this harness to load its model choices. You can
-            start with its own settings.
+            No model choices yet.
           </Text>
         )}
         {catalog.error && (
@@ -313,11 +304,7 @@ export default function NewSessionScreen() {
             value={mode}
             onChange={(next) => next && setMode(next)}
           />
-        ) : harness === "pi" ? (
-          <Text className="text-sm text-muted-foreground">
-            Uses pi's own tools and project settings.
-          </Text>
-        ) : (
+        ) : harness === "pi" ? null : (
           <>
             <Choice
               label="Approvals"
@@ -341,8 +328,7 @@ export default function NewSessionScreen() {
         {unconnected && guest ? (
           <View className="gap-2 rounded-md border border-attention/40 bg-attention/5 px-3.5 py-3">
             <Text className="text-sm">
-              On {guest.name}, {label} runs with your own account. Connect it
-              first.
+              Connect your {label} account on {guest.name}.
             </Text>
             <Button
               size="sm"

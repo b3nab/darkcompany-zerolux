@@ -150,10 +150,6 @@ export function WorkspaceManager({
           ZeroLux
         </p>
         <h1 className="text-2xl font-semibold tracking-tight">Workspaces</h1>
-        <p className="text-sm text-muted-foreground">
-          Separate organizations, chats and agents. Your saved connections stay
-          on this device.
-        </p>
       </header>
       <div aria-live="polite">
         {(state.busy || pending) && (
@@ -221,11 +217,6 @@ export function WorkspaceManager({
                   size="sm"
                   variant="ghost"
                   disabled={disabled || profile.running}
-                  title={
-                    profile.running
-                      ? "A running local kernel keeps its connection in this list"
-                      : undefined
-                  }
                   onClick={() => {
                     setForgetting(profile.id);
                     cancelEdit();
@@ -237,8 +228,7 @@ export function WorkspaceManager({
               {forgetting === profile.id && (
                 <div className="space-y-3 border-t pt-3">
                   <p className="text-sm text-muted-foreground">
-                    Remove this saved connection? Workspace data is not deleted
-                    and an external server is not stopped.
+                    Forget this connection?
                   </p>
                   <div className="flex gap-2">
                     <Button
@@ -301,11 +291,6 @@ export function WorkspaceManager({
               value={address}
               onChange={(event) => setAddress(event.target.value)}
             />
-            <p className="text-xs text-muted-foreground">
-              {edited
-                ? "Only this device's address changes. It must serve the same workspace; pending sends must finish first."
-                : "A server on this computer, your network or a trusted remote network. No existing workspace is copied or replaced."}
-            </p>
           </div>
           <div className="flex gap-2">
             <Button type="submit" disabled={disabled || !address.trim()}>
@@ -350,10 +335,6 @@ export function WorkspaceManager({
               onChange={(event) => setName(event.target.value)}
               placeholder="My workspace"
             />
-            <p className="text-xs text-muted-foreground">
-              A new, independent kernel and data directory, managed by this app.
-              LiveKit and Bun must be installed.
-            </p>
           </div>
           <Button
             type="submit"
@@ -368,16 +349,9 @@ export function WorkspaceManager({
         className="space-y-4 border-t pt-6"
         aria-labelledby="computer-heading"
       >
-        <div className="space-y-1">
-          <h2 id="computer-heading" className="text-sm font-semibold">
-            This computer in a workspace
-          </h2>
-          <p className="text-xs text-muted-foreground">
-            Join a workspace as one of its computers: you start and follow your
-            sessions here from any of its apps, with this computer's Claude
-            Code, Codex and pi. It stays connected while this app runs.
-          </p>
-        </div>
+        <h2 id="computer-heading" className="text-sm font-semibold">
+          This computer in a workspace
+        </h2>
         {state.computers.length > 0 && (
           <ul aria-label="Joined workspaces" className="space-y-2">
             {state.computers.map((joined) => (
@@ -412,9 +386,8 @@ export function WorkspaceManager({
                 {leaving === joined.id && (
                   <div className="space-y-3 border-t pt-3">
                     <p className="text-sm text-muted-foreground">
-                      Leave this workspace? This computer disconnects and
-                      forgets it; joining again needs a new code. Its sessions
-                      here stop being reachable from the workspace.
+                      Leave this workspace? Its sessions here stop being
+                      reachable from the workspace.
                     </p>
                     <div className="flex gap-2">
                       <Button
@@ -478,16 +451,14 @@ export function WorkspaceManager({
               className="font-mono"
             />
             <p className="text-xs text-muted-foreground">
-              From the workspace, in Settings › Computers › Add a computer. It
-              works once, within ten minutes.
+              From the workspace: My settings › Computers › Add a computer.
             </p>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="join-name">Name · optional</Label>
+            <Label htmlFor="join-name">Computer name · optional</Label>
             <Input
               id="join-name"
               maxLength={200}
-              placeholder="The one given with the code"
               disabled={disabled}
               value={joining.name}
               onChange={(event) =>
@@ -504,17 +475,6 @@ export function WorkspaceManager({
           </Button>
         </form>
       </section>
-      <footer className="space-y-2 border-t pt-5 text-xs text-muted-foreground">
-        <p>
-          Switching keeps open workspaces running. Quitting only shuts down
-          local kernels started by this app, not external servers or native
-          agents.
-        </p>
-        <p>
-          The kernel does not yet authenticate users. Do not expose it on an
-          untrusted public network.
-        </p>
-      </footer>
     </main>
   );
 }

@@ -81,9 +81,7 @@ function Run({ action, kernel }: { action: ExtensionAction; kernel: string }) {
       ) : null}
       <ActionForm {...form} disabled={busy} />
       {minutes > 1 ? (
-        <Text className="text-xs text-faint">
-          It can take up to {minutes} minutes.
-        </Text>
+        <Text className="text-xs text-faint">Up to {minutes} minutes</Text>
       ) : null}
       <Button
         variant={action.effects === "destructive" ? "destructive" : "default"}

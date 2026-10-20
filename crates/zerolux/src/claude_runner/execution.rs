@@ -57,7 +57,7 @@ pub(super) fn verify_exit(
     let file = private_file(&registry.join(format!("{native_id}.lock")), false)
         .context("The native Claude execution has no readable process evidence")?;
     file.try_lock_exclusive()
-        .context("The Claude execution is still leased; its exit is not confirmed")?;
+        .context("Claude is still running this session")?;
     let metadata = file.metadata()?;
     ensure!(
         !crate::platform::linked_elsewhere(&metadata) && metadata.len() <= 64 * 1024,
@@ -83,7 +83,7 @@ pub(super) fn verify_exit(
                 "The stopped Claude execution host changed"
             ),
             Purpose::Stop(None) => {
-                anyhow::bail!("The legacy Claude host cannot confirm native cancellation")
+                anyhow::bail!("This Claude runner cannot confirm it stopped")
             }
         }
         return Ok(());
@@ -107,7 +107,7 @@ pub(super) fn verify_exit(
             && (owner.phase != "starting" || (owner.started && owner.native_pid.is_none()))
             && (owner.phase != "running" || (owner.started && owner.native_pid.is_some()))
             && (!owner.released || matches!(owner.phase.as_str(), "waiting" | "exited")),
-        "The native Claude execution evidence does not match this session"
+        "Claude's process record does not match this session"
     );
     match purpose {
         Purpose::Stop(Some(instance)) => ensure!(
@@ -120,13 +120,13 @@ pub(super) fn verify_exit(
     }
     ensure!(
         owner.phase != "starting",
-        "Claude startup has no confirmed child identity; no replacement was started"
+        "Claude's start was not confirmed"
     );
     if !owner.released {
         if let Some(pid) = owner.native_pid {
             ensure!(
                 owner.phase == "exited" || !alive(pid),
-                "The previous native Claude process is still alive; a free helper lease is not proof of death"
+                "Claude is still running this session"
             );
         }
         ensure!(

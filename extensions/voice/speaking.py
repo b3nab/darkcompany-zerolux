@@ -89,7 +89,7 @@ class Voices:
             model = self.model(language)
             reference = self.path(actor) / "voice.wav"
             if not reference.is_file():
-                raise ValueError("This agent has no voice yet: create one first")
+                raise ValueError("This agent has no voice")
             voice = reference.with_suffix(f".{MODELS[language]}.safetensors")
             if not voice.exists() or voice.stat().st_mtime < reference.stat().st_mtime:
                 export_model_state(model.get_state_for_audio_prompt(str(reference)), voice)

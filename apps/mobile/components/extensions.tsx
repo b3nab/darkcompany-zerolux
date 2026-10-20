@@ -147,7 +147,7 @@ export function ExtensionSettings({
                   placeholder={
                     setting.type === "secret"
                       ? setting.set
-                        ? "Set: type a new one to replace it"
+                        ? "Set"
                         : "Not set"
                       : undefined
                   }

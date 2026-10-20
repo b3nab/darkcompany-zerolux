@@ -132,7 +132,8 @@ async fn access_in<C: ConnectionTrait>(
 
 /// A session with the number of messages that are stored for it and not yet attempted.
 /// Stop notes the runtime sets on its own account; an owner's Stop replaces them.
-pub const LINK_FAILED: &str = "The native link could not be confirmed and its token was revoked. Check the harness before explicitly pairing again; native cancellation was not confirmed.";
+pub const LINK_FAILED: &str =
+    "The link could not be confirmed. Check the harness before pairing again.";
 
 const SESSIONS: &str = "SELECT s.*,(SELECT count(*) FROM deliveries d WHERE d.session_id=s.id AND d.status='stored') AS waiting FROM sessions s";
 
@@ -1513,9 +1514,7 @@ impl Store {
             .ok_or(Error::NotFound)?;
         let harness = actor.harness.as_deref().unwrap_or_default();
         if input.collaboration_mode.is_some() {
-            return Err(Error::Invalid(
-                "Plan mode belongs to a running Codex session, not to an agent's defaults".into(),
-            ));
+            return Err(Error::Invalid("Plan mode is set per Codex session".into()));
         }
         let value = |field: Option<String>,
                      label: &str,

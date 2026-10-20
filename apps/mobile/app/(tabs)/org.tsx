@@ -23,17 +23,11 @@ import { useSession } from "@/src/kernel";
 import { useMe } from "@/src/me";
 
 type Mode = "everyone" | "people" | "agents" | "shift";
-const views: Record<Mode, { label: string; note: string }> = {
-  everyone: {
-    label: "Everyone",
-    note: "People report to people. Each person's agents hang off them.",
-  },
-  people: { label: "People", note: "Who reports to whom." },
-  agents: {
-    label: "Agents",
-    note: "The agent org mirrors the people org: an agent sits where its owner sits.",
-  },
-  shift: { label: "Shift", note: "Who worked when, over the last 16 hours." },
+const views: Record<Mode, { label: string }> = {
+  everyone: { label: "Everyone" },
+  people: { label: "People" },
+  agents: { label: "Agents" },
+  shift: { label: "Shift" },
 };
 const role = (actor: Actor) =>
   actor.kind === "human"
@@ -93,7 +87,9 @@ export default function Org() {
         />
       </View>
       <ScrollView contentContainerClassName="gap-4 px-5 pb-10">
-        <Text className="text-xs text-faint">{views[view].note}</Text>
+        {view === "shift" ? (
+          <Text className="text-xs text-faint">Last 16 hours</Text>
+        ) : null}
         {view === "shift" ? (
           <Shift
             rows={people.flatMap((p) => [p, ...agentsOf(p)])}

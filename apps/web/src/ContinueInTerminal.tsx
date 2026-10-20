@@ -61,8 +61,7 @@ export function ContinueInTerminal({
           <DialogTitle>Continue in terminal</DialogTitle>
           <DialogDescription>
             Run this in a terminal
-            {computer ? ` on ${computer}` : " on the computer it runs on"}: the
-            same native session goes on there, with its history.
+            {computer ? ` on ${computer}` : " on the computer it runs on"}.
           </DialogDescription>
         </DialogHeader>
         {read.error && (
@@ -81,24 +80,18 @@ export function ContinueInTerminal({
               )}
             </div>
             {command.stop_first && (
-              <>
-                <p className="text-sm text-muted-foreground">
-                  It is running in ZeroLux: it stops here first, so two
-                  processes never use the same session.
-                </p>
-                <Button
-                  className="self-start"
-                  disabled={busy}
-                  onClick={() =>
-                    void perform(async () => {
-                      await stop();
-                      await navigator.clipboard?.writeText(command.command);
-                    }).then(() => void load())
-                  }
-                >
-                  Stop and copy
-                </Button>
-              </>
+              <Button
+                className="self-start"
+                disabled={busy}
+                onClick={() =>
+                  void perform(async () => {
+                    await stop();
+                    await navigator.clipboard?.writeText(command.command);
+                  }).then(() => void load())
+                }
+              >
+                Stop and copy
+              </Button>
             )}
           </div>
         )}

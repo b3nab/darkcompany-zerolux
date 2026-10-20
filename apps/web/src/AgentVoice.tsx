@@ -139,9 +139,7 @@ export function AgentVoice({ agent, mine }: { agent: Actor; mine: boolean }) {
           )}
         </>
       ) : !mine ? (
-        <p className="text-sm text-muted-foreground">
-          {agent.name} has no voice yet.
-        </p>
+        <p className="text-sm text-muted-foreground">No voice</p>
       ) : step.kind === "describe" || step.kind === "designing" ? (
         <form
           className="flex flex-col gap-3"
@@ -161,10 +159,6 @@ export function AgentVoice({ agent, mine }: { agent: Actor; mine: boolean }) {
             );
           }}
         >
-          <p className="text-sm text-muted-foreground">
-            Describe how {agent.name} sounds, in English: three voices come from
-            it, each saying hello, and you choose one.
-          </p>
           <Label htmlFor="voice-description" className="sr-only">
             Description
           </Label>
@@ -197,17 +191,11 @@ export function AgentVoice({ agent, mine }: { agent: Actor; mine: boolean }) {
             className="self-start"
             disabled={step.kind === "designing" || !description.trim()}
           >
-            {step.kind === "designing"
-              ? "Designing three voices… about half a minute"
-              : "Design three voices"}
+            {step.kind === "designing" ? "Designing…" : "Design three voices"}
           </Button>
         </form>
       ) : (
         <div className="flex flex-col gap-3">
-          <p className="text-sm text-muted-foreground">
-            Listen, and choose {agent.name}'s voice. It then reads a text with
-            every sound of its language, to speak anything: about two minutes.
-          </p>
           <ul className="flex flex-col gap-2">
             {step.proposals.map((proposal, index) => (
               <li key={proposal.id} className="flex items-center gap-3">
@@ -235,7 +223,7 @@ export function AgentVoice({ agent, mine }: { agent: Actor; mine: boolean }) {
                   }}
                 >
                   {step.kind === "choosing" && step.proposal === proposal.id
-                    ? "Making its voice…"
+                    ? "Choosing…"
                     : "Choose"}
                 </Button>
               </li>

@@ -177,14 +177,13 @@ export function ChangesPanel({
   const confirm = discarding && (
     <div className="flex flex-col gap-2 rounded-md bg-destructive/10 p-3 text-sm">
       <p>
-        Throw away the changes to{" "}
+        Discard the unstaged changes to{" "}
         {discarding.length === 1 ? (
           <span className="font-mono text-[12.5px]">{discarding[0]}</span>
         ) : (
           `${discarding.length} files`
-        )}{" "}
-        that are not staged? An untracked file is deleted. This cannot be
-        undone.
+        )}
+        ? This cannot be undone.
       </p>
       <div className="flex gap-2">
         <Button
@@ -334,9 +333,7 @@ export function ChangesPanel({
               discard={setDiscarding}
             />
             {!status.changes.length && (
-              <p className="text-sm text-muted-foreground">
-                Nothing changed since the last commit.
-              </p>
+              <p className="text-sm text-muted-foreground">No changes.</p>
             )}
           </>
         )}
@@ -547,17 +544,13 @@ function Branch({
 }) {
   const status = git.status!;
   if (!status.branch)
-    return (
-      <p className="text-sm text-muted-foreground">
-        No branch is checked out (detached HEAD).
-      </p>
-    );
+    return <p className="text-sm text-muted-foreground">Detached HEAD.</p>;
   const publish = !status.upstream;
   return (
     <div className="flex items-center gap-2 text-sm">
       <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground">
         {publish
-          ? "Not on a remote yet"
+          ? "Not published"
           : `${status.upstream} · ${status.ahead} ahead · ${status.behind} behind`}
       </span>
       {write && (publish || status.ahead > 0) && (
@@ -812,7 +805,7 @@ function NotedLines({
     >
       <Textarea
         aria-label="Note on these lines"
-        placeholder={`A note for ${name} on these lines`}
+        placeholder="Note"
         value={note}
         rows={2}
         autoFocus
@@ -939,13 +932,12 @@ export function FileDiff({
     );
   if (!diff) return null;
   if (diff.binary)
-    return <p className="text-sm text-muted-foreground">A binary file.</p>;
+    return <p className="text-sm text-muted-foreground">Binary file.</p>;
   return (
     <div className="flex flex-col gap-2">
       <p className="font-mono text-[11px] text-faint">
         <span className="text-success">+{diff.added}</span>{" "}
         <span className="text-destructive">−{diff.removed}</span>
-        {send && " · choose a line's number to write a note on it"}
       </p>
       <NotedLines
         rows={diff.lines.map((line) => ({
@@ -1301,9 +1293,7 @@ export function TerminalPanel({
         />
       )}
       {terminals?.length === 0 && (
-        <p className="p-3 text-sm text-muted-foreground">
-          No terminal is open.
-        </p>
+        <p className="p-3 text-sm text-muted-foreground">No terminal open.</p>
       )}
     </Pane>
   );

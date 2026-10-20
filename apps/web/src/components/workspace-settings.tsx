@@ -53,12 +53,7 @@ export function WorkspaceSettings({
             maxLength={200}
             disabled={busy}
             required
-            aria-describedby="workspace-name-help"
           />
-          <p id="workspace-name-help" className="text-sm text-muted-foreground">
-            Shared with everyone in this workspace. Renaming keeps its history
-            and identity.
-          </p>
         </div>
         {error && (
           <p role="alert" className="text-sm text-destructive">
@@ -107,16 +102,7 @@ export function Connection({
           value={connection.address}
           readOnly
           className="font-mono text-xs"
-          aria-describedby="workspace-address-help"
         />
-        <p
-          id="workspace-address-help"
-          className="text-sm text-muted-foreground"
-        >
-          {connection.desktop
-            ? "This device's connection, not the workspace's name. Manage connections to change the address or open another workspace."
-            : "This browser connects to the server at this address. Open another server's address to use a different workspace."}
-        </p>
       </div>
       {connection.desktop && (
         <Button

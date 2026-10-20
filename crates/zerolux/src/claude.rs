@@ -40,7 +40,7 @@ const INTERRUPTED: [&str; 2] = [
 ];
 /// How far back the transcript is read for the current turn state when a link starts.
 const RECENT: u64 = 1 << 20;
-const WRITTEN: &str = "Handed to the Claude Code inbox; the session has not queued it yet.";
+const WRITTEN: &str = "Sent to Claude Code; not queued yet.";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -457,11 +457,14 @@ impl ClaudeSession {
             .await?;
         let mut bytes = Vec::new();
         file.take(RECENT).read_to_end(&mut bytes).await?;
-        let mode = String::from_utf8_lossy(&bytes).lines().rev()
+        let mode = String::from_utf8_lossy(&bytes)
+            .lines()
+            .rev()
             .find_map(|line| permission_record(line, session_id))
-            .context("Claude's saved permission mode is unavailable; reopen the native terminal before reconnecting")?;
-        serde_json::from_value(mode)
-            .context("Claude's saved permission mode is unsupported; no replacement was started")
+            .context(
+                "Claude's permission mode is unknown; open the session in its terminal first",
+            )?;
+        serde_json::from_value(mode).context("Claude's permission mode is not supported")
     }
 
     /// Verifies that the hired session is still alive in its workspace. Read-only: it lists the
@@ -495,7 +498,7 @@ impl ClaudeSession {
         // process with a private inbox. A background session that ended has neither.
         ensure!(
             matches!(session.kind.as_str(), "interactive" | "background"),
-            "This Claude Code session is of a kind that cannot be connected"
+            "This kind of Claude Code session cannot be connected"
         );
         ensure!(
             dunce::canonicalize(&session.cwd)? == dunce::canonicalize(workspace)?,
@@ -628,7 +631,7 @@ impl ClaudeSession {
             let _ = kernel
                 .status(
                     "attention",
-                    Some("Claude Code needs attention. Uncertain messages have not been resent."),
+                    Some("Needs attention. Unconfirmed messages were not sent again."),
                 )
                 .await;
         }
@@ -705,7 +708,7 @@ impl ClaudeSession {
                     kernel
                         .receipt(
                             &delivery.id,
-                            json!({"status":"uncertain","reason":"The Claude Code inbox could not be reached. The message was not resent."}),
+                            json!({"status":"uncertain","reason":"Claude Code's inbox could not be reached; the message was not sent again."}),
                         )
                         .await?;
                 }
@@ -741,10 +744,7 @@ fn inbox(sockets: &Path, pid: u32) -> Result<PathBuf> {
 /// to its own processes, so a session started in a terminal is not reachable from outside.
 #[cfg(windows)]
 fn inbox(_sockets: &Path, _pid: u32) -> Result<PathBuf> {
-    anyhow::bail!(
-        "On Windows, Claude Code takes messages from outside a session only with a token of its \
-         own processes: start the session from ZeroLux to work with it here"
-    )
+    anyhow::bail!("On Windows, start Claude Code sessions from ZeroLux")
 }
 
 /// One line into a live session's inbox, as Claude Code shows a message from another session.
@@ -759,7 +759,7 @@ pub(crate) async fn write_inbox(socket: &Path, text: &str) -> Result<()> {
     };
     tokio::time::timeout(WRITE_TIMEOUT, write)
         .await
-        .context("Claude Code did not accept the message in time; outcome may be uncertain")?
+        .context("Claude Code did not confirm the message")?
         .context("Cannot reach the Claude Code inbox; outcome may be uncertain")
 }
 

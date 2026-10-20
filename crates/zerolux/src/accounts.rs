@@ -110,7 +110,7 @@ fn guest(homes: &Homes) -> Result<PathBuf> {
     match homes.root() {
         Some(root) => Ok(root.to_owned()),
         None => bail!(crate::store::Error::Invalid(
-            "On your own computer your harnesses use its accounts; sign in to them there".into()
+            "On your own computer, sign in to the harnesses directly".into()
         )),
     }
 }
@@ -222,7 +222,7 @@ pub async fn set_codex(homes: &Homes, account: CodexAccount) -> Result<Value> {
                 .request("account/login/start", json!({"type": "chatgptDeviceCode"}))
                 .await
                 .context(
-                    "Codex did not start the sign-in; device codes may need enabling in ChatGPT's security settings",
+                    "Codex did not start the sign-in; enable device code sign-in in ChatGPT's security settings",
                 )?;
             let login = reply["loginId"].as_str().map(str::to_owned);
             // The sign-in belongs to this connection: it stays open until Codex finishes it.

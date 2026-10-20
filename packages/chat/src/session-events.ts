@@ -433,8 +433,7 @@ export function toolName(name: string): string {
 export const toolText = (value: unknown) =>
   typeof value === "string" ? value : JSON.stringify(value, null, 2);
 
-const UPDATE =
-  "This kernel does not show agents' work yet: it needs an update.";
+const UPDATE = "Update the kernel to see agents' work.";
 /** Past the end of any record: a read back from here starts at the end. */
 const LATEST = Number.MAX_SAFE_INTEGER;
 

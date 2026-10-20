@@ -741,10 +741,7 @@ impl ChatRuntime {
                     &session.id,
                     ChatSessionStatus {
                         status: "attention".into(),
-                        reason: Some(
-                            "Its computer is offline; the session continues when it connects again"
-                                .into(),
-                        ),
+                        reason: Some("Its computer is offline".into()),
                     },
                 )
                 .await;
