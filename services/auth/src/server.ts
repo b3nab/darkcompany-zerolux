@@ -12,12 +12,15 @@ let exitCode = 0;
 let failureReported = false;
 let stage: "config" | "database" | "listen" = "config";
 
-function failed() {
-  // A machine-readable category, never the underlying error or configuration.
+function failed(error?: unknown) {
+  // A machine-readable category, never the underlying error or configuration. Only a
+  // listener's own error, which holds neither, goes to the log, to say why it could not listen.
   if (!failureReported) {
     failureReported = true;
     console.log(JSON.stringify({ type: "failed", version: 1, reason: stage }));
     console.error("ZeroLux authentication service failed to start");
+    if (stage === "listen" && error instanceof Error)
+      console.error(`${error.name}: ${error.message}`);
   }
   void stop(1);
 }
@@ -86,7 +89,7 @@ lines.on("line", (line) => {
     return;
   }
   starting = start(line);
-  void starting.catch(failed);
+  void starting.catch((error) => failed(error));
 });
 // EOF also arrives when the parent crashes: an orphan cannot retain the auth listener.
 lines.on("close", () => {
