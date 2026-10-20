@@ -877,15 +877,8 @@ function ChatComposer({
   const files = useRef<HTMLInputElement>(null);
   useEffect(() => {
     saveDraft(conversation.id, text);
-    // An emptied composer shrinks back to one line.
-    if (!text && box.current) box.current.style.height = "";
   }, [conversation.id, text]);
   useEffect(() => {
-    // A draft brought back fits its box, as typed text does.
-    if (box.current?.value) {
-      box.current.style.height = "auto";
-      box.current.style.height = `${box.current.scrollHeight}px`;
-    }
     // Opening a chat puts you in its box where a keyboard is at hand; a touch screen keeps its
     // keyboard down until you tap.
     if (!matchMedia("(pointer: fine)").matches) return;

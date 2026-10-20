@@ -1527,7 +1527,6 @@ function SessionInput({
     going.forEach(({ url }) => remove(url));
     // What was typed meanwhile stays.
     if (draftOf(session.id) === sent) write("");
-    if (box.current) box.current.style.height = "auto";
   }
   return (
     <Composer

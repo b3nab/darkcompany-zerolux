@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import type { ComponentProps, ReactNode, Ref } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { ComponentProps, ReactNode, RefObject } from "react";
 import {
   ArrowUpIcon,
   AudioLinesIcon,
@@ -86,7 +86,7 @@ export function Composer({
   working?: boolean;
   /** What is written cannot go, as too long: Send waits. */
   blocked?: boolean;
-  box?: Ref<HTMLTextAreaElement>;
+  box?: RefObject<HTMLTextAreaElement | null>;
   /** The text's own keys, pasting and selection, as each composer reads them. */
   textarea?: Pick<
     ComponentProps<"textarea">,
@@ -111,6 +111,8 @@ export function Composer({
   voice: Omit<VoiceTargets, "write">;
 }) {
   const recorder = useRecorder();
+  const own = useRef<HTMLTextAreaElement>(null);
+  const field = box ?? own;
   const speech = useVoiceInput(recorder, {
     ...voice,
     write: (said) => setText(dictated(text, said)),
@@ -118,6 +120,14 @@ export function Composer({
   const [holding, setHolding] = useState(false);
   const menuHold = useRef<ReturnType<typeof setTimeout>>(undefined);
   const opened = useRef(false);
+  // The box grows with its text, however it came (typed, dictated, a draft brought back),
+  // up to a few lines; then it scrolls. Back from a recording, it is drawn anew.
+  useLayoutEffect(() => {
+    const at = field.current;
+    if (!at) return;
+    at.style.height = "auto";
+    at.style.height = `${at.scrollHeight}px`;
+  }, [field, text, speech.use, speech.transcribing]);
   const filled = !!text.trim() || extra;
   const canDictate = open && voice.transcription;
   const clock = `${Math.floor(recorder.seconds / 60)}:${String(recorder.seconds % 60).padStart(2, "0")}`;
@@ -351,18 +361,13 @@ export function Composer({
           ) : (
             <textarea
               {...textarea}
-              ref={box}
+              ref={field}
               aria-label={label}
               rows={1}
               value={text}
               disabled={!open}
               placeholder={placeholder}
-              onChange={(event) => {
-                // Grows with the text, up to a few lines; then it scrolls.
-                event.target.style.height = "auto";
-                event.target.style.height = `${event.target.scrollHeight}px`;
-                setText(event.target.value);
-              }}
+              onChange={(event) => setText(event.target.value)}
               className="max-h-48 min-h-11 resize-none bg-transparent px-3.5 pt-2.5 pb-1 text-sm outline-none placeholder:text-faint disabled:opacity-60"
             />
           )}
