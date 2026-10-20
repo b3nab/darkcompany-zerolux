@@ -101,7 +101,7 @@ export interface UiPiece {
   /** The name of one of the clients' icons. */
   icon?: string;
   view:
-    | { kind: "native" }
+    | { kind: "native"; entry?: string }
     | { kind: "described"; action: string; refresh_on?: string[] }
     | { kind: "remote"; action: string }
     | { kind: "web"; entry: string }
