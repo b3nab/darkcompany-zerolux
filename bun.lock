@@ -166,6 +166,20 @@
         "@earendil-works/pi-coding-agent": "*",
       },
     },
+    "marketplace/drive": {
+      "name": "@zerolux/extension-drive",
+      "devDependencies": {
+        "@types/bun": "^1.3.0",
+        "typescript": "^5.9.0",
+      },
+    },
+    "marketplace/s3": {
+      "name": "@zerolux/extension-s3",
+      "devDependencies": {
+        "@types/bun": "^1.3.0",
+        "typescript": "^5.9.0",
+      },
+    },
     "packages/bridge": {
       "name": "@zerolux/bridge",
       "devDependencies": {
@@ -1126,6 +1140,10 @@
     "@zerolux/claude": ["@zerolux/claude@workspace:harnesses/claude"],
 
     "@zerolux/desktop": ["@zerolux/desktop@workspace:apps/desktop"],
+
+    "@zerolux/extension-drive": ["@zerolux/extension-drive@workspace:marketplace/drive"],
+
+    "@zerolux/extension-s3": ["@zerolux/extension-s3@workspace:marketplace/s3"],
 
     "@zerolux/extension-sdk": ["@zerolux/extension-sdk@workspace:packages/extension-sdk"],
 

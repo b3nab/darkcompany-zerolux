@@ -1,0 +1,19 @@
+[extension]
+id = "zerolux.drive"
+name = "Google Drive"
+version = "0.1.0"
+publisher = "zerolux"
+description = "Storage's files kept in a Google Drive folder"
+kernel = ">=0.0.1"
+
+[dependencies]
+"zerolux.storage" = ">=0.1"
+
+[process]
+command = ["bun", "run", "main.ts"]
+
+[settings]
+folder_id = { type = "text", label = "Folder ID", description = "The Drive folder for the workspace's files, from its address" }
+client_id = { type = "text", label = "OAuth client ID" }
+client_secret = { type = "secret", label = "OAuth client secret" }
+refresh_token = { type = "secret", label = "Refresh token", description = "With the drive.file scope" }
