@@ -106,6 +106,7 @@ import {
 import { CiTrigger } from "@/components/ci-trigger";
 import { GoalSection } from "@/components/goal";
 import { Schedules } from "@/components/schedules";
+import { Tasks } from "@/components/tasks";
 import {
   SubagentLinks,
   SubagentList,
@@ -975,6 +976,7 @@ function About({
         <GoalSection session={session} />
         <ForkSession session={session} close={close} />
         <ContinueInTerminal session={session} />
+        <Tasks session={session} close={close} />
         <Schedules session={session} />
         <CiTrigger session={session} />
         <UsageFacts sessionId={session.id} />
