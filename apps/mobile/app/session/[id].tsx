@@ -1176,7 +1176,6 @@ function QueueCard({
   item: QueuedInput;
 }) {
   const { chat } = useSession();
-  const editable = session.harness === "codex";
   const [editing, setEditing] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -1216,7 +1215,7 @@ function QueueCard({
             className="max-h-28 flex-1 font-sans text-sm text-foreground"
           />
         )}
-        {editable && editing === undefined ? (
+        {item.changeable && editing === undefined ? (
           <View className="flex-row gap-3">
             <Pressable
               onPress={() => setEditing(item.text)}
