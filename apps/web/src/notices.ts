@@ -1,6 +1,13 @@
 import { useEffect, useRef } from "react";
-import { noticeText, sessionAttentions, sessionNotices } from "@zerolux/chat";
-import type { Attention, Chat } from "@zerolux/chat";
+import {
+  newProposals,
+  noticeText,
+  proposer,
+  sessionAttentions,
+  sessionNotices,
+  useExtensions,
+} from "@zerolux/chat";
+import type { Attention, Chat, ChatSession, Extension } from "@zerolux/chat";
 import type { Actor } from "./api";
 import { stored } from "./stored";
 
@@ -66,4 +73,39 @@ export function useSessionNotices(
     // The states decide; the rest is read as it is when they change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [changed]);
+}
+
+/**
+ * Tells the owner, through the system's notifications, when an agent proposes an extension;
+ * clicking it opens the Extensions page.
+ */
+export function useProposalNotices(
+  owns: boolean,
+  actors: Actor[],
+  sessions: ChatSession[],
+  open: () => void,
+) {
+  const { extensions } = useExtensions(undefined, owns);
+  const before = useRef<Extension[]>(undefined);
+  useEffect(() => {
+    if (!extensions) return;
+    const was = before.current;
+    before.current = extensions;
+    const system = notifications();
+    if (system?.permission !== "granted" || !noticeChoice.current().needs)
+      return;
+    for (const extension of newProposals(was, extensions)) {
+      const shown = new system(extension.name, {
+        body: `Proposed by ${proposer(extension, actors, sessions)}`,
+        tag: `proposal:${extension.id}`,
+      });
+      shown.onclick = () => {
+        window.focus();
+        open();
+        shown.close?.();
+      };
+    }
+    // The list decides; the rest is read as it is when it changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extensions]);
 }

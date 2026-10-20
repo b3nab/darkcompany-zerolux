@@ -337,3 +337,21 @@ test("the web gives every component a native view uses, and draws only images th
   expect(image("data:image/png;base64,AAAA")).toContain("<img");
   expect(image("https://192.0.2.1/aspen.png")).toBe("");
 });
+
+test("an extension an agent proposed waits disabled for the owner, by the agent's name", () => {
+  const html = renderToStaticMarkup(
+    <ExtensionList
+      extensions={[
+        extension({ enabled: false, running: false, proposed_by: "a-cedar" }),
+      ]}
+      proposerOf={(one) => (one.proposed_by === "a-cedar" ? "cedar" : "")}
+      error=""
+      owns
+      busy={false}
+      perform={async () => true}
+    />,
+  );
+  expect(html).toContain("cedar");
+  expect(html.match(/>Enable<\/button>/g)).toHaveLength(1);
+  expect(html.match(/>Remove</g)).toHaveLength(1);
+});

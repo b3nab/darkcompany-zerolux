@@ -564,7 +564,7 @@ function DeviceNotices() {
     <fieldset className="flex flex-col gap-3">
       {(
         [
-          ["needs", "Session needs you"],
+          ["needs", "When you're needed"],
           ["finished", "Session finished"],
         ] as const
       ).map(([key, label]) => (

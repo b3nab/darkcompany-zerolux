@@ -36,7 +36,7 @@ import { CommandMenu } from "./CommandMenu";
 import { ConsoleHome, ConsoleList, SessionView } from "./Console";
 import { MD, useMedia } from "./media";
 import { Meetings } from "./Meetings";
-import { useSessionNotices } from "./notices";
+import { useProposalNotices, useSessionNotices } from "./notices";
 import { OwnerOnboarding } from "./OwnerOnboarding";
 import { Organization } from "./Org";
 import { AgentList, Sidebar, WorkspaceMenu } from "./Sidebar";
@@ -175,6 +175,9 @@ export function App({
   }, [conversation, chat.openId]);
   useSessionNotices(chat, actors, consoleId, (id) =>
     navigate(`/console/${id}`),
+  );
+  useProposalNotices(owns, actors, chat.sessions, () =>
+    navigate("/extensions"),
   );
   const hire = () => navigate("/team/hire");
   const showChat = (c: Conversation) => navigate(`/chats/${c.id}`);
@@ -522,6 +525,7 @@ export function App({
                   element={
                     <Page>
                       <ExtensionsPage
+                        sessions={chat.sessions}
                         owns={owns}
                         busy={busy}
                         perform={perform}

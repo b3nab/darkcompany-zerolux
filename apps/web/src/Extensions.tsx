@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useContext, useState } from "react";
 import {
   disableExtension,
   enableExtension,
@@ -8,6 +8,8 @@ import {
   loadExtensionFolder,
   offerAction,
   offerWarning,
+  proposalWarning,
+  proposer,
   removeExtension,
   runAction,
   setExtensionSettings,
@@ -16,6 +18,7 @@ import {
   useOfficialExtensions,
 } from "@zerolux/chat";
 import type {
+  ChatSession,
   Extension,
   ExtensionAction,
   ExtensionSetting,
@@ -27,6 +30,7 @@ import type {
 import { Section, Settings } from "./Account";
 import { ActionForm } from "./ActionForm";
 import { ConfirmButton } from "./extension-view";
+import { UiActors } from "./native-ui";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -307,12 +311,15 @@ type Open =
 
 function ExtensionItem({
   extension,
+  proposer,
   owns,
   busy,
   perform,
   open,
 }: {
   extension: Extension;
+  /** The agent that proposed it, by name, while it waits for the owner. */
+  proposer: string;
   owns: boolean;
   busy: boolean;
   perform: Perform;
@@ -336,6 +343,11 @@ function ExtensionItem({
         </span>
         <State extension={extension} />
         {extension.dev && <Badge variant="outline">In development</Badge>}
+        {extension.proposed_by && (
+          <Badge variant="outline" className="text-attention">
+            Proposed by {proposer}
+          </Badge>
+        )}
       </div>
       {extension.description && (
         <p className="text-sm text-muted-foreground">{extension.description}</p>
@@ -406,13 +418,18 @@ function ExtensionItem({
               Disable
             </Button>
           ) : (
-            <Button
-              size="sm"
-              disabled={busy}
-              onClick={() => act(() => enableExtension(extension.id))}
-            >
-              Enable
-            </Button>
+            <ConfirmButton
+              title="Enable"
+              tone="primary"
+              // An agent's extension says first what it runs, as an offer does.
+              confirm={
+                extension.proposed_by
+                  ? proposalWarning(extension, proposer)
+                  : undefined
+              }
+              busy={busy}
+              go={() => act(() => enableExtension(extension.id))}
+            />
           )}
           {extension.settings.length > 0 && (
             <Button
@@ -649,6 +666,7 @@ export function ExtensionList({
   official = [],
   marketplace,
   marketplaceError = "",
+  proposerOf = () => "an agent",
   installed = () => {},
   error,
   owns,
@@ -661,6 +679,8 @@ export function ExtensionList({
   /** What the indexes offer. */
   marketplace?: Marketplace;
   marketplaceError?: string;
+  /** Who proposed an extension, by name. */
+  proposerOf?: (extension: Extension) => string;
   /** One of them was installed, or failed to be. */
   installed?: () => void;
   error: string;
@@ -686,6 +706,7 @@ export function ExtensionList({
             <ExtensionItem
               key={extension.id}
               extension={extension}
+              proposer={proposerOf(extension)}
               owns={owns}
               busy={busy}
               perform={perform}
@@ -726,14 +747,18 @@ export function ExtensionList({
 }
 
 export function ExtensionsPage({
+  sessions,
   owns,
   busy,
   perform,
 }: {
+  /** The workspace's sessions, which may have proposed an extension. */
+  sessions: ChatSession[];
   owns: boolean;
   busy: boolean;
   perform: Perform;
 }) {
+  const actors = useContext(UiActors);
   const { extensions, error, reload } = useExtensions();
   const { official, reload: reloadOfficial } = useOfficialExtensions();
   const {
@@ -751,6 +776,7 @@ export function ExtensionsPage({
       official={official}
       marketplace={marketplace}
       marketplaceError={marketplaceError}
+      proposerOf={(extension) => proposer(extension, actors, sessions)}
       installed={() => {
         void reload();
         void reloadOfficial();
