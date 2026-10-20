@@ -9,6 +9,7 @@ import {
   installOffer,
   loadExtensionFolder,
   offerAction,
+  offerWarning,
   useExtensions,
   useMarketplace,
   useOfficialExtensions,
@@ -48,14 +49,15 @@ export default function Extensions() {
       .catch((e: unknown) => setFailure(errorMessage(e)))
       .finally(() => setBusy(undefined));
   };
-  // Code that runs inside the kernel is installed only once its publisher is named.
+  // Code that runs inside the kernel or the app is installed only once that is said.
   const install = (offer: MarketplaceOffer) => {
     const run = () =>
       add(`${offer.index} ${offer.id}`, () => installOffer(offer, url));
-    if (!offer.parts?.includes("kernel")) return run();
+    const warning = offerWarning(offer);
+    if (!warning) return run();
     Alert.alert(
       `${offerAction(offer) === "update" ? "Update" : "Install"} ${offer.name}?`,
-      `It runs inside the kernel, signed by ${offer.publisher}.`,
+      warning,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -179,6 +181,9 @@ export default function Extensions() {
                               ? `${offer.installed} → ${offer.version}`
                               : offer.version,
                             offer.parts?.includes("kernel") ? "Kernel" : null,
+                            offer.parts?.includes("interface")
+                              ? "Interface"
+                              : null,
                           ]
                             .filter(Boolean)
                             .join(" · ")}
