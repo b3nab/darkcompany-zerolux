@@ -66,9 +66,16 @@ toward, or a budget a session stops at.
 sessions are private, or shared to follow or to work in together. Join your other computers to
 run sessions there, and open a computer to the others, who use their own accounts.
 
+**Voice.** Dictate a message, or send a voice message with its transcript. Give an agent a
+voice of its own: describe it, listen to three, choose one; then hear its messages, in chats
+and in the Console. Agents' voices speak Italian and English. It all runs on the kernel's
+computer with open models. See [voice](docs/voice.md).
+
 **Extensions.** Add to your workspace what it does not do by itself: actions, events,
-triggers and settings, written in TypeScript. Each action works the same for people and agents.
-Load one from a folder while you write it. See [extensions](docs/extensions.md).
+triggers and settings, from a program in any language, with an SDK for TypeScript. Each action
+works the same for people and agents. Install official ones, such as voice, from
+**Extensions › Available**, or load one from a folder while you write it. See
+[extensions](docs/extensions.md).
 
 **Everywhere you are.** The web app, a desktop app for macOS, Linux and Windows with the kernel
 inside, and a mobile app for iPhone and Android. Four themes, each light and dark.
@@ -94,8 +101,9 @@ a workspace that runs elsewhere, to run your sessions there. See
 ### Kernel on a computer or server
 
 Each release has the kernel for macOS, Linux and Windows as a single file, with everything it
-runs inside: LiveKit, the web app, sign-in and the runners of the sessions it starts. Download
-the one for your system and start it:
+runs inside: LiveKit, the web app, sign-in, the runners of the sessions it starts and the
+official extensions, with Bun and uv to run them. Download the one for your system and start
+it:
 
 ```sh
 chmod +x zerolux-v0.0.1-aarch64-apple-darwin
@@ -130,8 +138,9 @@ kernel.
 ### From source
 
 You need Rust (current stable), a C/C++ toolchain, [Bun](https://bun.sh) 1.4.2 or later and
-`livekit-server` on the PATH. Bun is the only JavaScript tool: no Node, npm or Vite. The LiveKit
-client downloads its WebRTC build on the first compile; on Linux, see the
+`livekit-server` on the PATH, and [uv](https://docs.astral.sh/uv/) for voice. Bun is the only
+JavaScript tool: no Node, npm or Vite. The LiveKit client downloads its WebRTC build on the
+first compile; on Linux, see the
 [LiveKit SDK build requirements](https://github.com/livekit/rust-sdks#building).
 
 ```sh
