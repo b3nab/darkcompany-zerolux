@@ -31,6 +31,10 @@ from designing import Designer
 from hearing import MODELS, Ears, decode
 from speaking import MODELS as LANGUAGES
 from speaking import Voices, sentences
+
+# Each language with its name, the same for every client.
+NAMES = {"it": "Italian", "en": "English"}
+CHOICES = [{"const": code, "title": NAMES[code]} for code in LANGUAGES]
 from zerolux import Extension
 
 extension = Extension()
@@ -104,7 +108,7 @@ def split(input: dict, caller: dict) -> dict:
     input={"type": "object", "required": ["actor_id", "text"], "properties": {
         "actor_id": {"type": "string", "description": "The agent whose voice it is"},
         "text": {"type": "string", "minLength": 1, "maxLength": 2000},
-        "language": {"type": "string", "enum": list(LANGUAGES), "description": "Otherwise the text's own"},
+        "language": {"type": "string", "oneOf": CHOICES, "description": "Otherwise the text's own"},
     }},
     seconds=300,
 )
@@ -134,7 +138,7 @@ def listed(input: dict, caller: dict) -> dict:
         "actor_id": {"type": "string"},
         "description": {"type": "string", "minLength": 3, "maxLength": 500,
                         "description": "In English, e.g. a warm, calm adult voice with a slight rasp"},
-        "language": {"type": "string", "enum": list(LANGUAGES), "default": "it",
+        "language": {"type": "string", "oneOf": CHOICES, "default": "it",
                      "description": "The language it speaks best: its greeting and reference are in it"},
     }},
     effects="write", seconds=1800,
