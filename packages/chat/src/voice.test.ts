@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { setKernelFetch } from "./client";
 import {
+  audioLevel,
   chooseVoice,
   designVoice,
   forgetVoice,
@@ -148,4 +149,12 @@ test("a tap keeps recording, a hold ends at its release, and a press while recor
   expect(endsOnRelease({ at: 1000, recording: false }, 1200)).toBe(false);
   expect(endsOnRelease({ at: 1000, recording: false }, 1300)).toBe(true);
   expect(endsOnRelease({ at: 1000, recording: true }, 1050)).toBe(true);
+});
+
+test("the microphone's level draws silence at the floor and speech up to the top", () => {
+  expect(audioLevel(-160)).toBe(0);
+  expect(audioLevel(-55)).toBe(0);
+  expect(audioLevel(-32.5)).toBeCloseTo(0.5);
+  expect(audioLevel(-10)).toBe(1);
+  expect(audioLevel(0)).toBe(1);
 });

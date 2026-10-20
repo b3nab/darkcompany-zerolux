@@ -132,6 +132,18 @@ export async function spoken(
   else await send(said);
 }
 
+/** The quietest and the loudest the microphone's level is drawn between, in dBFS. */
+const QUIET = -55;
+const LOUD = -10;
+
+/**
+ * How loud the microphone hears now, from its level in dBFS (-160 to 0, as iOS, Android and a
+ * browser's analyser give it), as a bar's height from 0 to 1: speech fills it, silence keeps it
+ * at the floor.
+ */
+export const audioLevel = (db: number) =>
+  Math.min(1, Math.max(0, (db - QUIET) / (LOUD - QUIET)));
+
 /** How long a press on Dictate or Record lasts before its release ends the recording. */
 export const HOLD_MS = 300;
 
