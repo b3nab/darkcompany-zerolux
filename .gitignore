@@ -11,3 +11,6 @@ apps/web/generated/
 
 # Python
 __pycache__/
+
+# LiveKit's source, as the CI builds it
+.livekit/
