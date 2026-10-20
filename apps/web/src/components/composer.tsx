@@ -4,14 +4,22 @@ import {
   ArrowUpIcon,
   AudioLinesIcon,
   CheckIcon,
+  ChevronLeftIcon,
   LoaderCircleIcon,
   MicIcon,
   PlusIcon,
   SquareIcon,
+  Trash2Icon,
   XIcon,
 } from "lucide-react";
-import { composerAction, dictated, useVoiceInput } from "@zerolux/chat";
+import {
+  composerAction,
+  dictated,
+  HOLD_MS,
+  useVoiceInput,
+} from "@zerolux/chat";
 import type { VoiceTargets, VoiceUse } from "@zerolux/chat";
+import { cn } from "cn";
 import { useRecorder } from "../recorder";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +38,8 @@ export interface ComposerAdd {
 
 /** Holding the primary button long enough opens its other ways to send. */
 const HOLD = 450;
+/** How far left a held Dictate or Record is slid to drop its recording, in pixels. */
+const CANCEL = 110;
 
 /**
  * Where you write, to a chat or a session: one card holding what goes with the text, the
@@ -105,7 +115,7 @@ export function Composer({
     write: (said) => setText(dictated(text, said)),
   });
   const [holding, setHolding] = useState(false);
-  const held = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const menuHold = useRef<ReturnType<typeof setTimeout>>(undefined);
   const opened = useRef(false);
   const filled = !!text.trim() || extra;
   const canDictate = open && voice.transcription;
@@ -160,25 +170,82 @@ export function Composer({
   }[action];
 
   const submits = action === "send" && !speech.use;
-  // A tap records on until the next press; a hold records until it is released. The pointer
-  // stays with the button, so the release reaches it; a key press is a tap.
-  const talk = (use: VoiceUse): ComponentProps<"button"> => ({
+  // A tap records on until the next press; a hold records until it is released, and sliding
+  // the held button left drops the recording. The pointer stays with the button, so the
+  // release reaches it; a key press is a tap.
+  const [held, setHeld] = useState<"mic" | "primary">();
+  const [slide, setSlide] = useState(0);
+  const [binned, setBinned] = useState(false);
+  const touch = useRef<{
+    x: number;
+    timer?: ReturnType<typeof setTimeout>;
+    dropped: boolean;
+  }>(null);
+  const letGo = () => {
+    clearTimeout(touch.current?.timer);
+    touch.current = null;
+    setHeld(undefined);
+    setSlide(0);
+  };
+  const talk = (
+    use: VoiceUse,
+    holder: "mic" | "primary",
+  ): ComponentProps<"button"> => ({
     onPointerDown: (event) => {
       event.currentTarget.setPointerCapture(event.pointerId);
+      // A press that ends a recording is not held.
+      const ending = !!speech.use;
       speech.press(use);
+      touch.current = {
+        x: event.clientX,
+        dropped: false,
+        timer: ending ? undefined : setTimeout(() => setHeld(holder), HOLD_MS),
+      };
     },
-    onPointerUp: () => speech.release(),
+    onPointerMove: (event) => {
+      const at = touch.current;
+      if (!held || !at || at.dropped) return;
+      const dx = event.clientX - at.x;
+      setSlide(Math.max(-CANCEL, Math.min(0, dx)));
+      if (dx > -CANCEL) return;
+      at.dropped = true;
+      speech.discard();
+      letGo();
+      setBinned(true);
+      navigator.vibrate?.(30);
+      setTimeout(() => setBinned(false), 900);
+    },
+    onPointerUp: () => {
+      const dropped = touch.current?.dropped;
+      letGo();
+      if (!dropped) speech.release();
+    },
+    onPointerCancel: () => {
+      letGo();
+      speech.release();
+    },
     onClick: (event) => {
       if (event.detail !== 0) return;
       speech.press(use);
       speech.release();
     },
   });
+  // The held button grows and follows the pointer; let go, it springs back.
+  const lifted = (holder: "mic" | "primary") =>
+    held === holder
+      ? {
+          className: "relative z-10 shadow-lg",
+          style: {
+            transform: `translateX(${slide}px) scale(1.18)`,
+            transition: slide ? "none" : undefined,
+          },
+        }
+      : undefined;
   const voiced =
     action === "record"
-      ? talk("message")
+      ? talk("message", "primary")
       : speech.use
-        ? talk(speech.use)
+        ? talk(speech.use, "primary")
         : undefined;
   const button = voiced ? (
     <Button
@@ -187,8 +254,12 @@ export function Composer({
       aria-label={primary.label}
       title={primary.label}
       disabled={primary.disabled}
-      className="size-8 shrink-0 rounded-full"
       {...voiced}
+      style={lifted("primary")?.style}
+      className={cn(
+        "size-8 shrink-0 rounded-full transition-transform duration-300 ease-[cubic-bezier(0.3,1.45,0.5,1)]",
+        lifted("primary")?.className,
+      )}
     >
       {primary.icon}
     </Button>
@@ -209,13 +280,13 @@ export function Composer({
       }}
       onPointerDown={() => {
         if (!ways) return;
-        held.current = setTimeout(() => {
+        menuHold.current = setTimeout(() => {
           opened.current = true;
           setHolding(true);
         }, HOLD);
       }}
-      onPointerUp={() => clearTimeout(held.current)}
-      onPointerLeave={() => clearTimeout(held.current)}
+      onPointerUp={() => clearTimeout(menuHold.current)}
+      onPointerLeave={() => clearTimeout(menuHold.current)}
       onContextMenu={(event) => {
         if (!ways) return;
         event.preventDefault();
@@ -243,10 +314,38 @@ export function Composer({
           </p>
         )}
         <div className="flex flex-col rounded-xl border border-input bg-background shadow-xs transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/20">
-          {chips && !speech.use && (
+          {chips && !speech.use && !binned && (
             <div className="flex flex-wrap gap-2 px-3 pt-3">{chips}</div>
           )}
-          {speech.use ? (
+          {binned ? (
+            <div className="flex min-h-11 items-center px-3.5 pt-2.5">
+              <Trash2Icon
+                aria-label="Discarded"
+                className="composer-bin size-5 text-destructive"
+              />
+            </div>
+          ) : speech.use && held ? (
+            <div
+              role="status"
+              className="flex min-h-11 items-center gap-2.5 px-3.5 pt-2.5 text-sm"
+            >
+              <span
+                aria-hidden
+                className="size-2.5 animate-pulse rounded-full bg-destructive"
+              />
+              <span className="font-mono">{clock}</span>
+              <span
+                className="flex flex-1 animate-in items-center justify-center gap-1 whitespace-nowrap text-muted-foreground fade-in duration-150"
+                style={{
+                  opacity: Math.max(0, Math.min(1, 1 + slide / (CANCEL * 0.9))),
+                  transform: `translateX(${slide / 2}px)`,
+                }}
+              >
+                <ChevronLeftIcon className="composer-nudge size-4 text-faint" />
+                Slide to cancel
+              </span>
+            </div>
+          ) : speech.use ? (
             <div
               role="status"
               className="flex min-h-11 items-center gap-2.5 px-3.5 pt-2.5 font-mono text-sm"
@@ -284,17 +383,20 @@ export function Composer({
             />
           )}
           <div className="flex items-center gap-1 px-1.5 pb-1.5">
-            {speech.use ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Discard"
-                title="Discard"
-                onClick={speech.discard}
-              >
-                <XIcon />
-              </Button>
+            {speech.use || binned ? (
+              !held &&
+              !binned && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Discard"
+                  title="Discard"
+                  onClick={speech.discard}
+                >
+                  <XIcon />
+                </Button>
+              )
             ) : (
               <>
                 {add && add.length > 0 && (
@@ -337,8 +439,12 @@ export function Composer({
                 title="Dictate"
                 aria-pressed={speech.use === "dictation"}
                 disabled={busy || speech.transcribing}
-                className="aria-pressed:text-destructive"
-                {...talk("dictation")}
+                {...talk("dictation", "mic")}
+                style={lifted("mic")?.style}
+                className={cn(
+                  "transition-transform duration-300 ease-[cubic-bezier(0.3,1.45,0.5,1)] aria-pressed:bg-destructive/12 aria-pressed:text-destructive",
+                  lifted("mic")?.className,
+                )}
               >
                 <MicIcon />
               </Button>

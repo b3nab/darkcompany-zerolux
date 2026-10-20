@@ -128,3 +128,41 @@
     background-position: 0 0;
   }
 }
+
+/* A dropped recording: the bin springs in, then shakes once. */
+.composer-bin {
+  animation:
+    composer-bin-in 0.45s cubic-bezier(0.3, 1.6, 0.5, 1) both,
+    composer-bin-shake 0.38s 0.3s ease-in-out;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+@keyframes composer-bin-in {
+  from {
+    transform: scale(0);
+  }
+}
+@keyframes composer-bin-shake {
+  25% {
+    rotate: -14deg;
+  }
+  50% {
+    rotate: 12deg;
+  }
+  75% {
+    rotate: -6deg;
+  }
+}
+/* Slide to cancel: the arrow nudges toward where to slide. */
+.composer-nudge {
+  animation: composer-nudge 0.9s ease-in-out infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+@keyframes composer-nudge {
+  50% {
+    transform: translateX(-4px);
+  }
+}
