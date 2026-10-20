@@ -80,6 +80,30 @@ enum ExtAction {
         /// Where to write it; by default a folder named as its id's name, here.
         folder: Option<PathBuf>,
     },
+    /// A new publisher's key, which signs its packages; its public key is what an index lists.
+    Key {
+        /// The publisher, as in its extensions' ids.
+        publisher: String,
+        /// Where to keep it; by default `~/.zerolux/keys/<publisher>.json`.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Build the extension's kernel module for this computer, into `kernel/<platform>/`.
+    Build {
+        #[arg(default_value = ".")]
+        folder: PathBuf,
+    },
+    /// Pack the extension into a signed `<id>-<version>.zlx`.
+    Pack {
+        #[arg(default_value = ".")]
+        folder: PathBuf,
+        /// The publisher's key; by default `~/.zerolux/keys/<publisher>.json`.
+        #[arg(long)]
+        key: Option<PathBuf>,
+        /// Where to write the package.
+        #[arg(long, default_value = "dist")]
+        out: PathBuf,
+    },
     /// Install an extension from its folder in the kernel running on this computer, as its
     /// owner, and follow it: the kernel starts it again as its files change.
     Dev {
@@ -118,6 +142,15 @@ pub fn init_logging() {
                 .unwrap_or_else(|_| "zerolux=info,tower_http=info".into()),
         )
         .try_init();
+}
+
+/// Where a publisher's key is kept by default.
+fn key_file(publisher: &str) -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    home.join(".zerolux/keys").join(format!("{publisher}.json"))
 }
 
 /// Installs the extension in `folder` in the local kernel and follows it: its state as it
@@ -258,6 +291,29 @@ pub async fn run() -> anyhow::Result<()> {
                 println!("{}", made.display());
             }
             ExtAction::Dev { folder, data_dir } => dev(&folder, &data_dir).await?,
+            ExtAction::Key { publisher, out } => {
+                let path = out.unwrap_or_else(|| key_file(&publisher));
+                let key = crate::extensions::package::Key::new(&publisher)?;
+                key.write(&path)?;
+                eprintln!("{}", path.display());
+                println!("{}", key.public);
+            }
+            ExtAction::Build { folder } => {
+                println!("{}", crate::extensions::package::build(&folder)?.display());
+            }
+            ExtAction::Pack { folder, key, out } => {
+                let manifest = crate::extensions::manifest::Manifest::parse(
+                    &std::fs::read_to_string(folder.join(crate::extensions::manifest::FILE))?,
+                )?;
+                let key = key.unwrap_or_else(|| key_file(&manifest.extension.publisher));
+                let key = crate::extensions::package::Key::read(&key)?;
+                let package = crate::extensions::package::pack(&folder, &key, &out)?;
+                println!("{}", package.display());
+                println!(
+                    "sha256 {}",
+                    crate::extensions::package::sha256(&std::fs::read(&package)?)
+                );
+            }
         },
         Command::Doctor => println!(
             "{}",

@@ -784,3 +784,120 @@ async fn a_kernel_module_is_loaded_while_the_kernel_runs() {
     server.abort();
     livekit.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn extensions_are_installed_from_an_index_only_as_their_publisher_signed_them() {
+    use zerolux::extensions::{library, package};
+    if std::process::Command::new("livekit-server")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("livekit-server not installed: skipped");
+        return;
+    }
+    let built = tally_module();
+    let dir = tempfile::tempdir().unwrap();
+    // A publisher packs its kernel module for this computer and signs it.
+    let folder = dir.path().join("tally");
+    let modules = folder.join("kernel").join(library::platform());
+    std::fs::create_dir_all(&modules).unwrap();
+    std::fs::copy(&built, modules.join(library::file_name("tally"))).unwrap();
+    std::fs::write(
+        folder.join("zerolux-extension.toml"),
+        "[extension]\nid = \"zerolux.tally\"\nname = \"Tally\"\nversion = \"1.0.0\"\npublisher = \"zerolux\"\n\n[kernel]\nlibrary = \"tally\"\n",
+    )
+    .unwrap();
+    let key = package::Key::new("zerolux").unwrap();
+    let site = dir.path().join("site");
+    let packed = package::pack(&folder, &key, &site.join("packages")).unwrap();
+    let digest = package::sha256(&std::fs::read(&packed).unwrap());
+    // Another key signs a copy that claims to be the same.
+    let forged = package::pack(
+        &folder,
+        &package::Key::new("zerolux").unwrap(),
+        &site.join("forged"),
+    )
+    .unwrap();
+    let forged_digest = package::sha256(&std::fs::read(&forged).unwrap());
+    let listing = |version: &str, path: &str, sha256: &str| {
+        json!({"version": version, "kernel": ">=0.0.1",
+            "packages": {library::platform(): {"url": path, "sha256": sha256}}})
+    };
+    std::fs::write(
+        site.join("index.json"),
+        json!({"name": "Test", "publishers": {"zerolux": {"key": key.public}},
+            "extensions": [
+                {"id": "zerolux.tally", "name": "Tally", "publisher": "zerolux",
+                    "versions": [listing("1.0.0", "packages/zerolux.tally-1.0.0.zlx", &digest),
+                        listing("1.0.1", "forged/zerolux.tally-1.0.0.zlx", &forged_digest),
+                        listing("1.0.2", "packages/zerolux.tally-1.0.0.zlx", &"0".repeat(64)),
+                        {"version": "9.0.0", "kernel": ">=99", "packages": {"any": {"url": "x", "sha256": "x"}}}]},
+            ]})
+        .to_string(),
+    )
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let index = format!("http://{}/index.json", listener.local_addr().unwrap());
+    let site_server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().fallback_service(tower_http::services::ServeDir::new(site)),
+        )
+        .await
+        .unwrap();
+    });
+    // SAFETY: set before the kernel reads it, in this test only.
+    unsafe { std::env::set_var("ZEROLUX_EXTENSION_INDEXES", &index) };
+    let (kernel, runtime, livekit, server, _database) = kernel_for(dir.path()).await;
+    let (status, offered) = kernel
+        .call(Method::GET, "/extensions/marketplace", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{offered}");
+    // The newest version that runs here: 9.0.0 needs another kernel.
+    assert_eq!(offered["offers"][0]["id"], "zerolux.tally");
+    assert_eq!(offered["offers"][0]["version"], "1.0.2");
+    // Not as the index lists it, or not signed by its publisher: refused.
+    for version in ["1.0.2", "1.0.1"] {
+        let (status, refused) = kernel
+            .call(
+                Method::POST,
+                "/extensions/marketplace/install",
+                Some(json!({"index": index, "id": "zerolux.tally", "version": version})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{version}: {refused}");
+    }
+    let (status, _) = kernel
+        .call(
+            Method::POST,
+            "/extensions/marketplace/install",
+            Some(json!({"index": "http://elsewhere/index.json", "id": "zerolux.tally"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // As signed: installed, enabled, and run in the kernel.
+    let (status, installed) = kernel
+        .call(
+            Method::POST,
+            "/extensions/marketplace/install",
+            Some(json!({"index": index, "id": "zerolux.tally", "version": "1.0.0"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{installed}");
+    assert_eq!(installed["extension"]["dev"], false);
+    assert_eq!(installed["extension"]["running"], true);
+    let (status, added) = kernel
+        .call(Method::POST, "/ext/zerolux.tally/add", Some(json!({})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    let (_, offered) = kernel
+        .call(Method::GET, "/extensions/marketplace", None)
+        .await;
+    assert_eq!(offered["offers"][0]["installed"], "1.0.0");
+    unsafe { std::env::remove_var("ZEROLUX_EXTENSION_INDEXES") };
+    runtime.shutdown().await.unwrap();
+    server.abort();
+    site_server.abort();
+    livekit.shutdown().await.unwrap();
+}

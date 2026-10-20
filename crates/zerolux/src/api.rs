@@ -349,6 +349,11 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/extensions", get(list_extensions))
         .route("/extensions/folder", post(install_extension_folder))
         .route("/extensions/available", get(available_extensions))
+        .route("/extensions/marketplace", get(marketplace_offers))
+        .route(
+            "/extensions/marketplace/install",
+            post(install_from_marketplace),
+        )
         .route(
             "/extensions/available/{id}",
             post(install_official_extension),
@@ -3009,6 +3014,42 @@ async fn extension_ui_file(
         bytes,
     )
         .into_response())
+}
+
+/// What the extension indexes offer.
+async fn marketplace_offers(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+) -> Result<Json<Value>, ApiFailure> {
+    Ok(Json(
+        runtime(&state)?
+            .extensions
+            .offers(&who)
+            .await
+            .map_err(said)?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Offer {
+    index: String,
+    id: String,
+    version: Option<String>,
+}
+
+/// Installs an extension from an index, and enables it.
+async fn install_from_marketplace(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    ChatJson(input): ChatJson<Offer>,
+) -> Result<Json<Value>, ApiFailure> {
+    let extension = runtime(&state)?
+        .extensions
+        .install_offer(&who, &input.index, &input.id, input.version.as_deref())
+        .await
+        .map_err(said)?;
+    Ok(Json(json!({ "extension": extension })))
 }
 
 /// The official extensions ZeroLux brings, installed or not.

@@ -5,6 +5,8 @@
 
 pub mod library;
 pub mod manifest;
+pub mod marketplace;
+pub mod package;
 pub mod process;
 pub mod scaffold;
 
@@ -332,6 +334,114 @@ impl Extensions {
                 description: manifest.extension.description,
             })
             .collect())
+    }
+
+    /// What the indexes offer: each extension's newest version that runs here, with what is
+    /// installed of it; an index that cannot be read is listed with its error.
+    pub async fn offers(&self, who: &ChatIdentity) -> Result<Value> {
+        ensure!(who.is_person(), Error::Forbidden);
+        let installed: HashMap<String, String> = extensions::Entity::find()
+            .all(self.store.db())
+            .await?
+            .into_iter()
+            .map(|row| (row.id, row.version))
+            .collect();
+        let (mut offers, mut errors) = (Vec::new(), Vec::new());
+        for url in marketplace::indexes() {
+            match marketplace::read(&url).await {
+                Ok(index) => {
+                    for listing in &index.extensions {
+                        let Some(release) = listing.newest() else {
+                            continue;
+                        };
+                        offers.push(json!({"index": url, "id": listing.id,
+                            "name": listing.name, "description": listing.description,
+                            "publisher": listing.publisher, "version": release.version,
+                            "installed": installed.get(&listing.id)}));
+                    }
+                }
+                Err(error) => errors.push(json!({"index": url, "error": format!("{error:#}")})),
+            }
+        }
+        Ok(json!({"offers": offers, "errors": errors}))
+    }
+
+    /// Installs an extension from one of the indexes, its newest version or the one named:
+    /// downloaded, checked against the index, unpacked only if its publisher signed it, and
+    /// enabled.
+    pub async fn install_offer(
+        &self,
+        who: &ChatIdentity,
+        index_url: &str,
+        id: &str,
+        version: Option<&str>,
+    ) -> Result<Installed> {
+        self.owner_only(who).await?;
+        ensure!(
+            marketplace::indexes()
+                .iter()
+                .any(|known| known == index_url),
+            Error::Invalid("This kernel does not read that index".into())
+        );
+        let index = marketplace::read(index_url).await?;
+        let listing = index
+            .extensions
+            .iter()
+            .find(|listing| listing.id == id)
+            .ok_or(Error::NotFound)?;
+        let release = match version {
+            Some(version) => listing
+                .versions
+                .iter()
+                .find(|release| release.version == version)
+                .ok_or(Error::NotFound)?,
+            None => listing.newest().ok_or_else(|| {
+                Error::Invalid("No version of it runs on this computer and kernel".into())
+            })?,
+        };
+        let package = release.package().ok_or_else(|| {
+            Error::Invalid("That version does not run on this computer and kernel".into())
+        })?;
+        let key = index
+            .publishers
+            .get(&listing.publisher)
+            .ok_or_else(|| {
+                Error::Invalid(format!("The index has no key for {}", listing.publisher))
+            })?
+            .key
+            .clone();
+        let bytes = marketplace::download(index_url, package).await?;
+        let packages = self.root.join("packages").join(id);
+        let into = packages.join(format!(
+            "{}-{}",
+            release.version,
+            &package.sha256.to_lowercase()[..12.min(package.sha256.len())]
+        ));
+        if !into.is_dir() {
+            let target = into.clone();
+            let manifest =
+                tokio::task::spawn_blocking(move || package::unpack(&bytes, &key, &target))
+                    .await??;
+            if manifest.extension.id != id
+                || manifest.extension.version != release.version
+                || manifest.extension.publisher != listing.publisher
+            {
+                let _ = std::fs::remove_dir_all(&into);
+                bail!(Error::Invalid(
+                    "The package is not the extension its index lists".into()
+                ));
+            }
+        }
+        let installed = self.install_from(&into.to_string_lossy(), false).await?;
+        // Versions no longer installed are let go.
+        if let Ok(entries) = std::fs::read_dir(&packages) {
+            for entry in entries.flatten() {
+                if entry.path() != into {
+                    let _ = std::fs::remove_dir_all(entry.path());
+                }
+            }
+        }
+        Ok(installed)
     }
 
     /// Installs one of the official extensions, and enables it.
