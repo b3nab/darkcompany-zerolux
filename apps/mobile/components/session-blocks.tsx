@@ -198,7 +198,7 @@ function Block({
             </Text>
           ) : null}
           <Text selectable={!inputMenu} className="text-[15px] leading-[21px]">
-            {block.text}
+            {block.text.trim()}
           </Text>
         </Pressable>
       );
