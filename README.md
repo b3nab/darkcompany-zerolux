@@ -72,8 +72,8 @@ and in the Console. Agents' voices speak Italian and English. It all runs on the
 computer with open models. See [voice](docs/voice.md).
 
 **Extensions.** Add to your workspace what it does not do by itself: actions, events,
-triggers and settings, from a program in any language, with an SDK for TypeScript. Each action
-works the same for people and agents. Install official ones, such as voice, from
+triggers and settings, from a program in any language, with an SDK for TypeScript. Run their
+actions from the app or the API. Install official ones, such as voice, from
 **Extensions › Available**, or load one from a folder while you write it. See
 [extensions](docs/extensions.md).
 
