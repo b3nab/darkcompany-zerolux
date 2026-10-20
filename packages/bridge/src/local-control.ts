@@ -10,6 +10,7 @@ import {
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { nativeProcess } from "./native-process.ts";
 
 /** A live session's identity and state, as its descriptor and `describe` show them. */
 export interface Description extends Record<string, unknown> {
@@ -81,7 +82,8 @@ export class LocalControl {
           instance_id: this.instanceId,
           endpoint,
           nonce: this.nonce,
-          pid: process.pid,
+          // The native as its host recorded it (on Windows, the gate that serves it).
+          pid: nativeProcess().pid,
           ...this.host.describe(),
         }),
         { flag: "wx", mode: 0o600 },
