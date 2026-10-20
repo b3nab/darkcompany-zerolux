@@ -553,6 +553,13 @@ function MarketplaceSection({
                   <p className="text-xs text-muted-foreground">
                     {offer.description}
                   </p>
+                  {offer.parts && (
+                    <p className="font-mono text-[11px] text-faint">
+                      {offer.parts
+                        .map((part) => parts[part] ?? part)
+                        .join(" · ")}
+                    </p>
+                  )}
                 </div>
                 {action === "installed" ? (
                   <Badge variant="outline">Installed</Badge>
