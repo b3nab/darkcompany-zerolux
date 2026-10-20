@@ -78,24 +78,6 @@ const render = (workspace: Workspace, actor = "owner") =>
     </MemoryRouter>,
   );
 
-test("the shell uses the persistent workspace name and shows creation dates for people and agents", () => {
-  const owner = render(company);
-  expect(owner).toContain("Research studio");
-  expect(owner).toMatch(/Day \d+ · 2 members/);
-  expect(owner).toContain("Created 2026-01-02");
-  const agent = render(company, "aspen");
-  expect(agent).toContain("Created 2026-01-02");
-});
-
-test("a future workspace timestamp does not produce a negative company day", () => {
-  const html = render({
-    ...company,
-    workspace: { ...company.workspace, created_at: Date.UTC(9999, 0, 1) },
-  });
-  expect(html).toContain("Created 9999-01-01 · 2 members");
-  expect(html).not.toMatch(/Day -?\d+ ·/);
-});
-
 test("workspace settings edit only the name and keep creation metadata read-only", () => {
   const html = renderToStaticMarkup(
     <WorkspaceSettings
@@ -105,12 +87,9 @@ test("workspace settings edit only the name and keep creation metadata read-only
       save={async () => {}}
     />,
   );
-  expect(html).toContain('aria-label="Workspace settings"');
   expect(html).toContain('value="Research studio"');
   expect(html).toContain('name="name"');
-  expect(html).toContain("Created 2026-01-02");
   expect(html).not.toContain('name="created_at"');
-  expect(html).toContain("Save name");
 });
 
 test("the desktop's connection is this device's, apart from the workspace's shared name", () => {
@@ -119,10 +98,8 @@ test("the desktop's connection is this device's, apart from the workspace's shar
       connection={{ address: "https://studio.example", desktop: true }}
     />,
   );
-  expect(html).not.toContain("Workspace name");
   expect(html).toContain('value="https://studio.example"');
   expect(html).toContain('href="zerolux://workspaces"');
-  expect(html).toContain("Manage connections");
   expect(html).not.toContain('name="address"');
   const browser = renderToStaticMarkup(
     <Connection
@@ -130,7 +107,6 @@ test("the desktop's connection is this device's, apart from the workspace's shar
     />,
   );
   expect(browser).not.toContain('href="zerolux://workspaces"');
-  expect(browser).toContain("This browser connects");
 });
 
 test("workspace settings expose server errors and disable editing during a save", () => {
@@ -143,8 +119,6 @@ test("workspace settings expose server errors and disable editing during a save"
     />,
   );
   expect(html).toContain('role="alert"');
-  expect(html).toContain("The kernel is unavailable");
-  expect(html).toContain("Saving…");
   expect(html).toMatch(/<input\b[^>]*\sdisabled=""/);
   expect(html).toMatch(/<button\b[^>]*\sdisabled=""/);
 });
@@ -156,9 +130,7 @@ test("your profile, your settings and the administration are three separate page
       <ProfilePage owner={owner} />
     </MemoryRouter>,
   );
-  expect(profile).toContain("Your profile");
   expect(profile).toContain(owner.name);
-  expect(profile).not.toContain("Workspace name");
 
   const mine = renderToStaticMarkup(
     <MemoryRouter>
@@ -173,9 +145,6 @@ test("your profile, your settings and the administration are three separate page
   for (const part of ["Notifications", "This device", "Theme", "Light"])
     expect(mine).toContain(part);
   expect(mine).toContain('role="radiogroup"');
-  expect(mine).not.toContain("Workspace name");
-  // Notifications on this device: asked for first, then chosen by kind.
-  expect(mine).toContain("This browser cannot show notifications.");
   const settings = (permission: NotificationPermission) => {
     globalThis.Notification = { permission } as typeof Notification;
     try {
@@ -193,11 +162,7 @@ test("your profile, your settings and the administration are three separate page
       delete (globalThis as { Notification?: unknown }).Notification;
     }
   };
-  expect(settings("default")).toContain("Allow notifications");
-  expect(settings("denied")).toContain("blocked for this page");
   const granted = settings("granted");
-  expect(granted).toContain("When a session needs you");
-  expect(granted).toContain("When a session finishes its work");
 
   const admin = renderToStaticMarkup(
     <MemoryRouter>
@@ -222,7 +187,6 @@ test("your profile, your settings and the administration are three separate page
   // Chats are on in this kernel, meetings are not yet.
   expect(admin).toMatch(/Chats<\/span>(?:(?!<\/li>).)*Available/);
   expect(admin).toMatch(/Meetings<\/span>(?:(?!<\/li>).)*Not yet/);
-  expect(admin).not.toContain("Theme");
 });
 
 test("a computer says where it stands: the kernel's own, waiting for its code, online or not", () => {

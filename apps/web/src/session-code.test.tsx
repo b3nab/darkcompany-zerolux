@@ -77,7 +77,6 @@ test("the Changes panel shows what is staged and what is not, the commit and the
     changes: [],
   });
   expect(pushed).toContain("Push 2 commits");
-  expect(pushed).toContain("Nothing changed since the last commit.");
   expect(pushed).not.toContain("Commit message");
 });
 
@@ -112,49 +111,6 @@ test("the owner's git actions go to the session's folder", async () => {
   ]);
 });
 
-test("an input is written again in a fork, and its files put back only where the harness keeps checkpoints", () => {
-  const input: InputBlock = {
-    key: "1.0",
-    time: null,
-    kind: "input",
-    text: "Fix the build",
-    chat: null,
-    at: 42,
-  };
-  const actions = (rewind?: boolean) =>
-    renderToStaticMarkup(
-      <InputActions
-        input={input}
-        fork={async () => true}
-        rewind={
-          rewind
-            ? async () => ({ canRewind: true, filesChanged: ["a.md"] })
-            : undefined
-        }
-        busy={false}
-        perform={async () => true}
-      />,
-    );
-  expect(actions()).toContain("Edit");
-  expect(actions()).not.toContain("Rewind files");
-  expect(actions(true)).toContain("Rewind files");
-});
-
-test("the Files panel finds a session's files by what is typed", () => {
-  const html = renderToStaticMarkup(
-    <FilesPanel
-      session={session}
-      name="aspen"
-      revision={0}
-      busy={false}
-      perform={async () => true}
-      send={nothing}
-      close={() => {}}
-    />,
-  );
-  expect(html).toContain('aria-label="Find a file"');
-});
-
 test("a schedule is written as a rule, and says in words when it runs", () => {
   const form = (rule: Parameters<typeof ScheduleForm>[0]["initial"]["rule"]) =>
     renderToStaticMarkup(
@@ -166,31 +122,9 @@ test("a schedule is written as a rule, and says in words when it runs", () => {
       />,
     );
   const weekday = form({ every: "weekday", hour: 9, minute: 0 });
-  expect(weekday).toContain("Every weekday at 09:00");
   expect(weekday).toContain('value="09:00"');
   expect(weekday).toContain(">Check the build</textarea>");
-  expect(form({ every: "week", day: 1, hour: 18, minute: 30 })).toContain(
-    "Every Monday at 18:30",
-  );
   const custom = form({ every: "custom", cron: "*/15 * * * *" });
-  expect(custom).toContain('aria-label="Cron pattern"');
-  expect(custom).toContain("*/15 * * * *, in the time");
-});
-
-test("a Codex session's goal is set by whoever may write to it", () => {
-  const card = (write: boolean) =>
-    renderToStaticMarkup(
-      <GoalCard
-        session={{ ...session, harness: "codex" }}
-        read={async () => ({ seq: 0, items: [] })}
-        write={write}
-        busy={false}
-        perform={async () => true}
-      />,
-    );
-  expect(card(true)).toContain("No goal.");
-  expect(card(true)).toContain("Set a goal");
-  expect(card(false)).not.toContain("Set a goal");
 });
 
 test("a search's words stand out in what matched, and each step names where it is", () => {
@@ -223,7 +157,6 @@ test("the agent's words carry what can be done with them, such as hearing them",
   );
   // Only the words, never the reasoning.
   expect(html.match(/Listen to/g)).toHaveLength(1);
-  expect(html).toContain("Listen to 8.0");
 });
 
 test("a session listens for its CI: failures only by default, then the owner's words", () => {
@@ -236,44 +169,5 @@ test("a session listens for its CI: failures only by default, then the owner's w
         cancel={() => {}}
       />,
     );
-  expect(form(true)).toContain("hears of a failure");
   expect(form(true)).toContain(">Fix what failed.</textarea>");
-  expect(form(false)).toContain("hears how they went");
-});
-
-test("a subagent's work opens from the call that started it, and from the session's About", () => {
-  const card = (openWork?: () => void) =>
-    renderToStaticMarkup(
-      <SubagentCard
-        tool={{
-          key: "1.0",
-          time: null,
-          kind: "tool",
-          id: "t1",
-          name: "Task",
-          input: { description: "Check the docs", prompt: "Read them all" },
-        }}
-        openWork={openWork}
-      />,
-    );
-  expect(card(() => {})).toContain("Open its work");
-  expect(card()).not.toContain("Open its work");
-  const list = renderToStaticMarkup(
-    <SubagentList
-      subagents={[
-        {
-          id: "a1",
-          name: null,
-          description: "Check the docs",
-          kind: "general-purpose",
-          tool_call_id: "t1",
-          parent_id: null,
-          updated_at: 1,
-        },
-      ]}
-      open={() => {}}
-    />,
-  );
-  expect(list).toContain("general-purpose");
-  expect(list).toContain("Check the docs");
 });

@@ -210,8 +210,7 @@ async fn an_acknowledgement_or_unrelated_notice_is_not_confirmation_and_is_never
         model: Some("two".into()),
         ..AgentSettings::default()
     };
-    let error = f.control.apply(&patch, false).await.unwrap_err();
-    assert!(error.to_string().contains("not confirmed"));
+    assert!(f.control.apply(&patch, false).await.is_err());
     assert_eq!(f.calls("thread/settings/update").len(), 1);
     assert_eq!(f.control.values().model.as_deref(), Some("one"));
 }

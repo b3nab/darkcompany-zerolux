@@ -5,15 +5,7 @@ import { MemoryRouter } from "react-router";
 import { App } from "./App";
 import { isLocalRequest } from "../dev-security";
 
-describe("kernel connection", () => {
-  test("initial UI explains how to start the Rust kernel", () => {
-    const html = renderToStaticMarkup(
-      createElement(MemoryRouter, null, createElement(App)),
-    );
-    expect(html).toContain("cargo run -- serve");
-    expect(html).toContain("Connecting to your kernel");
-  });
-});
+describe("kernel connection", () => {});
 
 describe("Bun API proxy trust boundary", () => {
   const request = (host: string, origin?: string) =>

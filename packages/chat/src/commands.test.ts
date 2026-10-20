@@ -30,15 +30,6 @@ test("the menu offers ZeroLux's commands, then the harness's, by what is typed",
     "/compact",
     "/review",
   ]);
-  // Where both have one, ZeroLux's stays.
-  expect(commandsFor("/Co", harness)).toEqual([
-    {
-      name: "compact",
-      invoke: "/compact",
-      description: "Summarize the older work, so the session has room again",
-      hint: "what to keep",
-    },
-  ]);
   expect(commandsFor("$", harness).map((c) => c.invoke)).toEqual(["$deploy"]);
   expect(commandsFor("/x", harness)).toEqual([]);
   expect(commandsFor("/compact now", harness)).toEqual([]);

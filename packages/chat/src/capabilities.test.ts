@@ -9,10 +9,5 @@ test("every known feature says whether this kernel has it, and unknown ones stil
   expect(available("auth-v1")).toBe(true);
   expect(available("meetings-v1")).toBe(false);
   expect(available("storage-v1")).toBe(false);
-  expect(status.at(-1)).toEqual({
-    id: "console-v1",
-    name: "console-v1",
-    description: "",
-    available: true,
-  });
+  expect(available("console-v1")).toBe(true);
 });

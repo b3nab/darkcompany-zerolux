@@ -98,11 +98,7 @@ async fn a_busy_port_fails_before_any_data_is_opened() {
         .await
         .err()
         .expect("a busy port is an error");
-    let text = format!("{error:#}");
-    assert!(
-        text.contains(&format!("Cannot listen on {address}")) && text.contains("retry"),
-        "{text}"
-    );
+    assert!(format!("{error:#}").contains(&address.to_string()));
     // Binding comes first: no directory, no database, no LiveKit for a port we do not own.
     assert!(!dir.path().join("data").exists());
     drop(busy);

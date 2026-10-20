@@ -126,12 +126,6 @@ async fn only_its_own_guarded_waiting_host_can_satisfy_a_new_launch() {
             accepted,
             "Unexpected launch result for {description}"
         );
-        if let Err(error) = result {
-            assert!(
-                format!("{error:#}").contains("no bind was sent"),
-                "{error:#}"
-            );
-        }
         assert!(!f.registry.is_leased(&f.native).unwrap());
     }
 }

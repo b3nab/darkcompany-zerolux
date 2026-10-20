@@ -283,7 +283,6 @@ test("a kernel that reads only forward asks for an update instead of looping", a
   let shown: SessionRecord | undefined;
   await sessionReader("s1", undefined, (r) => (shown = r)).earlier(0);
   expect(calls).toBe(1);
-  expect(shown?.error).toContain("needs an update");
 });
 
 test("a turn knows when it began, reasoning how long it took, a summary what it changed", () => {

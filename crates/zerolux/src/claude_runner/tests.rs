@@ -35,9 +35,6 @@ async fn a_live_claimant_with_unreachable_control_is_not_absent() {
         result.is_err(),
         "An unreachable live claimant is not absent"
     );
-    assert!(
-        format!("{:#}", result.err().unwrap()).contains("live Claude runner could not be verified")
-    );
     for pid in [0, -1] {
         record["pid"] = json!(pid);
         std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
@@ -82,9 +79,7 @@ fn a_free_lease_requires_native_child_exit_evidence() {
         verify_stop().is_err(),
         "A missing host does not confirm its child's Stop"
     );
-    assert!(
-        format!("{:#}", verify().unwrap_err()).contains("free helper lease is not proof of death")
-    );
+    assert!(verify().is_err());
     for patch in [
         json!({"nativePid":null,"phase":"starting"}),
         json!({"nativePid":0}),

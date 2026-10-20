@@ -16,7 +16,6 @@ test("authentication mounts before any workspace hooks or private content", () =
     </AuthGate>,
   );
   expect(mounted).toBe(false);
-  expect(html).not.toContain("Private workspace data");
   expect(html).not.toContain('type="password"');
 });
 

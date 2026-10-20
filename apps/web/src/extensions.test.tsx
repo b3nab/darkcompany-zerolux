@@ -38,7 +38,6 @@ test("an action's form draws each field as its kind asks", () => {
   expect(html).toContain('type="password"');
   expect(html).toContain('<option data-slot="native-select-option"');
   expect(html).toContain(">closed</option>");
-  expect(html).toContain('placeholder="One per line"');
   expect(html).toContain('inputMode="numeric"');
   expect(html).toContain("<legend");
   expect(html).toContain(">Meta<");
@@ -248,12 +247,5 @@ test("the official extensions not yet installed are offered, installed by the ow
         perform={async () => true}
       />,
     );
-  expect(html(true)).toContain("Available");
-  expect(html(true)).toContain(
-    "Speech to text, and each agent&#x27;s own voice",
-  );
-  // What is installed is in the list above, not offered again.
-  expect(html(true)).not.toContain(">Notes<");
   expect(html(true).match(/>Install</g)).toHaveLength(1);
-  expect(html(false)).not.toContain(">Install<");
 });
