@@ -54,7 +54,7 @@ import type {
   Storage,
 } from "@zerolux/chat";
 import { ApprovalCard, openApprovals } from "./Approvals";
-import { Composer } from "@/components/composer";
+import { Composer, ComposerChip } from "@/components/composer";
 import { Listen } from "@/components/listen";
 import { useReadAloud } from "./read-aloud";
 import { useMe } from "./AuthGate";
@@ -921,14 +921,39 @@ function ChatComposer({
     setText(next);
     draft.current = newId();
   };
+  // Files wait in the card, an image as itself, and go when the message does.
+  const [picked, setPicked] = useState<{ file: File; url?: string }[]>([]);
+  const shown = useRef(picked);
+  shown.current = picked;
+  useEffect(
+    () => () =>
+      shown.current.forEach(({ url }) => url && URL.revokeObjectURL(url)),
+    [],
+  );
+  const drop = (file: File) =>
+    setPicked((all) =>
+      all.filter((one) => {
+        if (one.file !== file) return true;
+        if (one.url) URL.revokeObjectURL(one.url);
+        return false;
+      }),
+    );
 
   async function submit() {
-    if (!text.trim() || tooLong || !agents.length) return;
+    if ((!text.trim() && !picked.length) || tooLong || !agents.length) return;
     sent();
     const id = draft.current;
-    const ok = await perform(() =>
-      chat.send(conversation, { id, text: text.trim() }),
-    );
+    const going = picked;
+    const ok = await perform(async () => {
+      if (going.length) {
+        await storage.upload(
+          going.map(({ file }) => file),
+          { conversation_id: conversation.id },
+        );
+        going.forEach(({ file }) => drop(file));
+      }
+      if (text.trim()) await chat.send(conversation, { id, text: text.trim() });
+    });
     // Only the draft that was sent is cleared: what you typed meanwhile is a new draft.
     if (ok && draft.current === id) write("");
   }
@@ -941,10 +966,17 @@ function ChatComposer({
         multiple
         hidden
         onChange={(event) => {
-          const picked = [...(event.target.files ?? [])];
+          const added = [...(event.target.files ?? [])];
           event.target.value = "";
-          if (picked.length)
-            void storage.upload(picked, { conversation_id: conversation.id });
+          setPicked((all) => [
+            ...all,
+            ...added.map((file) => ({
+              file,
+              url: file.type.startsWith("image/")
+                ? URL.createObjectURL(file)
+                : undefined,
+            })),
+          ]);
         }}
       />
       <Composer
@@ -956,6 +988,7 @@ function ChatComposer({
         }
         text={text}
         setText={write}
+        extra={picked.length > 0}
         open
         busy={busy}
         blocked={tooLong || !agents.length}
@@ -967,6 +1000,29 @@ function ChatComposer({
             void submit();
           },
         }}
+        chips={
+          picked.length > 0 &&
+          picked.map(({ file, url }) => (
+            <ComposerChip
+              key={url ?? `${file.name}:${file.size}:${file.lastModified}`}
+              name={file.name}
+              remove={() => drop(file)}
+            >
+              {url ? (
+                <img
+                  src={url}
+                  alt={file.name}
+                  className="size-14 rounded-md border object-cover"
+                />
+              ) : (
+                <span className="flex h-14 max-w-48 items-center gap-2 rounded-md border px-3 text-xs">
+                  <PaperclipIcon className="size-3.5 shrink-0 text-faint" />
+                  <span className="truncate">{file.name}</span>
+                </span>
+              )}
+            </ComposerChip>
+          ))
+        }
         add={
           storage.available
             ? [
