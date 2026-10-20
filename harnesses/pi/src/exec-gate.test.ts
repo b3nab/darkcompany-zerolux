@@ -38,7 +38,8 @@ test("the recorded gate PID becomes the native PID without swallowing queued RPC
     );
     await f.child.stdin.flush();
     const response = await new Response(f.child.stdout).json();
-    expect(response.pid).toBe(f.child.pid);
+    // On Windows, which cannot exec in place, the gate serves the native as its child.
+    if (process.platform !== "win32") expect(response.pid).toBe(f.child.pid);
     expect(response.input).toBe('{"type":"get_state"}');
     expect(await f.child.exited).toBe(0);
   } finally {

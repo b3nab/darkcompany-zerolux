@@ -34,7 +34,13 @@ async function createFixture(backend: Backend) {
         if (schema) await admin?.query(`DROP SCHEMA "${schema}" CASCADE`);
       } finally {
         await admin?.end();
-        await rm(root, { recursive: true, force: true });
+        // Windows keeps a database file locked for a moment after it is closed.
+        await rm(root, {
+          recursive: true,
+          force: true,
+          maxRetries: 20,
+          retryDelay: 100,
+        });
       }
     }
   });

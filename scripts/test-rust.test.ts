@@ -55,36 +55,47 @@ async function run(extra: Record<string, string> = {}) {
     calls: (await Bun.file(log).exists()) ? await Bun.file(log).text() : "",
   };
 }
+// The fake cargo is a shell script.
+const windows = process.platform === "win32";
 const fixtureUrl = "postgresql://fixture:fixture-only@127.0.0.1:9/disposable";
 
-test("the root Rust gate runs SQLite first and PostgreSQL second, without exposing the URL", async () => {
-  const result = await run({ ZEROLUX_TEST_POSTGRES_URL: fixtureUrl });
-  expect(result.status).toBe(0);
-  expect(result.calls).toBe(
-    "test --workspace:\ntest -p zerolux -- --test-threads=4:postgres\n",
-  );
-  expect(result.stdout).toContain("Rust: SQLite");
-  expect(result.stdout).toContain("Rust: PostgreSQL");
-  expect(result.stdout + result.stderr).not.toContain(fixtureUrl);
-});
-test("a SQLite failure cannot be hidden by a later PostgreSQL success", async () => {
-  const result = await run({
-    ZEROLUX_TEST_POSTGRES_URL: fixtureUrl,
-    FAIL_SQLITE: "7",
-  });
-  expect(result.status).toBe(7);
-  expect(result.calls).toBe("test --workspace:\n");
-});
-test("a PostgreSQL failure remains a failure after the SQLite pass", async () => {
-  const result = await run({
-    ZEROLUX_TEST_POSTGRES_URL: fixtureUrl,
-    FAIL_POSTGRES: "9",
-  });
-  expect(result.status).toBe(9);
-  expect(result.calls).toBe(
-    "test --workspace:\ntest -p zerolux -- --test-threads=4:postgres\n",
-  );
-});
+test.skipIf(windows)(
+  "the root Rust gate runs SQLite first and PostgreSQL second, without exposing the URL",
+  async () => {
+    const result = await run({ ZEROLUX_TEST_POSTGRES_URL: fixtureUrl });
+    expect(result.status).toBe(0);
+    expect(result.calls).toBe(
+      "test --workspace:\ntest -p zerolux -- --test-threads=4:postgres\n",
+    );
+    expect(result.stdout).toContain("Rust: SQLite");
+    expect(result.stdout).toContain("Rust: PostgreSQL");
+    expect(result.stdout + result.stderr).not.toContain(fixtureUrl);
+  },
+);
+test.skipIf(windows)(
+  "a SQLite failure cannot be hidden by a later PostgreSQL success",
+  async () => {
+    const result = await run({
+      ZEROLUX_TEST_POSTGRES_URL: fixtureUrl,
+      FAIL_SQLITE: "7",
+    });
+    expect(result.status).toBe(7);
+    expect(result.calls).toBe("test --workspace:\n");
+  },
+);
+test.skipIf(windows)(
+  "a PostgreSQL failure remains a failure after the SQLite pass",
+  async () => {
+    const result = await run({
+      ZEROLUX_TEST_POSTGRES_URL: fixtureUrl,
+      FAIL_POSTGRES: "9",
+    });
+    expect(result.status).toBe(9);
+    expect(result.calls).toBe(
+      "test --workspace:\ntest -p zerolux -- --test-threads=4:postgres\n",
+    );
+  },
+);
 test("a generic DATABASE_URL is never the test database fallback", async () => {
   const result = await run({ DATABASE_URL: fixtureUrl });
   expect(result.status).not.toBe(0);

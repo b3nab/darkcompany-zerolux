@@ -86,8 +86,10 @@ process.stdin.on("end", () => console.log(JSON.stringify({pid:process.pid, text}
     expect(processExists(running.nativePid)).toBe(true);
     expect(() => owner.release(true)).toThrow("not confirmed its exit");
     child.stdin.end('{"type":"initialize"}\n');
+    // On Windows, which cannot exec in place, the gate serves the native as its child.
     expect(JSON.parse(await output(child))).toEqual({
-      pid: running.nativePid,
+      pid:
+        process.platform === "win32" ? expect.any(Number) : running.nativePid,
       text: '{"type":"initialize"}\n',
     });
     await owner.waitForExit();
@@ -144,63 +146,68 @@ test("a free helper lease does not permit replacing its live native child", asyn
   }
 });
 
-test("a real helper crash cannot recreate its still-live fake native child", async () => {
-  const f = await fixture();
-  const host = Bun.spawn(
-    [
-      process.execPath,
-      join(import.meta.dir, "fixtures/execution-host.ts"),
-      f.root,
-    ],
-    {
-      env: { HOME: f.root, TMPDIR: f.root, PATH: "/usr/bin:/bin" },
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
-  let nativePid: number | undefined;
-  const reader = host.stdout.getReader();
-  try {
-    let text = "";
-    while (!text.includes("\n")) {
-      const part = await reader.read();
-      if (part.done)
-        throw new Error("Fake host exited before its child was ready");
-      text += new TextDecoder().decode(part.value);
-    }
-    nativePid = Number(text.trim());
-    const before = await f.record();
-    expect(before.holderPid).toBe(host.pid);
-    expect(before.nativePid).toBe(nativePid);
-    expect(processExists(nativePid)).toBe(true);
-    host.kill("SIGKILL"); // This fixture alone: a crash, not an owner Stop.
-    await host.exited;
-    expect(processExists(host.pid)).toBe(false);
-    const free = f.lock();
-    expect(() => new ClaudeExecution(free, f.identity, gate)).toThrow(
-      "free helper lease is not proof of death",
+// The native's own PID is the recorded one only where the gate execs in place.
+test.skipIf(process.platform === "win32")(
+  "a real helper crash cannot recreate its still-live fake native child",
+  async () => {
+    const f = await fixture();
+    const host = Bun.spawn(
+      [
+        process.execPath,
+        join(import.meta.dir, "fixtures/execution-host.ts"),
+        f.root,
+      ],
+      {
+        env: { HOME: f.root, TMPDIR: f.root, PATH: "/usr/bin:/bin" },
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      },
     );
-    expect(await f.record()).toEqual(before);
-    expect(processExists(nativePid)).toBe(true);
-    free.release();
-    process.kill(nativePid, "SIGTERM"); // Only the child created by this isolated fixture.
-    for (let n = 0; n < 100 && processExists(nativePid); n++)
-      await Bun.sleep(20);
-    expect(processExists(nativePid)).toBe(false);
-    const next = new ClaudeExecution(f.lock(), f.identity, gate);
-    expect(next.describe().native_phase).toBe("waiting");
-    next.release(true);
-  } finally {
-    host.kill("SIGKILL");
-    await host.exited;
-    if (nativePid && processExists(nativePid))
-      process.kill(nativePid, "SIGKILL");
-    await reader.cancel().catch(() => {});
-    reader.releaseLock();
-    await f.close();
-  }
-}, 10_000);
+    let nativePid: number | undefined;
+    const reader = host.stdout.getReader();
+    try {
+      let text = "";
+      while (!text.includes("\n")) {
+        const part = await reader.read();
+        if (part.done)
+          throw new Error("Fake host exited before its child was ready");
+        text += new TextDecoder().decode(part.value);
+      }
+      nativePid = Number(text.trim());
+      const before = await f.record();
+      expect(before.holderPid).toBe(host.pid);
+      expect(before.nativePid).toBe(nativePid);
+      expect(processExists(nativePid)).toBe(true);
+      host.kill("SIGKILL"); // This fixture alone: a crash, not an owner Stop.
+      await host.exited;
+      expect(processExists(host.pid)).toBe(false);
+      const free = f.lock();
+      expect(() => new ClaudeExecution(free, f.identity, gate)).toThrow(
+        "free helper lease is not proof of death",
+      );
+      expect(await f.record()).toEqual(before);
+      expect(processExists(nativePid)).toBe(true);
+      free.release();
+      process.kill(nativePid, "SIGTERM"); // Only the child created by this isolated fixture.
+      for (let n = 0; n < 100 && processExists(nativePid); n++)
+        await Bun.sleep(20);
+      expect(processExists(nativePid)).toBe(false);
+      const next = new ClaudeExecution(f.lock(), f.identity, gate);
+      expect(next.describe().native_phase).toBe("waiting");
+      next.release(true);
+    } finally {
+      host.kill("SIGKILL");
+      await host.exited;
+      if (nativePid && processExists(nativePid))
+        process.kill(nativePid, "SIGKILL");
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+      await f.close();
+    }
+  },
+  10_000,
+);
 
 test("unknown spawn, invalid evidence and ambiguous process checks refuse without erasing evidence", async () => {
   for (const fields of [
