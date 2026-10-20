@@ -55,6 +55,8 @@ export interface Context {
       input?: unknown,
     ): Promise<T>;
   };
+  /** A new tree for one of its `remote` views, shown with `context`. */
+  updateView(name: string, context: unknown, tree: unknown): Promise<void>;
   log(message: string): void;
 }
 
@@ -91,6 +93,21 @@ export interface Implementation {
   >;
 }
 
+/** A piece of its interface in one of the clients' spaces. */
+export interface UiPiece {
+  space: "page" | "session" | "chat" | "message" | "settings";
+  name: string;
+  title: string;
+  /** The name of one of the clients' icons. */
+  icon?: string;
+  view:
+    | { kind: "native" }
+    | { kind: "described"; action: string; refresh_on?: string[] }
+    | { kind: "remote"; action: string }
+    | { kind: "web"; entry: string }
+    | { kind: "action"; action: string };
+}
+
 export interface Extension {
   actions?: Record<string, Action>;
   points?: Record<string, Point>;
@@ -104,6 +121,8 @@ export interface Extension {
   >;
   /** When `event:<publisher.extension/event>` or `schedule:<cron>`, run one of its actions. */
   triggers?: { on: string; action: string }[];
+  /** What it shows in the clients, and where. */
+  ui?: UiPiece[];
   /** Once the kernel has started it. */
   start?(context: Context): void | Promise<void>;
   /** After its settings changed. */
@@ -148,6 +167,7 @@ export function contributes(extension: Extension) {
     })),
     subscribes: Object.keys(extension.on ?? {}),
     triggers: extension.triggers ?? [],
+    ui: extension.ui ?? [],
   };
 }
 
@@ -235,6 +255,8 @@ export async function serve(
           })
         ).result,
     },
+    updateView: async (name, viewContext, tree) =>
+      void (await ask("views.update", { name, context: viewContext, tree })),
     log: (message) => send({ method: "log", params: { message } }),
   };
   const answer = async (message: Message) => {
