@@ -5,6 +5,7 @@ import {
   designVoice,
   forgetVoice,
   readAloud,
+  spoken,
   transcribe,
 } from "./voice";
 
@@ -96,4 +97,48 @@ test("an agent's voice is designed, chosen and forgotten through its actions", a
     { name: "choose", input: { actor_id: "birch", proposal: "0a1b2c3d" } },
     { name: "forget", input: { actor_id: "birch" } },
   ]);
+});
+
+/** Where a recording went: the box, a sent message, or kept as a file. */
+function targets(transcription = true) {
+  const went: string[] = [];
+  return {
+    went,
+    write: (said: string) => void went.push(`write ${said}`),
+    send: async (said: string) => void went.push(`send ${said}`),
+    keep: async () => void went.push("keep"),
+    transcription,
+  };
+}
+
+const recording = new Blob([new Uint8Array([1, 2, 3])], { type: "audio/mp4" });
+
+test("dictated words go to the box, and a message is kept, then sent as said", async () => {
+  fake(() => ({ text: " Run the tests " }));
+  const dictation = targets();
+  await spoken("dictation", recording, dictation, kernel);
+  expect(dictation.went).toEqual(["write Run the tests"]);
+  const message = targets();
+  await spoken("message", recording, message, kernel);
+  expect(message.went).toEqual(["keep", "send Run the tests"]);
+});
+
+test("without transcription a message is only kept, and silence goes nowhere", async () => {
+  const asked = fake(() => ({ text: "  " }));
+  const kept = targets(false);
+  await spoken("message", recording, kept, kernel);
+  expect(kept.went).toEqual(["keep"]);
+  expect(asked).toEqual([]);
+  const silent = targets();
+  await spoken("dictation", recording, silent, kernel);
+  expect(silent.went).toEqual([]);
+});
+
+test("a failed transcription throws and leaves the box as it was", async () => {
+  setKernelFetch(async () =>
+    Response.json({ error: "The voice is starting" }, { status: 503 }),
+  );
+  const box = targets();
+  await expect(spoken("dictation", recording, box, kernel)).rejects.toThrow();
+  expect(box.went).toEqual([]);
 });

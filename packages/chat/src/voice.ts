@@ -1,4 +1,5 @@
-import { kernelUrl } from "./client";
+import { useState } from "react";
+import { errorMessage, kernelUrl } from "./client";
 import {
   extensionsNotice,
   runAction,
@@ -85,6 +86,97 @@ export const transcribe = async (audio: Blob, kernel = kernelUrl()) =>
       kernel,
     )
   ).text;
+
+/** A microphone as a client records with it: one recording at a time. */
+export interface Recorder {
+  start(): Promise<void>;
+  /** Ends the recording and gives its audio. */
+  stop(): Promise<Blob | undefined>;
+  /** Drops the recording. */
+  cancel(): unknown;
+}
+
+/** What the microphone takes: words for the box, or a message sent as said. */
+export type VoiceUse = "dictation" | "message";
+
+export interface VoiceTargets {
+  /** What was dictated, for the box. */
+  write: (said: string) => void;
+  /** What was recorded as a message, said. */
+  send: (said: string) => Promise<void>;
+  /** A message's recording, kept before it is transcribed. */
+  keep?: (audio: Blob) => Promise<void>;
+  /** Whether the workspace transcribes: without it, a message is only kept. */
+  transcription: boolean;
+}
+
+/** Dictated words after what the box holds. */
+export const dictated = (text: string, said: string) =>
+  text.trim() ? `${text.trimEnd()} ${said}` : said;
+
+/**
+ * A recording where it goes: dictated words to the box, a message kept and then sent as
+ * said. A failure throws and leaves the box as it was.
+ */
+export async function spoken(
+  use: VoiceUse,
+  audio: Blob,
+  { write, send, keep, transcription }: VoiceTargets,
+  kernel = kernelUrl(),
+) {
+  if (use === "message" && keep) await keep(audio);
+  if (!transcription) return;
+  const said = (await transcribe(audio, kernel)).trim();
+  if (!said) return;
+  if (use === "dictation") write(said);
+  else await send(said);
+}
+
+/**
+ * Speaking into a composer, Dictate or Record: what it records for, `transcribing` until
+ * the text comes (seconds the first time), and what went wrong, in a sentence.
+ */
+export function useVoiceInput(
+  recorder: Recorder,
+  targets: VoiceTargets,
+  kernel = kernelUrl(),
+) {
+  const [use, setUse] = useState<VoiceUse>();
+  const [transcribing, setTranscribing] = useState(false);
+  const [error, setError] = useState("");
+  return {
+    use,
+    transcribing,
+    error,
+    async start(next: VoiceUse) {
+      setError("");
+      try {
+        await recorder.start();
+        setUse(next);
+      } catch (e) {
+        setError(`The microphone is not available: ${errorMessage(e)}`);
+      }
+    },
+    async finish() {
+      const now = use;
+      setUse(undefined);
+      if (!now) return;
+      setTranscribing(targets.transcription);
+      try {
+        const audio = await recorder.stop();
+        if (audio) await spoken(now, audio, targets, kernel);
+      } catch (e) {
+        setError(errorMessage(e));
+      } finally {
+        setTranscribing(false);
+      }
+    },
+    discard() {
+      setUse(undefined);
+      void recorder.cancel();
+    },
+  };
+}
 
 /**
  * A text said by an agent's own voice, a sentence or a few at a time: each piece is made
