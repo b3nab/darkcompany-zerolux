@@ -2125,7 +2125,7 @@ async fn what_waits_in_codex_queue_reaches_the_kernel_when_it_changes() {
     kernel
         .wait(|s| {
             s.live.last()
-                == Some(&json!({"type":"queue","items":[{"id":"queue-9","text":"then the docs"}]}))
+                == Some(&json!({"type":"queue","items":[{"id":"queue-9","text":"then the docs","changeable":true}]}))
         })
         .await;
     finish(stop, task).await;

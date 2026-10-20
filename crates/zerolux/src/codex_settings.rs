@@ -24,6 +24,9 @@ pub(crate) struct CodexSettings {
     pub state: watch::Sender<Value>,
     pub turn: watch::Sender<Option<String>>,
     pub ready: watch::Sender<bool>,
+    /// The owner's inputs steered into the running turn that Codex has not taken yet: they
+    /// wait like those in its queue, but can no longer be taken back.
+    pub steered: watch::Sender<Vec<crate::live::Queued>>,
 }
 
 impl CodexSettings {
@@ -53,6 +56,34 @@ impl CodexSettings {
                 }
             }
             self.state.send_replace(current);
+        }
+        // A steered input leaves the waiting ones once Codex takes it into the turn.
+        if event["method"] == "item/started" || event["method"] == "item/completed" {
+            let item = &event["params"]["item"];
+            if item["type"] == "userMessage"
+                && let Some(id) = item["clientId"].as_str()
+            {
+                self.steered.send_if_modified(|steered| {
+                    let before = steered.len();
+                    steered.retain(|queued| queued.id != id);
+                    steered.len() != before
+                });
+            }
+        }
+        // Codex takes what was steered into a turn before it ends; any left is not waiting.
+        if event["method"] == "turn/completed" {
+            self.steered.send_if_modified(|steered| {
+                if steered.is_empty() {
+                    return false;
+                }
+                tracing::warn!(
+                    thread = %self.thread_id,
+                    inputs = steered.len(),
+                    "Steered input not seen in its turn"
+                );
+                steered.clear();
+                true
+            });
         }
     }
 
@@ -92,16 +123,26 @@ impl CodexSettings {
         }
         let running = self.turn.borrow().clone();
         if let Some(turn) = running.filter(|_| mode == crate::model::InputMode::Steer) {
+            let id = uuid::Uuid::new_v4().to_string();
             match self
                 .rpc
                 .request(
                     "turn/steer",
                     json!({"threadId": self.thread_id, "expectedTurnId": turn,
-                        "clientUserMessageId": uuid::Uuid::new_v4().to_string(), "input": input}),
+                        "clientUserMessageId": id, "input": input}),
                 )
                 .await
             {
-                Ok(_) => return Ok(()),
+                Ok(_) => {
+                    self.steered.send_modify(|steered| {
+                        steered.push(crate::live::Queued {
+                            id,
+                            text: summary(&input),
+                            changeable: false,
+                        })
+                    });
+                    return Ok(());
+                }
                 // Only a refusal proves nothing was delivered: the turn ended or cannot be
                 // steered, so the input waits for the next turn.
                 Err(error)
@@ -165,7 +206,8 @@ impl CodexSettings {
             .collect())
     }
 
-    /// What waits in Codex's queue for this thread, oldest first.
+    /// What waits for this thread, oldest first: what was steered into the running turn and
+    /// Codex has not taken yet, then Codex's queue.
     pub async fn queue(&self) -> Result<Vec<crate::live::Queued>> {
         let listed = self
             .rpc
@@ -175,27 +217,22 @@ impl CodexSettings {
             )
             .await
             .context("Codex did not list its queue")?;
-        Ok(listed["data"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|queued| {
-                let text = queued["input"]
-                    .as_array()?
-                    .iter()
-                    .map(|part| match part["type"].as_str() {
-                        Some("text") => part["text"].as_str().unwrap_or_default().to_owned(),
-                        Some(kind) => format!("[{kind}]"),
-                        None => String::new(),
+        let mut waiting = self.steered.borrow().clone();
+        waiting.extend(
+            listed["data"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|queued| {
+                    queued["input"].as_array()?;
+                    Some(crate::live::Queued {
+                        id: queued["id"].as_str()?.to_owned(),
+                        text: summary(&queued["input"]),
+                        changeable: true,
                     })
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                Some(crate::live::Queued {
-                    id: queued["id"].as_str()?.to_owned(),
-                    text,
-                })
-            })
-            .collect())
+                }),
+        );
+        Ok(waiting)
     }
 
     /// A control asked as the pi and Claude integrations are, `{method, ...}`: how a joined
@@ -534,4 +571,19 @@ pub(crate) async fn models(rpc: &CodexRpc) -> Result<Vec<ModelOption>> {
         );
     }
     bail!("Codex model catalog exceeded its pagination bound")
+}
+
+/// An input as it is shown while it waits: its text, and its other parts by kind.
+fn summary(input: &Value) -> String {
+    input
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|part| match part["type"].as_str() {
+            Some("text") => part["text"].as_str().unwrap_or_default().to_owned(),
+            Some(kind) => format!("[{kind}]"),
+            None => String::new(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }

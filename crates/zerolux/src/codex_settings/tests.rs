@@ -98,6 +98,7 @@ impl Fixture {
             state: watch::channel(initial).0,
             turn: watch::channel(active.then(|| "turn".to_owned())).0,
             ready: watch::channel(true).0,
+            steered: watch::channel(Vec::new()).0,
         };
         let observing = control.clone();
         let observer = tokio::spawn(async move {
@@ -355,11 +356,13 @@ async fn the_queue_is_read_taken_back_and_rewritten_in_codex() {
         vec![
             crate::live::Queued {
                 id: "q1".into(),
-                text: "then the docs".into()
+                text: "then the docs".into(),
+                changeable: true,
             },
             crate::live::Queued {
                 id: "q2".into(),
-                text: "and this [localImage]".into()
+                text: "and this [localImage]".into(),
+                changeable: true,
             },
         ]
     );
@@ -401,4 +404,42 @@ async fn plan_mode_goes_to_codex_with_the_model_and_effort_it_runs_with() {
         update[0]["params"]["collaborationMode"],
         json!({"mode":"plan","settings":{"model":"one","reasoning_effort":"low","developer_instructions":null}})
     );
+}
+
+#[tokio::test]
+async fn a_steered_input_waits_until_codex_takes_it_into_the_turn() {
+    let busy = Fixture::new(true, false, "applied").await;
+    busy.control
+        .input("look", InputMode::Steer, &[])
+        .await
+        .unwrap();
+    let id = busy.calls("turn/steer")[0]["params"]["clientUserMessageId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let waiting = busy.control.queue().await.unwrap();
+    assert_eq!(
+        waiting[0],
+        crate::live::Queued {
+            id: id.clone(),
+            text: "look".into(),
+            changeable: false,
+        }
+    );
+    assert_eq!(waiting.len(), 3);
+    busy.control.observe(
+        &json!({"method":"item/started","params":{"threadId":"thread",
+        "item":{"type":"userMessage","id":"item","clientId":id,"content":[]}}}),
+    );
+    assert_eq!(busy.control.queue().await.unwrap().len(), 2);
+    // One the turn ends without is no longer waiting.
+    busy.control
+        .input("more", InputMode::Steer, &[])
+        .await
+        .unwrap();
+    assert_eq!(busy.control.queue().await.unwrap().len(), 3);
+    busy.control.observe(
+        &json!({"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"turn"}}}),
+    );
+    assert_eq!(busy.control.queue().await.unwrap().len(), 2);
 }

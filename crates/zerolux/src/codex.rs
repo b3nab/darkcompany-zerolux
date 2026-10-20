@@ -750,6 +750,7 @@ impl CodexDriver {
             state: watch::channel(settings.clone()).0,
             turn: watch::channel(None).0,
             ready: watch::channel(false).0,
+            steered: watch::channel(Vec::new()).0,
         };
         Ok(Self {
             rpc,
@@ -830,6 +831,7 @@ impl CodexDriver {
         let result = async {
             if *stop.borrow() { return Ok(()); }
             kernel.status("connected", None).await?;
+            let mut steered = self.native_settings.steered.subscribe();
             self.report_queue(&kernel).await;
             if !self.refresh(&kernel, true, true).await? { return Ok(()); }
             loop {
@@ -839,6 +841,9 @@ impl CodexDriver {
                     }
                     _ = tokio::time::sleep_until(self.live_due.unwrap_or_else(tokio::time::Instant::now)), if self.live_due.is_some() => {
                         self.report_live(&kernel).await;
+                    }
+                    Ok(()) = steered.changed() => {
+                        self.report_queue(&kernel).await;
                     }
                     event = self.events.recv() => match event {
                         Ok(event) if event["method"] == CLOSED => bail!("Codex connection closed; pending prompts will not be resent"),

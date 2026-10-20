@@ -118,6 +118,9 @@ pub struct Queued {
     pub id: String,
     /// The start of its text.
     pub text: String,
+    /// Whether it can still be taken back or rewritten in the harness's queue.
+    #[serde(default)]
+    pub changeable: bool,
 }
 
 /// A session's live state: what is in progress, and the number of the last change.
@@ -290,6 +293,7 @@ fn pieces(changes: Vec<Change>) -> Vec<Change> {
                     .map(|queued| Queued {
                         text: queued.text.chars().take(QUEUED_TEXT).collect(),
                         id: queued.id,
+                        changeable: queued.changeable,
                     })
                     .collect(),
             }),
@@ -396,6 +400,7 @@ mod tests {
         let queued = |id: &str, text: &str| Queued {
             id: id.into(),
             text: text.into(),
+            changeable: false,
         };
         live.apply(
             "s",
