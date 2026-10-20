@@ -1,10 +1,11 @@
 import { useSyncExternalStore } from "react";
 import { File, Paths } from "expo-file-system";
-import { keepSeenIn } from "@zerolux/chat";
+import { keepDraftsIn, keepSeenIn } from "@zerolux/chat";
 
 /**
  * What this phone keeps for you between launches, as small JSON files in the app's own
- * documents: which sessions you have seen, how much of their work you want drawn.
+ * documents: what you were writing, which sessions you have seen, how much of their work you
+ * want drawn.
  */
 const file = (name: string) => new File(Paths.document, `${name}.json`);
 
@@ -69,5 +70,25 @@ export async function restoreSeen() {
       ? (saved as Record<string, unknown>)
       : {},
     (all) => writeSaved("seen", all),
+  );
+}
+
+/**
+ * What you were writing in each chat and session, kept as you type: an update or a restart
+ * of the app finds it where you left it. Read at once, before any screen shows a box.
+ */
+export function restoreDrafts() {
+  let saved: unknown;
+  try {
+    const drafts = file("drafts");
+    saved = drafts.exists ? JSON.parse(drafts.textSync()) : undefined;
+  } catch {
+    saved = undefined;
+  }
+  keepDraftsIn(
+    saved && typeof saved === "object"
+      ? (saved as Record<string, unknown>)
+      : {},
+    (all) => writeSaved("drafts", all),
   );
 }
