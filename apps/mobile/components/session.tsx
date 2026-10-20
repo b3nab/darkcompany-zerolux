@@ -228,7 +228,6 @@ export function Sharing({ session }: { session: ChatSession }) {
   if (!mine)
     return (
       <View className="gap-1">
-        <Text className="text-sm text-faint">Shared</Text>
         <Text className="text-[15px]">
           {person} shared it with you to{" "}
           {session.shared === "write" ? "work in" : "read"}.
@@ -238,7 +237,6 @@ export function Sharing({ session }: { session: ChatSession }) {
   const choice = shareChoice(session.shared);
   return (
     <View className="gap-2">
-      <Text className="text-sm text-faint">Share</Text>
       <Segmented<ShareChoice>
         options={Object.entries(shareLabels) as [ShareChoice, string][]}
         value={choice}

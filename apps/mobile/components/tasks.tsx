@@ -3,12 +3,10 @@ import { ChevronRightIcon } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 import { useCSSVariable } from "uniwind";
-import { taskState, useSessionTasks } from "@zerolux/chat";
-import type { ChatSession } from "@zerolux/chat";
+import { taskState } from "@zerolux/chat";
+import type { ChatSession, Task } from "@zerolux/chat";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
-import { useSession } from "../src/kernel";
-import { useAccess } from "../src/me";
 
 /** The time now, read again every second while `ticking`. */
 export function useNow(ticking: boolean) {
@@ -23,26 +21,23 @@ export function useNow(ticking: boolean) {
 }
 
 /**
- * In About, for whoever follows the session: the commands it runs in the background, newest
- * first, each with how it stands; a tap opens its output.
+ * The commands a session runs in the background, newest first, each with how it stands; a
+ * tap opens its output.
  */
-export function Tasks({
+export function TaskList({
   session,
-  close,
+  tasks,
+  error,
 }: {
   session: ChatSession;
-  close: () => void;
+  tasks: Task[] | undefined;
+  error: string;
 }) {
-  const { url } = useSession();
-  const { read } = useAccess(session);
-  const { tasks, error } = useSessionTasks(read ? session.id : undefined, url);
   const router = useRouter();
   const faint = String(useCSSVariable("--color-faint"));
   const now = useNow(Boolean(tasks?.some((t) => t.status === "running")));
-  if (!read) return null;
   return (
     <View className="gap-2">
-      <Text className="text-sm text-faint">Tasks</Text>
       {error ? <Text className="text-xs text-destructive">{error}</Text> : null}
       {tasks?.length ? (
         <View className="overflow-hidden rounded-md border border-border">
@@ -50,13 +45,12 @@ export function Tasks({
             <Pressable
               key={task.id}
               accessibilityRole="button"
-              onPress={() => {
-                close();
+              onPress={() =>
                 router.push({
                   pathname: "/task/[id]",
                   params: { id: task.id, session: session.id },
-                });
-              }}
+                })
+              }
               className={cn(
                 "flex-row items-center gap-3 bg-card px-3 py-2.5 active:bg-accent",
                 index > 0 && "border-t border-border",
@@ -85,7 +79,7 @@ export function Tasks({
           ))}
         </View>
       ) : tasks ? (
-        <Text className="text-xs text-faint">No tasks.</Text>
+        <Text className="text-sm text-faint">No tasks.</Text>
       ) : null}
     </View>
   );

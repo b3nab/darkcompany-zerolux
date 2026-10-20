@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { TextInputInstance } from "react-native";
 import {
+  ActivityIcon,
   ChevronDownIcon,
   ClockIcon,
   ImagePlusIcon,
@@ -63,6 +64,7 @@ import {
   useSessionEvents,
   useSessionFiles,
   useSessionGit,
+  useSessionTasks,
   useSessionSubagents,
   useSessionQueue,
   useSessionUsage,
@@ -107,7 +109,7 @@ import {
 import { CiTrigger } from "@/components/ci-trigger";
 import { GoalSection } from "@/components/goal";
 import { Schedules } from "@/components/schedules";
-import { Tasks } from "@/components/tasks";
+import { Eyebrow } from "@/components/meter";
 import {
   SubagentLinks,
   SubagentList,
@@ -179,6 +181,11 @@ export default function SessionPage() {
   const changed =
     useSessionGit(access.read ? id : undefined, session?.output_at, url).status
       ?.changes.length ?? 0;
+  // How many of its tasks run now, on the Tasks button.
+  const running =
+    useSessionTasks(access.read ? id : undefined, url).tasks?.filter(
+      (task) => task.status === "running",
+    ).length ?? 0;
   // Read from the start, then again from where it stopped at each session.output notice.
   const {
     events,
@@ -356,6 +363,26 @@ export default function SessionPage() {
               className="size-10 items-center justify-center rounded-sm active:bg-accent"
             >
               <SquareTerminalIcon color={muted} size={20} strokeWidth={1.5} />
+            </Pressable>
+          ) : null}
+          {access.read ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={
+                running ? `Tasks, ${running} running` : "Tasks"
+              }
+              onPress={() => router.push(`/tasks/${id}`)}
+              hitSlop={6}
+              className="size-10 items-center justify-center rounded-sm active:bg-accent"
+            >
+              <ActivityIcon color={muted} size={20} strokeWidth={1.5} />
+              {running ? (
+                <View className="absolute top-0.5 right-0 min-w-4 items-center rounded-full bg-success px-1">
+                  <Text className="font-mono text-[10px] leading-4 text-primary-foreground">
+                    {running}
+                  </Text>
+                </View>
+              ) : null}
             </Pressable>
           ) : null}
           <Pressable
@@ -957,51 +984,60 @@ function About({
           </Text>
         </Pressable>
       </View>
-      <ScrollView contentContainerClassName="gap-6 px-5 py-6">
-        {agentId ? (
-          <Pressable
-            onPress={() => {
-              close();
-              router.push(`/member/${agentId}`);
-            }}
-            accessibilityRole="button"
-            className="border-y border-border py-2"
-          >
-            <Fact label="Agent">
-              <View className="flex-row items-center gap-2">
-                <ActorMark kind="agent" name={name} size="sm" />
-                <Text className="flex-1 font-mono text-sm text-agent-foreground">
-                  {name}
-                </Text>
-                <ChevronRightIcon color={faint} size={16} strokeWidth={1.5} />
-              </View>
-            </Fact>
-          </Pressable>
-        ) : null}
-        <View className="gap-2">
-          <Text className="text-sm text-faint">Density</Text>
-          <Segmented<Density>
-            options={Object.entries(densityLabels) as [Density, string][]}
-            value={density}
-            choose={setDensity}
+      <ScrollView contentContainerClassName="gap-8 px-5 py-6">
+        <View className="gap-5">
+          <Eyebrow>Session</Eyebrow>
+          {agentId ? (
+            <Pressable
+              onPress={() => {
+                close();
+                router.push(`/member/${agentId}`);
+              }}
+              accessibilityRole="button"
+              className="border-y border-border py-2"
+            >
+              <Fact label="Agent">
+                <View className="flex-row items-center gap-2">
+                  <ActorMark kind="agent" name={name} size="sm" />
+                  <Text className="flex-1 font-mono text-sm text-agent-foreground">
+                    {name}
+                  </Text>
+                  <ChevronRightIcon color={faint} size={16} strokeWidth={1.5} />
+                </View>
+              </Fact>
+            </Pressable>
+          ) : null}
+          <SessionCard session={session} name={name} facts />
+          {access.mine ? <Organize session={session} /> : null}
+          <UsageFacts sessionId={session.id} />
+          {access.mine ? <Budget session={session} /> : null}
+          <SubagentList
+            sessionId={session.id}
+            subagents={subagents}
+            close={close}
           />
+          <Delegation session={session} close={close} />
+          <ForkSession session={session} close={close} />
+          <ContinueInTerminal session={session} />
+          <View className="gap-2">
+            <Text className="text-sm text-faint">Density</Text>
+            <Segmented<Density>
+              options={Object.entries(densityLabels) as [Density, string][]}
+              value={density}
+              choose={setDensity}
+            />
+          </View>
         </View>
-        <Sharing session={session} />
-        <Delegation session={session} close={close} />
-        <SubagentList
-          sessionId={session.id}
-          subagents={subagents}
-          close={close}
-        />
-        {access.mine ? <Organize session={session} /> : null}
-        <GoalSection session={session} />
-        <ForkSession session={session} close={close} />
-        <ContinueInTerminal session={session} />
-        <Tasks session={session} close={close} />
-        <Schedules session={session} />
-        <CiTrigger session={session} />
-        <UsageFacts sessionId={session.id} />
-        <SessionCard session={session} name={name} facts />
+        <View className="gap-5">
+          <Eyebrow>Sharing</Eyebrow>
+          <Sharing session={session} />
+        </View>
+        <View className="gap-5">
+          <Eyebrow>Automations</Eyebrow>
+          <GoalSection session={session} />
+          <Schedules session={session} />
+          <CiTrigger session={session} />
+        </View>
       </ScrollView>
     </View>
   );
@@ -1326,16 +1362,45 @@ function UsageFacts({ sessionId }: { sessionId: string }) {
  * that stops its turns once its harness reports that much spent.
  */
 function Organize({ session }: { session: ChatSession }) {
-  const { chat } = useSession();
   const organize = useOrganize(session);
-  const usage = useSessionUsage(session.id, chat.live);
   const [title, setTitle] = useState(session.title);
-  const [budget, setBudget] = useState(
-    session.budget_usd ? String(session.budget_usd) : "",
-  );
   const save = () => {
     if (title.trim() && title.trim() !== session.title) organize.rename(title);
   };
+  return (
+    <View className="gap-3">
+      <View className="gap-2">
+        <Text className="text-sm text-faint">Title</Text>
+        <Input
+          value={title}
+          onChangeText={setTitle}
+          onSubmitEditing={save}
+          onBlur={save}
+          placeholder="Untitled session"
+          returnKeyType="done"
+          maxLength={200}
+        />
+      </View>
+      <View className="flex-row items-center gap-3">
+        <Text className="flex-1 text-sm">Pinned in the Console</Text>
+        <Switch value={organize.pinned} onValueChange={organize.pin} />
+      </View>
+      <View className="flex-row items-center gap-3">
+        <Text className="flex-1 text-sm">Archived</Text>
+        <Switch value={organize.archived} onValueChange={organize.archive} />
+      </View>
+    </View>
+  );
+}
+
+/** What the session may spend, and what it has spent, as its harness reports it. */
+function Budget({ session }: { session: ChatSession }) {
+  const { chat } = useSession();
+  const organize = useOrganize(session);
+  const usage = useSessionUsage(session.id, chat.live);
+  const [budget, setBudget] = useState(
+    session.budget_usd ? String(session.budget_usd) : "",
+  );
   // A phone in Italian writes 1,50: the comma is the decimal point.
   const saveBudget = () => {
     const usd = budget.trim() ? Number(budget.replace(",", ".")) : 0;
@@ -1357,47 +1422,25 @@ function Organize({ session }: { session: ChatSession }) {
           ? `${usdCost(cost)} of ${usdCost(session.budget_usd)}`
           : `${usdCost(cost)} so far, no limit`;
   return (
-    <View className="gap-3 border-b border-border pb-4">
-      <View className="gap-2">
-        <Text className="text-sm text-faint">Title</Text>
-        <Input
-          value={title}
-          onChangeText={setTitle}
-          onSubmitEditing={save}
-          onBlur={save}
-          placeholder="Untitled session"
-          returnKeyType="done"
-          maxLength={200}
-        />
-      </View>
-      <View className="flex-row items-center gap-3">
-        <Text className="flex-1 text-sm">Pinned in the Console</Text>
-        <Switch value={organize.pinned} onValueChange={organize.pin} />
-      </View>
-      <View className="flex-row items-center gap-3">
-        <Text className="flex-1 text-sm">Archived</Text>
-        <Switch value={organize.archived} onValueChange={organize.archive} />
-      </View>
-      <View className="gap-2">
-        <Text className="text-sm text-faint">Budget</Text>
-        {session.harness === "codex" ? null : (
-          <View className="flex-row items-center gap-2">
-            <Text className="font-mono text-base text-muted-foreground">$</Text>
-            <Input
-              value={budget}
-              onChangeText={setBudget}
-              onSubmitEditing={saveBudget}
-              onBlur={saveBudget}
-              placeholder="No limit"
-              keyboardType="decimal-pad"
-              returnKeyType="done"
-              accessibilityLabel="Budget in dollars"
-              className="flex-1 font-mono"
-            />
-          </View>
-        )}
-        <Text className="text-xs text-faint">{spent}</Text>
-      </View>
+    <View className="gap-2">
+      <Text className="text-sm text-faint">Budget</Text>
+      {session.harness === "codex" ? null : (
+        <View className="flex-row items-center gap-2">
+          <Text className="font-mono text-base text-muted-foreground">$</Text>
+          <Input
+            value={budget}
+            onChangeText={setBudget}
+            onSubmitEditing={saveBudget}
+            onBlur={saveBudget}
+            placeholder="No limit"
+            keyboardType="decimal-pad"
+            returnKeyType="done"
+            accessibilityLabel="Budget in dollars"
+            className="flex-1 font-mono"
+          />
+        </View>
+      )}
+      <Text className="text-xs text-faint">{spent}</Text>
     </View>
   );
 }
