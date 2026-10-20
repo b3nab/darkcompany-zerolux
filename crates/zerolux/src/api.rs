@@ -233,6 +233,9 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
             "/sessions/{id}/triggers",
             get(session_triggers).post(create_trigger),
         )
+        .route("/sessions/{id}/tasks", get(session_tasks).post(start_task))
+        .route("/tasks/{task}", get(read_task))
+        .route("/tasks/{task}/stop", post(stop_task))
         .route(
             "/triggers/{trigger}",
             axum::routing::patch(change_trigger).delete(delete_trigger),
@@ -1019,6 +1022,67 @@ async fn delete_schedule(
 ) -> Result<Json<Value>, Error> {
     store.delete_schedule(&who, &schedule).await?;
     Ok(Json(json!({ "deleted": true })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewTask {
+    command: String,
+}
+
+/// Runs a command in the background, in the session's folder; the session is told how it ends.
+async fn start_task(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<NewTask>,
+) -> Result<Json<Value>, ApiFailure> {
+    let task = runtime(&state)?
+        .start_task(&who, &id, &input.command)
+        .await
+        .map_err(said)?;
+    Ok(Json(json!({ "task": task })))
+}
+
+async fn session_tasks(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let tasks = runtime(&state)?.tasks(&who, &id).await.map_err(said)?;
+    Ok(Json(json!({ "tasks": tasks })))
+}
+
+#[derive(Deserialize)]
+struct TaskRead {
+    #[serde(default)]
+    after: u64,
+}
+
+/// A task, and its output from `after`.
+async fn read_task(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(task): Path<String>,
+    Query(read): Query<TaskRead>,
+) -> Result<Json<Value>, ApiFailure> {
+    let (task, output) = runtime(&state)?
+        .task(&who, &task, read.after)
+        .await
+        .map_err(said)?;
+    Ok(Json(json!({ "task": task, "output": output })))
+}
+
+async fn stop_task(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(task): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let task = runtime(&state)?
+        .stop_task(&who, &task)
+        .await
+        .map_err(said)?;
+    Ok(Json(json!({ "task": task })))
 }
 
 async fn session_triggers(

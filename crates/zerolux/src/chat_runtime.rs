@@ -292,6 +292,10 @@ pub struct ChatRuntime {
     pub remote_terminals: std::sync::Mutex<HashMap<String, (String, String)>>,
     /// The workspace's extensions.
     pub extensions: Arc<crate::extensions::Extensions>,
+    /// Where tasks keep their output and exit codes.
+    tasks_dir: PathBuf,
+    /// The processes of the tasks this kernel started.
+    task_children: std::sync::Mutex<HashMap<String, tokio::process::Child>>,
     /// What those computers tell, to publish to whoever may read it.
     pub host_notices: mpsc::UnboundedSender<(String, Value)>,
     host_notice_task: Mutex<Option<JoinHandle<()>>>,
@@ -414,6 +418,8 @@ impl ChatRuntime {
             hosts: Arc::default(),
             remote_terminals: Default::default(),
             extensions,
+            tasks_dir: links.with_file_name("tasks"),
+            task_children: Default::default(),
             host_notices,
             host_notice_task: Mutex::new(Some(host_notice_task)),
         }))
@@ -1771,6 +1777,7 @@ mod owned;
 mod remote;
 mod settings;
 mod subagents;
+pub mod tasks;
 pub use subagents::Subagent;
 pub(crate) use subagents::{events as subagent_events_of, list as subagents_of};
 

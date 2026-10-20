@@ -218,6 +218,8 @@ impl Server {
                     }
                 }
             });
+            // Tasks: sessions hear how the commands they run in the background end.
+            let tasks = tokio::spawn(crate::chat_runtime::tasks::watch(Arc::downgrade(&runtime)));
             // The workspace's extensions, enabled as they were; their schedule triggers.
             let extensions = runtime.extensions.clone();
             let extension_schedules = tokio::spawn(async move {
@@ -285,6 +287,8 @@ impl Server {
             let _ = watcher.await;
             extension_schedules.abort();
             let _ = extension_schedules.await;
+            tasks.abort();
+            let _ = tasks.await;
             settings_observer.abort();
             let _ = relinker.await;
             let _ = sweeper.await;
