@@ -482,7 +482,7 @@ mod tests {
     }
 
     const ENVELOPE: &str =
-        "[ZeroLux] \"Kernel\"\nChat: chat-1; delivery: d-1\n\"Ben\" [message m]:\n> go";
+        "[ZeroLux] \"Kernel\"\nChat: chat-1; delivery: d-1\n\"Owner\" [message m]:\n> go";
 
     #[test]
     fn every_envelope_format_names_its_chat_and_delivery() {

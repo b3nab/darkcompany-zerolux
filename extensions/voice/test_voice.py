@@ -37,8 +37,8 @@ class Voice(unittest.TestCase):
         self.assertIsNone(code(None))
 
     def test_a_take_is_scored_by_what_it_says_and_how_clean_it_is(self):
-        self.assertEqual(cer("Ciao, Ben!", "ciao ben"), 0.0)
-        self.assertGreater(cer("Ciao Ben", "Grazie"), 0.5)
+        self.assertEqual(cer("Ciao, Alba!", "ciao alba"), 0.0)
+        self.assertGreater(cer("Ciao Alba", "Grazie"), 0.5)
         rate = 16000
         t = np.arange(rate) / rate
         voice = np.sin(2 * np.pi * 220 * t).astype(np.float32)

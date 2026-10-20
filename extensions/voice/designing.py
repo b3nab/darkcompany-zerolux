@@ -4,8 +4,7 @@ one chosen then reads half a minute of text with every sound of the language, an
 recording is the voice's reference, which Pocket clones.
 
 Each recording is the best of a few takes: of those that say the text (heard back by the
-transcription model), the one whose voice stands farthest above its background, which is what
-Ben's ear chose by in the prototype. On a Mac with Apple silicon VoxCPM2 runs with MLX;
+transcription model), the one whose voice stands farthest above its background. On a Mac with Apple silicon VoxCPM2 runs with MLX;
 elsewhere with PyTorch, on the GPU when there is one."""
 
 import platform
@@ -25,13 +24,13 @@ GREETING = {
 }
 # Every sound of the language, with questions and exclamations, in about half a minute.
 SOUNDS = {
-    "it": ("Ciao Ben, sono {}. Lavoro nel team di ZeroLux, con le persone e con gli altri agenti. Ti va se oggi "
+    "it": ("Ciao, sono {}. Lavoro nel team di ZeroLux, con le persone e con gli altri agenti. Ti va se oggi "
            "ascoltiamo insieme come suona la mia voce? Ogni mattina leggo, scrivo e controllo il lavoro; verso "
            "mezzogiorno faccio il punto, e se qualcosa non mi convince, lo dico subito e non lascio correre. Perché "
            "lo faccio? Perché mi piace. Mi bastano poche cose: un'idea chiara, un po' di pazienza e la voglia di "
            "fare sempre meglio. Ieri, per esempio, ho corretto tre errori in un quarto d'ora. Che soddisfazione! E "
            "la cosa più bella? Imparare ogni giorno. Adesso tocca anche a te: dimmi pure cosa ne pensi, e grazie."),
-    "en": ("Hi Ben, I'm {}. I work in the ZeroLux team, with people and with the other agents. Shall we listen "
+    "en": ("Hi, I'm {}. I work in the ZeroLux team, with people and with the other agents. Shall we listen "
            "together to how my voice sounds today? Every morning I read, write and check the work; around noon I "
            "take stock, and if something doesn't convince me, I say so at once. Why do I do it? Because I enjoy "
            "it. I need just a few things: a clear idea, a little patience and the wish to keep getting better. "
