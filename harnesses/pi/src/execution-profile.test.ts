@@ -100,8 +100,10 @@ test("private host profile persists atomically, validates identity and refuses s
       "cannot be restored",
     );
     await savePiProfile(profile);
-    await chmod(path, 0o644);
-    await expect(loadPiProfile(path, profile)).rejects.toThrow("private");
+    if (process.platform !== "win32") {
+      await chmod(path, 0o644);
+      await expect(loadPiProfile(path, profile)).rejects.toThrow("private");
+    }
     await chmod(path, 0o600);
     await writeFile(
       path,
