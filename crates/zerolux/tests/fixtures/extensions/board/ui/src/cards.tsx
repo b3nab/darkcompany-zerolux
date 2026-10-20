@@ -39,7 +39,7 @@ export default function Cards() {
       ) : (
         <Empty>No cards</Empty>
       )}
-      <Stack direction="horizontal" gap={8}>
+      <Stack direction="row" gap={8}>
         <Input value={title} onChange={setTitle} placeholder="Title" />
         <Button
           title="Add"

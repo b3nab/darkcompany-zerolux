@@ -1184,6 +1184,31 @@ async fn projects_keep_tasks_here_or_in_a_tracker() {
     )
     .await;
     assert_eq!(mine["result"]["tasks"].as_array().unwrap().len(), 1);
+    // Given to an agent, the agent is told in its running session; with none, it says why.
+    let (_, workspace) = kernel.call(Method::GET, "/workspace", None).await;
+    let owner = workspace["actors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|actor| actor["kind"] == "human")
+        .unwrap()["id"]
+        .clone();
+    let agent: Value = kernel
+        .client
+        .post(format!("{}/api/actors", kernel.url))
+        .json(&json!({"name": "Ada", "owner_id": owner, "harness": "pi"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let (status, given) = run("update_task", json!({"id": task, "assignee": agent["id"]})).await;
+    assert_eq!(status, StatusCode::OK, "{given} {agent}");
+    assert_eq!(
+        given["result"]["told"]["error"], "The agent has no running session",
+        "{given}"
+    );
     // A project kept in a tracker: read from it, and changed there first.
     let (status, tracker) = kernel
         .call(

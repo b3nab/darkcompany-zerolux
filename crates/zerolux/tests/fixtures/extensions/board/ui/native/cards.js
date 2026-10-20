@@ -11,34 +11,34 @@ globalThis.__zeroluxModule(
       return this[e];
     }
     var f = (e) => {
-        var a = (c ??= new WeakMap()).get(e),
+        var d = (c ??= new WeakMap()).get(e),
           n;
-        if (a) return a;
+        if (d) return d;
         if (
-          ((a = i({}, "__esModule", { value: !0 })),
+          ((d = i({}, "__esModule", { value: !0 })),
           (e && typeof e === "object") || typeof e === "function")
         ) {
           for (var o of g(e))
-            if (!m.call(a, o))
-              i(a, o, {
+            if (!m.call(d, o))
+              i(d, o, {
                 get: y.bind(e, o),
                 enumerable: !(n = p(e, o)) || n.enumerable,
               });
         }
-        return (c.set(e, a), a);
+        return (c.set(e, d), d);
       },
       c;
-    var h = (e) => e;
-    function C(e, a) {
-      this[e] = h.bind(null, a);
+    var C = (e) => e;
+    function h(e, d) {
+      this[e] = C.bind(null, d);
     }
-    var k = (e, a) => {
-      for (var n in a)
+    var k = (e, d) => {
+      for (var n in d)
         i(e, n, {
-          get: a[n],
+          get: d[n],
           enumerable: !0,
           configurable: !0,
-          set: C.bind(a, n),
+          set: h.bind(d, n),
         });
     };
     var S = {};
@@ -46,27 +46,27 @@ globalThis.__zeroluxModule(
     module.exports = f(S);
     var l = require("react"),
       t = require("@zerolux/ui"),
-      d = require("react/jsx-runtime");
+      a = require("react/jsx-runtime");
     function u() {
       let e = t.useActionResult("cards", {}),
-        a = t.useAction("add"),
+        d = t.useAction("add"),
         n = t.useAction("done"),
         [o, r] = l.useState("");
       return (
         t.useEvent("zerolux.board/changed", () => e.reload()),
-        d.jsxs(t.Stack, {
+        a.jsxs(t.Stack, {
           gap: 12,
           children: [
-            d.jsx(t.Heading, { children: "Cards" }),
+            a.jsx(t.Heading, { children: "Cards" }),
             e.data?.cards.length
-              ? d.jsx(t.List, {
+              ? a.jsx(t.List, {
                   children: e.data.cards.map((s) =>
-                    d.jsx(
+                    a.jsx(
                       t.ListItem,
                       {
                         title: s.title,
                         accessory: s.done
-                          ? d.jsx(t.Badge, { children: "Done" })
+                          ? a.jsx(t.Badge, { children: "Done" })
                           : void 0,
                         onPress: () => n.run({ id: s.id }),
                       },
@@ -74,17 +74,17 @@ globalThis.__zeroluxModule(
                     ),
                   ),
                 })
-              : d.jsx(t.Empty, { children: "No cards" }),
-            d.jsxs(t.Stack, {
-              direction: "horizontal",
+              : a.jsx(t.Empty, { children: "No cards" }),
+            a.jsxs(t.Stack, {
+              direction: "row",
               gap: 8,
               children: [
-                d.jsx(t.Input, { value: o, onChange: r, placeholder: "Title" }),
-                d.jsx(t.Button, {
+                a.jsx(t.Input, { value: o, onChange: r, placeholder: "Title" }),
+                a.jsx(t.Button, {
                   title: "Add",
                   disabled: !o.trim(),
                   onPress: async () => {
-                    (await a.run({ title: o }), r(""));
+                    (await d.run({ title: o }), r(""));
                   },
                 }),
               ],

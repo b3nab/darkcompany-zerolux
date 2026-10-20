@@ -362,3 +362,23 @@ pub async fn watch(runtime: std::sync::Weak<ChatRuntime>) {
         }
     }
 }
+
+impl ChatRuntime {
+    /// An agent hears `text` in the session it works in, its newest running one, as input that
+    /// waits for its turn: the session's ID. None running: refused, never kept for later.
+    pub async fn tell_agent(&self, actor_id: &str, text: &str) -> Result<String> {
+        use crate::entity::sessions;
+        let session = sessions::Entity::find()
+            .filter(sessions::Column::ActorId.eq(actor_id))
+            .filter(sessions::Column::StoppedAt.is_null())
+            .filter(sessions::Column::Status.is_in(["connected", "attention"]))
+            .order_by_desc(sessions::Column::CreatedAt)
+            .one(self.store.db())
+            .await?
+            .ok_or_else(|| Error::Invalid("The agent has no running session".into()))?;
+        let owner = self.store.session_person(&session.id).await?;
+        self.input(&owner, &session.id, text, InputMode::Queue, &[])
+            .await?;
+        Ok(session.id)
+    }
+}

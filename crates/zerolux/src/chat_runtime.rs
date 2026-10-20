@@ -389,7 +389,7 @@ impl ChatRuntime {
             }
             revisions
         };
-        Ok(Arc::new(Self {
+        let runtime = Arc::new(Self {
             store,
             livekit,
             base_url,
@@ -418,7 +418,9 @@ impl ChatRuntime {
             ),
             host_notices,
             host_notice_task: Mutex::new(Some(host_notice_task)),
-        }))
+        });
+        runtime.extensions.serve_runtime(Arc::downgrade(&runtime));
+        Ok(runtime)
     }
 
     /// A session's live changes, from its integration: applied, then sent to the people in

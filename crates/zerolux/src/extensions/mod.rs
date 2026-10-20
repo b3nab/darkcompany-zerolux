@@ -160,6 +160,8 @@ pub struct Extensions {
     watched: std::sync::Mutex<HashMap<String, (u64, bool)>>,
     /// Keys that open an extension's own pages, until they expire: extension and expiry.
     ui_keys: std::sync::Mutex<HashMap<String, (String, i64)>>,
+    /// The runtime extensions reach the rest of ZeroLux through.
+    runtime: std::sync::OnceLock<Weak<crate::chat_runtime::ChatRuntime>>,
     me: Weak<Extensions>,
 }
 
@@ -177,6 +179,7 @@ impl Extensions {
             next_runs: std::sync::Mutex::default(),
             watched: std::sync::Mutex::default(),
             ui_keys: std::sync::Mutex::default(),
+            runtime: std::sync::OnceLock::new(),
             me: me.clone(),
         })
     }
@@ -262,6 +265,11 @@ impl Extensions {
             Error::Invalid("An extension's id is `publisher.name`".into())
         );
         Ok(self.root.join(format!("{id}.log")))
+    }
+
+    /// Extensions reach the rest of ZeroLux through this runtime: its agents' sessions.
+    pub fn serve_runtime(&self, runtime: Weak<crate::chat_runtime::ChatRuntime>) {
+        let _ = self.runtime.set(runtime);
     }
 
     /// People's clients read the extensions again.
@@ -1371,6 +1379,24 @@ impl process::Kernel for Extensions {
                 self.publish(&format!("{extension}/{name}"), params["payload"].clone())
                     .await;
                 Ok(json!({}))
+            }
+            // An agent hears something, in the session it works in, as input that waits for its
+            // turn: a task given to it, for one.
+            "agents.tell" => {
+                let runtime = self
+                    .runtime
+                    .get()
+                    .and_then(Weak::upgrade)
+                    .context("The kernel is stopping")?;
+                let (actor, told) = (text("actor_id"), text("text"));
+                ensure!(
+                    !told.trim().is_empty() && told.len() <= 64 * 1024,
+                    Error::Invalid("Tell an agent 1 byte to 64 KiB".into())
+                );
+                let session = runtime
+                    .tell_agent(&actor, &format!("[{extension}] {told}"))
+                    .await?;
+                Ok(json!({"session_id": session}))
             }
             // A view it keeps: the clients showing it draw the new tree.
             "views.update" => {
