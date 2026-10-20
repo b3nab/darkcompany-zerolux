@@ -94,7 +94,12 @@ export function useSessionTasks(
     };
   }, [sessionId, reload]);
   const current = read?.session === session ? read : undefined;
-  const andReload = (work: Promise<unknown>) => work.then(() => reload());
+  // The task as the kernel answered, once the list has it too.
+  const andReload = async (work: Promise<{ task: Task }>) => {
+    const { task } = await work;
+    await reload();
+    return task;
+  };
   return {
     tasks: current?.tasks,
     error: current?.error ?? "",
