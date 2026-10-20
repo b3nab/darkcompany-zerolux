@@ -94,6 +94,9 @@ test("registry commands are restricted to the packaged manager, not workspace pa
   expect(capabilities[1].windows).toEqual(["workspace-*"]);
   expect(capabilities[1].permissions).toEqual([
     "allow-window-control",
+    // Its own sign-in only: the desktop finds the connection from the calling window.
+    "allow-read-workspace-credential",
+    "allow-write-workspace-credential",
     "core:window:allow-start-dragging",
     "core:window:allow-internal-toggle-maximize",
     "core:window:allow-is-fullscreen",
