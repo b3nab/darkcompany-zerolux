@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   draft:
+    name: Draft
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -33,23 +34,33 @@ jobs:
             --title "ZeroLux $version" --notes-file notes.md
 
   kernel:
+    name: Kernel (${{ matrix.name }})
     needs: draft
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-26, target: aarch64-apple-darwin }
-          - { os: macos-26-intel, target: x86_64-apple-darwin }
+          - { name: macOS arm64, os: macos-26, target: aarch64-apple-darwin }
+          - { name: macOS x64, os: macos-26-intel, target: x86_64-apple-darwin }
           # The oldest supported Ubuntu, so the builds run with older glibc versions too.
-          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
-          - { os: windows-2025, target: x86_64-pc-windows-msvc }
+          - {
+              name: Linux x64,
+              os: ubuntu-22.04,
+              target: x86_64-unknown-linux-gnu,
+            }
+          - {
+              name: Windows x64,
+              os: windows-2025,
+              target: x86_64-pc-windows-msvc,
+            }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup
+      - name: Set up (Bun, Rust, uv, LiveKit)
+        uses: ./.github/actions/setup
         with:
           cache-key: release
-      - uses: ./.github/actions/livekit
+          livekit: "true"
       - name: Prepare what the kernel carries
         run: bun run --cwd apps/desktop assets
       # One file: the kernel with its web app, sign-in, runners, Bun and LiveKit server inside.
@@ -69,22 +80,24 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" "$file"
 
   desktop:
+    name: Desktop (${{ matrix.name }})
     needs: draft
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-26 }
-          - { os: macos-26-intel }
-          - { os: ubuntu-22.04 }
-          - { os: windows-2025 }
+          - { name: macOS arm64, os: macos-26 }
+          - { name: macOS x64, os: macos-26-intel }
+          - { name: Linux x64, os: ubuntu-22.04 }
+          - { name: Windows x64, os: windows-2025 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup
+      - name: Set up (Bun, Rust, uv, LiveKit)
+        uses: ./.github/actions/setup
         with:
           cache-key: release
-      - uses: ./.github/actions/livekit
+          livekit: "true"
       # Signed and notarized with the Apple Developer ID when its secrets are set; otherwise
       # signed ad hoc, which Apple Silicon needs to open it at all.
       - name: Choose how the macOS app is signed
@@ -118,6 +131,7 @@ jobs:
   # when its secrets are set; otherwise with the debug key, which installs but cannot be
   # updated by a build signed with the release key later.
   android:
+    name: Android
     needs: draft
     runs-on: ubuntu-24.04
     steps:
@@ -164,6 +178,7 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" "$apk"
 
   publish:
+    name: Publish
     needs: [kernel, desktop, android]
     runs-on: ubuntu-24.04
     steps:

@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/b3nab/darkcompany-zerolux/actions/workflows/check.yml"><img alt="Check" src="https://github.com/b3nab/darkcompany-zerolux/actions/workflows/check.yml/badge.svg"></a>
+  <a href="https://github.com/b3nab/darkcompany-zerolux/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/b3nab/darkcompany-zerolux/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/b3nab/darkcompany-zerolux/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/b3nab/darkcompany-zerolux?include_prereleases&label=release&color=3cf2d8"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-3cf2d8"></a>
 </p>

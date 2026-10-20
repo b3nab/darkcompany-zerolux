@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The same checks on each system. PostgreSQL runs on Linux only: GitHub runs service
+  # containers only there, and an empty image starts none.
+  ci:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-24.04
+            postgres: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+          - { name: Windows, os: windows-2025, postgres: "" }
+          - { name: macOS, os: macos-26, postgres: "" }
+    runs-on: ${{ matrix.os }}
+    services:
+      postgres:
+        image: ${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: zerolux_test
+          POSTGRES_PASSWORD: fixture-only-password
+          POSTGRES_DB: zerolux_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U zerolux_test -d zerolux_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up (Bun, Rust, uv, LiveKit)
+        uses: ./.github/actions/setup
+        with:
+          cache-key: check
+          livekit: "true"
+      - name: Format
+        run: cargo fmt --all -- --check && bun run format:check
+      # The desktop crate compiles against the built web app, so it comes before Lint.
+      - name: Web build
+        run: bun run --cwd apps/desktop assets
+      - name: Lint (clippy)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Rust tests (SQLite)
+        run: cargo test --workspace --no-fail-fast
+      - name: Rust tests (PostgreSQL)
+        if: runner.os == 'Linux'
+        env:
+          ZEROLUX_TEST_POSTGRES_URL: postgresql://zerolux_test:fixture-only-password@127.0.0.1:5432/zerolux_test
+        run: cargo test -p zerolux --no-fail-fast -- --test-threads=4
+      - name: Typecheck
+        run: bun run typecheck
+      - name: JavaScript and Python tests
+        run: bun run test
