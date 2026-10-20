@@ -108,7 +108,8 @@ async fn a_persons_connection_ends_with_their_sign_in() {
     let claims: serde_json::Value = serde_json::from_slice(&payload).unwrap();
     assert!(claims["exp"].as_i64().unwrap() - now / 1000 <= 61);
 
-    // A device signed in for two more seconds, then a device signed in for an hour.
+    // A device signed in for ten more seconds (joining takes a few on a slow computer), then a
+    // device signed in for an hour.
     let signed_in = Arc::new(AtomicBool::new(true));
     let requests = Arc::new(AtomicUsize::new(0));
     let subscribe = |expires_at: i64| {
@@ -132,7 +133,8 @@ async fn a_persons_connection_ends_with_their_sign_in() {
         ));
         (invalidations, stopper, link)
     };
-    let (mut short, stop_short, short_link) = subscribe(zerolux::store::now_ms() + 2_000);
+    let short_until = zerolux::store::now_ms() + 10_000;
+    let (mut short, stop_short, short_link) = subscribe(short_until);
     tokio::time::timeout(Duration::from_secs(15), short.recv())
         .await
         .expect("joined")
@@ -150,7 +152,8 @@ async fn a_persons_connection_ends_with_their_sign_in() {
         .expect("still connected")
         .unwrap();
     // Expired: the sweep disconnects it; the device asks for a token and gets none.
-    tokio::time::sleep(Duration::from_millis(2_100)).await;
+    let left = short_until - zerolux::store::now_ms() + 100;
+    tokio::time::sleep(Duration::from_millis(left.max(0) as u64)).await;
     signed_in.store(false, Ordering::SeqCst);
     let asked = requests.load(Ordering::SeqCst);
     livekit.sweep_expired().await.unwrap();
