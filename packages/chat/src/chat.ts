@@ -9,6 +9,7 @@ import type {
 import type { LiveNotice } from "./live";
 import type { ExtensionsNotice } from "./extensions";
 import type { BackgroundNotice } from "./background";
+import type { UiNotice } from "./extension-ui";
 import type { TerminalNotice } from "./terminals";
 
 export const PAGE = 100;
@@ -210,6 +211,7 @@ export type ChatEvent = { event_id: string } & (
   | TerminalNotice
   | ExtensionsNotice
   | BackgroundNotice
+  | (UiNotice & { event_id: string })
 );
 /** How a session's native record ends, as the kernel's watcher last read it. */
 export type SessionTail = Partial<
@@ -521,7 +523,10 @@ const eventTypes = new Set<string>([
   "terminal.output",
   "extensions.changed",
   "background_command.changed",
+  "extension.event",
+  "extension.view",
 ]);
+let uiNotices = 0;
 let extensionNotices = 0;
 export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
   try {
@@ -548,6 +553,11 @@ export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
       typeof event.event_id !== "string"
     )
       event.event_id = `background_command.changed:${event.background_command_id}:${event.status}`;
+    // An extension's event or a new tree for a view: each one is its own.
+    if (event.type === "extension.event" && typeof event.event_id !== "string")
+      event.event_id = `extension.event:${event.event}:${++uiNotices}`;
+    if (event.type === "extension.view" && typeof event.event_id !== "string")
+      event.event_id = `extension.view:${event.extension}:${event.name}:${++uiNotices}`;
     if (typeof event.event_id === "string" && eventTypes.has(event.type))
       return event;
   } catch {

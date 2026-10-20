@@ -38,3 +38,4 @@ export * from "./extensions";
 export * from "./background";
 export * from "./inputs";
 export * from "./composer";
+export * from "./extension-ui";

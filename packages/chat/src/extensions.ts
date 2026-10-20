@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { JsonSchema } from "./action-form";
+import type { UiPiece } from "./extension-ui";
 import { errorMessage, kernelUrl, request } from "./client";
 
 /** A setting of an extension; a secret's value never comes back, only whether it has one. */
@@ -48,6 +49,8 @@ export interface ExtensionContributes {
   subscribes: string[];
   /** `event:<name>` or `schedule:<cron>`, and the action it runs. */
   triggers: { on: string; action: string }[];
+  /** Pieces of interface it brings into the clients' spaces. */
+  ui?: Omit<UiPiece, "extension">[];
 }
 
 /** An extension installed in the workspace, as people see it. */
