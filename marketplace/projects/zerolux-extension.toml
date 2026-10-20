@@ -1,0 +1,10 @@
+[extension]
+id = "zerolux.projects"
+name = "Projects"
+version = "0.1.0"
+publisher = "zerolux"
+description = "Projects and their tasks, for people and agents, kept here or in a tracker"
+kernel = ">=0.0.1"
+
+[kernel]
+library = "zerolux_projects"

@@ -1,0 +1,12 @@
+[extension]
+id = "zerolux.tracker"
+name = "Tracker"
+version = "0.1.0"
+publisher = "zerolux"
+description = "A test extension: a project tracker kept in memory, for Projects"
+
+[dependencies]
+"zerolux.projects" = ">=0.1"
+
+[process]
+command = ["bun", "run", "main.ts"]

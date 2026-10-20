@@ -1091,3 +1091,136 @@ async fn storage_keeps_files_and_gives_them_back() {
     server.abort();
     livekit.shutdown().await.unwrap();
 }
+
+/// One of ZeroLux's kernel modules in `marketplace/`, built and laid out as its package would be.
+fn official_module(
+    dir: &std::path::Path,
+    name: &str,
+    package: &str,
+    library: &str,
+) -> std::path::PathBuf {
+    use zerolux::extensions::library as libraries;
+    let built = built_module(&["-p", package, "--lib"], library);
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../marketplace")
+        .join(name);
+    let folder = dir.join(name);
+    let modules = folder.join("kernel").join(libraries::platform());
+    std::fs::create_dir_all(&modules).unwrap();
+    std::fs::copy(
+        source.join("zerolux-extension.toml"),
+        folder.join("zerolux-extension.toml"),
+    )
+    .unwrap();
+    std::fs::copy(&built, modules.join(libraries::file_name(library))).unwrap();
+    folder
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn projects_keep_tasks_here_or_in_a_tracker() {
+    for program in ["livekit-server", "bun"] {
+        if std::process::Command::new(program)
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("{program} not installed: skipped");
+            return;
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let folder = official_module(
+        dir.path(),
+        "projects",
+        "zerolux-projects",
+        "zerolux_projects",
+    );
+    let (kernel, runtime, livekit, server, _database) = kernel_for(dir.path()).await;
+    let run = |action: &'static str, input: Value| {
+        let kernel = &kernel;
+        async move {
+            kernel
+                .call(
+                    Method::POST,
+                    &format!("/ext/zerolux.projects/{action}"),
+                    Some(input),
+                )
+                .await
+        }
+    };
+    let (status, installed) = kernel
+        .call(
+            Method::POST,
+            "/extensions/folder",
+            Some(json!({"folder": folder})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{installed}");
+    // A project kept here: its tasks numbered by its key, assigned, moved and commented.
+    let (status, project) = run("create_project", json!({"name": "ZeroLux", "key": "zl"})).await;
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["result"]["id"].as_str().unwrap().to_owned();
+    let (status, _) = run("create_project", json!({"name": "Again", "key": "ZL"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, task) = run(
+        "create_task",
+        json!({"project_id": project, "title": "Release 0.0.1", "priority": "high", "assignee": "agent-1"}),
+    )
+    .await;
+    assert_eq!(task["result"]["key"], "ZL-1", "{task}");
+    assert_eq!(task["result"]["status"], "backlog");
+    let task = task["result"]["id"].as_str().unwrap().to_owned();
+    let (status, moved) = run("update_task", json!({"id": task, "status": "in_progress"})).await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    assert_eq!(moved["result"]["priority"], "high");
+    let (status, _) = run("update_task", json!({"id": task, "status": "lost"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    run("comment", json!({"id": task, "text": "On it"})).await;
+    let (_, read) = run("task", json!({"id": task})).await;
+    assert_eq!(read["result"]["comments"][0]["text"], "On it", "{read}");
+    let (_, mine) = run(
+        "tasks",
+        json!({"assignee": "agent-1", "status": "in_progress"}),
+    )
+    .await;
+    assert_eq!(mine["result"]["tasks"].as_array().unwrap().len(), 1);
+    // A project kept in a tracker: read from it, and changed there first.
+    let (status, tracker) = kernel
+        .call(
+            Method::POST,
+            "/extensions/folder",
+            Some(json!({"folder": fixture("tracker")})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{tracker}");
+    let (status, tracked) = run(
+        "create_project",
+        json!({"name": "Engineering", "key": "ENG", "tracker": "fake", "remote_id": "ENG"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{tracked}");
+    let tracked = tracked["result"]["id"].as_str().unwrap().to_owned();
+    let (_, listed) = run("tasks", json!({"project_id": tracked})).await;
+    assert_eq!(
+        listed["result"]["tasks"][0]["title"], "Set up CI",
+        "{listed}"
+    );
+    let (_, added) = run(
+        "create_task",
+        json!({"project_id": tracked, "title": "Ship"}),
+    )
+    .await;
+    assert_eq!(added["result"]["remote_id"], "ENG-2", "{added}");
+    let added = added["result"]["id"].as_str().unwrap().to_owned();
+    run("update_task", json!({"id": added, "status": "done"})).await;
+    run("comment", json!({"id": added, "text": "Shipped"})).await;
+    let (_, seen) = kernel
+        .call(Method::POST, "/ext/zerolux.tracker/seen", Some(json!({})))
+        .await;
+    let remote = &seen["result"]["tasks"][1];
+    assert_eq!(remote["status"], "done", "{seen}");
+    assert_eq!(remote["comments"], json!(["Shipped"]));
+    runtime.shutdown().await.unwrap();
+    server.abort();
+    livekit.shutdown().await.unwrap();
+}
