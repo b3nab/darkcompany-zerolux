@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <h1>Board</h1>
+    <button id="add">Add a card</button>
+    <p id="said"></p>
+    <script>
+      // MCP Apps' bridge: JSON-RPC over postMessage with the client that shows this page.
+      let next = 1;
+      const waiting = new Map();
+      addEventListener("message", (event) => {
+        const message = event.data;
+        if (message?.jsonrpc === "2.0" && waiting.has(message.id)) {
+          waiting.get(message.id)(message);
+          waiting.delete(message.id);
+        }
+      });
+      const call = (method, params) =>
+        new Promise((resolve) => {
+          const id = next++;
+          waiting.set(id, resolve);
+          parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+        });
+      document.getElementById("add").onclick = async () => {
+        const answer = await call("tools/call", {
+          name: "add",
+          arguments: { title: "From the page" },
+        });
+        document.getElementById("said").textContent = answer.error
+          ? answer.error.message
+          : "Added";
+      };
+    </script>
+  </body>
+</html>

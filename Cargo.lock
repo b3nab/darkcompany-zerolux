@@ -8302,6 +8302,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "jsonschema",
+ "libloading 0.8.9",
  "livekit",
  "livekit-api",
  "memchr",
@@ -8347,6 +8348,13 @@ dependencies = [
  "tokio",
  "uuid",
  "zerolux",
+]
+
+[[package]]
+name = "zerolux-extension"
+version = "0.0.1-dev"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

@@ -256,7 +256,7 @@ pub enum PiStartFailure {
 }
 
 pub struct ChatRuntime {
-    store: Store,
+    pub(crate) store: Store,
     livekit: Arc<LiveKit>,
     base_url: String,
     runners: crate::claude_runner::Registry,
@@ -342,14 +342,11 @@ impl ChatRuntime {
             links.with_file_name("extensions"),
             Box::new({
                 let (store, livekit) = (store.clone(), livekit.clone());
-                // People's clients read the extensions again.
-                move || {
+                move |notice: serde_json::Value| {
                     let (store, livekit) = (store.clone(), livekit.clone());
                     tokio::spawn(async move {
                         if let Ok(people) = store.everyone().await {
-                            let _ = livekit
-                                .notify(&serde_json::json!({"type": "extensions.changed"}), &people)
-                                .await;
+                            let _ = livekit.notify(&notice, &people).await;
                         }
                     });
                 }

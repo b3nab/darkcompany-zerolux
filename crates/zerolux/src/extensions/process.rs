@@ -41,12 +41,18 @@ pub trait Kernel: Send + Sync + 'static {
     fn heard(&self, extension: String, method: String, params: Value);
 }
 
+/// An extension's running part: a process, or a kernel module, both spoken to the same way.
 pub struct Process {
     send: mpsc::UnboundedSender<String>,
     pending: Pending,
     next: AtomicU64,
-    child: Mutex<Option<Child>>,
+    part: Mutex<Option<Part>>,
     ended: watch::Receiver<bool>,
+}
+
+enum Part {
+    Child(Child),
+    Module(Arc<super::library::Module>),
 }
 
 impl Process {
@@ -107,61 +113,14 @@ impl Process {
             send: send.clone(),
             pending: pending.clone(),
             next: AtomicU64::new(1),
-            child: Mutex::new(Some(child)),
+            part: Mutex::new(Some(Part::Child(child))),
             ended,
         });
         let extension = extension.to_owned();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                if line.len() > LINE {
-                    continue;
-                }
-                let Ok(message) = serde_json::from_str::<Value>(&line) else {
-                    continue;
-                };
-                let method = message["method"].as_str().map(str::to_owned);
-                match (method, message.get("id").cloned()) {
-                    // It asks the kernel.
-                    (Some(method), Some(id)) => {
-                        let (kernel, send, extension) =
-                            (kernel.clone(), send.clone(), extension.clone());
-                        let params = message["params"].clone();
-                        tokio::spawn(async move {
-                            let answer = match kernel.upgrade() {
-                                Some(kernel) => kernel.answer(extension, method, params).await,
-                                None => Err(anyhow::anyhow!("The kernel is stopping")),
-                            };
-                            let reply = match answer {
-                                Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
-                                Err(error) => json!({"jsonrpc": "2.0", "id": id,
-                                    "error": {"code": -32000, "message": format!("{error:#}")}}),
-                            };
-                            let _ = send.send(reply.to_string());
-                        });
-                    }
-                    // It tells the kernel something.
-                    (Some(method), None) => {
-                        if let Some(kernel) = kernel.upgrade() {
-                            kernel.heard(extension.clone(), method, message["params"].clone());
-                        }
-                    }
-                    // It answers the kernel.
-                    (None, Some(id)) => {
-                        let Some(id) = id.as_u64() else { continue };
-                        let answer = match message.get("error") {
-                            Some(error) => Err(error["message"]
-                                .as_str()
-                                .unwrap_or("The extension failed")
-                                .to_owned()),
-                            None => Ok(message["result"].clone()),
-                        };
-                        if let Some(waiting) = pending.lock().expect("pending").remove(&id) {
-                            let _ = waiting.send(answer);
-                        }
-                    }
-                    (None, None) => {}
-                }
+                dispatch(&line, &kernel, &send, &extension, &pending);
             }
             // Its output closed: whatever was asked is not answered.
             pending.lock().expect("pending").clear();
@@ -217,11 +176,113 @@ impl Process {
     /// Asks it to stop, then ends it if it has not.
     pub async fn stop(&self) {
         self.notify("shutdown", json!({}));
-        let Some(mut child) = self.child.lock().await.take() else {
-            return;
-        };
-        if tokio::time::timeout(GRACE, child.wait()).await.is_err() {
-            let _ = child.kill().await;
+        match self.part.lock().await.take() {
+            Some(Part::Child(mut child)) => {
+                if tokio::time::timeout(GRACE, child.wait()).await.is_err() {
+                    let _ = child.kill().await;
+                }
+            }
+            // The notice reaches it before it stops, in order.
+            Some(Part::Module(module)) => {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                module.stop();
+            }
+            None => {}
         }
+    }
+
+    /// Loads the kernel module at `library` and starts it; `copies` keeps the loaded files.
+    pub fn start_module<K: Kernel>(
+        extension: &str,
+        library: &Path,
+        copies: &Path,
+        kernel: Weak<K>,
+    ) -> Result<Arc<Self>> {
+        let (heard_by, mut heard) = mpsc::unbounded_channel::<String>();
+        let module = Arc::new(super::library::Module::start(library, copies, heard_by)?);
+        let (send, mut outgoing) = mpsc::unbounded_channel::<String>();
+        let pending: Pending = Arc::default();
+        let (ended_tx, ended) = watch::channel(false);
+        {
+            let module = module.clone();
+            tokio::spawn(async move {
+                while let Some(message) = outgoing.recv().await {
+                    module.send(&message);
+                }
+            });
+        }
+        let process = Arc::new(Self {
+            send: send.clone(),
+            pending: pending.clone(),
+            next: AtomicU64::new(1),
+            part: Mutex::new(Some(Part::Module(module))),
+            ended,
+        });
+        let extension = extension.to_owned();
+        tokio::spawn(async move {
+            while let Some(message) = heard.recv().await {
+                dispatch(&message, &kernel, &send, &extension, &pending);
+            }
+            pending.lock().expect("pending").clear();
+            ended_tx.send_replace(true);
+        });
+        Ok(process)
+    }
+}
+
+/// One message from an extension's part: a request to the kernel, a notice, or an answer.
+fn dispatch<K: Kernel>(
+    line: &str,
+    kernel: &Weak<K>,
+    send: &mpsc::UnboundedSender<String>,
+    extension: &str,
+    pending: &Pending,
+) {
+    if line.len() > LINE {
+        return;
+    }
+    let Ok(message) = serde_json::from_str::<Value>(line) else {
+        return;
+    };
+    let method = message["method"].as_str().map(str::to_owned);
+    match (method, message.get("id").cloned()) {
+        // It asks the kernel.
+        (Some(method), Some(id)) => {
+            let (kernel, send, extension) = (kernel.clone(), send.clone(), extension.to_owned());
+            let params = message["params"].clone();
+            tokio::spawn(async move {
+                let answer = match kernel.upgrade() {
+                    Some(kernel) => kernel.answer(extension, method, params).await,
+                    None => Err(anyhow::anyhow!("The kernel is stopping")),
+                };
+                let reply = match answer {
+                    Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+                    Err(error) => json!({"jsonrpc": "2.0", "id": id,
+                        "error": {"code": -32000, "message": format!("{error:#}")}}),
+                };
+                let _ = send.send(reply.to_string());
+            });
+        }
+        // It tells the kernel something.
+        (Some(method), None) => {
+            if let Some(kernel) = kernel.upgrade() {
+                kernel.heard(extension.to_owned(), method, message["params"].clone());
+            }
+        }
+        // It answers the kernel.
+        (None, Some(id)) => {
+            let Some(id) = id.as_u64() else { return };
+            let answer = match message.get("error") {
+                Some(error) => Err(error["message"]
+                    .as_str()
+                    .unwrap_or("The extension failed")
+                    .to_owned()),
+                None => Ok(message["result"].clone()),
+            };
+            if let Some(waiting) = pending.lock().expect("pending").remove(&id) {
+                let _ = waiting.send(answer);
+            }
+        }
+        (None, None) => {}
     }
 }

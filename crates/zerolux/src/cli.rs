@@ -59,6 +59,37 @@ enum Command {
         #[arg(long, env = "ZEROLUX_DATA_DIR", default_value = ".zerolux/host")]
         data_dir: PathBuf,
     },
+    /// Make and work on extensions.
+    Ext {
+        #[command(subcommand)]
+        action: ExtAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ExtAction {
+    /// A new extension in a new folder: its manifest, one action and the SDK of its language.
+    New {
+        /// `publisher.name`, in lowercase letters, digits and dashes.
+        id: String,
+        /// Its name as people read it; by default its id's name.
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, value_enum, default_value = "typescript")]
+        language: crate::extensions::scaffold::Language,
+        /// Where to write it; by default a folder named as its id's name, here.
+        folder: Option<PathBuf>,
+    },
+    /// Install an extension from its folder in the kernel running on this computer, as its
+    /// owner, and follow it: the kernel starts it again as its files change.
+    Dev {
+        /// The extension's folder; by default this one.
+        #[arg(default_value = ".")]
+        folder: PathBuf,
+        /// The running kernel's data folder.
+        #[arg(long, env = "ZEROLUX_DATA_DIR", default_value = ".zerolux")]
+        data_dir: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -87,6 +118,58 @@ pub fn init_logging() {
                 .unwrap_or_else(|_| "zerolux=info,tower_http=info".into()),
         )
         .try_init();
+}
+
+/// Installs the extension in `folder` in the local kernel and follows it: its state as it
+/// starts again, and its log, until interrupted.
+async fn dev(folder: &std::path::Path, data_dir: &std::path::Path) -> anyhow::Result<()> {
+    use serde_json::json;
+    let folder = std::path::absolute(folder)?;
+    let mut kernel = crate::local_control::Client::connect(data_dir).await?;
+    let installed = kernel
+        .ask("extensions.dev", json!({"folder": folder}))
+        .await?;
+    let id = installed["id"].as_str().unwrap_or_default().to_owned();
+    let state = |extension: &serde_json::Value| match extension["error"].as_str() {
+        Some(error) => format!("{id}: {error}"),
+        None if extension["enabled"] == true => format!("{id}: running"),
+        None => format!("{id}: disabled"),
+    };
+    eprintln!("{}", state(&installed));
+    let mut seen = installed["updated_at"].clone();
+    let mut after = kernel
+        .ask("extensions.log", json!({"id": id, "after": u64::MAX}))
+        .await?["end"]
+        .as_u64()
+        .unwrap_or(0);
+    let stop = crate::server::shutdown_signal();
+    tokio::pin!(stop);
+    loop {
+        tokio::select! {
+            _ = &mut stop => return Ok(()),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
+        }
+        let log = kernel
+            .ask("extensions.log", json!({"id": id, "after": after}))
+            .await?;
+        if let Some(text) = log["text"].as_str().filter(|text| !text.is_empty()) {
+            eprint!("{text}");
+        }
+        after = log["next"].as_u64().unwrap_or(after);
+        let listed = kernel.ask("extensions.list", json!({})).await?;
+        let Some(extension) = listed
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|extension| extension["id"] == id.as_str())
+        else {
+            anyhow::bail!("{id} was removed");
+        };
+        if extension["updated_at"] != seen {
+            seen = extension["updated_at"].clone();
+            eprintln!("{}", state(extension));
+        }
+    }
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -160,6 +243,21 @@ pub async fn run() -> anyhow::Result<()> {
                 });
                 crate::host_link::run(config, &data_dir, stopped).await?;
             }
+        },
+        Command::Ext { action } => match action {
+            ExtAction::New {
+                id,
+                name,
+                language,
+                folder,
+            } => {
+                let short = id.split_once('.').map_or(id.as_str(), |(_, name)| name);
+                let folder = folder.unwrap_or_else(|| PathBuf::from(short));
+                let name = name.unwrap_or_else(|| short.to_owned());
+                let made = crate::extensions::scaffold::create(&id, &name, language, &folder)?;
+                println!("{}", made.display());
+            }
+            ExtAction::Dev { folder, data_dir } => dev(&folder, &data_dir).await?,
         },
         Command::Doctor => println!(
             "{}",

@@ -220,6 +220,11 @@ fn terminate(pid: Option<i64>, child: Option<tokio::process::Child>) {
     }
 }
 
+/// A file's text from `after`, as much as one read returns, cut at a whole character.
+pub fn read_log(path: &Path, after: u64) -> Result<Output> {
+    read_output(path, after)
+}
+
 fn read_output(path: &Path, after: u64) -> Result<Output> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = match std::fs::File::open(path) {

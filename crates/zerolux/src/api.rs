@@ -360,6 +360,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
             "/extensions/{id}/settings",
             axum::routing::patch(extension_settings),
         )
+        .route("/extensions/{id}/ui", post(extension_ui_address))
         .route("/actions", get(list_actions))
         .route(
             "/ext/{extension}/{action}",
@@ -381,6 +382,8 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/auth/invites/{token}", get(invitation))
         .route("/hosts/join", post(join_host))
         .route("/hosts/channel", get(host_channel))
+        // An extension's own page, opened by the key its address carries.
+        .route("/extension-ui/{key}/{*path}", get(extension_ui_file))
         .route("/auth/{*rest}", axum::routing::any(auth_proxy));
     let api = open
         .merge(domain)
@@ -2942,6 +2945,70 @@ async fn install_extension_folder(
         .await
         .map_err(said)?;
     Ok(Json(json!({ "extension": extension })))
+}
+
+#[derive(Deserialize)]
+struct UiEntry {
+    entry: String,
+}
+
+/// Where to open one of an extension's pages.
+async fn extension_ui_address(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<UiEntry>,
+) -> Result<Json<Value>, ApiFailure> {
+    let url = runtime(&state)?
+        .extensions
+        .ui_address(&who, &id, &input.entry)
+        .await
+        .map_err(said)?;
+    Ok(Json(json!({ "url": url })))
+}
+
+/// One of an extension's page files, isolated: it runs its scripts, apart from the app.
+async fn extension_ui_file(
+    State(state): State<AppState>,
+    Path((key, path)): Path<(String, String)>,
+) -> Result<Response, ApiFailure> {
+    let file = runtime(&state)?
+        .extensions
+        .ui_file(&key, &path)
+        .await
+        .map_err(said)?;
+    let bytes = tokio::fs::read(&file)
+        .await
+        .map_err(|_| ApiFailure::from(Error::NotFound))?;
+    let kind = match file.extension().and_then(|kind| kind.to_str()) {
+        Some("html" | "htm") => "text/html; charset=utf-8",
+        Some("js" | "mjs") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("wasm") => "application/wasm",
+        Some("txt") => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    };
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, kind),
+            (
+                axum::http::header::CONTENT_SECURITY_POLICY,
+                "sandbox allow-scripts allow-forms; default-src 'self' 'unsafe-inline' data: blob:",
+            ),
+            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 /// The official extensions ZeroLux brings, installed or not.

@@ -223,6 +223,16 @@ impl Server {
                 &runtime,
             )));
             // The workspace's extensions, enabled as they were; their schedule triggers.
+            // Extensions being worked on start again as their folders change.
+            let watched = runtime.extensions.clone();
+            let extension_reloads = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(1));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    interval.tick().await;
+                    watched.reload_changed().await;
+                }
+            });
             let extensions = runtime.extensions.clone();
             let extension_schedules = tokio::spawn(async move {
                 extensions.start_enabled().await;
@@ -233,6 +243,15 @@ impl Server {
                     extensions.run_schedules().await;
                 }
             });
+            // The local channel: the owner's commands from this computer, such as `zerolux ext dev`.
+            let control = {
+                let (data_dir, runtime) = (std::path::absolute(&data_dir)?, runtime.clone());
+                tokio::spawn(async move {
+                    if let Err(error) = crate::local_control::serve(&data_dir, runtime).await {
+                        tracing::warn!(error = format!("{error:#}"), "Local channel stopped");
+                    }
+                })
+            };
             // Triggers: a session hears when the CI runs of its commit end.
             let watch = runtime.clone();
             let watcher = tokio::spawn(async move {
@@ -289,6 +308,10 @@ impl Server {
             let _ = watcher.await;
             extension_schedules.abort();
             let _ = extension_schedules.await;
+            extension_reloads.abort();
+            let _ = extension_reloads.await;
+            control.abort();
+            let _ = control.await;
             background.abort();
             let _ = background.await;
             settings_observer.abort();

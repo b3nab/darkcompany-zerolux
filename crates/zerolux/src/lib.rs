@@ -28,6 +28,7 @@ mod integration_code;
 pub mod lease;
 pub mod live;
 pub mod livekit;
+pub mod local_control;
 pub mod model;
 pub mod native_events;
 pub mod native_output;

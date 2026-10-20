@@ -100,6 +100,12 @@ fn name_part(value: &str) -> bool {
 }
 
 impl Manifest {
+    /// Whether `id` is an extension's id, `publisher.name`.
+    pub fn valid_id(id: &str) -> bool {
+        id.split_once('.')
+            .is_some_and(|(publisher, name)| name_part(publisher) && name_part(name))
+    }
+
     /// Reads and checks a manifest.
     pub fn parse(text: &str) -> Result<Self> {
         let manifest: Self =
@@ -191,18 +197,20 @@ impl Manifest {
                 )));
             }
         }
-        if self.kernel.is_some() {
-            return Err(invalid(
-                "Kernel parts are not loaded yet by this kernel; use a process part",
-            ));
-        }
         if self.remote.is_some() {
             return Err(invalid(
-                "Remote parts are not called yet by this kernel; use a process part",
+                "Remote parts are not called yet by this kernel; use a kernel or process part",
             ));
         }
-        if self.process.is_none() {
-            return Err(invalid("An extension has a process part"));
+        if let Some(kernel) = &self.kernel
+            && !name_part(&kernel.library.replace('_', "-"))
+        {
+            return Err(invalid(
+                "A kernel part names its library in lowercase letters, digits, dashes and underscores",
+            ));
+        }
+        if self.kernel.is_some() == self.process.is_some() {
+            return Err(invalid("An extension has a kernel part or a process part"));
         }
         Ok(())
     }
@@ -228,6 +236,44 @@ pub struct Contributes {
     pub subscribes: Vec<String>,
     #[serde(default)]
     pub triggers: Vec<Trigger>,
+    /// What it shows in the clients, and where.
+    #[serde(default)]
+    pub ui: Vec<UiPiece>,
+}
+
+/// A piece of an extension's interface, in one of the clients' spaces.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct UiPiece {
+    /// `page`, `session`, `chat`, `message` or `settings`.
+    pub space: String,
+    pub name: String,
+    pub title: String,
+    /// The name of one of the clients' icons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    pub view: UiView,
+}
+
+/// How a piece is drawn.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum UiView {
+    /// By the clients' own component for it, when they have one.
+    Native,
+    /// From the tree an action of its returns, drawn again after its own actions and on the
+    /// events it names.
+    Described {
+        action: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        refresh_on: Vec<String>,
+    },
+    /// From a tree the extension keeps up to date itself, starting from an action's.
+    Remote { action: String },
+    /// From its own page, `ui/…` in its folder, isolated in a frame.
+    Web { entry: String },
+    /// One of its actions, run on a message.
+    Action { action: String },
 }
 
 /// An operation, defined once for people, agents and the API.
@@ -367,6 +413,57 @@ impl Contributes {
                 return Err(invalid(format!("Invalid event `{}`", event.name)));
             }
         }
+        let mut pieces = std::collections::HashSet::new();
+        for piece in &self.ui {
+            if !local_name(&piece.name) || !pieces.insert((&piece.space, &piece.name)) {
+                return Err(invalid(format!(
+                    "Invalid or repeated interface piece `{}`",
+                    piece.name
+                )));
+            }
+            if !matches!(
+                piece.space.as_str(),
+                "page" | "session" | "chat" | "message" | "settings"
+            ) {
+                return Err(invalid(format!(
+                    "`{}` goes in a page, session, chat, message or settings",
+                    piece.name
+                )));
+            }
+            let action = match &piece.view {
+                UiView::Native => None,
+                UiView::Described { action, .. } | UiView::Remote { action } => Some(action),
+                UiView::Web { entry } => {
+                    let path = std::path::Path::new(entry);
+                    if !entry.starts_with("ui/")
+                        || path
+                            .components()
+                            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+                    {
+                        return Err(invalid(format!(
+                            "`{}` shows a page in its `ui/` folder",
+                            piece.name
+                        )));
+                    }
+                    None
+                }
+                UiView::Action { action } => Some(action),
+            };
+            if matches!(piece.view, UiView::Action { .. }) != (piece.space == "message") {
+                return Err(invalid(format!(
+                    "`{}`: a message's piece runs an action, and only there",
+                    piece.name
+                )));
+            }
+            if let Some(action) = action
+                && !self.actions.iter().any(|known| &known.name == action)
+            {
+                return Err(invalid(format!(
+                    "`{}` shows `{action}`, which {extension} does not have",
+                    piece.name
+                )));
+            }
+        }
         for trigger in &self.triggers {
             if !self
                 .actions
@@ -475,5 +572,41 @@ token = { type = "secret", label = "Token" }
             parse_point("zerolux.storage/providers@1").unwrap(),
             ("zerolux.storage".into(), "providers".into(), 1)
         );
+    }
+
+    #[test]
+    fn interface_pieces_go_in_known_spaces_and_show_their_own_actions() {
+        let with = |ui: serde_json::Value| -> Result<()> {
+            let contributes: Contributes = serde_json::from_value(serde_json::json!({
+                "actions": [{"name": "board", "title": "Board", "description": "The board"}],
+                "ui": ui,
+            }))
+            .map_err(|error| invalid(error.to_string()))?;
+            contributes.check("acme.board")
+        };
+        with(serde_json::json!([
+            {"space": "page", "name": "board", "title": "Board", "icon": "kanban",
+                "view": {"kind": "described", "action": "board", "refresh_on": ["acme.board/moved"]}},
+            {"space": "session", "name": "board", "title": "Board", "view": {"kind": "remote", "action": "board"}},
+            {"space": "settings", "name": "page", "title": "Board", "view": {"kind": "web", "entry": "ui/index.html"}},
+            {"space": "chat", "name": "files", "title": "Files", "view": {"kind": "native"}},
+            {"space": "message", "name": "save", "title": "Save", "view": {"kind": "action", "action": "board"}},
+        ]))
+        .unwrap();
+        for wrong in [
+            serde_json::json!([{"space": "sky", "name": "a", "title": "A", "view": {"kind": "native"}}]),
+            serde_json::json!([{"space": "page", "name": "a", "title": "A",
+                "view": {"kind": "described", "action": "missing"}}]),
+            serde_json::json!([{"space": "page", "name": "a", "title": "A",
+                "view": {"kind": "web", "entry": "ui/../secret"}}]),
+            serde_json::json!([{"space": "page", "name": "a", "title": "A",
+                "view": {"kind": "action", "action": "board"}}]),
+            serde_json::json!([{"space": "message", "name": "a", "title": "A", "view": {"kind": "native"}}]),
+            serde_json::json!([
+                {"space": "page", "name": "a", "title": "A", "view": {"kind": "native"}},
+                {"space": "page", "name": "a", "title": "B", "view": {"kind": "native"}}]),
+        ] {
+            assert!(with(wrong.clone()).is_err(), "{wrong}");
+        }
     }
 }

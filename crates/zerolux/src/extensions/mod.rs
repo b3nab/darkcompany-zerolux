@@ -3,8 +3,10 @@
 //! the implementations of others', events, triggers, settings and stored values, through its
 //! parts. The kernel offers the mechanism; what the contracts mean is the extensions' own.
 
+pub mod library;
 pub mod manifest;
 pub mod process;
+pub mod scaffold;
 
 use crate::platform::Canonical;
 use std::{
@@ -146,10 +148,16 @@ pub struct Extensions {
     /// Where extensions keep their logs.
     root: PathBuf,
     loaded: RwLock<HashMap<String, Loaded>>,
-    /// Told when what is installed or enabled changes.
-    changed: Box<dyn Fn() + Send + Sync>,
+    /// Tells every person's clients something: that extensions changed, an extension's event,
+    /// or a view it keeps.
+    tell: Box<dyn Fn(Value) + Send + Sync>,
     /// When each schedule trigger runs next, by extension and trigger.
     next_runs: std::sync::Mutex<HashMap<(String, usize), i64>>,
+    /// How the folder of each extension being worked on looked when last seen, and whether it
+    /// changed since it was loaded.
+    watched: std::sync::Mutex<HashMap<String, (u64, bool)>>,
+    /// Keys that open an extension's own pages, until they expire: extension and expiry.
+    ui_keys: std::sync::Mutex<HashMap<String, (String, i64)>>,
     me: Weak<Extensions>,
 }
 
@@ -158,15 +166,79 @@ fn row_manifest(row: &extensions::Model) -> Result<Manifest> {
 }
 
 impl Extensions {
-    pub fn new(store: Store, root: PathBuf, changed: Box<dyn Fn() + Send + Sync>) -> Arc<Self> {
+    pub fn new(store: Store, root: PathBuf, tell: Box<dyn Fn(Value) + Send + Sync>) -> Arc<Self> {
         Arc::new_cyclic(|me| Self {
             store,
             root,
             loaded: RwLock::default(),
-            changed,
+            tell,
             next_runs: std::sync::Mutex::default(),
+            watched: std::sync::Mutex::default(),
+            ui_keys: std::sync::Mutex::default(),
             me: me.clone(),
         })
+    }
+
+    /// Where a person's client opens one of an extension's pages, `ui/…` in its folder: an
+    /// address with a key of its own, good for an hour, under which its files are served.
+    pub async fn ui_address(&self, who: &ChatIdentity, id: &str, entry: &str) -> Result<String> {
+        ensure!(who.is_person(), Error::Forbidden);
+        let shown = self.loaded.read().await.get(id).is_some_and(|loaded| {
+            loaded.contributes.ui.iter().any(|piece| {
+                matches!(&piece.view, manifest::UiView::Web { entry: known } if known == entry)
+            })
+        });
+        ensure!(shown, Error::NotFound);
+        let key = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+        let now = now_ms();
+        let mut keys = self.ui_keys.lock().expect("ui keys");
+        keys.retain(|_, (_, expires)| *expires > now);
+        keys.insert(key.clone(), (id.to_owned(), now + 3_600_000));
+        Ok(format!(
+            "/api/extension-ui/{key}/{}",
+            entry.trim_start_matches("ui/")
+        ))
+    }
+
+    /// The file a page's key opens: within its extension's `ui/` folder only.
+    pub async fn ui_file(&self, key: &str, path: &str) -> Result<PathBuf> {
+        let extension = {
+            let keys = self.ui_keys.lock().expect("ui keys");
+            match keys.get(key) {
+                Some((extension, expires)) if *expires > now_ms() => extension.clone(),
+                _ => bail!(Error::NotFound),
+            }
+        };
+        ensure!(
+            std::path::Path::new(path)
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_))),
+            Error::NotFound
+        );
+        let row = self.row(&extension).await?;
+        let root =
+            dunce::canonicalize(Path::new(&row.source).join("ui")).map_err(|_| Error::NotFound)?;
+        let file = dunce::canonicalize(root.join(path)).map_err(|_| Error::NotFound)?;
+        ensure!(file.starts_with(&root) && file.is_file(), Error::NotFound);
+        Ok(file)
+    }
+
+    /// Where an installed extension's log is kept.
+    pub fn log_path(&self, id: &str) -> Result<PathBuf> {
+        ensure!(
+            manifest::Manifest::valid_id(id),
+            Error::Invalid("An extension's id is `publisher.name`".into())
+        );
+        Ok(self.root.join(format!("{id}.log")))
+    }
+
+    /// People's clients read the extensions again.
+    fn changed(&self) {
+        (self.tell)(json!({"type": "extensions.changed"}));
     }
 
     /// The folder an extension keeps its files in, private to it and to the kernel.
@@ -273,6 +345,10 @@ impl Extensions {
 
     async fn install(&self, who: &ChatIdentity, folder: &str, dev: bool) -> Result<Installed> {
         self.owner_only(who).await?;
+        self.install_from(folder, dev).await
+    }
+
+    async fn install_from(&self, folder: &str, dev: bool) -> Result<Installed> {
         let folder = dunce::canonicalize(folder)
             .ok()
             .filter(|folder| folder.is_dir())
@@ -307,7 +383,7 @@ impl Extensions {
         } else {
             row.insert(self.store.db()).await?;
         }
-        self.enable(who, &id).await?;
+        self.start(&id).await?;
         self.installed(&id).await
     }
 
@@ -323,6 +399,10 @@ impl Extensions {
     /// what they bring. A failure is kept as its error, and it stays disabled.
     pub async fn enable(&self, who: &ChatIdentity, id: &str) -> Result<Installed> {
         self.owner_only(who).await?;
+        self.start(id).await
+    }
+
+    async fn start(&self, id: &str) -> Result<Installed> {
         let row = self.row(id).await?;
         let result = self.load(&row).await;
         let now = now_ms();
@@ -343,7 +423,7 @@ impl Extensions {
             }
         }
         update.update(self.store.db()).await?;
-        (self.changed)();
+        self.changed();
         result?;
         self.installed(id).await
     }
@@ -369,15 +449,33 @@ impl Extensions {
         self.stop(&id).await;
         let mut contributes = Contributes::default();
         let mut process = None;
-        if let Some(part) = &manifest.process {
-            let started = process::Process::start(
-                &id,
-                Path::new(&row.source),
-                &part.command,
-                &self.root.join(format!("{id}.log")),
-                self.me.clone(),
-            )
-            .await?;
+        let started = match (&manifest.process, &manifest.kernel) {
+            (Some(part), _) => Some((
+                process::Process::start(
+                    &id,
+                    Path::new(&row.source),
+                    &part.command,
+                    &self.root.join(format!("{id}.log")),
+                    self.me.clone(),
+                )
+                .await?,
+                part.start_seconds.unwrap_or(60),
+            )),
+            (None, Some(part)) => {
+                let path = library::find(Path::new(&row.source), &part.library)?;
+                Some((
+                    process::Process::start_module(
+                        &id,
+                        &path,
+                        &self.root.join("modules"),
+                        self.me.clone(),
+                    )?,
+                    60,
+                ))
+            }
+            (None, None) => None,
+        };
+        if let Some((started, seconds)) = started {
             let settings = self.setting_values(&id, &manifest, false).await?;
             let folder = self.folder(&id);
             crate::platform::private_dir(&folder)?;
@@ -387,7 +485,7 @@ impl Extensions {
                     json!({"extension": {"id": id, "version": manifest.extension.version},
                         "kernel": {"version": env!("CARGO_PKG_VERSION"), "api": manifest::API},
                         "settings": settings, "folder": folder}),
-                    std::time::Duration::from_secs(part.start_seconds.unwrap_or(60)),
+                    std::time::Duration::from_secs(seconds),
                 )
                 .await;
             let answer = match answer {
@@ -455,12 +553,13 @@ impl Extensions {
         extensions::ActiveModel {
             id: Set(id.to_owned()),
             enabled: Set(false),
+            error: Set(None),
             updated_at: Set(now_ms()),
             ..Default::default()
         }
         .update(self.store.db())
         .await?;
-        (self.changed)();
+        self.changed();
         self.installed(id).await
     }
 
@@ -484,12 +583,84 @@ impl Extensions {
             std::fs::remove_dir_all(&folder)
                 .with_context(|| format!("Cannot remove {}", folder.display()))?;
         }
-        (self.changed)();
+        self.changed();
         Ok(())
     }
 
     /// Enables, when the kernel starts, the extensions that were enabled; dependencies first.
     /// An official extension, not one being worked on, runs as this kernel brings it.
+    /// Extensions being worked on start again from their folder once it changed and then held
+    /// still for a check: enabled ones, and those whose last start failed. One the owner
+    /// disabled is left alone.
+    pub async fn reload_changed(&self) {
+        let rows = match extensions::Entity::find()
+            .filter(extensions::Column::Dev.eq(true))
+            .all(self.store.db())
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(error = %error, "Extensions being worked on not read");
+                return;
+            }
+        };
+        for row in rows {
+            if !row.enabled && row.error.is_none() {
+                self.watched.lock().expect("watched").remove(&row.id);
+                continue;
+            }
+            let folder = PathBuf::from(&row.source);
+            // A kernel module being worked on is rebuilt where its tools put it.
+            let library = row_manifest(&row)
+                .ok()
+                .and_then(|manifest| manifest.kernel)
+                .map(|part| part.library);
+            let Ok(print) = tokio::task::spawn_blocking(move || {
+                let mut print = fingerprint(&folder);
+                if let Some(meta) = library
+                    .and_then(|library| library::find(&folder, &library).ok())
+                    .and_then(|path| std::fs::metadata(path).ok())
+                {
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    (print, meta.len(), meta.modified().ok()).hash(&mut hasher);
+                    print = hasher.finish();
+                }
+                print
+            })
+            .await
+            else {
+                continue;
+            };
+            let reload = {
+                let mut watched = self.watched.lock().expect("watched");
+                match watched.get_mut(&row.id) {
+                    None => {
+                        watched.insert(row.id.clone(), (print, false));
+                        false
+                    }
+                    Some((seen, changed)) if *seen != print => {
+                        *seen = print;
+                        *changed = true;
+                        false
+                    }
+                    Some((_, changed)) => std::mem::take(changed),
+                }
+            };
+            if !reload {
+                continue;
+            }
+            match self.install_from(&row.source, true).await {
+                Ok(_) => tracing::info!(extension = %row.id, "Extension reloaded"),
+                Err(error) => tracing::warn!(
+                    extension = %row.id,
+                    error = format!("{error:#}"),
+                    "Extension not reloaded"
+                ),
+            }
+        }
+    }
+
     pub async fn start_enabled(&self) {
         for (manifest, folder) in official() {
             let Ok(Some(row)) = extensions::Entity::find_by_id(&manifest.extension.id)
@@ -570,7 +741,7 @@ impl Extensions {
             }
             waiting = still;
         }
-        (self.changed)();
+        self.changed();
     }
 
     /// Stops every running part, as the kernel stops.
@@ -727,7 +898,7 @@ impl Extensions {
             let settings = self.setting_values(id, &manifest, false).await?;
             process.notify("settings", json!({"settings": settings}));
         }
-        (self.changed)();
+        self.changed();
         self.installed(id).await
     }
 
@@ -928,6 +1099,8 @@ impl Extensions {
         for process in heard {
             process.notify("event", json!({"name": name, "payload": payload}));
         }
+        // Clients draw again the views that follow it.
+        (self.tell)(json!({"type": "extension.event", "event": name}));
         for (extension, action) in triggers {
             let me = self.me.clone();
             let (name, payload) = (name.to_owned(), payload.clone());
@@ -1063,6 +1236,32 @@ impl process::Kernel for Extensions {
                     .await;
                 Ok(json!({}))
             }
+            // A view it keeps: the clients showing it draw the new tree.
+            "views.update" => {
+                let name = text("name");
+                let remote = self
+                    .loaded
+                    .read()
+                    .await
+                    .get(&extension)
+                    .is_some_and(|loaded| {
+                        loaded.contributes.ui.iter().any(|piece| {
+                            piece.name == name
+                                && matches!(piece.view, manifest::UiView::Remote { .. })
+                        })
+                    });
+                ensure!(
+                    remote,
+                    Error::Invalid(format!("{extension} keeps no view `{name}`"))
+                );
+                ensure!(
+                    params["tree"].is_object(),
+                    Error::Invalid("A view is a tree".into())
+                );
+                (self.tell)(json!({"type": "extension.view", "extension": extension,
+                    "name": name, "context": params["context"].clone(), "tree": params["tree"].clone()}));
+                Ok(json!({}))
+            }
             "actions.run" => {
                 let caller = Caller {
                     by: Some(extension.clone()),
@@ -1112,4 +1311,49 @@ impl process::Kernel for Extensions {
             );
         }
     }
+}
+
+/// What a folder holds, as a number that changes when a file is added, removed, resized or
+/// written; what its tools make and download is left out.
+fn fingerprint(folder: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    const SKIPPED: &[&str] = &[
+        ".git",
+        "node_modules",
+        ".venv",
+        "__pycache__",
+        "target",
+        ".DS_Store",
+    ];
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut pending = vec![folder.to_path_buf()];
+    let mut seen = 0usize;
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let name = entry.file_name();
+            if SKIPPED.iter().any(|skipped| name == *skipped) {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                pending.push(entry.path());
+                continue;
+            }
+            seen += 1;
+            if seen > 20_000 {
+                return hasher.finish();
+            }
+            entry.path().hash(&mut hasher);
+            meta.len().hash(&mut hasher);
+            meta.modified().ok().hash(&mut hasher);
+        }
+    }
+    hasher.finish()
 }

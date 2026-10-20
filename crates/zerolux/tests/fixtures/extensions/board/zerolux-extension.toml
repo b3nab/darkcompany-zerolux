@@ -1,0 +1,9 @@
+[extension]
+id = "zerolux.board"
+name = "Board"
+version = "0.1.0"
+publisher = "zerolux"
+description = "A test extension: cards on a board, shown in every space of the clients"
+
+[process]
+command = ["bun", "run", "main.ts"]
