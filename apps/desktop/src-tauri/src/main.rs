@@ -6,6 +6,7 @@ mod chrome;
 mod computer;
 mod connection;
 mod credentials;
+mod extension_ui;
 mod local;
 mod preferences;
 

@@ -56,6 +56,19 @@ export function desktopSignIn() {
 /** Where this page's kernel is: the desktop names it, a browser uses the page's own origin. */
 export const kernelAddress = () => desktopConnection()?.kernelUrl ?? "";
 
+/**
+ * Where an extension's page is opened: in the desktop through the app's own scheme, which
+ * serves it from this workspace's kernel only; in a browser at the kernel's address.
+ */
+export function extensionUiAddress(url: string) {
+  const desktop = desktopConnection();
+  const file = /\/api\/extension-ui\/(.+)$/.exec(url)?.[1];
+  if (!desktop || !file) return url;
+  return desktop.platform === "windows"
+    ? `http://zerolux-ui.localhost/${file}`
+    : `zerolux-ui://localhost/${file}`;
+}
+
 /** The desktop draws no title bar: these elements move the window; buttons inside keep working. */
 export const windowDragProps = () =>
   desktopConnection() ? ({ "data-tauri-drag-region": "deep" } as const) : {};

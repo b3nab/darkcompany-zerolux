@@ -7,6 +7,7 @@ import {
   installOffer,
   loadExtensionFolder,
   offerAction,
+  offerWarning,
   removeExtension,
   runAction,
   setExtensionSettings,
@@ -40,6 +41,7 @@ import { Input } from "@/components/ui/input";
 
 const parts: Record<string, string> = {
   kernel: "Kernel module",
+  interface: "Interface",
   process: "Process",
   remote: "Remote",
 };
@@ -574,11 +576,7 @@ function MarketplaceSection({
                             : "Install"
                       }
                       tone="primary"
-                      confirm={
-                        offer.parts?.includes("kernel")
-                          ? `It runs inside the kernel, signed by ${offer.publisher}.`
-                          : undefined
-                      }
+                      confirm={offerWarning(offer)}
                       busy={installing !== undefined}
                       go={() => {
                         setInstalling(key);

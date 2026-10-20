@@ -36,6 +36,13 @@ await run(["bun", "run", "build"], join(root, "apps/web"), {
   ZEROLUX_WEB_OUTDIR: join(dist, "web"),
 });
 
+// The page's own policy is for browsers; in the app, the app's (tauri.conf.json) applies alone.
+const page = await readFile(join(dist, "web/index.html"), "utf8");
+const policy = /<meta\s+http-equiv="Content-Security-Policy"[^>]*>/;
+if (!policy.test(page))
+  throw new Error("The web build has no Content-Security-Policy to replace");
+await Bun.write(join(dist, "web/index.html"), page.replace(policy, ""));
+
 // The small startup/error page uses the very same generated styles and design tokens.
 const html = await readFile(join(dist, "web/index.html"), "utf8");
 const styles = [...html.matchAll(/<link\b[^>]*rel="stylesheet"[^>]*>/g)]

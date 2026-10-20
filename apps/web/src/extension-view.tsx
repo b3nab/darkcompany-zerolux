@@ -1,31 +1,27 @@
-import { useEffect, useRef, useState } from "react";
+import * as React from "react";
+import { Component, useEffect, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
-import {
-  BlocksIcon,
-  EllipsisIcon,
-  ChartBarIcon,
-  FileTextIcon,
-  FolderIcon,
-  KanbanIcon,
-  ListChecksIcon,
-  type LucideIcon,
-  SettingsIcon,
-  SparklesIcon,
-} from "lucide-react";
+import * as jsxRuntime from "react/jsx-runtime";
+import { EllipsisIcon } from "lucide-react";
 import { useParams } from "react-router";
 import {
   answerBridge,
   errorMessage,
+  kernelUrl,
+  pieceUrl,
   resultLine,
   runPieceAction,
   useExtensionView,
+  useExtensions,
   useUiPieces,
-  webPieceUrl,
   withoutContext,
 } from "@zerolux/chat";
 import type { UiContext, UiNode, UiPiece } from "@zerolux/chat";
+import { moduleHost, UiSpace, uiModule } from "@zerolux/ui/host";
 import { cn } from "cn";
 import { ActionForm } from "./ActionForm";
+import { extensionUiAddress } from "./desktop";
+import { lucideIcon, uiComponents } from "./native-ui";
 import { MessageText } from "@/components/message-text";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,18 +33,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
 
-/** A piece's icon by its name; an unknown name shows as an extension. */
-const named: Record<string, LucideIcon> = {
-  folder: FolderIcon,
-  kanban: KanbanIcon,
-  "list-checks": ListChecksIcon,
-  "file-text": FileTextIcon,
-  "chart-bar": ChartBarIcon,
-  settings: SettingsIcon,
-  sparkles: SparklesIcon,
-};
-export const pieceIcon = (piece: UiPiece) =>
-  (piece.icon && named[piece.icon]) || BlocksIcon;
+/** A piece's icon by its Lucide name. */
+export const pieceIcon = (piece: UiPiece) => lucideIcon(piece.icon);
 
 /** The app's own components for official extensions' native pieces, by `<extension>/<name>`. */
 export const nativeViews: Record<
@@ -323,17 +309,7 @@ function DescribedView({
 function WebView({ piece, context }: { piece: UiPiece; context: UiContext }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const { run } = useExtensionView(piece, context);
-  const [opened, setOpened] = useState<{ url?: string; error?: string }>();
-  useEffect(() => {
-    let live = true;
-    webPieceUrl(piece).then(
-      (url) => live && setOpened({ url }),
-      (error: unknown) => live && setOpened({ error: errorMessage(error) }),
-    );
-    return () => {
-      live = false;
-    };
-  }, [piece]);
+  const opened = usePieceAddress(piece);
   useEffect(() => {
     const listen = async (event: MessageEvent) => {
       const own = frame.current?.contentWindow;
@@ -364,6 +340,139 @@ function WebView({ piece, context }: { piece: UiPiece; context: UiContext }) {
   );
 }
 
+/**
+ * Where a web or native piece opens, asked again only when its extension changes: opened anew,
+ * a page or view starts over, and what was typed in it would go.
+ */
+function usePieceAddress(piece: UiPiece) {
+  const { extensions } = useExtensions();
+  const revision = extensions?.find(
+    (one) => one.id === piece.extension,
+  )?.updated_at;
+  const entry = "entry" in piece.view ? piece.view.entry : undefined;
+  const [opened, setOpened] = useState<{ url?: string; error?: string }>();
+  useEffect(() => {
+    if (revision === undefined) return;
+    let live = true;
+    pieceUrl(piece).then(
+      (url) => live && setOpened({ url: extensionUiAddress(url) }),
+      (error: unknown) => live && setOpened({ error: errorMessage(error) }),
+    );
+    return () => {
+      live = false;
+    };
+    // The piece is read for what it names, not for being a new object.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [piece.extension, entry, revision]);
+  return opened;
+}
+
+/** What a view's bundle may ask for, and each view by the address its bundle ran from. */
+const views = moduleHost(
+  {
+    react: React,
+    "react/jsx-runtime": jsxRuntime,
+    "@zerolux/ui": uiModule(uiComponents),
+  },
+  () => (document.currentScript as HTMLScriptElement | null)?.src,
+);
+const loading = new Map<string, Promise<ComponentType>>();
+
+/** An extension's bundle, run once per address as a script of its own: the view it defines. */
+function loadView(address: string) {
+  let loaded = loading.get(address);
+  if (!loaded) {
+    loaded = new Promise<ComponentType>((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = address;
+      script.onload = () => {
+        const view = views.view(script.src);
+        if (view) resolve(view);
+        else reject(new Error("The extension's view did not load"));
+      };
+      script.onerror = () =>
+        reject(new Error("The extension's view could not be loaded"));
+      document.head.append(script);
+    });
+    loaded.catch(() => loading.delete(address));
+    loading.set(address, loaded);
+  }
+  return loaded;
+}
+
+/** A file a view gives, saved as the browser saves a download; the desktop puts it in Downloads. */
+async function save(file: Blob, name: string) {
+  const url = URL.createObjectURL(file);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+/** A view that breaks says why in its place; the rest of the app goes on. */
+class ViewBoundary extends Component<
+  { children: ReactNode },
+  { error?: string }
+> {
+  state: { error?: string } = {};
+  static getDerivedStateFromError(error: unknown) {
+    return { error: errorMessage(error) };
+  }
+  render() {
+    return this.state.error ? (
+      <p role="alert" className="text-sm text-destructive">
+        {this.state.error}
+      </p>
+    ) : (
+      this.props.children
+    );
+  }
+}
+
+/** An extension's own view, from its package, drawn with this app's components. */
+function NativeView({
+  piece,
+  context,
+}: {
+  piece: UiPiece;
+  context: UiContext;
+}) {
+  const opened = usePieceAddress(piece);
+  const [loaded, setLoaded] = useState<{
+    View?: ComponentType;
+    error?: string;
+  }>();
+  useEffect(() => {
+    if (!opened?.url) return;
+    let live = true;
+    loadView(opened.url).then(
+      (View) => live && setLoaded({ View }),
+      (error: unknown) => live && setLoaded({ error: errorMessage(error) }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [opened?.url]);
+  const error = opened?.error ?? loaded?.error;
+  if (error)
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        {error}
+      </p>
+    );
+  if (!loaded?.View)
+    return <p className="text-sm text-muted-foreground">Loading…</p>;
+  const View = loaded.View;
+  return (
+    <UiSpace piece={piece} context={context} kernel={kernelUrl()} save={save}>
+      <ViewBoundary>
+        <View />
+      </ViewBoundary>
+    </UiSpace>
+  );
+}
+
 /** A piece of an extension's interface where it shows, drawn the way it says. */
 export function ExtensionView({
   piece,
@@ -374,6 +483,8 @@ export function ExtensionView({
 }) {
   const kind = piece.view.kind;
   if (kind === "native") {
+    // From the extension's package; without an entry, the app's own component for it.
+    if (piece.view.entry) return <NativeView piece={piece} context={context} />;
     const Native = nativeViews[`${piece.extension}/${piece.name}`];
     return Native ? <Native context={context} /> : null;
   }

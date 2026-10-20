@@ -467,6 +467,9 @@ impl Host {
     ) -> Result<WorkspaceView> {
         self.generation += 1;
         let label = format!("workspace-{}-{}", profile.id, self.generation);
+        self.app
+            .state::<crate::extension_ui::Kernels>()
+            .set(&profile.id, url);
         let navigation = self.app.clone();
         let popup = self.app.clone();
         let profile_id = profile.id.clone();
@@ -502,6 +505,8 @@ impl Host {
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(800.0, 560.0)
                 .initialization_script(script)
+                // A file the page saves goes to Downloads, by the name it gives.
+                .on_download(|_, _| true)
                 .on_page_load(move |_, page| {
                     if page.event() == tauri::webview::PageLoadEvent::Finished
                         && local::app_page(page.url())
@@ -515,7 +520,8 @@ impl Host {
                         show_manager(&navigation, Some(&profile_id));
                         return false;
                     }
-                    let allowed = local::app_page(next);
+                    // Its own pages, and the frames of extensions' pages.
+                    let allowed = local::app_page(next) || crate::extension_ui::page(next);
                     if !allowed {
                         open_external(&navigation, next);
                     }
@@ -819,6 +825,11 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
         )
         // The page's own `Notification` reaches the system's notifications.
         .plugin(tauri_plugin_notification::init())
+        .manage(crate::extension_ui::Kernels::default())
+        .register_asynchronous_uri_scheme_protocol(
+            crate::extension_ui::SCHEME,
+            crate::extension_ui::serve,
+        )
         .invoke_handler(tauri::generate_handler![
             workspace_action,
             crate::chrome::window_control,

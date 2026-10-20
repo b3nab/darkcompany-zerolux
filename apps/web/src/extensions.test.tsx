@@ -5,6 +5,8 @@ import type { Extension, ExtensionSetting, JsonSchema } from "@zerolux/chat";
 import { ActionForm } from "./ActionForm";
 import { ExtensionList, settingChanges, settingsSchema } from "./Extensions";
 import { Part } from "./extension-view";
+import { uiComponents } from "./native-ui";
+import { uiModule } from "@zerolux/ui/host";
 
 const schema: JsonSchema = {
   type: "object",
@@ -325,4 +327,13 @@ test("the marketplace offers install or update to the owner, and shows each inde
   expect(html(true)).toContain("1.0.0 → 1.1.0");
   expect(html(true)).toContain("Cannot reach it");
   expect(html(false)).not.toMatch(/>(Install|Update)<\/button>/);
+});
+
+test("the web gives every component a native view uses, and draws only images the view carries", () => {
+  expect(() => uiModule(uiComponents)).not.toThrow();
+  const Image = uiComponents.Image;
+  const image = (src: string) =>
+    renderToStaticMarkup(<Image src={src} alt="aspen" />);
+  expect(image("data:image/png;base64,AAAA")).toContain("<img");
+  expect(image("https://192.0.2.1/aspen.png")).toBe("");
 });

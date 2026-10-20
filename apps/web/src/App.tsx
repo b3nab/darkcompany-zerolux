@@ -45,6 +45,7 @@ import { Storage } from "./Storage";
 import { AgentPage, Hire, Team } from "./Team";
 import { Tonight } from "./Tonight";
 import { ExtensionPage } from "./extension-view";
+import { UiActors } from "./native-ui";
 import { Page } from "@/components/page";
 import { SidePanel } from "@/components/side-panel";
 import { Button } from "@/components/ui/button";
@@ -442,219 +443,225 @@ export function App({
           ) : !me ? null : !chatReady ? (
             <Page>Update the kernel to use chats.</Page>
           ) : (
-            <Routes>
-              <Route
-                path="/"
-                element={
-                  <Tonight
-                    workspace={workspace}
-                    chat={chat}
-                    owner={me}
-                    busy={busy}
-                    perform={perform}
-                    capabilities={capabilities}
-                  />
-                }
-              />
-              <Route path="/chats" element={chatHome} />
-              <Route
-                path="/chats/new"
-                element={section(
-                  chatList,
-                  true,
-                  <Page>
-                    <NewConversation
+            <UiActors.Provider value={actors}>
+              <Routes>
+                <Route
+                  path="/"
+                  element={
+                    <Tonight
+                      workspace={workspace}
                       chat={chat}
-                      actors={actors}
-                      ownerId={me.id}
+                      owner={me}
                       busy={busy}
                       perform={perform}
-                      open={showChat}
-                      hire={hire}
+                      capabilities={capabilities}
                     />
-                  </Page>,
-                )}
-              />
-              <Route
-                path="/chats/:id"
-                element={
-                  conversation
-                    ? section(
-                        chatList,
-                        true,
-                        <ChatView
-                          key={conversation.id}
-                          chat={chat}
-                          conversation={conversation}
-                          actors={workspace.actors}
-                          ownerId={me.id}
-                          busy={busy}
-                          perform={perform}
-                          hire={hire}
-                          storage={storage}
-                        />,
-                      )
-                    : chatHome
-                }
-              />
-              <Route
-                path="/storage"
-                element={
-                  <Storage
-                    workspace={workspace}
-                    chat={chat}
-                    storage={storage}
-                  />
-                }
-              />
-              <Route
-                path="/x/:extension/:name"
-                element={
-                  <Page>
-                    <ExtensionPage />
-                  </Page>
-                }
-              />
-              <Route
-                path="/extensions"
-                element={
-                  <Page>
-                    <ExtensionsPage owns={owns} busy={busy} perform={perform} />
-                  </Page>
-                }
-              />
-              <Route
-                path="/org"
-                element={
-                  <Organization
-                    workspace={workspace}
-                    chat={chat}
-                    busy={busy}
-                    perform={perform}
-                  />
-                }
-              />
-              <Route
-                path="/meetings"
-                element={
-                  <Meetings
-                    workspace={workspace}
-                    chat={chat}
-                    owner={me}
-                    capabilities={capabilities}
-                  />
-                }
-              />
-              <Route
-                path="/approvals"
-                element={
-                  <Page>
-                    {openApprovals(chat.approvals).length
-                      ? approvals
-                      : nothingWaits}
-                  </Page>
-                }
-              />
-              <Route path="/team" element={team} />
-              <Route
-                path="/team/:id"
-                element={
-                  agent
-                    ? section(
-                        agentList,
-                        true,
-                        <Page>
-                          <AgentPage
-                            key={agent.id}
-                            agent={agent}
-                            workspace={workspace}
+                  }
+                />
+                <Route path="/chats" element={chatHome} />
+                <Route
+                  path="/chats/new"
+                  element={section(
+                    chatList,
+                    true,
+                    <Page>
+                      <NewConversation
+                        chat={chat}
+                        actors={actors}
+                        ownerId={me.id}
+                        busy={busy}
+                        perform={perform}
+                        open={showChat}
+                        hire={hire}
+                      />
+                    </Page>,
+                  )}
+                />
+                <Route
+                  path="/chats/:id"
+                  element={
+                    conversation
+                      ? section(
+                          chatList,
+                          true,
+                          <ChatView
+                            key={conversation.id}
                             chat={chat}
+                            conversation={conversation}
+                            actors={workspace.actors}
+                            ownerId={me.id}
                             busy={busy}
                             perform={perform}
-                          />
-                        </Page>,
-                      )
-                    : team
-                }
-              />
-              <Route
-                path="/team/hire"
-                element={section(
-                  agentList,
-                  true,
-                  <Page>
-                    {starts ? (
-                      <Hire
-                        chat={chat}
-                        actors={workspace.actors}
+                            hire={hire}
+                            storage={storage}
+                          />,
+                        )
+                      : chatHome
+                  }
+                />
+                <Route
+                  path="/storage"
+                  element={
+                    <Storage
+                      workspace={workspace}
+                      chat={chat}
+                      storage={storage}
+                    />
+                  }
+                />
+                <Route
+                  path="/x/:extension/:name"
+                  element={
+                    <Page>
+                      <ExtensionPage />
+                    </Page>
+                  }
+                />
+                <Route
+                  path="/extensions"
+                  element={
+                    <Page>
+                      <ExtensionsPage
+                        owns={owns}
                         busy={busy}
                         perform={perform}
                       />
-                    ) : (
-                      <p className="text-sm text-muted-foreground">
-                        This computer is not open to you.
-                      </p>
-                    )}
-                  </Page>,
-                )}
-              />
-              <Route path="/console" element={consoleHome} />
-              <Route
-                path="/console/:id"
-                element={
-                  consoleSession
-                    ? section(
-                        consoleList,
-                        true,
-                        <SessionView
-                          key={consoleSession.id}
-                          session={consoleSession}
+                    </Page>
+                  }
+                />
+                <Route
+                  path="/org"
+                  element={
+                    <Organization
+                      workspace={workspace}
+                      chat={chat}
+                      busy={busy}
+                      perform={perform}
+                    />
+                  }
+                />
+                <Route
+                  path="/meetings"
+                  element={
+                    <Meetings
+                      workspace={workspace}
+                      chat={chat}
+                      owner={me}
+                      capabilities={capabilities}
+                    />
+                  }
+                />
+                <Route
+                  path="/approvals"
+                  element={
+                    <Page>
+                      {openApprovals(chat.approvals).length
+                        ? approvals
+                        : nothingWaits}
+                    </Page>
+                  }
+                />
+                <Route path="/team" element={team} />
+                <Route
+                  path="/team/:id"
+                  element={
+                    agent
+                      ? section(
+                          agentList,
+                          true,
+                          <Page>
+                            <AgentPage
+                              key={agent.id}
+                              agent={agent}
+                              workspace={workspace}
+                              chat={chat}
+                              busy={busy}
+                              perform={perform}
+                            />
+                          </Page>,
+                        )
+                      : team
+                  }
+                />
+                <Route
+                  path="/team/hire"
+                  element={section(
+                    agentList,
+                    true,
+                    <Page>
+                      {starts ? (
+                        <Hire
                           chat={chat}
                           actors={workspace.actors}
-                          hosts={hosts}
                           busy={busy}
                           perform={perform}
-                        />,
-                      )
-                    : consoleHome
-                }
-              />
-              <Route
-                path="/profile"
-                element={
-                  <Page>
-                    <ProfilePage owner={me} />
-                  </Page>
-                }
-              />
-              <Route
-                path="/settings"
-                element={
-                  <Page>
-                    <MySettingsPage
-                      me={me}
-                      actors={actors}
-                      busy={busy}
-                      perform={perform}
-                    />
-                  </Page>
-                }
-              />
-              <Route
-                path="/admin"
-                element={
-                  <Page>
-                    <AdministrationPage
-                      workspace={workspace}
-                      busy={busy}
-                      perform={perform}
-                      kernel={{ version: health?.version, capabilities }}
-                    />
-                  </Page>
-                }
-              />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+                        />
+                      ) : (
+                        <p className="text-sm text-muted-foreground">
+                          This computer is not open to you.
+                        </p>
+                      )}
+                    </Page>,
+                  )}
+                />
+                <Route path="/console" element={consoleHome} />
+                <Route
+                  path="/console/:id"
+                  element={
+                    consoleSession
+                      ? section(
+                          consoleList,
+                          true,
+                          <SessionView
+                            key={consoleSession.id}
+                            session={consoleSession}
+                            chat={chat}
+                            actors={workspace.actors}
+                            hosts={hosts}
+                            busy={busy}
+                            perform={perform}
+                          />,
+                        )
+                      : consoleHome
+                  }
+                />
+                <Route
+                  path="/profile"
+                  element={
+                    <Page>
+                      <ProfilePage owner={me} />
+                    </Page>
+                  }
+                />
+                <Route
+                  path="/settings"
+                  element={
+                    <Page>
+                      <MySettingsPage
+                        me={me}
+                        actors={actors}
+                        busy={busy}
+                        perform={perform}
+                      />
+                    </Page>
+                  }
+                />
+                <Route
+                  path="/admin"
+                  element={
+                    <Page>
+                      <AdministrationPage
+                        workspace={workspace}
+                        busy={busy}
+                        perform={perform}
+                        kernel={{ version: health?.version, capabilities }}
+                      />
+                    </Page>
+                  }
+                />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </UiActors.Provider>
           )}
         </main>
       </div>
