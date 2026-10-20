@@ -77,7 +77,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 if (process.argv.includes("--version")) { console.log("0.87.1"); process.exit(0); }
 const root = process.env.FAKE_PI_ROOT;
-appendFileSync(join(root, "starts"), process.pid + "\\n");
+appendFileSync(join(root, "starts"), (process.env.ZEROLUX_NATIVE_PID ?? process.pid) + "\\n");
 const option = name => { const i = process.argv.indexOf(name); return i < 0 ? undefined : process.argv[i + 1]; };
 const file = option("--session");
 const header = JSON.parse(readFileSync(file, "utf8").split("\\n")[0]);
@@ -88,7 +88,7 @@ if (process.env.FAKE_PI_FAULT === "create") {
 }
 const { readControlDescriptor, controlRequest } = await import(${JSON.stringify(fileURLToPath(new URL("../../../packages/bridge/src/control-client.ts", import.meta.url)))});
 const descriptor = await readControlDescriptor(process.env.ZEROLUX_PI_RUNNER);
-if (process.env.FAKE_PI_FAULT !== "unguarded") await controlRequest(descriptor, "verify", { native_pid:process.pid, session_file:file, cli_version:"0.87.1", model:{provider:option("--provider") ?? "fixture",id:option("--model") ?? "native-model"}, thinking:option("--thinking") ?? "high", auth_configured:true });
+if (process.env.FAKE_PI_FAULT !== "unguarded") await controlRequest(descriptor, "verify", { native_pid:Number(process.env.ZEROLUX_NATIVE_PID ?? process.pid), session_file:file, cli_version:"0.87.1", model:{provider:option("--provider") ?? "fixture",id:option("--model") ?? "native-model"}, thinking:option("--thinking") ?? "high", auth_configured:true });
 // The native extension's own control, as stock pi's chat extension runs it: asked whose
 // turn it is, it answers what the test left in "turn" (a JSON value), or refuses.
 if (process.env.FAKE_PI_EXTENSION_CONTROL) {
@@ -106,7 +106,7 @@ if (process.env.FAKE_PI_EXTENSION_CONTROL) {
     },
   }, "fixture-ext");
   await control.start();
-  await controlRequest(descriptor, "links", { native_pid: process.pid, link_ids: ["link"], control: join(root, "ext-control", control.instanceId + ".json") });
+  await controlRequest(descriptor, "links", { native_pid: Number(process.env.ZEROLUX_NATIVE_PID ?? process.pid), link_ids: ["link"], control: join(root, "ext-control", control.instanceId + ".json") });
 }
 let buffer = "";
 process.stdin.on("data", bytes => {
