@@ -1395,7 +1395,7 @@ while IFS= read -r line; do :; done
       await output("two\n"); // pi keeps the end of long output: shown whole.
       await handlers.get("tool_execution_end")!({ toolCallId: "call" }, ctx);
       await handlers.get("agent_settled")!({}, ctx);
-      for (let i = 0; i < 100 && live.length < 6; i++) await Bun.sleep(20);
+      for (let i = 0; i < 100 && live.length < 7; i++) await Bun.sleep(20);
       const item = (live[0] as { item: string }).item;
       expect(live).toEqual([
         { type: "append", item, kind: "thinking", text: "Hmm" },
@@ -1410,6 +1410,8 @@ while IFS= read -r line; do :; done
           total_tokens: 1_500,
           cost_usd: 0.02,
         },
+        // The first settle clears what an earlier load left reported.
+        { type: "queue", items: [] },
       ]);
       // An input waiting in pi's queue shows as waiting until it enters the context.
       busy = true;
@@ -1421,8 +1423,8 @@ while IFS= read -r line; do :; done
         mode: "queue",
       });
       expect(queued.ok).toBe(true);
-      for (let i = 0; i < 100 && live.length < 7; i++) await Bun.sleep(20);
-      expect(live[6]).toMatchObject({
+      for (let i = 0; i < 100 && live.length < 8; i++) await Bun.sleep(20);
+      expect(live[7]).toMatchObject({
         type: "queue",
         items: [{ text: "then the docs" }],
       });
@@ -1430,8 +1432,26 @@ while IFS= read -r line; do :; done
         { message: { role: "user", content: "then the docs" } },
         ctx,
       );
-      for (let i = 0; i < 100 && live.length < 8; i++) await Bun.sleep(20);
-      expect(live[7]).toEqual({ type: "queue", items: [] });
+      for (let i = 0; i < 100 && live.length < 9; i++) await Bun.sleep(20);
+      expect(live[8]).toEqual({ type: "queue", items: [] });
+      // Inputs pi joins into one message, as after an interrupt, all leave the queue.
+      for (const text of ["first", "second"])
+        await rpc(record.endpoint, {
+          nonce: record.nonce,
+          method: "input",
+          link_id: "own",
+          text,
+          mode: "queue",
+        });
+      for (let i = 0; i < 100 && live.length < 11; i++) await Bun.sleep(20);
+      expect((live[10] as { items: unknown[] }).items).toHaveLength(2);
+      busy = false;
+      await handlers.get("message_start")!(
+        { message: { role: "user", content: "first\n\nsecond" } },
+        ctx,
+      );
+      for (let i = 0; i < 100 && live.length < 12; i++) await Bun.sleep(20);
+      expect(live[11]).toEqual({ type: "queue", items: [] });
     } finally {
       await command?.handler("off", ctx);
       await handlers.get("session_shutdown")?.({}, ctx);

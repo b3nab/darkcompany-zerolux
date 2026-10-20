@@ -1106,6 +1106,7 @@ export default function chatExtension(pi: ExtensionAPI) {
   };
   /** The owner's inputs waiting in pi's queue, oldest first. */
   const ownerQueue: { id: string; text: string; expanded: boolean }[] = [];
+  let queueReported = false;
   const reportQueue = () =>
     live({
       type: "queue",
@@ -1196,13 +1197,22 @@ export default function chatExtension(pi: ExtensionAPI) {
               .join("\n");
       for (const waiter of ownerInputs)
         if (waiter.expanded || waiter.text === text) waiter.seen();
+      // Inputs pi joined into one message, as after an interrupt, leave the queue with it;
+      // with nothing left in pi's queue, nothing of the owner's waits there.
+      const before = ownerQueue.length;
       const taken = ownerQueue.findIndex(
-        (queued) => queued.expanded || queued.text === text,
+        (queued) => queued.expanded || queued.text === text.trim(),
       );
-      if (taken >= 0) {
-        ownerQueue.splice(taken, 1);
-        reportQueue();
-      }
+      if (taken >= 0) ownerQueue.splice(taken, 1);
+      for (let index = ownerQueue.length - 1; index >= 0; index--)
+        if (
+          !ownerQueue[index]!.expanded &&
+          text.includes(ownerQueue[index]!.text)
+        )
+          ownerQueue.splice(index, 1);
+      if (ownerQueue.length && !context?.hasPendingMessages())
+        ownerQueue.length = 0;
+      if (ownerQueue.length !== before) reportQueue();
     }
     void messageStarted(bridges(), event.message, queuedInputs);
   });
@@ -1211,10 +1221,15 @@ export default function chatExtension(pi: ExtensionAPI) {
     toolOutput.clear();
     live({ type: "clear" });
     reportUsage();
-    // Nothing waits once pi has settled with an empty queue.
-    if (ownerQueue.length && !context?.hasPendingMessages()) {
+    // Nothing waits once pi has settled with an empty queue; the first settle after this
+    // extension loads also clears what an earlier load left reported.
+    if (
+      (ownerQueue.length || !queueReported) &&
+      !context?.hasPendingMessages()
+    ) {
       ownerQueue.length = 0;
       reportQueue();
+      queueReported = true;
     }
     settled = true;
     dialogShared = false;
