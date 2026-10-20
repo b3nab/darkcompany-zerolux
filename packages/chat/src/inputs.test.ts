@@ -49,7 +49,12 @@ test("the same words sent twice need two inputs in the record", () => {
 test("an input in the queue no longer shows as sent", () => {
   const inputs = [sent("a", "after this", 0)];
   expect(
-    unseenInputs(inputs, "s1", [], [{ id: "q1", text: "after this" }]),
+    unseenInputs(
+      inputs,
+      "s1",
+      [],
+      [{ id: "q1", text: "after this", changeable: false }],
+    ),
   ).toEqual([]);
 });
 

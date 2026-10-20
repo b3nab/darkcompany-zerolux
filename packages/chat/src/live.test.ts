@@ -50,7 +50,10 @@ test("changes build what is in progress, in order, each applied once", () => {
       { type: "set", item: "cmd", kind: "output", text: "line 1\n" },
       { type: "set", item: "cmd", kind: "output", text: "line 2\n" },
       { type: "done", item: "t" },
-      { type: "queue", items: [{ id: "q1", text: "then run the tests" }] },
+      {
+        type: "queue",
+        items: [{ id: "q1", text: "then run the tests", changeable: true }],
+      },
       { type: "usage", context_tokens: 42_000, context_window: 200_000 },
       { type: "goal", goal },
     ],
@@ -68,7 +71,7 @@ test("changes build what is in progress, in order, each applied once", () => {
       { id: "m", kind: "text", text: "Hello" },
       { id: "cmd", kind: "output", text: "line 2\n" },
     ],
-    queue: [{ id: "q1", text: "then run the tests" }],
+    queue: [{ id: "q1", text: "then run the tests", changeable: true }],
     usage,
     goal,
   });
@@ -78,7 +81,7 @@ test("changes build what is in progress, in order, each applied once", () => {
   ).toEqual({
     seq: 10,
     items: [],
-    queue: [{ id: "q1", text: "then run the tests" }],
+    queue: [{ id: "q1", text: "then run the tests", changeable: true }],
     usage,
     goal,
   });
@@ -116,14 +119,18 @@ test("a followed session reads its state, then follows the notices", async () =>
   expect(liveState("aspen").queue).toEqual([]);
   expect(liveState("aspen").seq).toBe(5);
   // A gap reads it again.
-  answer = { seq: 9, items: [], queue: [{ id: "q1", text: "next" }] };
+  answer = {
+    seq: 9,
+    items: [],
+    queue: [{ id: "q1", text: "next", changeable: false }],
+  };
   liveNotice(notice(8, [{ type: "clear" }]));
   await Promise.resolve();
   await Promise.resolve();
   expect(liveState("aspen")).toEqual({
     seq: 9,
     items: [],
-    queue: [{ id: "q1", text: "next" }],
+    queue: [{ id: "q1", text: "next", changeable: false }],
     usage: null,
     goal: null,
   });

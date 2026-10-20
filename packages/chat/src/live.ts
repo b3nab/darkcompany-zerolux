@@ -17,6 +17,8 @@ export interface LiveItem {
 export interface QueuedInput {
   id: string;
   text: string;
+  /** Whether it can still be rewritten or taken back: only where its harness allows it. */
+  changeable: boolean;
 }
 
 /** How full a session's context is and what it has used, as its harness counts them; null when it does not say. */
