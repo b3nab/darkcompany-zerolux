@@ -137,6 +137,7 @@ import { SubagentList, SubagentPanel } from "./SessionSubagents";
 
 import { AskOnTheSide, InputActions } from "./SessionFork";
 import { SessionSchedules } from "./SessionSchedules";
+import { SessionTasks } from "./SessionTasks";
 import { SessionTriggers } from "./SessionTriggers";
 import { ContinueInTerminal } from "./ContinueInTerminal";
 import { GoalCard } from "./SessionGoal";
@@ -982,6 +983,14 @@ export function SessionView({
                 <GoalCard
                   session={session}
                   read={chat.live}
+                  write={access.write}
+                  busy={busy}
+                  perform={perform}
+                />
+              )}
+              {about && (
+                <SessionTasks
+                  session={session}
                   write={access.write}
                   busy={busy}
                   perform={perform}
