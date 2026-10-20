@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { expect, test } from "bun:test";
 import {
   appendFile,
@@ -68,9 +69,9 @@ async function fixture(
     lastPid: old.pid,
     args: [],
   });
-  const pi = join(root, "pi-fixture");
+  const script = join(root, "pi-fixture");
   await writeFile(
-    pi,
+    script,
     `#!${process.execPath}
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -85,13 +86,13 @@ if (process.env.FAKE_PI_FAULT === "create") {
   const manager = SessionManager.open(file);
   manager.appendModelChange("fixture", "native-model"); manager.appendThinkingLevelChange("high");
 }
-const { readControlDescriptor, controlRequest } = await import(${JSON.stringify(new URL("../../../packages/bridge/src/control-client.ts", import.meta.url).pathname)});
+const { readControlDescriptor, controlRequest } = await import(${JSON.stringify(fileURLToPath(new URL("../../../packages/bridge/src/control-client.ts", import.meta.url)))});
 const descriptor = await readControlDescriptor(process.env.ZEROLUX_PI_RUNNER);
 if (process.env.FAKE_PI_FAULT !== "unguarded") await controlRequest(descriptor, "verify", { native_pid:process.pid, session_file:file, cli_version:"0.87.1", model:{provider:option("--provider") ?? "fixture",id:option("--model") ?? "native-model"}, thinking:option("--thinking") ?? "high", auth_configured:true });
 // The native extension's own control, as stock pi's chat extension runs it: asked whose
 // turn it is, it answers what the test left in "turn" (a JSON value), or refuses.
 if (process.env.FAKE_PI_EXTENSION_CONTROL) {
-  const { LocalControl } = await import(${JSON.stringify(new URL("../../../packages/bridge/src/local-control.ts", import.meta.url).pathname)});
+  const { LocalControl } = await import(${JSON.stringify(fileURLToPath(new URL("../../../packages/bridge/src/local-control.ts", import.meta.url)))});
   const { existsSync } = await import("node:fs");
   const control = new LocalControl(join(root, "ext-control"), {
     describe: () => ({ kind: "pi", native_session_id: header.id, workspace: process.cwd() }),
@@ -138,6 +139,10 @@ setInterval(() => {
 `,
     { mode: 0o700 },
   );
+  // Windows runs a script through a command file, as npm installs pi there.
+  const pi = process.platform === "win32" ? `${script}.cmd` : script;
+  if (process.platform === "win32")
+    await writeFile(pi, `@"${process.execPath}" "${script}" %*\r\n`);
   const inbox: Inbox = {
     session: {
       id: "link",

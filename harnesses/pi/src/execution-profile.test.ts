@@ -85,7 +85,9 @@ test("private host profile persists atomically, validates identity and refuses s
   };
   try {
     const path = await savePiProfile(profile);
-    expect((await stat(path)).mode & 0o077).toBe(0);
+    // Modes apply where the system has them; Windows keeps the profile private itself.
+    if (process.platform !== "win32")
+      expect((await stat(path)).mode & 0o077).toBe(0);
     expect(await loadPiProfile(path, profile)).toEqual(profile);
     await expect(
       loadPiProfile(path, { ...profile, nativeSessionId: "other" }),

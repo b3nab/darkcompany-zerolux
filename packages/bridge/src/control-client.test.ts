@@ -39,8 +39,11 @@ test("private control authenticates the instance and scopes mutations to the nat
       controlRequest({ ...descriptor, instance_id: "another" }, "describe"),
     ).rejects.toThrow("identity changed");
     expect(calls).toBe(1);
-    await chmod(path, 0o644);
-    await expect(readControlDescriptor(path)).rejects.toThrow("private");
+    // Modes apply where the system has them; Windows keeps the profile private itself.
+    if (process.platform !== "win32") {
+      await chmod(path, 0o644);
+      await expect(readControlDescriptor(path)).rejects.toThrow("private");
+    }
   } finally {
     await control.close();
     await rm(root, { recursive: true, force: true });
