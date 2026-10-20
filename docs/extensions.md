@@ -138,9 +138,13 @@ It speaks the process part's JSON-RPC, carried by four C functions instead of st
 
 The kernel looks for the library in `kernel/<platform>/` in the extension's folder (`macos-aarch64`, `linux-x86_64`, `windows-x86_64`…), then, in a folder being worked on, in `target/release` and `target/debug`. It loads a copy named by its content, so a rebuilt library is loaded anew; one being worked on starts again when it is rebuilt. A loaded library stays in memory until the kernel stops: once disabled or replaced, it is not called again. A kernel module runs inside the kernel with its rights; enable only those you trust.
 
+## Files
+
+An action can take a file and give one, without either passing through its messages. `POST /ext/{extension}/{action}/file?input=<json>&name=<name>` keeps the request's body in the extension's own folder while the action runs, and adds to its input `file {path, size, name, content_type}`; the action may move the file, and what it leaves is removed when it ends. An action run with `GET /ext/{extension}/{action}?input=<json>` that returns `{"$file": {path, name?, content_type?, temporary?}}` gives that file as the response, if it is in an extension's folder; a `temporary` one is removed once sent.
+
 ## Packages and indexes
 
-`zerolux ext build` builds an extension's kernel module, a Cargo package, for this computer and puts it in `kernel/<platform>/`. `zerolux ext key <publisher>` makes a publisher's Ed25519 key, kept in `~/.zerolux/keys/<publisher>.json` and readable only by its user; it prints the public key. `zerolux ext pack --key <file>` packs the extension into a signed `<id>-<version>.zlx` and prints its SHA-256. A package is a gzipped tar of the extension's files, without what tools make and download, with `files.json` (each file's path, size and SHA-256) and `SIGNATURE` (the publisher's signature of `files.json`).
+`zerolux ext build` builds an extension's kernel module, a Cargo package, for this computer and puts it in `kernel/<platform>/`. `zerolux ext key <publisher>` makes a publisher's Ed25519 key, kept in `~/.zerolux/keys/<publisher>.json` and readable only by its user; it prints the public key. `zerolux ext pack --key <file>` packs the extension into a signed `<id>-<version>.zlx` and prints its SHA-256. A package is a gzipped tar of the extension's files, without what tools make and download (`target`, `dist`, `node_modules`, `.venv`, `__pycache__`, `.git`), with `files.json` (each file's path, size and SHA-256) and `SIGNATURE` (the publisher's signature of `files.json`).
 
 An index is a JSON file on HTTPS that anyone may host:
 
@@ -158,6 +162,7 @@ An index is a JSON file on HTTPS that anyone may host:
         {
           "version": "1.0.0",
           "kernel": ">=0.0.1",
+          "parts": ["process"],
           "packages": {
             "macos-aarch64": {
               "url": "acme.notes-1.0.0-macos-aarch64.zlx",
@@ -175,7 +180,7 @@ An index is a JSON file on HTTPS that anyone may host:
 }
 ```
 
-A package is listed for each computer (`macos-aarch64`, `linux-x86_64`, `windows-x86_64`…) or for `any`; its URL is absolute or relative to the index. A kernel reads ZeroLux's own index, or those `ZEROLUX_EXTENSION_INDEXES` names, separated by commas. It offers each extension's newest version that works with it and has a package for its computer. Installing downloads the package, checks it against the index's SHA-256 and its publisher's key in that index, unpacks it in `extensions/packages/<id>/` in the data folder and enables it; an older version's files go.
+`parts` says what the package runs, `kernel` or `process`, so that people see it before installing; a package whose manifest says otherwise is refused. A package is listed for each computer (`macos-aarch64`, `linux-x86_64`, `windows-x86_64`…) or for `any`; its URL is absolute or relative to the index. A kernel reads ZeroLux's own index, or those `ZEROLUX_EXTENSION_INDEXES` names, separated by commas. It offers each extension's newest version that works with it and has a package for its computer. Installing downloads the package, checks it against the index's SHA-256 and its publisher's key in that index, unpacks it in `extensions/packages/<id>/` in the data folder and enables it; an older version's files go.
 
 ## Lifecycle
 
@@ -185,17 +190,19 @@ People and agents' sessions run actions. Clients hear `extensions.changed` and r
 
 ## API
 
-| Route                                      | Purpose                                                               |
-| ------------------------------------------ | --------------------------------------------------------------------- |
-| `GET /extensions`                          | Installed extensions, their state, settings and what they bring       |
-| `GET /extensions/available`                | The official extensions ZeroLux brings, and whether each is installed |
-| `POST /extensions/available/{id}`          | Install an official extension, and enable it                          |
-| `POST /extensions/folder {folder}`         | Install, or install again, from a folder, and enable                  |
-| `GET /extensions/marketplace`              | What the indexes offer, with what is installed; unreadable indexes    |
-| `POST /extensions/marketplace/install`     | `{index, id, version?}`: install from an index, and enable            |
-| `POST /extensions/{id}/enable`, `/disable` | Enable or disable                                                     |
-| `PATCH /extensions/{id}/settings`          | Change settings and secrets; `null` removes one                       |
-| `DELETE /extensions/{id}`                  | Remove a disabled extension and its data                              |
-| `GET /actions`                             | The enabled extensions' actions                                       |
-| `POST /ext/{extension}/{action}`           | Run an action; the body is its input, the answer `{result}`           |
-| `POST /extensions/{id}/ui {entry}`         | The address of one of its pages, under a key good for an hour         |
+| Route                                      | Purpose                                                                 |
+| ------------------------------------------ | ----------------------------------------------------------------------- |
+| `GET /extensions`                          | Installed extensions, their state, settings and what they bring         |
+| `GET /extensions/available`                | The official extensions ZeroLux brings, and whether each is installed   |
+| `POST /extensions/available/{id}`          | Install an official extension, and enable it                            |
+| `POST /extensions/folder {folder}`         | Install, or install again, from a folder, and enable                    |
+| `GET /extensions/marketplace`              | What the indexes offer, with what is installed; unreadable indexes      |
+| `POST /extensions/marketplace/install`     | `{index, id, version?}`: install from an index, and enable              |
+| `POST /extensions/{id}/enable`, `/disable` | Enable or disable                                                       |
+| `PATCH /extensions/{id}/settings`          | Change settings and secrets; `null` removes one                         |
+| `DELETE /extensions/{id}`                  | Remove a disabled extension and its data                                |
+| `GET /actions`                             | The enabled extensions' actions                                         |
+| `POST /ext/{extension}/{action}`           | Run an action; the body is its input, the answer `{result}`             |
+| `POST /ext/{extension}/{action}/file`      | Run an action with a file: the body, up to 2 GiB; `?input=<json>&name=` |
+| `GET /ext/{extension}/{action}?input=`     | Run an action that reads: its `{result}`, or the file it gives          |
+| `POST /extensions/{id}/ui {entry}`         | The address of one of its pages, under a key good for an hour           |
