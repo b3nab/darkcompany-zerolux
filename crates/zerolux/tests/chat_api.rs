@@ -647,7 +647,11 @@ async fn livekit_tickets_are_scoped_to_the_authenticated_actor_and_restart_requi
     kernel
         .client
         .post(format!("{url}/api/terminals/{terminal}/input"))
-        .json(&json!({"data":"echo from-$((6*7))\n"}))
+        .json(&json!({"data": if cfg!(windows) {
+            "echo \"from-$(6*7)\"\r\n"
+        } else {
+            "echo from-$((6*7))\n"
+        }}))
         .send()
         .await
         .unwrap()
@@ -671,7 +675,19 @@ async fn livekit_tickets_are_scoped_to_the_authenticated_actor_and_restart_requi
             read["output"]["data"].as_str().unwrap(),
         )
         .unwrap();
-        seen.push_str(&String::from_utf8_lossy(&bytes));
+        let piece = String::from_utf8_lossy(&bytes);
+        // Windows' console asks where the cursor is, and waits for the answer a terminal on
+        // screen gives.
+        if piece.contains("\u{1b}[6n") {
+            kernel
+                .client
+                .post(format!("{url}/api/terminals/{terminal}/input"))
+                .json(&json!({"data": "\u{1b}[1;1R"}))
+                .send()
+                .await
+                .unwrap();
+        }
+        seen.push_str(&piece);
         if seen.contains("from-42") {
             break;
         }

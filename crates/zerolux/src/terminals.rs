@@ -285,24 +285,28 @@ mod tests {
     use super::*;
     use base64::Engine;
 
-    async fn read_until(terminals: &Terminals, id: &str, wanted: &str) -> String {
+    /// Everything the terminal wrote, answering where the cursor is each time its console
+    /// asks, as a terminal on screen does: Windows' console waits for that answer.
+    fn read_all(terminals: &Terminals, id: &str, answered: &mut usize) -> String {
+        let output = terminals.output(id, 0).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(output.data)
+            .unwrap();
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        let asked = text.matches("\u{1b}[6n").count();
+        while *answered < asked {
+            let _ = terminals.write(id, "\u{1b}[1;1R");
+            *answered += 1;
+        }
+        text
+    }
+
+    async fn read_until(terminals: &Terminals, id: &str, wanted: &str, answered: &mut usize) {
         let mut text = String::new();
-        let mut after = 0;
         for _ in 0..200 {
-            let output = terminals.output(id, after).unwrap();
-            after = output.next;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(output.data)
-                .unwrap();
-            let piece = String::from_utf8_lossy(&bytes);
-            // Windows' console asks where the cursor is before it starts, and waits for the
-            // answer a terminal on screen gives.
-            if piece.contains("\u{1b}[6n") {
-                terminals.write(id, "\u{1b}[1;1R").unwrap();
-            }
-            text.push_str(&piece);
+            text = read_all(terminals, id, answered);
             if text.contains(wanted) {
-                return text;
+                return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
@@ -325,29 +329,27 @@ mod tests {
         } else {
             "echo here-$((40+2)); pwd\n"
         };
+        let mut answered = 0;
         terminals.write(&info.id, line).unwrap();
-        read_until(&terminals, &info.id, "here-42").await;
-        read_until(&terminals, &info.id, &folder.to_string_lossy()).await;
+        read_until(&terminals, &info.id, "here-42", &mut answered).await;
+        read_until(
+            &terminals,
+            &info.id,
+            &folder.to_string_lossy(),
+            &mut answered,
+        )
+        .await;
         assert!(heard.recv().await.is_some());
         assert_eq!(terminals.resize(&info.id, 100, 30).unwrap().cols, 100);
         assert!(terminals.output(&info.id, u64::MAX).is_err());
         terminals
             .write(&info.id, if cfg!(windows) { "exit\r\n" } else { "exit\n" })
             .unwrap();
-        let mut after = terminals.info(&info.id).unwrap().end;
         for _ in 0..200 {
             if terminals.info(&info.id).unwrap().ended {
                 break;
             }
-            // Its console may ask where the cursor is again, as a prompt is drawn.
-            let output = terminals.output(&info.id, after).unwrap();
-            after = output.next;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(output.data)
-                .unwrap();
-            if String::from_utf8_lossy(&bytes).contains("\u{1b}[6n") {
-                let _ = terminals.write(&info.id, "\u{1b}[1;1R");
-            }
+            read_all(&terminals, &info.id, &mut answered);
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
         assert!(terminals.info(&info.id).unwrap().ended);

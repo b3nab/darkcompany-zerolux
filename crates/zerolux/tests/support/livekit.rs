@@ -34,9 +34,22 @@ pub async fn subscriber(
         stop,
     ));
     // The first invalidation means "subscribed".
-    tokio::time::timeout(Duration::from_secs(15), invalidations.recv())
+    if tokio::time::timeout(Duration::from_secs(15), invalidations.recv())
         .await
-        .expect("joined")
-        .unwrap();
+        .is_err()
+    {
+        // What the server and the link said, to see why on a system where it fails.
+        let log = std::env::temp_dir()
+            .join(format!("zerolux-livekit-{}", std::process::id()))
+            .join("livekit.log");
+        eprintln!(
+            "LiveKit log:\n{}",
+            std::fs::read_to_string(log).unwrap_or_default()
+        );
+        if link.is_finished() {
+            eprintln!("Link ended: {:?}", link.await);
+        }
+        panic!("joined: the subscription did not start within 15 s");
+    }
     (invalidations, stopper, link)
 }

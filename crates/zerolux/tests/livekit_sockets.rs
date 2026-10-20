@@ -1,4 +1,6 @@
 //! Sockets of a LiveKit subscription, counted on the whole process: this test runs alone.
+//! They are counted with `lsof`.
+#![cfg(unix)]
 use std::{sync::Arc, time::Duration};
 
 use tokio::sync::{mpsc, watch};
