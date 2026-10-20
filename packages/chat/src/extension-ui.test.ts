@@ -212,6 +212,8 @@ test("a message's menu piece runs its action on the message, and its result read
   ]);
   expect(resultLine(result)).toBe('{"saved":true}');
   expect(resultLine(null)).toBe("Done");
+  expect(resultLine({ text: "Pinned" })).toBe("Pinned");
+  expect(resultLine({ message: "Saved", id: 3 })).toBe("Saved");
   expect(resultLine("x".repeat(300))).toHaveLength(200);
 });
 
@@ -240,7 +242,7 @@ test("an extension's events and trees are each their own notice", () => {
 
 test("a web piece opens at the address the kernel gives, and its tools/call runs an action", async () => {
   setKernelFetch(async (url, init) => {
-    expect(String(url)).toBe(`${kernel}/api/extensions/aspen.board/ui`);
+    expect(String(url)).toEndWith("/api/extensions/aspen.board/ui");
     expect(JSON.parse(String(init?.body))).toEqual({ entry: "index.html" });
     return Response.json({ url: "/api/extension-ui/k1/index.html" });
   });
@@ -254,6 +256,8 @@ test("a web piece opens at the address the kernel gives, and its tools/call runs
   expect(await webPieceUrl(piece, kernel)).toBe(
     `${kernel}/api/extension-ui/k1/index.html`,
   );
+  // On the web the kernel is the page's origin: the path is the address.
+  expect(await webPieceUrl(piece, "")).toBe("/api/extension-ui/k1/index.html");
   const ran: unknown[] = [];
   const call = async (name: string, input: Record<string, unknown>) => {
     ran.push([name, input]);

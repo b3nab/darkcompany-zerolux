@@ -313,7 +313,8 @@ export async function webPieceUrl(piece: UiPiece, kernel = kernelUrl()) {
     `/extensions/${encodeURIComponent(piece.extension)}/ui`,
     { entry: piece.view.entry },
   );
-  return new URL(url, kernel).toString();
+  // On the web the kernel is the page's own origin, and its path is already the address.
+  return kernel ? new URL(url, kernel).toString() : url;
 }
 
 /** The app's answer to a web piece, as JSON-RPC. */
@@ -361,7 +362,18 @@ export async function answerBridge(
 /** What an action gave back, in one line. */
 export function resultLine(value: unknown) {
   if (value === undefined || value === null || value === "") return "Done";
-  const line = typeof value === "string" ? value : JSON.stringify(value);
+  // An answer that says something in words says it in `text` or `message`.
+  const said =
+    typeof value === "object"
+      ? [
+          (value as { text?: unknown }).text,
+          (value as { message?: unknown }).message,
+        ].find(
+          (words): words is string => typeof words === "string" && words !== "",
+        )
+      : undefined;
+  const line =
+    said ?? (typeof value === "string" ? value : JSON.stringify(value));
   return line.length > 200 ? `${line.slice(0, 199)}…` : line;
 }
 
