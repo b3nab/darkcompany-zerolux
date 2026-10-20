@@ -163,10 +163,13 @@ export async function readTaskOutput(
   kernel = kernelUrl(),
 ) {
   for (;;) {
+    const from = at.next;
     const { output } = await request<{ output: TaskOutput }>(
       kernel,
-      `${taskPath(taskId)}?after=${at.next}`,
+      `${taskPath(taskId)}?after=${from}`,
     );
+    // Another read took this piece meanwhile, and goes on from there.
+    if (at.next !== from) return at;
     const moved = output.next > at.next;
     at.text = (at.text + output.text).slice(-KEPT);
     at.next = output.next;

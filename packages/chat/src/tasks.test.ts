@@ -37,6 +37,19 @@ test("a read goes on from where the last one stopped", async () => {
   expect(asked).toEqual([4]);
 });
 
+test("two reads at once take each piece once", async () => {
+  output({
+    0: { start: 0, text: "one\n", next: 4, end: 8 },
+    4: { start: 4, text: "two\n", next: 8, end: 8 },
+  });
+  const at = { text: "", next: 0 };
+  await Promise.all([
+    readTaskOutput("t1", at, kernel),
+    readTaskOutput("t1", at, kernel),
+  ]);
+  expect(at).toEqual({ text: "one\ntwo\n", next: 8 });
+});
+
 test("a character cut at the end waits for the next read instead of asking again", async () => {
   const asked = output({ 3: { start: 3, text: "", next: 3, end: 4 } });
   const at = await readTaskOutput("t1", { text: "abc", next: 3 }, kernel);
