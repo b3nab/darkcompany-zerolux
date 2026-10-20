@@ -66,6 +66,9 @@ A piece's `view` says how it is drawn:
 - `{kind: "web", entry}`: its own page, `ui/…` in its folder. `POST /extensions/{id}/ui {entry}` gives the address to open it: under a key good for an hour, which serves the files of its `ui/` folder only, sandboxed (`Content-Security-Policy: sandbox allow-scripts allow-forms`). The page talks to the client as MCP Apps do, JSON-RPC over `postMessage`: `tools/call {name, arguments}` runs one of the extension's actions.
 - `{kind: "action", action}`: only in `message`.
 
+Clients open a `web` piece only at the address `POST /extensions/{id}/ui` gives, in a frame sandboxed with `allow-scripts allow-forms`: it reaches neither the client's origin, cookies and storage nor its navigation.
+Clients answer only the messages that come from that frame.
+
 A tree is made of `stack {direction?, children}`, `heading {text}`, `text {text, tone?}`, `markdown {text}`, `badge {text}`, `divider`, `empty {text}`, `image {src, alt}` (`https:` or `data:image/`), `list {items: [{title, subtitle?, badge?, action?: {name, input}}]}`, `table {columns: [{key, title}], rows}`, `button {title, action: {name, input}, tone?, confirm?}` and `form {action, submit, values?}`, whose fields come from the action's input schema. Clients hear `extension.event {event}` for every event an extension publishes.
 
 ## Process parts

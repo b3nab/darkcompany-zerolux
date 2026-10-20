@@ -26,12 +26,14 @@ import {
   homeLabel,
   isThread,
   workspaceAge,
+  useUiPieces,
 } from "@zerolux/chat";
 import type { Chat } from "@zerolux/chat";
 import { activeActors } from "./api";
 import type { Actor, Workspace } from "./api";
 import { agentPresence } from "./presence";
 import { useAuthentication } from "./AuthGate";
+import { pieceIcon } from "./extension-view";
 import { useTheme } from "./theme";
 import { Mark } from "@/components/brand";
 import { Lamp } from "@/components/lamp";
@@ -71,6 +73,8 @@ export function Sidebar({
   kernel: Kernel;
   toggle: () => boolean;
 }) {
+  // Pages the workspace's extensions bring, after Storage.
+  const pages = useUiPieces("page");
   const unread = chat.conversations.filter(
     (c) => !isThread(c) && c.last_seq > (chat.seen[c.id] ?? 0),
   ).length;
@@ -101,6 +105,14 @@ export function Sidebar({
       <Item to="/org" icon={NetworkIcon} label="Org" />
       <Item to="/meetings" icon={PhoneIcon} label="Meetings" />
       <Item to="/storage" icon={FolderIcon} label="Storage" />
+      {pages.map((piece) => (
+        <Item
+          key={`${piece.extension}/${piece.name}`}
+          to={`/x/${encodeURIComponent(piece.extension)}/${encodeURIComponent(piece.name)}`}
+          icon={pieceIcon(piece)}
+          label={piece.title}
+        />
+      ))}
       <Item to="/extensions" icon={BlocksIcon} label="Extensions" />
       <Item
         to="/approvals"

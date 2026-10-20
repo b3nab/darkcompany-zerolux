@@ -44,6 +44,7 @@ import type { Kernel } from "./Sidebar";
 import { Storage } from "./Storage";
 import { AgentPage, Hire, Team } from "./Team";
 import { Tonight } from "./Tonight";
+import { ExtensionPage } from "./extension-view";
 import { Page } from "@/components/page";
 import { SidePanel } from "@/components/side-panel";
 import { Button } from "@/components/ui/button";
@@ -504,6 +505,14 @@ export function App({
                     chat={chat}
                     storage={storage}
                   />
+                }
+              />
+              <Route
+                path="/x/:extension/:name"
+                element={
+                  <Page>
+                    <ExtensionPage />
+                  </Page>
                 }
               />
               <Route

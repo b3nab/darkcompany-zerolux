@@ -14,10 +14,11 @@
       content="#f6f5f2"
     />
     <!-- Scripts only from ZeroLux, images only inline: a message (Markdown, a diagram) never
-         makes this page load an image from anywhere, ZeroLux included. LiveKit needs ws. -->
+         makes this page load an image from anywhere, ZeroLux included. Frames only from the
+         kernel: an extension's sandboxed page. LiveKit needs ws. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data: blob:; font-src 'self' data:; connect-src 'self' ws: wss: http: https:; media-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data: blob:; font-src 'self' data:; connect-src 'self' ws: wss: http: https:; media-src 'self' blob:; object-src 'none'; frame-src 'self'; base-uri 'self'; form-action 'self'"
     />
     <link rel="stylesheet" href="./src/fonts.css" />
     <link rel="stylesheet" href="./generated/app.css" />

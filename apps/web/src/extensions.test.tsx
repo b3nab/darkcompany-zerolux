@@ -4,6 +4,7 @@ import { actionFields } from "@zerolux/chat";
 import type { Extension, ExtensionSetting, JsonSchema } from "@zerolux/chat";
 import { ActionForm } from "./ActionForm";
 import { ExtensionList, settingChanges, settingsSchema } from "./Extensions";
+import { Part } from "./extension-view";
 
 const schema: JsonSchema = {
   type: "object",
@@ -248,4 +249,45 @@ test("the official extensions not yet installed are offered, installed by the ow
       />,
     );
   expect(html(true).match(/>Install</g)).toHaveLength(1);
+});
+
+test("a described view draws its parts; only items with an action run one, none while busy", () => {
+  const view = (busy: boolean) =>
+    renderToStaticMarkup(
+      <Part
+        node={{
+          type: "stack",
+          direction: "column",
+          children: [
+            { type: "heading", text: "Board" },
+            {
+              type: "list",
+              items: [
+                {
+                  title: "Plant",
+                  action: { name: "done", input: { id: "1" } },
+                },
+                { title: "Water", badge: "Done" },
+              ],
+            },
+            {
+              type: "button",
+              title: "Clear",
+              tone: "danger",
+              confirm: "Clear the board?",
+              action: { name: "clear", input: {} },
+            },
+            { type: "form", action: "add", submit: "Add", values: {} },
+          ],
+        }}
+        run={() => {}}
+        busy={busy}
+        form={(node) => <form data-action={node.action} />}
+      />,
+    );
+  expect(view(false).match(/<button/g)).toHaveLength(2);
+  expect(view(true).match(/<button[^>]*disabled=""/g)).toHaveLength(2);
+  // A button that asks first asks only once pressed.
+  expect(view(false)).not.toContain("Clear the board?");
+  expect(view(false)).toContain('data-action="add"');
 });

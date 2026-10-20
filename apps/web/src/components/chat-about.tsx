@@ -1,12 +1,18 @@
 import { cn } from "cn";
-import { fileUrl, harnessLabels, sessionState } from "@zerolux/chat";
+import {
+  fileUrl,
+  harnessLabels,
+  sessionState,
+  useUiPieces,
+} from "@zerolux/chat";
 import type { Actor, ChatSession, Conversation, Storage } from "@zerolux/chat";
+import { ExtensionView } from "../extension-view";
 import { sessionTone } from "../presence";
 import { FileGlyph, fileSize } from "./file";
 import { Lamp } from "./lamp";
 import { ActorMark, Eyebrow } from "./presence";
 
-/** Beside a chat: who is in it, what each is doing and the files shared in it. */
+/** Beside a chat: who is in it, what each is doing, the files shared in it, and its extensions. */
 export function ChatAbout({
   conversation,
   actors,
@@ -25,6 +31,7 @@ export function ChatAbout({
     .sort((a, b) => b.updated_at - a.updated_at);
   const images = files.filter((f) => f.content_type.startsWith("image/"));
   const others = files.filter((f) => !images.includes(f));
+  const sections = useUiPieces("chat");
   return (
     <aside
       aria-label="About this chat"
@@ -135,6 +142,19 @@ export function ChatAbout({
           </p>
         )}
       </section>
+      {sections.map((piece) => (
+        <section
+          key={`${piece.extension}/${piece.name}`}
+          aria-label={piece.title}
+          className="flex flex-col gap-1.5"
+        >
+          <Eyebrow>{piece.title}</Eyebrow>
+          <ExtensionView
+            piece={piece}
+            context={{ conversation_id: conversation.id }}
+          />
+        </section>
+      ))}
     </aside>
   );
 }

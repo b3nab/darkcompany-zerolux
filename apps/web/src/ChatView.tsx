@@ -42,6 +42,7 @@ import {
   workingSessions,
   useChatWork,
   useVoice,
+  useUiPieces,
 } from "@zerolux/chat";
 import type {
   Chat,
@@ -54,6 +55,7 @@ import type {
   Storage,
 } from "@zerolux/chat";
 import { ApprovalCard, openApprovals } from "./Approvals";
+import { MessageActions } from "./extension-view";
 import { Composer, ComposerChip } from "@/components/composer";
 import { Listen } from "@/components/listen";
 import { useReadAloud } from "./read-aloud";
@@ -267,6 +269,8 @@ export function ChatView({
   const [adding, setAdding] = useState(false);
   // Speech to text, and the agents that read their messages aloud in their own voice.
   const voice = useVoice();
+  // What extensions do with a message, in its menu.
+  const messageActions = useUiPieces("message");
   const aloud = useReadAloud();
   // Beside the chat on a wide screen; over it, on request, on a narrower one.
   const [about, setAbout] = useState(true);
@@ -548,6 +552,17 @@ export function ChatView({
                   <Fragment key={m.seq}>
                     {newDay && <DayLabel>{day}</DayLabel>}
                     <MessageRow
+                      actions={
+                        messageActions.length > 0 && (
+                          <MessageActions
+                            pieces={messageActions}
+                            context={{
+                              conversation_id: conversation.id,
+                              message_id: m.id,
+                            }}
+                          />
+                        )
+                      }
                       message={m}
                       mine={m.author_id === ownerId}
                       continued={
@@ -729,6 +744,7 @@ function MessageRow({
   author,
   name,
   listen,
+  actions,
   children,
 }: {
   message: Message;
@@ -738,6 +754,8 @@ function MessageRow({
   name: (actorId: string) => string;
   /** Its author's voice reads it aloud. */
   listen?: { reading: boolean; error?: string; toggle: () => void };
+  /** What extensions do with it, in its menu. */
+  actions?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   const agent = author?.kind !== "human";
@@ -746,19 +764,22 @@ function MessageRow({
       <li
         data-mine
         className={cn(
-          "max-w-[min(40rem,85%)] self-end rounded-md rounded-br-xs border border-human/25 bg-human/10 px-3.5 py-2",
+          "group/message max-w-[min(40rem,85%)] self-end rounded-md rounded-br-xs border border-human/25 bg-human/10 px-3.5 py-2",
           !continued && "mt-3",
         )}
       >
         <MessageText text={m.text} />
-        <Stamp message={m} name={name} className="justify-end" />
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {actions}
+          <Stamp message={m} name={name} className="justify-end" />
+        </div>
         {children}
       </li>
     );
   return (
     <li
       className={cn(
-        "grid grid-cols-[2rem_minmax(0,1fr)] gap-x-3",
+        "group/message grid grid-cols-[2rem_minmax(0,1fr)] gap-x-3",
         !continued && "mt-3",
       )}
     >
@@ -795,6 +816,7 @@ function MessageRow({
         <div className="flex flex-wrap items-center gap-2">
           <Stamp message={m} name={name} />
           {listen && <Listen {...listen} />}
+          {actions}
         </div>
         {children}
       </div>

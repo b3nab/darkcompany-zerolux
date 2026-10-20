@@ -59,7 +59,9 @@ export type CodePane =
   | "terminal"
   | "subagent"
   | "about"
-  | "background";
+  | "background"
+  /** An extension's panel: `ext:<extension>/<name>`. */
+  | `ext:${string}`;
 
 type Git = ReturnType<typeof useSessionGit>;
 

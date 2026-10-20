@@ -11,10 +11,12 @@ import {
   renameWorkspace,
   useHostJoining,
   useHosts,
+  useUiPieces,
 } from "@zerolux/chat";
 import type { Host, HostLink } from "@zerolux/chat";
 import type { AuthConnection, AuthDevice, Perform } from "@zerolux/chat";
 import { themes } from "@zerolux/theme/themes";
+import { ExtensionView } from "./extension-view";
 import type { Actor, Workspace } from "./api";
 import { useAuthentication } from "./AuthGate";
 import { noticeChoice, notifications } from "./notices";
@@ -778,6 +780,8 @@ export function AdministrationPage({
 }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Sections the workspace's extensions bring, after its own.
+  const settings = useUiPieces("settings");
   return (
     <Settings eyebrow="Administration" title={workspace.workspace.name}>
       <Section title="Workspace">
@@ -844,6 +848,11 @@ export function AdministrationPage({
         {/* TODO: kernel: where files are kept, signed updates and the backup taken before each. */}
         <NotYet>File storage, signed updates and backups.</NotYet>
       </Section>
+      {settings.map((piece) => (
+        <Section key={`${piece.extension}/${piece.name}`} title={piece.title}>
+          <ExtensionView piece={piece} context={{}} />
+        </Section>
+      ))}
     </Settings>
   );
 }

@@ -80,6 +80,7 @@ import {
   tokenCount,
   useSessionSettings,
   useBackgroundCommands,
+  useUiPieces,
   useVoice,
 } from "@zerolux/chat";
 import type {
@@ -93,6 +94,7 @@ import type {
   Perform,
   PlanStep,
   QueuedInput,
+  UiPiece,
   Host,
   SentInput,
   SessionShare,
@@ -142,6 +144,7 @@ import { SubagentList, SubagentPanel } from "./SessionSubagents";
 import { AskOnTheSide, InputActions } from "./SessionFork";
 import { SessionSchedules } from "./SessionSchedules";
 import { BackgroundPanel } from "./SessionBackground";
+import { ExtensionView, pieceIcon } from "./extension-view";
 import { SessionTriggers } from "./SessionTriggers";
 import { ContinueInTerminal } from "./ContinueInTerminal";
 import { GoalCard } from "./SessionGoal";
@@ -607,6 +610,11 @@ export function SessionView({
   const chatTitle = (id: string | null) =>
     chat.conversations.find((c) => c.id === id)?.title;
   const background = useBackgroundCommands(session.id);
+  // The panels the workspace's extensions bring beside a session.
+  const panels = useUiPieces("session");
+  const panelKey = (piece: UiPiece) =>
+    `ext:${piece.extension}/${piece.name}` as const;
+  const panel = panels.find((piece) => panelKey(piece) === pane);
   const running =
     background.commands?.filter((command) => command.status === "running")
       .length ?? 0;
@@ -750,6 +758,12 @@ export function SessionView({
         perform={perform}
         close={() => setPane(undefined)}
       />
+    ) : panel ? (
+      <Pane title={panel.title} close={() => setPane(undefined)}>
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
+          <ExtensionView piece={panel} context={{ session_id: session.id }} />
+        </div>
+      </Pane>
     ) : pane === "terminal" && access.write ? (
       <TerminalPanel
         session={session}
@@ -970,6 +984,23 @@ export function SessionView({
                     </span>
                   )}
                 </Button>
+                {panels.map((piece) => {
+                  const Icon = pieceIcon(piece);
+                  return (
+                    <Button
+                      key={panelKey(piece)}
+                      variant="outline"
+                      size="sm"
+                      aria-pressed={pane === panelKey(piece)}
+                      title={piece.title}
+                      onClick={() => toggle(panelKey(piece))}
+                      className="aria-pressed:bg-accent"
+                    >
+                      <Icon data-icon="inline-start" />
+                      <span className="@max-5xl:sr-only">{piece.title}</span>
+                    </Button>
+                  );
+                })}
               </>
             )}
             <Button
@@ -1229,15 +1260,17 @@ export function SessionView({
             className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl"
           >
             <SheetTitle className="sr-only">
-              {pane === "about"
-                ? "About"
-                : pane === "background"
-                  ? "Background"
-                  : pane === "terminal"
-                    ? "Terminal"
-                    : pane === "files"
-                      ? "Files"
-                      : "Changes"}
+              {panel
+                ? panel.title
+                : pane === "about"
+                  ? "About"
+                  : pane === "background"
+                    ? "Background"
+                    : pane === "terminal"
+                      ? "Terminal"
+                      : pane === "files"
+                        ? "Files"
+                        : "Changes"}
             </SheetTitle>
             {code}
           </SheetContent>
