@@ -167,6 +167,30 @@ export type InputBlock = Extract<SessionBlock, { kind: "input" }>;
 /** The agent's own words in the session. */
 export type TextBlock = Extract<SessionBlock, { kind: "text" }>;
 
+/** Words given to the session, with what goes under them. */
+export function InputBubble({
+  text,
+  from,
+  children,
+}: {
+  text: string;
+  /** The chat they came from. */
+  from?: string | null | false;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="group/input flex flex-col items-end gap-1">
+      <div className="max-w-[min(40rem,85%)] rounded-md rounded-br-xs border border-human/25 bg-human/10 px-3.5 py-2">
+        {from && (
+          <p className="mb-1 font-mono text-[11px] text-faint">From {from}</p>
+        )}
+        <p className="text-sm whitespace-pre-wrap break-words">{text}</p>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function Block({
   block,
   chatTitle,
@@ -183,19 +207,12 @@ function Block({
   switch (block.kind) {
     case "input":
       return (
-        <div className="group/input flex flex-col items-end gap-1">
-          <div className="max-w-[min(40rem,85%)] rounded-md rounded-br-xs border border-human/25 bg-human/10 px-3.5 py-2">
-            {block.chat && chatTitle && (
-              <p className="mb-1 font-mono text-[11px] text-faint">
-                From {chatTitle(block.chat) ?? "a chat"}
-              </p>
-            )}
-            <p className="text-sm whitespace-pre-wrap break-words">
-              {block.text}
-            </p>
-          </div>
+        <InputBubble
+          text={block.text}
+          from={block.chat && chatTitle && (chatTitle(block.chat) ?? "a chat")}
+        >
           {inputActions?.(block)}
-        </div>
+        </InputBubble>
       );
     case "text":
       return (

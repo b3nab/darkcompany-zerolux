@@ -94,6 +94,7 @@ import type {
   PlanStep,
   QueuedInput,
   Host,
+  SentInput,
   SessionShare,
   SessionUsage,
   ShareChoice as ShareChoiceValue,
@@ -102,7 +103,11 @@ import type { Actor } from "./api";
 import { sessionTone } from "./presence";
 import { Presence } from "@/components/presence";
 import { SessionMark } from "@/components/profile";
-import { LiveItems, SessionBlocks } from "@/components/session-blocks";
+import {
+  InputBubble,
+  LiveItems,
+  SessionBlocks,
+} from "@/components/session-blocks";
 import { Listen } from "@/components/listen";
 import { useReadAloud } from "./read-aloud";
 import { PlanSteps } from "@/components/tool-call";
@@ -549,6 +554,8 @@ export function SessionView({
   const live = useSessionLive(session.id, chat.live, events.length);
   // The owner's inputs waiting for the turn to end, as the harness queues them.
   const queue = useSessionQueue(session.id, chat.live);
+  // The owner's inputs on their way, until the record or the queue has them.
+  const sent = chat.sentInputs(session.id, blocks, queue);
   // How full its context is and what it has used, as its harness last said.
   const usage = useSessionUsage(session.id, chat.live);
   const plan = latestPlan(blocks);
@@ -1091,8 +1098,16 @@ export function SessionView({
                   )
                 }
               />
+              {sent.map((input) => (
+                <SentInputBubble
+                  key={input.id}
+                  input={input}
+                  retry={() => void chat.retryInput(input.id).catch(() => {})}
+                  drop={() => chat.dropInput(input.id)}
+                />
+              ))}
               <LiveItems items={live} />
-              {!blocks.length && !live.length && !error && (
+              {!blocks.length && !live.length && !sent.length && !error && (
                 <p className="text-sm text-faint">Nothing recorded yet.</p>
               )}
               {error && (
@@ -1111,7 +1126,13 @@ export function SessionView({
             busy={busy}
             perform={perform}
             send={(text, mode, images) =>
-              chat.input(session.id, text, mode, images)
+              chat.input(
+                session.id,
+                text,
+                mode,
+                images,
+                events.length ? events[events.length - 1]!.at + 1 : undefined,
+              )
             }
             compact={(instructions) => chat.compact(session.id, instructions)}
             interrupt={interrupt}
@@ -1455,15 +1476,12 @@ function SessionInput({
     const sent = text;
     const run = sessionCommand(sent);
     const going = run ? [] : picked;
-    const done = await perform(async () =>
-      run?.name === "compact"
-        ? compact(run.args)
-        : send(
-            sent.trim(),
-            working ? mode : "steer",
-            await Promise.all(going.map(({ file }) => imageOf(file))),
-          ),
-    );
+    const done = await perform(async () => {
+      if (run?.name === "compact") return compact(run.args);
+      const images = await Promise.all(going.map(({ file }) => imageOf(file)));
+      // It shows below at once, and a failure there, to send again.
+      void send(sent.trim(), working ? mode : "steer", images).catch(() => {});
+    });
     if (!done) return;
     going.forEach(({ url }) => remove(url));
     // What was typed meanwhile stays.
@@ -1913,6 +1931,39 @@ function SessionSettings({
         <span className="text-xs text-attention">{settings.error}</span>
       )}
     </div>
+  );
+}
+
+/** An input on its way to the session: sending, sent, or failed with its error. */
+function SentInputBubble({
+  input,
+  retry,
+  drop,
+}: {
+  input: SentInput;
+  retry: () => void;
+  drop: () => void;
+}) {
+  return (
+    <InputBubble text={input.text}>
+      {input.status === "failed" ? (
+        <div className="flex items-center gap-2">
+          <p role="alert" className="text-xs text-destructive">
+            {input.error}
+          </p>
+          <Button size="xs" variant="outline" onClick={retry}>
+            Retry
+          </Button>
+          <Button size="xs" variant="ghost" onClick={drop}>
+            Discard
+          </Button>
+        </div>
+      ) : (
+        <span className="font-mono text-[11px] text-faint">
+          {input.status === "sending" ? "Sending…" : "Sent"}
+        </span>
+      )}
+    </InputBubble>
   );
 }
 
