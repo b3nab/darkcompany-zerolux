@@ -11,7 +11,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { composerAction, dictated, useVoiceInput } from "@zerolux/chat";
-import type { VoiceTargets } from "@zerolux/chat";
+import type { VoiceTargets, VoiceUse } from "@zerolux/chat";
 import { useRecorder } from "../recorder";
 import { Button } from "@/components/ui/button";
 import {
@@ -160,7 +160,39 @@ export function Composer({
   }[action];
 
   const submits = action === "send" && !speech.use;
-  const button = (
+  // A tap records on until the next press; a hold records until it is released. The pointer
+  // stays with the button, so the release reaches it; a key press is a tap.
+  const talk = (use: VoiceUse): ComponentProps<"button"> => ({
+    onPointerDown: (event) => {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      speech.press(use);
+    },
+    onPointerUp: () => speech.release(),
+    onClick: (event) => {
+      if (event.detail !== 0) return;
+      speech.press(use);
+      speech.release();
+    },
+  });
+  const voiced =
+    action === "record"
+      ? talk("message")
+      : speech.use
+        ? talk(speech.use)
+        : undefined;
+  const button = voiced ? (
+    <Button
+      type="button"
+      size="icon-sm"
+      aria-label={primary.label}
+      title={primary.label}
+      disabled={primary.disabled}
+      className="size-8 shrink-0 rounded-full"
+      {...voiced}
+    >
+      {primary.icon}
+    </Button>
+  ) : (
     <Button
       type={submits ? "submit" : "button"}
       size="icon-sm"
@@ -296,15 +328,17 @@ export function Composer({
             )}
             <span className="flex-1" />
             {!speech.use && meter}
-            {!speech.use && canDictate && (
+            {canDictate && speech.use !== "message" && (
               <Button
                 type="button"
                 variant="ghost"
                 size="icon-sm"
                 aria-label="Dictate"
                 title="Dictate"
+                aria-pressed={speech.use === "dictation"}
                 disabled={busy || speech.transcribing}
-                onClick={() => void speech.start("dictation")}
+                className="aria-pressed:text-destructive"
+                {...talk("dictation")}
               >
                 <MicIcon />
               </Button>
