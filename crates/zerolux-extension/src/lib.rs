@@ -191,6 +191,17 @@ impl Context {
             .take())
     }
 
+    /// An agent hears `text` in its newest running session, as input that waits for its turn:
+    /// that session's id. Refused when the agent has none running.
+    pub fn tell_agent(&self, actor_id: &str, text: &str) -> Result<String, String> {
+        Ok(
+            self.ask("agents.tell", json!({"actor_id": actor_id, "text": text}))?["session_id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+        )
+    }
+
     /// A new tree for one of its `remote` views, shown with `context`.
     pub fn update_view(&self, name: &str, context: Value, tree: Value) -> Result<(), String> {
         self.ask(

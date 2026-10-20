@@ -176,6 +176,11 @@ class Extension:
         return self.ask("points.call", {"point": point, "implementation": implementation,
                                         "operation": operation, "input": input or {}})["result"]
 
+    def tell_agent(self, actor_id: str, text: str) -> str:
+        """An agent hears `text` in its newest running session, as input that waits for its
+        turn: that session's id. Refused when the agent has none running."""
+        return self.ask("agents.tell", {"actor_id": actor_id, "text": text})["session_id"]
+
     def update_view(self, name: str, context: dict, tree: dict) -> None:
         """A new tree for one of its `remote` views, shown with `context`."""
         self.ask("views.update", {"name": name, "context": context, "tree": tree})

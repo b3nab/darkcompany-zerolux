@@ -57,6 +57,11 @@ export interface Context {
   };
   /** A new tree for one of its `remote` views, shown with `context`. */
   updateView(name: string, context: unknown, tree: unknown): Promise<void>;
+  /**
+   * An agent hears `text` in its newest running session, as input that waits for its turn:
+   * that session's id. Refused when the agent has none running.
+   */
+  tellAgent(actorId: string, text: string): Promise<string>;
   log(message: string): void;
 }
 
@@ -255,6 +260,8 @@ export async function serve(
           })
         ).result,
     },
+    tellAgent: async (actorId, text) =>
+      (await ask("agents.tell", { actor_id: actorId, text })).session_id,
     updateView: async (name, viewContext, tree) =>
       void (await ask("views.update", { name, context: viewContext, tree })),
     log: (message) => send({ method: "log", params: { message } }),
