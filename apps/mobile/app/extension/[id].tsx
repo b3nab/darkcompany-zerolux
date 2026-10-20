@@ -75,7 +75,7 @@ export default function ExtensionPage() {
               {[
                 state.label,
                 extension.publisher,
-                extension.dev ? "from a folder" : null,
+                extension.dev ? "In development" : null,
               ]
                 .filter(Boolean)
                 .join(" · ")}

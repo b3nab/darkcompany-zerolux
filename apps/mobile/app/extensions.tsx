@@ -6,10 +6,14 @@ import { useCSSVariable } from "uniwind";
 import {
   errorMessage,
   installExtension,
+  installOffer,
   loadExtensionFolder,
+  offerAction,
   useExtensions,
+  useMarketplace,
   useOfficialExtensions,
 } from "@zerolux/chat";
+import type { MarketplaceOffer } from "@zerolux/chat";
 import { extensionState, StateDot } from "@/components/extensions";
 import { Screen } from "@/components/screen";
 import { Button } from "@/components/ui/button";
@@ -20,8 +24,8 @@ import { useMe } from "../src/me";
 
 /**
  * The workspace's extensions, each with what it is and how it stands; a tap opens it. The
- * owner installs the official ones ZeroLux brings, and loads one from a folder on the
- * kernel's computer, in development.
+ * owner installs the official ones ZeroLux brings and those the indexes offer, and loads one
+ * from a folder on the kernel's computer, in development.
  */
 export default function Extensions() {
   const { url } = useSession();
@@ -30,6 +34,7 @@ export default function Extensions() {
   const available = useOfficialExtensions(url, owner).official?.filter(
     (e) => !e.installed,
   );
+  const { marketplace } = useMarketplace(url, owner);
   const router = useRouter();
   const faint = String(useCSSVariable("--color-faint"));
   // What is being installed or loaded, while the kernel starts it.
@@ -42,6 +47,23 @@ export default function Extensions() {
       .then((extension) => router.push(`/extension/${extension.id}`))
       .catch((e: unknown) => setFailure(errorMessage(e)))
       .finally(() => setBusy(undefined));
+  };
+  // Code that runs inside the kernel is installed only once its publisher is named.
+  const install = (offer: MarketplaceOffer) => {
+    const run = () =>
+      add(`${offer.index} ${offer.id}`, () => installOffer(offer, url));
+    if (!offer.parts?.includes("kernel")) return run();
+    Alert.alert(
+      `${offerAction(offer) === "update" ? "Update" : "Install"} ${offer.name}?`,
+      `It runs inside the kernel, signed by ${offer.publisher}.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: offerAction(offer) === "update" ? "Update" : "Install",
+          onPress: run,
+        },
+      ],
+    );
   };
   const load = (folder: string) =>
     folder.trim() && add(folder, () => loadExtensionFolder(folder.trim(), url));
@@ -79,7 +101,7 @@ export default function Extensions() {
                         state.label,
                         extension.version,
                         extension.publisher,
-                        extension.dev ? "from a folder" : null,
+                        extension.dev ? "In development" : null,
                       ]
                         .filter(Boolean)
                         .join(" · ")}
@@ -128,6 +150,80 @@ export default function Extensions() {
                 </View>
               ))}
             </View>
+          </View>
+        ) : null}
+        {marketplace?.offers.length || marketplace?.errors.length ? (
+          <View className="gap-2">
+            <Text className="text-sm text-faint">Marketplace</Text>
+            {marketplace.offers.length ? (
+              <View className="overflow-hidden rounded-md border border-border bg-card">
+                {marketplace.offers.map((offer, index) => {
+                  const action = offerAction(offer);
+                  const key = `${offer.index} ${offer.id}`;
+                  return (
+                    <View
+                      key={key}
+                      className={cn(
+                        "flex-row items-center gap-3 px-4 py-3",
+                        index > 0 && "border-t border-border",
+                      )}
+                    >
+                      <View className="min-w-0 flex-1 gap-0.5">
+                        <Text numberOfLines={1} className="text-[15px]">
+                          {offer.name}
+                        </Text>
+                        <Text numberOfLines={1} className="text-xs text-faint">
+                          {[
+                            offer.publisher,
+                            action === "update"
+                              ? `${offer.installed} → ${offer.version}`
+                              : offer.version,
+                            offer.parts?.includes("kernel") ? "Kernel" : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </Text>
+                        {offer.description ? (
+                          <Text
+                            numberOfLines={2}
+                            className="text-xs text-muted-foreground"
+                          >
+                            {offer.description}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <Button
+                        size="sm"
+                        variant={action === "update" ? "default" : "outline"}
+                        disabled={Boolean(busy) || action === "installed"}
+                        onPress={() => install(offer)}
+                      >
+                        <Text>
+                          {busy === key
+                            ? action === "update"
+                              ? "Updating…"
+                              : "Installing…"
+                            : action === "update"
+                              ? "Update"
+                              : action === "install"
+                                ? "Install"
+                                : "Installed"}
+                        </Text>
+                      </Button>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : null}
+            {marketplace.errors.map((failed) => (
+              <Text
+                key={failed.index}
+                numberOfLines={2}
+                className="text-xs text-destructive"
+              >
+                {failed.error}
+              </Text>
+            ))}
           </View>
         ) : null}
         {owner && Platform.OS === "ios" ? (
