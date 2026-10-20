@@ -291,3 +291,39 @@ test("a described view draws its parts; only items with an action run one, none 
   expect(view(false)).not.toContain("Clear the board?");
   expect(view(false)).toContain('data-action="add"');
 });
+
+test("the marketplace offers install or update to the owner, and shows each index it cannot read", () => {
+  const offer = {
+    index: "https://192.0.2.1/index.json",
+    publisher: "aspen",
+    description: "",
+    version: "1.1.0",
+  };
+  const html = (owns: boolean) =>
+    renderToStaticMarkup(
+      <ExtensionList
+        extensions={[]}
+        marketplace={{
+          offers: [
+            { ...offer, id: "aspen.notes", name: "Notes", installed: null },
+            { ...offer, id: "aspen.clock", name: "Clock", installed: "1.0.0" },
+            { ...offer, id: "aspen.maps", name: "Maps", installed: "1.1.0" },
+          ],
+          errors: [
+            { index: "https://192.0.2.2/index.json", error: "Cannot reach it" },
+          ],
+        }}
+        error=""
+        owns={owns}
+        busy={false}
+        perform={async () => true}
+      />,
+    );
+  expect(html(true).match(/>(Install|Update)<\/button>/g)).toEqual([
+    ">Install</button>",
+    ">Update</button>",
+  ]);
+  expect(html(true)).toContain("1.0.0 → 1.1.0");
+  expect(html(true)).toContain("Cannot reach it");
+  expect(html(false)).not.toMatch(/>(Install|Update)<\/button>/);
+});

@@ -203,8 +203,8 @@ export function Part({
   }
 }
 
-/** A button of a view: asked first when the extension says so. */
-function ConfirmButton({
+/** A button that asks first when it has a question. */
+export function ConfirmButton({
   title,
   tone,
   confirm,

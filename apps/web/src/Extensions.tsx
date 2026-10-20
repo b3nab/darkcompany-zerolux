@@ -4,11 +4,14 @@ import {
   enableExtension,
   errorMessage,
   installExtension,
+  installOffer,
   loadExtensionFolder,
+  offerAction,
   removeExtension,
   runAction,
   setExtensionSettings,
   useExtensions,
+  useMarketplace,
   useOfficialExtensions,
 } from "@zerolux/chat";
 import type {
@@ -16,11 +19,13 @@ import type {
   ExtensionAction,
   ExtensionSetting,
   JsonSchema,
+  Marketplace,
   OfficialExtension,
   Perform,
 } from "@zerolux/chat";
 import { Section, Settings } from "./Account";
 import { ActionForm } from "./ActionForm";
+import { ConfirmButton } from "./extension-view";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -505,6 +510,103 @@ function Available({
   );
 }
 
+/**
+ * What the indexes offer, installed or updated by the owner in one press, and the indexes that
+ * could not be read. Code that runs inside the kernel says so, and who signed it, before it
+ * installs.
+ */
+function MarketplaceSection({
+  marketplace,
+  error,
+  owns,
+  installed,
+}: {
+  marketplace?: Marketplace;
+  error: string;
+  owns: boolean;
+  installed: () => void;
+}) {
+  const [installing, setInstalling] = useState<string>();
+  const [failed, setFailed] = useState("");
+  const offers = marketplace?.offers ?? [];
+  const errors = marketplace?.errors ?? [];
+  if (!offers.length && !errors.length && !error) return null;
+  return (
+    <Section title="Marketplace">
+      {!!offers.length && (
+        <ul className="flex flex-col divide-y">
+          {offers.map((offer) => {
+            const action = offerAction(offer);
+            const key = `${offer.index} ${offer.id}`;
+            return (
+              <li key={key} className="flex items-center gap-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">
+                    {offer.name}{" "}
+                    <span className="font-mono text-[11px] font-normal text-faint">
+                      {action === "update"
+                        ? `${offer.installed} → ${offer.version}`
+                        : offer.version}{" "}
+                      · {offer.publisher}
+                    </span>
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {offer.description}
+                  </p>
+                </div>
+                {action === "installed" ? (
+                  <Badge variant="outline">Installed</Badge>
+                ) : (
+                  owns && (
+                    <ConfirmButton
+                      title={
+                        installing === key
+                          ? "Installing…"
+                          : action === "update"
+                            ? "Update"
+                            : "Install"
+                      }
+                      tone="primary"
+                      confirm={
+                        offer.parts?.includes("kernel")
+                          ? `Runs inside the kernel, signed by ${offer.publisher}.`
+                          : undefined
+                      }
+                      busy={installing !== undefined}
+                      go={() => {
+                        setInstalling(key);
+                        setFailed("");
+                        installOffer(offer)
+                          .catch((problem: unknown) =>
+                            setFailed(errorMessage(problem)),
+                          )
+                          .finally(() => {
+                            setInstalling(undefined);
+                            installed();
+                          });
+                      }}
+                    />
+                  )
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {errors.map((unread) => (
+        <p key={unread.index} className="text-xs text-destructive">
+          {unread.error}
+        </p>
+      ))}
+      {(failed || error) && (
+        <p role="alert" className="text-sm text-destructive">
+          {failed || error}
+        </p>
+      )}
+    </Section>
+  );
+}
+
 /** An extension being written, from a folder on the kernel's computer. */
 function LoadFolder({ busy, perform }: { busy: boolean; perform: Perform }) {
   const [folder, setFolder] = useState("");
@@ -540,6 +642,8 @@ function LoadFolder({ busy, perform }: { busy: boolean; perform: Perform }) {
 export function ExtensionList({
   extensions,
   official = [],
+  marketplace,
+  marketplaceError = "",
   installed = () => {},
   error,
   owns,
@@ -549,6 +653,9 @@ export function ExtensionList({
   extensions: Extension[] | undefined;
   /** The official extensions this kernel brings. */
   official?: OfficialExtension[];
+  /** What the indexes offer. */
+  marketplace?: Marketplace;
+  marketplaceError?: string;
   /** One of them was installed, or failed to be. */
   installed?: () => void;
   error: string;
@@ -583,6 +690,12 @@ export function ExtensionList({
         </ul>
       )}
       <Available official={official} owns={owns} installed={installed} />
+      <MarketplaceSection
+        marketplace={marketplace}
+        error={marketplaceError}
+        owns={owns}
+        installed={installed}
+      />
       {owns && <LoadFolder busy={busy} perform={perform} />}
       {shown?.kind === "action" && (
         <ActionDialog action={shown.action} close={close} />
@@ -618,6 +731,11 @@ export function ExtensionsPage({
 }) {
   const { extensions, error, reload } = useExtensions();
   const { official, reload: reloadOfficial } = useOfficialExtensions();
+  const {
+    marketplace,
+    error: marketplaceError,
+    reload: reloadMarketplace,
+  } = useMarketplace();
   // The list is read again after each change made here, done or refused, besides the
   // kernel's notices of changes made anywhere.
   const act: Perform = (operation) =>
@@ -626,9 +744,12 @@ export function ExtensionsPage({
     <ExtensionList
       extensions={extensions}
       official={official}
+      marketplace={marketplace}
+      marketplaceError={marketplaceError}
       installed={() => {
         void reload();
         void reloadOfficial();
+        void reloadMarketplace();
       }}
       error={error}
       owns={owns}
