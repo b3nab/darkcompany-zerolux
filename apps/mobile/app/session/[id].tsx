@@ -88,6 +88,7 @@ import type {
   InputMode,
   LiveItem,
   QueuedInput,
+  SentInput,
   SessionUsage,
   PlanStep,
   SessionBlock,
@@ -133,10 +134,11 @@ import type { Photo } from "../../src/photos";
 type Item = SessionBlock | ApprovalItem;
 /** What it is producing now, after the record's work. */
 type LiveRow = { kind: "live"; key: string; item: LiveItem };
-type Row = BlockRun<Item> | LiveRow;
+type SentRow = { kind: "sent"; key: string; input: SentInput };
+type Row = BlockRun<Item> | LiveRow | SentRow;
 /** Where in the native record a row's work is: its blocks are keyed by it. */
 const rowAt = (row: Row) =>
-  row.kind === "live" || row.kind === "approval"
+  row.kind === "live" || row.kind === "sent" || row.kind === "approval"
     ? undefined
     : Number(row.key.split(".")[0]);
 
@@ -206,17 +208,22 @@ export default function SessionPage() {
   const runs = useMemo(() => blockRuns(items), [items]);
   // What it is producing right now follows its record, until the record has it.
   const live = useSessionLive(id, chat.live, events.length);
-  const rows = useMemo<Row[]>(
-    () => [
-      ...runs,
-      ...live.map((item) => ({
-        kind: "live" as const,
-        key: `live:${item.id}`,
-        item,
-      })),
-    ],
-    [runs, live],
-  );
+  // What the owner sent shows at once, until the record or the queue has it.
+  const queue = useSessionQueue(id, chat.live);
+  const sent = chat.sentInputs(id, blocks, queue);
+  const rows: Row[] = [
+    ...runs,
+    ...live.map((item) => ({
+      kind: "live" as const,
+      key: `live:${item.id}`,
+      item,
+    })),
+    ...sent.map((input) => ({
+      kind: "sent" as const,
+      key: `sent:${input.id}`,
+      input,
+    })),
+  ];
   const fresh = useArrivals(items);
   // Opened at a place in its history: earlier work is read until it is in, then shown once.
   const list = useRef<LegendListRef>(null);
@@ -372,6 +379,8 @@ export default function SessionPage() {
           renderItem={({ item }) =>
             (item as Row).kind === "live" ? (
               <LiveItemView item={(item as LiveRow).item} />
+            ) : (item as Row).kind === "sent" ? (
+              <SentInputView input={(item as SentRow).input} />
             ) : (
               <View
                 className={cn(
@@ -439,6 +448,7 @@ export default function SessionPage() {
         notice={error}
         compacting={compacting}
         compactStarted={() => setCompactAfter(blocks.at(-1)?.key ?? null)}
+        recordEnd={(events.at(-1)?.at ?? -1) + 1}
       >
         {plan?.some((step) => step.status !== "done") ? (
           <PlanBar steps={plan} />
@@ -476,6 +486,7 @@ function Composer({
   notice,
   compacting,
   compactStarted,
+  recordEnd,
   children,
 }: {
   session: ChatSession;
@@ -483,6 +494,8 @@ function Composer({
   notice: string;
   compacting: boolean;
   compactStarted: () => void;
+  /** Where the record shown ends: what is sent now comes after. */
+  recordEnd: number;
   children?: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
@@ -537,22 +550,30 @@ function Composer({
           sent.map((photo) => ({ type: photo.media_type, size: photo.size })),
         );
     if (refused) return setError(refused);
-    setSending(true);
     setError("");
-    try {
-      if (command?.name === "compact") {
-        await chat.compact(session.id, command.args);
-        compactStarted();
-      } else
-        await chat.input(
+    // What was typed or picked meanwhile stays.
+    const clear = () => {
+      setDraft((now) => (now === text ? "" : now));
+      setPhotos((now) => now.filter((photo) => !sent.includes(photo)));
+    };
+    if (command?.name !== "compact") {
+      // It shows at once at the session's end; a failure stays there, to send again.
+      clear();
+      return void chat
+        .input(
           session.id,
           text.trim(),
           mode,
           sent.map(({ media_type, data }) => ({ media_type, data })),
-        );
-      // What was typed or picked meanwhile stays.
-      setDraft((now) => (now === text ? "" : now));
-      setPhotos((now) => now.filter((photo) => !sent.includes(photo)));
+          recordEnd,
+        )
+        .catch(() => undefined);
+    }
+    setSending(true);
+    try {
+      await chat.compact(session.id, command.args);
+      compactStarted();
+      clear();
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -1062,6 +1083,55 @@ function SettingsBar({ session }: { session: ChatSession }) {
  * An input of the owner's waiting for the turn to end, above the box. Codex lets it be
  * rewritten or taken back; the other harnesses show it as it waits.
  */
+/** An input of the owner's on its way: sending, sent, or failed with its error and Retry. */
+function SentInputView({ input }: { input: SentInput }) {
+  const { chat } = useSession();
+  const photos = input.images.length;
+  return (
+    <View className="max-w-[86%] gap-1 self-end rounded-md rounded-br-xs border border-human/25 bg-human/10 px-3 py-2">
+      {input.text ? (
+        <Text className="text-[15px] leading-[21px]">{input.text}</Text>
+      ) : null}
+      {photos ? (
+        <Text className="text-xs text-muted-foreground">
+          {photos === 1 ? "1 photo" : `${photos} photos`}
+        </Text>
+      ) : null}
+      {input.status === "failed" ? (
+        <View className="gap-1.5">
+          <Text className="text-xs text-destructive">{input.error}</Text>
+          <View className="flex-row gap-4 self-end">
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => chat.dropInput(input.id)}
+              hitSlop={8}
+            >
+              <Text className="text-[13px] font-medium text-muted-foreground">
+                Discard
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() =>
+                void chat.retryInput(input.id).catch(() => undefined)
+              }
+              hitSlop={8}
+            >
+              <Text className="text-[13px] font-medium text-human-foreground">
+                Retry
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : (
+        <Text className="self-end font-mono text-[11px] text-faint">
+          {input.status === "sending" ? "Sending…" : "Sent"}
+        </Text>
+      )}
+    </View>
+  );
+}
+
 function QueueCard({
   session,
   item,
