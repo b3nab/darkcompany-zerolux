@@ -69,7 +69,7 @@ A piece's `view` says how it is drawn:
 Clients open a `web` piece only at the address `POST /extensions/{id}/ui` gives, in a frame sandboxed with `allow-scripts allow-forms`: it reaches neither the client's origin, cookies and storage nor its navigation.
 Clients answer only the messages that come from that frame.
 
-A tree is made of `stack {direction?, children}`, `heading {text}`, `text {text, tone?}`, `markdown {text}`, `badge {text}`, `divider`, `empty {text}`, `image {src, alt}` (`https:` or `data:image/`), `list {items: [{title, subtitle?, badge?, action?: {name, input}}]}`, `table {columns: [{key, title}], rows}`, `button {title, action: {name, input}, tone?, confirm?}` and `form {action, submit, values?}`, whose fields come from the action's input schema. Clients hear `extension.event {event}` for every event an extension publishes.
+A tree is made of `stack {direction?, children}`, `heading {text}`, `text {text, tone?}`, `markdown {text}`, `badge {text}`, `divider`, `empty {text}`, `image {src, alt}` (a `data:image/` address: nothing is loaded from elsewhere), `list {items: [{title, subtitle?, badge?, action?: {name, input}}]}`, `table {columns: [{key, title}], rows}`, `button {title, action: {name, input}, tone?, confirm?}` and `form {action, submit, values?}`, whose fields come from the action's input schema. Clients hear `extension.event {event}` for every event an extension publishes.
 
 ## Process parts
 
@@ -138,6 +138,45 @@ It speaks the process part's JSON-RPC, carried by four C functions instead of st
 
 The kernel looks for the library in `kernel/<platform>/` in the extension's folder (`macos-aarch64`, `linux-x86_64`, `windows-x86_64`…), then, in a folder being worked on, in `target/release` and `target/debug`. It loads a copy named by its content, so a rebuilt library is loaded anew; one being worked on starts again when it is rebuilt. A loaded library stays in memory until the kernel stops: once disabled or replaced, it is not called again. A kernel module runs inside the kernel with its rights; enable only those you trust.
 
+## Packages and indexes
+
+`zerolux ext build` builds an extension's kernel module, a Cargo package, for this computer and puts it in `kernel/<platform>/`. `zerolux ext key <publisher>` makes a publisher's Ed25519 key, kept in `~/.zerolux/keys/<publisher>.json` and readable only by its user; it prints the public key. `zerolux ext pack --key <file>` packs the extension into a signed `<id>-<version>.zlx` and prints its SHA-256. A package is a gzipped tar of the extension's files, without what tools make and download, with `files.json` (each file's path, size and SHA-256) and `SIGNATURE` (the publisher's signature of `files.json`).
+
+An index is a JSON file on HTTPS that anyone may host:
+
+```json
+{
+  "name": "Acme",
+  "publishers": { "acme": { "key": "<public key, base64>" } },
+  "extensions": [
+    {
+      "id": "acme.notes",
+      "name": "Notes",
+      "description": "Notes kept where you choose",
+      "publisher": "acme",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "kernel": ">=0.0.1",
+          "packages": {
+            "macos-aarch64": {
+              "url": "acme.notes-1.0.0-macos-aarch64.zlx",
+              "sha256": "…"
+            },
+            "any": {
+              "url": "https://example.com/acme.notes-1.0.0.zlx",
+              "sha256": "…"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+A package is listed for each computer (`macos-aarch64`, `linux-x86_64`, `windows-x86_64`…) or for `any`; its URL is absolute or relative to the index. A kernel reads ZeroLux's own index, or those `ZEROLUX_EXTENSION_INDEXES` names, separated by commas. It offers each extension's newest version that works with it and has a package for its computer. Installing downloads the package, checks it against the index's SHA-256 and its publisher's key in that index, unpacks it in `extensions/packages/<id>/` in the data folder and enables it; an older version's files go.
+
 ## Lifecycle
 
 The workspace owner installs, enables, disables, configures and removes extensions. ZeroLux brings official extensions, such as [voice](voice.md): a release carries them, and a kernel run from a checkout finds them in `extensions/`. An installed official extension runs as the kernel that starts it brings it. Installing from a folder on the kernel's computer marks it as being worked on: it starts again as its files change, and installing the same folder again reloads it. Disabling one clears its last error. Enabling starts its parts after its dependencies; a failure is kept as its error and it stays disabled. An extension cannot be disabled while an enabled one depends on it. Removing a disabled extension deletes its settings, secrets, stored values and folder. Enabled extensions start again with the kernel, dependencies first.
@@ -152,6 +191,8 @@ People and agents' sessions run actions. Clients hear `extensions.changed` and r
 | `GET /extensions/available`                | The official extensions ZeroLux brings, and whether each is installed |
 | `POST /extensions/available/{id}`          | Install an official extension, and enable it                          |
 | `POST /extensions/folder {folder}`         | Install, or install again, from a folder, and enable                  |
+| `GET /extensions/marketplace`              | What the indexes offer, with what is installed; unreadable indexes    |
+| `POST /extensions/marketplace/install`     | `{index, id, version?}`: install from an index, and enable            |
 | `POST /extensions/{id}/enable`, `/disable` | Enable or disable                                                     |
 | `PATCH /extensions/{id}/settings`          | Change settings and secrets; `null` removes one                       |
 | `DELETE /extensions/{id}`                  | Remove a disabled extension and its data                              |
