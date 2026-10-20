@@ -81,7 +81,7 @@ import {
   percent,
   tokenCount,
   useSessionSettings,
-  useSessionTasks,
+  useBackgroundCommands,
   useVoice,
 } from "@zerolux/chat";
 import type {
@@ -144,7 +144,7 @@ import { SubagentList, SubagentPanel } from "./SessionSubagents";
 
 import { AskOnTheSide, InputActions } from "./SessionFork";
 import { SessionSchedules } from "./SessionSchedules";
-import { TasksPanel } from "./SessionTasks";
+import { BackgroundPanel } from "./SessionBackground";
 import { SessionTriggers } from "./SessionTriggers";
 import { ContinueInTerminal } from "./ContinueInTerminal";
 import { GoalCard } from "./SessionGoal";
@@ -603,9 +603,10 @@ export function SessionView({
     : undefined;
   const chatTitle = (id: string | null) =>
     chat.conversations.find((c) => c.id === id)?.title;
-  const tasks = useSessionTasks(session.id);
+  const background = useBackgroundCommands(session.id);
   const running =
-    tasks.tasks?.filter((task) => task.status === "running").length ?? 0;
+    background.commands?.filter((command) => command.status === "running")
+      .length ?? 0;
   const code =
     access.read &&
     (pane === "changes" ? (
@@ -738,9 +739,9 @@ export function SessionView({
           )}
         </div>
       </Pane>
-    ) : pane === "tasks" ? (
-      <TasksPanel
-        tasks={tasks}
+    ) : pane === "background" ? (
+      <BackgroundPanel
+        background={background}
         write={access.write}
         busy={busy}
         perform={perform}
@@ -953,13 +954,13 @@ export function SessionView({
                 <Button
                   variant="outline"
                   size="sm"
-                  aria-pressed={pane === "tasks"}
-                  title="Tasks"
-                  onClick={() => toggle("tasks")}
+                  aria-pressed={pane === "background"}
+                  title="Background"
+                  onClick={() => toggle("background")}
                   className="aria-pressed:bg-accent"
                 >
                   <ActivityIcon data-icon="inline-start" />
-                  <span className="@max-5xl:sr-only">Tasks</span>
+                  <span className="@max-5xl:sr-only">Background</span>
                   {running > 0 && (
                     <span className="font-mono text-[11px] text-agent-foreground">
                       {running}
@@ -1226,8 +1227,8 @@ export function SessionView({
             <SheetTitle className="sr-only">
               {pane === "about"
                 ? "About"
-                : pane === "tasks"
-                  ? "Tasks"
+                : pane === "background"
+                  ? "Background"
                   : pane === "terminal"
                     ? "Terminal"
                     : pane === "files"

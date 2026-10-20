@@ -59,7 +59,7 @@ export type CodePane =
   | "terminal"
   | "subagent"
   | "about"
-  | "tasks";
+  | "background";
 
 type Git = ReturnType<typeof useSessionGit>;
 

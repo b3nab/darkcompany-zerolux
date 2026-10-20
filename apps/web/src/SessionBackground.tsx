@@ -1,31 +1,34 @@
 import { useEffect, useRef, useState } from "react";
 import { PlusIcon } from "lucide-react";
 import {
+  backgroundState,
   plainOutput,
-  taskState,
-  useSessionTasks,
-  useTaskOutput,
+  useBackgroundCommands,
+  useBackgroundOutput,
 } from "@zerolux/chat";
-import type { Perform, Task } from "@zerolux/chat";
+import type { BackgroundCommand, Perform } from "@zerolux/chat";
 import { Pane } from "./SessionCode";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-/** How a task stands; while it runs, its time counted live. */
-function State({ task }: { task: Task }) {
-  const running = task.status === "running";
+/** How a background command stands; while it runs, its time counted live. */
+function State({ command }: { command: BackgroundCommand }) {
+  const running = command.status === "running";
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     if (!running) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [running]);
-  return <>{taskState(task, now)}</>;
+  return <>{backgroundState(command, now)}</>;
 }
 
-/** A task's output, following its end while it runs unless scrolled up. */
-function TaskOutput({ task }: { task: Task }) {
-  const { text, error } = useTaskOutput(task.id, task.status === "running");
+/** A background command's output, following its end while it runs unless scrolled up. */
+function Output({ command }: { command: BackgroundCommand }) {
+  const { text, error } = useBackgroundOutput(
+    command.id,
+    command.status === "running",
+  );
   const view = useRef<HTMLPreElement>(null);
   const following = useRef(true);
   useEffect(() => {
@@ -50,99 +53,101 @@ function TaskOutput({ task }: { task: Task }) {
 }
 
 /** Commands the session runs in the background: started, followed and stopped here. */
-export function TasksPanel({
-  tasks: { tasks, error, start, stop },
+export function BackgroundPanel({
+  background: { commands, error, run, stop },
   write,
   busy,
   perform,
   close,
 }: {
-  tasks: ReturnType<typeof useSessionTasks>;
+  background: ReturnType<typeof useBackgroundCommands>;
   write: boolean;
   busy: boolean;
   perform: Perform;
   close: () => void;
 }) {
   // The command being written; undefined while there is no form.
-  const [command, setCommand] = useState<string>();
+  const [draft, setDraft] = useState<string>();
   const [open, setOpen] = useState<string>();
   return (
     <Pane
-      title="Tasks"
+      title="Background"
       close={close}
       actions={
         write &&
-        command === undefined && (
-          <Button size="sm" variant="outline" onClick={() => setCommand("")}>
+        draft === undefined && (
+          <Button size="sm" variant="outline" onClick={() => setDraft("")}>
             <PlusIcon data-icon="inline-start" />
-            New task
+            Run in background
           </Button>
         )
       }
     >
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
-        {command !== undefined && (
+        {draft !== undefined && (
           <form
             className="flex gap-2"
             onSubmit={(event) => {
               event.preventDefault();
               void perform(async () => {
-                setOpen((await start(command.trim())).id);
-              }).then((done) => done && setCommand(undefined));
+                setOpen((await run(draft.trim())).id);
+              }).then((done) => done && setDraft(undefined));
             }}
           >
             <Input
               aria-label="Command"
               placeholder="bun test"
-              value={command}
-              onChange={(event) => setCommand(event.target.value)}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
               autoFocus
               className="h-7 min-w-0 flex-1 font-mono text-[12.5px]"
             />
-            <Button type="submit" size="sm" disabled={busy || !command.trim()}>
+            <Button type="submit" size="sm" disabled={busy || !draft.trim()}>
               Start
             </Button>
             <Button
               type="button"
               size="sm"
               variant="outline"
-              onClick={() => setCommand(undefined)}
+              onClick={() => setDraft(undefined)}
             >
               Cancel
             </Button>
           </form>
         )}
         {error && <p className="text-xs text-attention">{error}</p>}
-        {tasks?.length === 0 && command === undefined && (
-          <p className="text-sm text-muted-foreground">No tasks.</p>
+        {commands?.length === 0 && draft === undefined && (
+          <p className="text-sm text-muted-foreground">
+            No background commands.
+          </p>
         )}
-        {!!tasks?.length && (
+        {!!commands?.length && (
           <ul className="flex flex-col divide-y">
-            {tasks.map((task) => (
-              <li key={task.id} className="flex flex-col gap-2 py-2">
+            {commands.map((command) => (
+              <li key={command.id} className="flex flex-col gap-2 py-2">
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    aria-expanded={open === task.id}
-                    title={task.command}
+                    aria-expanded={open === command.id}
+                    title={command.command}
                     onClick={() =>
-                      setOpen(open === task.id ? undefined : task.id)
+                      setOpen(open === command.id ? undefined : command.id)
                     }
                     className="min-w-0 flex-1 truncate text-left font-mono text-[12.5px]"
                   >
-                    {task.command}
+                    {command.command}
                   </button>
                   <span className="shrink-0 font-mono text-[11px] text-faint">
-                    <State task={task} />
+                    <State command={command} />
                   </span>
-                  {write && task.status === "running" && (
+                  {write && command.status === "running" && (
                     <Button
                       size="xs"
                       variant="outline"
                       disabled={busy}
                       onClick={() =>
                         void perform(async () => {
-                          await stop(task.id);
+                          await stop(command.id);
                         })
                       }
                     >
@@ -150,10 +155,10 @@ export function TasksPanel({
                     </Button>
                   )}
                 </div>
-                {task.error && (
-                  <p className="text-xs text-attention">{task.error}</p>
+                {command.error && (
+                  <p className="text-xs text-attention">{command.error}</p>
                 )}
-                {open === task.id && <TaskOutput task={task} />}
+                {open === command.id && <Output command={command} />}
               </li>
             ))}
           </ul>
