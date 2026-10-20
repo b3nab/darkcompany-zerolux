@@ -1,0 +1,16 @@
+[extension]
+id = "zerolux.clickup"
+name = "ClickUp"
+version = "0.1.0"
+publisher = "zerolux"
+description = "Projects kept in ClickUp: each project a ClickUp list, its tasks the list's tasks"
+kernel = ">=0.0.1"
+
+[dependencies]
+"zerolux.projects" = ">=0.1"
+
+[process]
+command = ["bun", "run", "main.ts"]
+
+[settings]
+token = { type = "secret", label = "API token", description = "Your personal token, from ClickUp's settings, under Apps" }

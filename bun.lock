@@ -166,8 +166,29 @@
         "@earendil-works/pi-coding-agent": "*",
       },
     },
+    "marketplace/clickup": {
+      "name": "@zerolux/extension-clickup",
+      "devDependencies": {
+        "@types/bun": "^1.3.0",
+        "typescript": "^5.9.0",
+      },
+    },
     "marketplace/drive": {
       "name": "@zerolux/extension-drive",
+      "devDependencies": {
+        "@types/bun": "^1.3.0",
+        "typescript": "^5.9.0",
+      },
+    },
+    "marketplace/linear": {
+      "name": "@zerolux/extension-linear",
+      "devDependencies": {
+        "@types/bun": "^1.3.0",
+        "typescript": "^5.9.0",
+      },
+    },
+    "marketplace/plane": {
+      "name": "@zerolux/extension-plane",
       "devDependencies": {
         "@types/bun": "^1.3.0",
         "typescript": "^5.9.0",
@@ -1141,7 +1162,13 @@
 
     "@zerolux/desktop": ["@zerolux/desktop@workspace:apps/desktop"],
 
+    "@zerolux/extension-clickup": ["@zerolux/extension-clickup@workspace:marketplace/clickup"],
+
     "@zerolux/extension-drive": ["@zerolux/extension-drive@workspace:marketplace/drive"],
+
+    "@zerolux/extension-linear": ["@zerolux/extension-linear@workspace:marketplace/linear"],
+
+    "@zerolux/extension-plane": ["@zerolux/extension-plane@workspace:marketplace/plane"],
 
     "@zerolux/extension-s3": ["@zerolux/extension-s3@workspace:marketplace/s3"],
 

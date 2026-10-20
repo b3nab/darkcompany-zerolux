@@ -1,0 +1,12 @@
+{
+  "name": "@zerolux/extension-clickup",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "bun x --bun tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.0",
+    "typescript": "^5.9.0"
+  }
+}
