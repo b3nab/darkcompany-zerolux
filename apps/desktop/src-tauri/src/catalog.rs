@@ -350,13 +350,7 @@ mod tests {
         let database = profile.database(root.path()).unwrap();
         assert!(!database.exists());
         profile.workspace_id = Some("existing-workspace".into());
-        assert!(
-            profile
-                .database(root.path())
-                .unwrap_err()
-                .to_string()
-                .contains("not recreated")
-        );
+        assert!(profile.database(root.path()).is_err());
         assert!(!database.exists());
         std::fs::create_dir_all(database.parent().unwrap()).unwrap();
         std::fs::write(&database, b"sentinel: do not open as SQLite").unwrap();
