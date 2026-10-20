@@ -61,6 +61,8 @@ export interface ComposerVoice {
   seconds: number;
   /** Dictate is offered: the workspace transcribes. */
   dictation: boolean;
+  /** How loud the microphone hears now, from 0 to 1. */
+  level(): number;
   /** Dictate or Record pressed, and released: a tap records on, a hold until released. */
   press(use: VoiceUse): void;
   release(): void;
@@ -291,8 +293,7 @@ export function Composer({
             <Recording
               use={voice.use!}
               seconds={voice.seconds}
-              sliding={sliding}
-              slide={slide}
+              level={voice.level}
             />
           ) : busy ? (
             <View className="min-h-12 flex-row items-center gap-2.5 px-3.5 pt-3 pb-1">
@@ -315,7 +316,9 @@ export function Composer({
           )}
           <View className="min-h-12 flex-row items-center gap-0.5 px-1.5 pt-0.5 pb-1.5">
             {recording ? (
-              sliding ? null : (
+              sliding ? (
+                <SlideHint slide={slide} />
+              ) : (
                 tool(XIcon, "Discard", bin)
               )
             ) : (
@@ -484,26 +487,73 @@ function HoldButton({
   );
 }
 
+/** How many of the microphone's last levels the wave shows, newest on the right. */
+const BARS = 34;
+
 /**
- * In the words' place while the microphone records: what for, and for how long. While a
- * finger holds it, how to drop it, fading as the finger slides.
+ * In the words' place while the microphone records: what for, for how long, and the wave of
+ * what it hears, moving left as it records and flat in silence.
  */
 function Recording({
   use,
   seconds,
-  sliding,
-  slide,
+  level,
 }: {
   use: VoiceUse;
   seconds: number;
-  sliding: boolean;
-  slide: SharedValue<number>;
+  level: () => number;
 }) {
-  const [faint] = useCSSVariable(["--color-faint"]).map(String);
   const lit = useSharedValue(1);
-  const nudge = useSharedValue(0);
   useEffect(() => {
     lit.value = withRepeat(withTiming(0.3, { duration: 700 }), -1, true);
+  }, [lit]);
+  const dot = useAnimatedStyle(() => ({ opacity: lit.value }));
+  // Read here, so only the wave is drawn again as it moves.
+  const hear = useRef(level);
+  hear.current = level;
+  const [levels, setLevels] = useState(() => Array<number>(BARS).fill(0));
+  useEffect(() => {
+    const heard = setInterval(
+      () => setLevels((now) => [...now.slice(1), hear.current()]),
+      80,
+    );
+    return () => clearInterval(heard);
+  }, []);
+  return (
+    <View className="min-h-12 flex-row items-center gap-2.5 px-3.5 pt-3 pb-1">
+      <Animated.View
+        style={dot}
+        className="size-2.5 rounded-full bg-destructive"
+      />
+      <Text className="font-mono text-sm font-medium">
+        {use === "dictation" ? "Listening" : "Recording"}
+        <Text className="font-mono text-sm text-faint">
+          {" "}
+          · {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
+        </Text>
+      </Text>
+      <View
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        className="h-6 flex-1 flex-row items-center justify-end gap-0.5 overflow-hidden"
+      >
+        {levels.map((heard, i) => (
+          <View
+            key={i}
+            className="w-[3px] rounded-full bg-foreground/70"
+            style={{ height: 3 + heard * 21 }}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+/** Where Discard was, while a finger holds the recording: how to drop it, fading as it slides. */
+function SlideHint({ slide }: { slide: SharedValue<number> }) {
+  const [faint] = useCSSVariable(["--color-faint"]).map(String);
+  const nudge = useSharedValue(0);
+  useEffect(() => {
     nudge.value = withRepeat(
       withSequence(
         withTiming(-4, { duration: 450 }),
@@ -511,8 +561,7 @@ function Recording({
       ),
       -1,
     );
-  }, [lit, nudge]);
-  const dot = useAnimatedStyle(() => ({ opacity: lit.value }));
+  }, [nudge]);
   const hint = useAnimatedStyle(() => ({
     opacity: interpolate(
       slide.value,
@@ -525,36 +574,17 @@ function Recording({
   const chevron = useAnimatedStyle(() => ({
     transform: [{ translateX: nudge.value }],
   }));
-  const time = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
   return (
-    <View className="min-h-12 flex-row items-center gap-2.5 px-3.5 pt-3 pb-1">
-      <Animated.View
-        style={dot}
-        className="size-2.5 rounded-full bg-destructive"
-      />
-      <Text className="font-mono text-sm font-medium">
-        {sliding ? (
-          time
-        ) : (
-          <>
-            {use === "dictation" ? "Listening" : "Recording"}
-            <Text className="font-mono text-sm text-faint"> · {time}</Text>
-          </>
-        )}
-      </Text>
-      {sliding ? (
-        <Animated.View
-          entering={FadeIn.duration(160)}
-          style={hint}
-          className="flex-1 flex-row items-center justify-center gap-1"
-        >
-          <Animated.View style={chevron}>
-            <ChevronLeftIcon color={faint} size={16} strokeWidth={2} />
-          </Animated.View>
-          <Text className="text-sm text-muted-foreground">Slide to cancel</Text>
-        </Animated.View>
-      ) : null}
-    </View>
+    <Animated.View
+      entering={FadeIn.duration(160)}
+      style={hint}
+      className="h-10 flex-row items-center gap-1 pl-2"
+    >
+      <Animated.View style={chevron}>
+        <ChevronLeftIcon color={faint} size={16} strokeWidth={2} />
+      </Animated.View>
+      <Text className="text-sm text-muted-foreground">Slide to cancel</Text>
+    </Animated.View>
   );
 }
 

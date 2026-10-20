@@ -748,6 +748,7 @@ export default function ChatScreen() {
             use: voice.use,
             transcribing: voice.transcribing,
             seconds: recorder.seconds,
+            level: recorder.level,
             dictation: transcription,
             press: voice.press,
             release: voice.release,

@@ -10,7 +10,7 @@ import {
 } from "expo-audio";
 import type { AudioPlayer } from "expo-audio";
 import { File as Saved, Paths } from "expo-file-system";
-import { errorMessage, readAloud } from "@zerolux/chat";
+import { audioLevel, errorMessage, readAloud } from "@zerolux/chat";
 import type { Recorder } from "@zerolux/chat";
 
 /** A file on this phone as the `File` the kernel's storage takes. */
@@ -19,13 +19,21 @@ export async function asFile(uri: string, name: string, type?: string) {
   return new File([blob], name, { type: type ?? blob.type });
 }
 
+// The recording also tells how loud the microphone hears.
+const RECORDING = { ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true };
+
 /** Records from the microphone: one recording at a time, kept until stopped or dropped. */
-export function useRecorder(): Recorder & { seconds: number } {
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+export function useRecorder(): Recorder & {
+  seconds: number;
+  /** How loud it hears now, from 0 to 1; read as often as it is drawn. */
+  level(): number;
+} {
+  const recorder = useAudioRecorder(RECORDING);
   const state = useAudioRecorderState(recorder, 250);
   const release = () => setAudioModeAsync({ allowsRecording: false });
   return {
     seconds: Math.floor(state.durationMillis / 1000),
+    level: () => audioLevel(recorder.getStatus().metering ?? -160),
     async start() {
       if (!(await requestRecordingPermissionsAsync()).granted)
         throw new Error("allow it for ZeroLux in Settings");

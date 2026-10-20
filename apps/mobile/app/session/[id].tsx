@@ -844,6 +844,7 @@ function Composer({
           use: voice.use,
           transcribing: voice.transcribing,
           seconds: recorder.seconds,
+          level: recorder.level,
           dictation: transcription && open,
           press: voice.press,
           release: voice.release,
