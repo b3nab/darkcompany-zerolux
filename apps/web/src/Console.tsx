@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { Link, NavLink, useNavigate, useSearchParams } from "react-router";
 import { cn } from "cn";
 import {
+  ActivityIcon,
   ArchiveIcon,
   ArchiveRestoreIcon,
   ChevronLeftIcon,
@@ -80,6 +81,7 @@ import {
   percent,
   tokenCount,
   useSessionSettings,
+  useSessionTasks,
   useVoice,
 } from "@zerolux/chat";
 import type {
@@ -101,7 +103,7 @@ import type {
 } from "@zerolux/chat";
 import type { Actor } from "./api";
 import { sessionTone } from "./presence";
-import { Presence } from "@/components/presence";
+import { Eyebrow, Presence } from "@/components/presence";
 import { SessionMark } from "@/components/profile";
 import {
   InputBubble,
@@ -137,12 +139,12 @@ import { SessionCard, StartSession, resumable, takeable } from "./Team";
 import { ApprovalCard, ApprovalReceipt } from "./Approvals";
 import { sendsOnEnter } from "./ChatView";
 import { useMe } from "./AuthGate";
-import { ChangesPanel, FilesPanel, TerminalPanel } from "./SessionCode";
+import { ChangesPanel, FilesPanel, Pane, TerminalPanel } from "./SessionCode";
 import { SubagentList, SubagentPanel } from "./SessionSubagents";
 
 import { AskOnTheSide, InputActions } from "./SessionFork";
 import { SessionSchedules } from "./SessionSchedules";
-import { SessionTasks } from "./SessionTasks";
+import { TasksPanel } from "./SessionTasks";
 import { SessionTriggers } from "./SessionTriggers";
 import { ContinueInTerminal } from "./ContinueInTerminal";
 import { GoalCard } from "./SessionGoal";
@@ -533,7 +535,6 @@ export function SessionView({
   const speaker = voice.voices?.some((v) => v.actor_id === session.actor_id)
     ? session.actor_id
     : undefined;
-  const [about, setAbout] = useState(false);
   // The new title while renaming.
   const [title, setTitle] = useState<string>();
   async function rename(event: React.FormEvent) {
@@ -602,6 +603,9 @@ export function SessionView({
     : undefined;
   const chatTitle = (id: string | null) =>
     chat.conversations.find((c) => c.id === id)?.title;
+  const tasks = useSessionTasks(session.id);
+  const running =
+    tasks.tasks?.filter((task) => task.status === "running").length ?? 0;
   const code =
     access.read &&
     (pane === "changes" ? (
@@ -632,6 +636,114 @@ export function SessionView({
         subagent={subagent}
         grown={chat.outputs[session.id]?.end}
         chatTitle={chatTitle}
+        close={() => setPane(undefined)}
+      />
+    ) : pane === "about" ? (
+      <Pane title="About" close={() => setPane(undefined)}>
+        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-3">
+          <section aria-label="Session" className="flex flex-col gap-3">
+            <Eyebrow>Session</Eyebrow>
+            <SessionCard
+              session={session}
+              name={name}
+              facts
+              usage={usage}
+              computer={
+                computer &&
+                `${computer.name} · ${computer.online ? "online" : "offline"}`
+              }
+              delegatedBy={
+                parent && (
+                  <Link
+                    to={`/console/${parent.id}`}
+                    className="underline-offset-4 hover:underline"
+                  >
+                    {sessionName(parent, actors)}
+                  </Link>
+                )
+              }
+              // Codex reports no cost: a budget there would never be reached.
+              budget={
+                access.mine && session.harness !== "codex"
+                  ? (usd) =>
+                      perform(() =>
+                        chat.updateSession(session.id, { budget_usd: usd }),
+                      )
+                  : undefined
+              }
+              busy={busy}
+              stop={
+                access.write
+                  ? () => perform(() => chat.stop(session.id))
+                  : undefined
+              }
+              resume={
+                access.write && resumable(session)
+                  ? () => perform(() => chat.resume(session.id))
+                  : undefined
+              }
+              takeover={
+                access.mine && takeable(session)
+                  ? () => perform(() => chat.takeoverPi(session.id))
+                  : undefined
+              }
+            />
+            {subagents.length > 0 && (
+              <SubagentList subagents={subagents} open={openSubagent} />
+            )}
+            {delegates.length > 0 && (
+              <DelegatedSessions sessions={delegates} actors={actors} />
+            )}
+          </section>
+          {access.mine && (
+            <section aria-label="Sharing" className="flex flex-col gap-3">
+              <Eyebrow>Sharing</Eyebrow>
+              <ShareChoice
+                session={session}
+                busy={busy}
+                share={(shared) =>
+                  perform(() => chat.updateSession(session.id, { shared }))
+                }
+              />
+            </section>
+          )}
+          {(access.write || session.harness === "codex") && (
+            <section aria-label="Automations" className="flex flex-col gap-3">
+              <Eyebrow>Automations</Eyebrow>
+              {session.harness === "codex" && (
+                <GoalCard
+                  session={session}
+                  read={chat.live}
+                  write={access.write}
+                  busy={busy}
+                  perform={perform}
+                />
+              )}
+              {access.write && (
+                <SessionSchedules
+                  session={session}
+                  busy={busy}
+                  perform={perform}
+                />
+              )}
+              {access.write && (
+                <SessionTriggers
+                  session={session}
+                  revision={at}
+                  busy={busy}
+                  perform={perform}
+                />
+              )}
+            </section>
+          )}
+        </div>
+      </Pane>
+    ) : pane === "tasks" ? (
+      <TasksPanel
+        tasks={tasks}
+        write={access.write}
+        busy={busy}
+        perform={perform}
         close={() => setPane(undefined)}
       />
     ) : pane === "terminal" && access.write ? (
@@ -838,17 +950,34 @@ export function SessionView({
                     <span className="@max-5xl:sr-only">Terminal</span>
                   </Button>
                 )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-pressed={pane === "tasks"}
+                  title="Tasks"
+                  onClick={() => toggle("tasks")}
+                  className="aria-pressed:bg-accent"
+                >
+                  <ActivityIcon data-icon="inline-start" />
+                  <span className="@max-5xl:sr-only">Tasks</span>
+                  {running > 0 && (
+                    <span className="font-mono text-[11px] text-agent-foreground">
+                      {running}
+                    </span>
+                  )}
+                </Button>
               </>
             )}
             <Button
               variant="outline"
               size="sm"
-              aria-expanded={about}
-              title="About this session"
-              onClick={() => setAbout(!about)}
+              aria-pressed={pane === "about"}
+              title="About"
+              onClick={() => toggle("about")}
+              className="aria-pressed:bg-accent"
             >
               <InfoIcon data-icon="inline-start" />
-              <span className="@max-5xl:sr-only">About this session</span>
+              <span className="@max-5xl:sr-only">About</span>
             </Button>
             {access.mine && (
               <DropdownMenu>
@@ -924,100 +1053,6 @@ export function SessionView({
             }}
           >
             <div className="mx-auto flex max-w-3xl flex-col gap-3">
-              {about && (
-                <SessionCard
-                  session={session}
-                  name={name}
-                  facts
-                  usage={usage}
-                  computer={
-                    computer &&
-                    `${computer.name} · ${computer.online ? "online" : "offline"}`
-                  }
-                  delegatedBy={
-                    parent && (
-                      <Link
-                        to={`/console/${parent.id}`}
-                        className="underline-offset-4 hover:underline"
-                      >
-                        {sessionName(parent, actors)}
-                      </Link>
-                    )
-                  }
-                  // Codex reports no cost: a budget there would never be reached.
-                  budget={
-                    access.mine && session.harness !== "codex"
-                      ? (usd) =>
-                          perform(() =>
-                            chat.updateSession(session.id, { budget_usd: usd }),
-                          )
-                      : undefined
-                  }
-                  busy={busy}
-                  stop={
-                    access.write
-                      ? () => perform(() => chat.stop(session.id))
-                      : undefined
-                  }
-                  resume={
-                    access.write && resumable(session)
-                      ? () => perform(() => chat.resume(session.id))
-                      : undefined
-                  }
-                  takeover={
-                    access.mine && takeable(session)
-                      ? () => perform(() => chat.takeoverPi(session.id))
-                      : undefined
-                  }
-                />
-              )}
-              {about && access.mine && (
-                <ShareChoice
-                  session={session}
-                  busy={busy}
-                  share={(shared) =>
-                    perform(() => chat.updateSession(session.id, { shared }))
-                  }
-                />
-              )}
-              {about && subagents.length > 0 && (
-                <SubagentList subagents={subagents} open={openSubagent} />
-              )}
-              {about && delegates.length > 0 && (
-                <DelegatedSessions sessions={delegates} actors={actors} />
-              )}
-              {about && session.harness === "codex" && (
-                <GoalCard
-                  session={session}
-                  read={chat.live}
-                  write={access.write}
-                  busy={busy}
-                  perform={perform}
-                />
-              )}
-              {about && (
-                <SessionTasks
-                  session={session}
-                  write={access.write}
-                  busy={busy}
-                  perform={perform}
-                />
-              )}
-              {about && access.write && (
-                <SessionSchedules
-                  session={session}
-                  busy={busy}
-                  perform={perform}
-                />
-              )}
-              {about && access.write && (
-                <SessionTriggers
-                  session={session}
-                  revision={at}
-                  busy={busy}
-                  perform={perform}
-                />
-              )}
               {more && (
                 <Button
                   variant="outline"
@@ -1189,11 +1224,15 @@ export function SessionView({
             className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl"
           >
             <SheetTitle className="sr-only">
-              {pane === "terminal"
-                ? "Terminal"
-                : pane === "files"
-                  ? "Files"
-                  : "Changes"}
+              {pane === "about"
+                ? "About"
+                : pane === "tasks"
+                  ? "Tasks"
+                  : pane === "terminal"
+                    ? "Terminal"
+                    : pane === "files"
+                      ? "Files"
+                      : "Changes"}
             </SheetTitle>
             {code}
           </SheetContent>
@@ -1290,20 +1329,14 @@ function ShareChoice({
 }) {
   const choice = shareChoice(session.shared);
   return (
-    <section
-      aria-label="Share"
-      className="flex flex-wrap items-center gap-3 rounded-lg border p-3"
-    >
-      <h3 className="text-sm font-medium">Share</h3>
-      <Segmented<ShareChoiceValue>
-        label="Shared with the workspace"
-        value={choice}
-        choose={(next) => {
-          if (!busy && next !== choice) void share(sharedAs(next));
-        }}
-        options={Object.entries(shareLabels) as [ShareChoiceValue, string][]}
-      />
-    </section>
+    <Segmented<ShareChoiceValue>
+      label="Shared with the workspace"
+      value={choice}
+      choose={(next) => {
+        if (!busy && next !== choice) void share(sharedAs(next));
+      }}
+      options={Object.entries(shareLabels) as [ShareChoiceValue, string][]}
+    />
   );
 }
 

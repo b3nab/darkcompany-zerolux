@@ -53,7 +53,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { useTheme } from "./theme";
 
 /** The panels of a session's code, opened by its owner beside its work. */
-export type CodePane = "changes" | "files" | "terminal" | "subagent";
+export type CodePane =
+  | "changes"
+  | "files"
+  | "terminal"
+  | "subagent"
+  | "about"
+  | "tasks";
 
 type Git = ReturnType<typeof useSessionGit>;
 

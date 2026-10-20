@@ -6,7 +6,8 @@ import {
   useSessionTasks,
   useTaskOutput,
 } from "@zerolux/chat";
-import type { ChatSession, Perform, Task } from "@zerolux/chat";
+import type { Perform, Task } from "@zerolux/chat";
+import { Pane } from "./SessionCode";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -49,113 +50,115 @@ function TaskOutput({ task }: { task: Task }) {
 }
 
 /** Commands the session runs in the background: started, followed and stopped here. */
-export function SessionTasks({
-  session,
+export function TasksPanel({
+  tasks: { tasks, error, start, stop },
   write,
   busy,
   perform,
+  close,
 }: {
-  session: ChatSession;
+  tasks: ReturnType<typeof useSessionTasks>;
   write: boolean;
   busy: boolean;
   perform: Perform;
+  close: () => void;
 }) {
-  const { tasks, error, start, stop } = useSessionTasks(session.id);
   // The command being written; undefined while there is no form.
   const [command, setCommand] = useState<string>();
   const [open, setOpen] = useState<string>();
-  if (!write && !tasks?.length) return null;
   return (
-    <section
-      aria-label="Tasks"
-      className="flex flex-col gap-3 rounded-lg border p-3"
-    >
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-medium">Tasks</h3>
-        {write && command === undefined && (
+    <Pane
+      title="Tasks"
+      close={close}
+      actions={
+        write &&
+        command === undefined && (
           <Button size="sm" variant="outline" onClick={() => setCommand("")}>
             <PlusIcon data-icon="inline-start" />
             New task
           </Button>
+        )
+      }
+    >
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+        {command !== undefined && (
+          <form
+            className="flex gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void perform(async () => {
+                setOpen((await start(command.trim())).id);
+              }).then((done) => done && setCommand(undefined));
+            }}
+          >
+            <Input
+              aria-label="Command"
+              placeholder="bun test"
+              value={command}
+              onChange={(event) => setCommand(event.target.value)}
+              autoFocus
+              className="h-7 min-w-0 flex-1 font-mono text-[12.5px]"
+            />
+            <Button type="submit" size="sm" disabled={busy || !command.trim()}>
+              Start
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setCommand(undefined)}
+            >
+              Cancel
+            </Button>
+          </form>
+        )}
+        {error && <p className="text-xs text-attention">{error}</p>}
+        {tasks?.length === 0 && command === undefined && (
+          <p className="text-sm text-muted-foreground">No tasks.</p>
+        )}
+        {!!tasks?.length && (
+          <ul className="flex flex-col divide-y">
+            {tasks.map((task) => (
+              <li key={task.id} className="flex flex-col gap-2 py-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    aria-expanded={open === task.id}
+                    title={task.command}
+                    onClick={() =>
+                      setOpen(open === task.id ? undefined : task.id)
+                    }
+                    className="min-w-0 flex-1 truncate text-left font-mono text-[12.5px]"
+                  >
+                    {task.command}
+                  </button>
+                  <span className="shrink-0 font-mono text-[11px] text-faint">
+                    <State task={task} />
+                  </span>
+                  {write && task.status === "running" && (
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() =>
+                        void perform(async () => {
+                          await stop(task.id);
+                        })
+                      }
+                    >
+                      Stop
+                    </Button>
+                  )}
+                </div>
+                {task.error && (
+                  <p className="text-xs text-attention">{task.error}</p>
+                )}
+                {open === task.id && <TaskOutput task={task} />}
+              </li>
+            ))}
+          </ul>
         )}
       </div>
-      {command !== undefined && (
-        <form
-          className="flex gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void perform(async () => {
-              setOpen((await start(command.trim())).id);
-            }).then((done) => done && setCommand(undefined));
-          }}
-        >
-          <Input
-            aria-label="Command"
-            placeholder="bun test"
-            value={command}
-            onChange={(event) => setCommand(event.target.value)}
-            autoFocus
-            className="h-7 min-w-0 flex-1 font-mono text-[12.5px]"
-          />
-          <Button type="submit" size="sm" disabled={busy || !command.trim()}>
-            Start
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => setCommand(undefined)}
-          >
-            Cancel
-          </Button>
-        </form>
-      )}
-      {error && <p className="text-xs text-attention">{error}</p>}
-      {tasks?.length === 0 && command === undefined && (
-        <p className="text-sm text-muted-foreground">No tasks.</p>
-      )}
-      {!!tasks?.length && (
-        <ul className="flex flex-col divide-y">
-          {tasks.map((task) => (
-            <li key={task.id} className="flex flex-col gap-2 py-2">
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  aria-expanded={open === task.id}
-                  title={task.command}
-                  onClick={() =>
-                    setOpen(open === task.id ? undefined : task.id)
-                  }
-                  className="min-w-0 flex-1 truncate text-left font-mono text-[12.5px]"
-                >
-                  {task.command}
-                </button>
-                <span className="shrink-0 font-mono text-[11px] text-faint">
-                  <State task={task} />
-                </span>
-                {write && task.status === "running" && (
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() =>
-                      void perform(async () => {
-                        await stop(task.id);
-                      })
-                    }
-                  >
-                    Stop
-                  </Button>
-                )}
-              </div>
-              {task.error && (
-                <p className="text-xs text-attention">{task.error}</p>
-              )}
-              {open === task.id && <TaskOutput task={task} />}
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+    </Pane>
   );
 }
