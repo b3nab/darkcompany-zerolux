@@ -37,6 +37,8 @@ pub struct HostRuntime {
     attachments: std::path::PathBuf,
     /// Where sessions started in a worktree of their own work.
     worktrees: std::path::PathBuf,
+    /// The background commands the kernel runs in this computer's session folders.
+    background: crate::background_processes::BackgroundProcesses,
     /// The pi and Claude Code runners of this computer's sessions.
     pi: crate::pi_runner::Registry,
     claude: crate::claude_runner::Registry,
@@ -86,6 +88,9 @@ impl HostRuntime {
             terminals: terminals(notices.clone()),
             attachments: links.with_file_name("attachments"),
             worktrees: links.with_file_name("worktrees"),
+            background: crate::background_processes::BackgroundProcesses::new(
+                links.with_file_name("background"),
+            ),
             url,
             codex,
             pending: Mutex::default(),
@@ -287,6 +292,8 @@ impl HostRuntime {
                     .close(params["id"].as_str().unwrap_or_default())?;
                 Ok(json!({"closed": true}))
             }
+            "background.start" | "background.ended" | "background.stop" | "background.output"
+            | "background.tail" => self.background.answer(op, &params),
             other => crate::host_ops::answer(other, params).await,
         }
     }

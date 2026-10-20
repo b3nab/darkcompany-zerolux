@@ -3,7 +3,7 @@ use sea_orm::entity::prelude::*;
 /// A command a session runs in the background, in its folder: the session goes on, and is
 /// told how it ended.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-#[sea_orm(table_name = "tasks")]
+#[sea_orm(table_name = "background_commands")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub id: String,
@@ -33,7 +33,7 @@ pub enum Relation {
         from = "Column::SessionId",
         to = "super::sessions::Column::Id",
         on_delete = "Cascade",
-        fk_name = "tasks_session_id_fkey"
+        fk_name = "background_commands_session_id_fkey"
     )]
     Session,
 }
@@ -50,7 +50,7 @@ impl super::schema::Definition for Entity {
         table.check(Expr::col(Column::Status).is_in(["running", "exited", "stopped", "lost"]));
         indexes.push(
             Index::create()
-                .name("tasks_by_session")
+                .name("background_commands_by_session")
                 .table(Entity)
                 .col(Column::SessionId)
                 .col(Column::StartedAt)

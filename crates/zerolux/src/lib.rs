@@ -3,6 +3,7 @@ pub mod agent_link;
 pub mod agent_settings;
 pub mod api;
 pub mod auth;
+pub mod background_processes;
 pub mod byoh;
 pub mod carry;
 pub mod chat;

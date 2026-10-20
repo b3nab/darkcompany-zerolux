@@ -66,7 +66,7 @@ CREATE TABLE `extension_values` (`extension_id` text NOT NULL, `kind` text NOT N
 CREATE TABLE `extension_calls` (`id` text NOT NULL, `extension_id` text NOT NULL, `action` text NOT NULL, `actor_id` text NULL, `session_id` text NULL, `by` text NULL, `at` integer NOT NULL, `duration_ms` integer NOT NULL, `ok` boolean NOT NULL, `error` text NULL, PRIMARY KEY (`id`));
 -- Create index "extension_calls_by_extension" to table: "extension_calls"
 CREATE INDEX `extension_calls_by_extension` ON `extension_calls` (`extension_id`, `at`);
--- Create "tasks" table
-CREATE TABLE `tasks` (`id` text NOT NULL, `session_id` text NOT NULL, `command` text NOT NULL, `folder` text NOT NULL, `status` text NOT NULL, `pid` integer NULL, `exit_code` integer NULL, `started_at` integer NOT NULL, `ended_at` integer NULL, `told_at` integer NULL, `error` text NULL, PRIMARY KEY (`id`), CONSTRAINT `0` FOREIGN KEY (`session_id`) REFERENCES `sessions` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE, CHECK ("status" IN ('running', 'exited', 'stopped', 'lost')));
--- Create index "tasks_by_session" to table: "tasks"
-CREATE INDEX `tasks_by_session` ON `tasks` (`session_id`, `started_at`);
+-- Create "background_commands" table
+CREATE TABLE `background_commands` (`id` text NOT NULL, `session_id` text NOT NULL, `command` text NOT NULL, `folder` text NOT NULL, `status` text NOT NULL, `pid` integer NULL, `exit_code` integer NULL, `started_at` integer NOT NULL, `ended_at` integer NULL, `told_at` integer NULL, `error` text NULL, PRIMARY KEY (`id`), CONSTRAINT `0` FOREIGN KEY (`session_id`) REFERENCES `sessions` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE, CHECK ("status" IN ('running', 'exited', 'stopped', 'lost')));
+-- Create index "background_commands_by_session" to table: "background_commands"
+CREATE INDEX `background_commands_by_session` ON `background_commands` (`session_id`, `started_at`);

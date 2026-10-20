@@ -233,9 +233,12 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
             "/sessions/{id}/triggers",
             get(session_triggers).post(create_trigger),
         )
-        .route("/sessions/{id}/tasks", get(session_tasks).post(start_task))
-        .route("/tasks/{task}", get(read_task))
-        .route("/tasks/{task}/stop", post(stop_task))
+        .route(
+            "/sessions/{id}/background-commands",
+            get(session_background).post(start_background),
+        )
+        .route("/background-commands/{command}", get(read_background))
+        .route("/background-commands/{command}/stop", post(stop_background))
         .route(
             "/triggers/{trigger}",
             axum::routing::patch(change_trigger).delete(delete_trigger),
@@ -1026,63 +1029,68 @@ async fn delete_schedule(
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct NewTask {
+struct NewBackgroundCommand {
     command: String,
 }
 
 /// Runs a command in the background, in the session's folder; the session is told how it ends.
-async fn start_task(
+async fn start_background(
     State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
-    ChatJson(input): ChatJson<NewTask>,
+    ChatJson(input): ChatJson<NewBackgroundCommand>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let task = runtime(&state)?
-        .start_task(&who, &id, &input.command)
+    let started = runtime(&state)?
+        .start_background(&who, &id, &input.command)
         .await
         .map_err(said)?;
-    Ok(Json(json!({ "task": task })))
+    Ok(Json(json!({ "background_command": started })))
 }
 
-async fn session_tasks(
+async fn session_background(
     State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let tasks = runtime(&state)?.tasks(&who, &id).await.map_err(said)?;
-    Ok(Json(json!({ "tasks": tasks })))
+    let commands = runtime(&state)?
+        .background_commands(&who, &id)
+        .await
+        .map_err(said)?;
+    Ok(Json(json!({ "background_commands": commands })))
 }
 
 #[derive(Deserialize)]
-struct TaskRead {
+struct OutputRead {
     #[serde(default)]
     after: u64,
 }
 
-/// A task, and its output from `after`.
-async fn read_task(
+/// A background command, and its output from `after`.
+async fn read_background(
     State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
-    Path(task): Path<String>,
-    Query(read): Query<TaskRead>,
+    Path(command): Path<String>,
+    Query(read): Query<OutputRead>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let (task, output) = runtime(&state)?
-        .task(&who, &task, read.after)
+    let (command, output) = runtime(&state)?
+        .background_command(&who, &command, read.after)
         .await
         .map_err(said)?;
-    Ok(Json(json!({ "task": task, "output": output })))
+    Ok(Json(
+        json!({ "background_command": command, "output": output }),
+    ))
 }
 
-async fn stop_task(
+async fn stop_background(
     State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
-    Path(task): Path<String>,
+    Path(command): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let task = runtime(&state)?
-        .stop_task(&who, &task)
+    let stopped = runtime(&state)?
+        .stop_background(&who, &command)
         .await
         .map_err(said)?;
-    Ok(Json(json!({ "task": task })))
+    Ok(Json(json!({ "background_command": stopped })))
 }
 
 async fn session_triggers(

@@ -1,6 +1,6 @@
-//! Tasks: a session runs a command in the background, reads its output while it runs, and the
-//! task ends on its own or is stopped. Its session's harness is not linked here, so telling
-//! it how the task ended is recorded as not delivered.
+//! Background commands: a session runs a command in the background, reads its output while it
+//! runs, and the command ends on its own or is stopped. Its session's harness is not linked
+//! here, so telling it how the command ended is recorded as not delivered.
 use std::{sync::Arc, time::Duration};
 
 use reqwest::{Client, Method, StatusCode};
@@ -90,7 +90,7 @@ async fn a_session_runs_commands_in_the_background_and_reads_how_they_end() {
     )
     .await
     .unwrap();
-    let watcher = tokio::spawn(zerolux::chat_runtime::tasks::watch(Arc::downgrade(
+    let watcher = tokio::spawn(zerolux::chat_runtime::background::watch(Arc::downgrade(
         &runtime,
     )));
     let app = api::router_with_runtime(store.clone(), dir.path().join("web"), runtime.clone());
@@ -109,25 +109,35 @@ async fn a_session_runs_commands_in_the_background_and_reads_how_they_end() {
         &client,
         &url,
         Method::POST,
-        &format!("/sessions/{session}/tasks"),
+        &format!("/sessions/{session}/background-commands"),
         Some(json!({ "command": command })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{started}");
-    let task = started["task"]["id"].as_str().unwrap().to_owned();
-    assert_eq!(started["task"]["status"], "running");
+    let first = started["background_command"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(started["background_command"]["status"], "running");
 
     let mut ended = Value::Null;
     for _ in 0..100 {
-        let (_, read) = call(&client, &url, Method::GET, &format!("/tasks/{task}"), None).await;
-        if read["task"]["status"] != "running" {
+        let (_, read) = call(
+            &client,
+            &url,
+            Method::GET,
+            &format!("/background-commands/{first}"),
+            None,
+        )
+        .await;
+        if read["background_command"]["status"] != "running" {
             ended = read;
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert_eq!(ended["task"]["status"], "exited", "{ended}");
-    assert_eq!(ended["task"]["exit_code"], 3);
+    assert_eq!(ended["background_command"]["status"], "exited", "{ended}");
+    assert_eq!(ended["background_command"]["exit_code"], 3);
     let text = ended["output"]["text"].as_str().unwrap();
     assert!(text.contains("one") && text.contains("two"), "{text}");
     if cfg!(unix) {
@@ -139,15 +149,22 @@ async fn a_session_runs_commands_in_the_background_and_reads_how_they_end() {
         &client,
         &url,
         Method::GET,
-        &format!("/tasks/{task}?after={next}"),
+        &format!("/background-commands/{first}?after={next}"),
         None,
     )
     .await;
     assert_eq!(after["output"]["text"], "");
     // Its harness is not linked here: telling it is recorded as not delivered.
     for _ in 0..50 {
-        let (_, read) = call(&client, &url, Method::GET, &format!("/tasks/{task}"), None).await;
-        if read["task"]["error"].is_string() {
+        let (_, read) = call(
+            &client,
+            &url,
+            Method::GET,
+            &format!("/background-commands/{first}"),
+            None,
+        )
+        .await;
+        if read["background_command"]["error"].is_string() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -156,14 +173,14 @@ async fn a_session_runs_commands_in_the_background_and_reads_how_they_end() {
         &client,
         &url,
         Method::GET,
-        &format!("/sessions/{session}/tasks"),
+        &format!("/sessions/{session}/background-commands"),
         None,
     )
     .await;
-    assert_eq!(listed["tasks"][0]["id"], task);
-    assert!(listed["tasks"][0]["error"].is_string());
+    assert_eq!(listed["background_commands"][0]["id"], first);
+    assert!(listed["background_commands"][0]["error"].is_string());
 
-    // A long task is stopped, with what it started.
+    // A long command is stopped, with what it started.
     let long = if cfg!(windows) {
         "ping -n 60 127.0.0.1"
     } else {
@@ -173,26 +190,29 @@ async fn a_session_runs_commands_in_the_background_and_reads_how_they_end() {
         &client,
         &url,
         Method::POST,
-        &format!("/sessions/{session}/tasks"),
+        &format!("/sessions/{session}/background-commands"),
         Some(json!({ "command": long })),
     )
     .await;
-    let long = started["task"]["id"].as_str().unwrap().to_owned();
+    let long = started["background_command"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let (status, stopped) = call(
         &client,
         &url,
         Method::POST,
-        &format!("/tasks/{long}/stop"),
+        &format!("/background-commands/{long}/stop"),
         None,
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{stopped}");
-    assert_eq!(stopped["task"]["status"], "stopped");
+    assert_eq!(stopped["background_command"]["status"], "stopped");
     let (status, _) = call(
         &client,
         &url,
         Method::POST,
-        &format!("/tasks/{long}/stop"),
+        &format!("/background-commands/{long}/stop"),
         None,
     )
     .await;
@@ -201,14 +221,14 @@ async fn a_session_runs_commands_in_the_background_and_reads_how_they_end() {
         &client,
         &url,
         Method::POST,
-        &format!("/sessions/{session}/tasks"),
+        &format!("/sessions/{session}/background-commands"),
         Some(json!({ "command": "  " })),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    // The session itself runs its tasks, with its own token.
+    // The session itself runs its background commands, with its own token.
     let own = client
-        .post(format!("{url}/api/sessions/{session}/tasks"))
+        .post(format!("{url}/api/sessions/{session}/background-commands"))
         .bearer_auth(&issued.token)
         .json(&json!({ "command": "echo mine" }))
         .send()

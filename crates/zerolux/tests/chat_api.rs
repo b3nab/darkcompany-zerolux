@@ -2227,6 +2227,110 @@ async fn a_computer_joins_as_a_host_and_answers_over_its_channel() {
         "{searched}"
     );
     assert_eq!(searched["results"][0]["kind"], "input");
+    // Its background commands run there, in its folder, and are read, watched and stopped
+    // from here.
+    let command = if cfg!(windows) {
+        "cd & echo done & exit 4"
+    } else {
+        "pwd; echo done; exit 4"
+    };
+    let started: Value = kernel
+        .post(
+            &format!("/sessions/{}/background-commands", issued.session.id),
+            None,
+            json!({ "command": command }),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    let command_id = started["background_command"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut ended = Value::Null;
+    for _ in 0..100 {
+        runtime.check_background().await.unwrap();
+        let read: Value = kernel
+            .get(&format!("/background-commands/{command_id}"), None)
+            .await
+            .json()
+            .await
+            .unwrap();
+        if read["background_command"]["status"] != "running" {
+            ended = read;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(ended["background_command"]["status"], "exited", "{ended}");
+    assert_eq!(ended["background_command"]["exit_code"], 4);
+    let text = ended["output"]["text"].as_str().unwrap();
+    assert!(
+        text.contains("done") && text.contains(work.file_name().unwrap().to_str().unwrap()),
+        "{text}"
+    );
+    // Its output is kept on that computer.
+    assert!(
+        host_dir
+            .join("links/background")
+            .join(format!("{command_id}.log"))
+            .exists()
+    );
+    let long = if cfg!(windows) {
+        "ping -n 30 127.0.0.1 > nul"
+    } else {
+        "sleep 30"
+    };
+    let started: Value = kernel
+        .post(
+            &format!("/sessions/{}/background-commands", issued.session.id),
+            None,
+            json!({ "command": long }),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    let command_id = started["background_command"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let stopped: Value = kernel
+        .post(
+            &format!("/background-commands/{command_id}/stop"),
+            None,
+            json!({}),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        stopped["background_command"]["status"], "stopped",
+        "{stopped}"
+    );
+    // Its process there ends.
+    use sea_orm::EntityTrait as _;
+    let pid = zerolux::entity::background_commands::Entity::find_by_id(command_id.as_str())
+        .one(kernel.store.db())
+        .await
+        .unwrap()
+        .unwrap()
+        .pid
+        .unwrap() as u32;
+    let mut alive = true;
+    for _ in 0..100 {
+        alive = zerolux::platform::alive(pid);
+        if !alive {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        !alive,
+        "the stopped command's process {pid} is still running"
+    );
     // Removed: its channel closes and its secret no longer connects.
     kernel
         .request(Method::DELETE, &format!("/hosts/{host}"), None)

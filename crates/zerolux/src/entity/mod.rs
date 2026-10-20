@@ -1,6 +1,7 @@
 //! Domain entities. Schema metadata belongs to the entities; release migrations
 //! are immutable artifacts, not a schema inferred from the live database at startup.
 
+pub mod background_commands;
 pub mod schema;
 
 pub mod actors;
@@ -16,7 +17,6 @@ pub mod invites;
 pub mod messages;
 pub mod schedules;
 pub mod sessions;
-pub mod tasks;
 pub mod tool_approvals;
 pub mod triggers;
 pub mod workspace;

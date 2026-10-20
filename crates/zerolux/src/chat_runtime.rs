@@ -292,10 +292,8 @@ pub struct ChatRuntime {
     pub remote_terminals: std::sync::Mutex<HashMap<String, (String, String)>>,
     /// The workspace's extensions.
     pub extensions: Arc<crate::extensions::Extensions>,
-    /// Where tasks keep their output and exit codes.
-    tasks_dir: PathBuf,
-    /// The processes of the tasks this kernel started.
-    task_children: std::sync::Mutex<HashMap<String, tokio::process::Child>>,
+    /// The processes of the background commands of this computer's sessions.
+    pub background_processes: crate::background_processes::BackgroundProcesses,
     /// What those computers tell, to publish to whoever may read it.
     pub host_notices: mpsc::UnboundedSender<(String, Value)>,
     host_notice_task: Mutex<Option<JoinHandle<()>>>,
@@ -418,8 +416,9 @@ impl ChatRuntime {
             hosts: Arc::default(),
             remote_terminals: Default::default(),
             extensions,
-            tasks_dir: links.with_file_name("tasks"),
-            task_children: Default::default(),
+            background_processes: crate::background_processes::BackgroundProcesses::new(
+                links.with_file_name("background"),
+            ),
             host_notices,
             host_notice_task: Mutex::new(Some(host_notice_task)),
         }))
@@ -1772,12 +1771,12 @@ impl ChatRuntime {
 
 mod control;
 pub(crate) use control::localize_images;
+pub mod background;
 mod fork;
 mod owned;
 mod remote;
 mod settings;
 mod subagents;
-pub mod tasks;
 pub use subagents::Subagent;
 pub(crate) use subagents::{events as subagent_events_of, list as subagents_of};
 
