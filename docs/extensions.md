@@ -35,7 +35,7 @@ Settings are `text`, `number`, `boolean`, `secret` or `choice`, with its `option
 
 When enabled, its process says what it brings:
 
-- **Actions**: named operations with a JSON Schema for their input and an effect (`read`, `write` or `destructive`). An action answers within a minute, or within the `seconds` it declares, up to 30 minutes. One action serves people, agents and the API. The kernel checks the input against the schema before the extension sees it, and records every call with who made it, how long it took and whether it succeeded.
+- **Actions**: named operations with a JSON Schema for their input and an effect (`read`, `write` or `destructive`). An action answers within a minute, or within the `seconds` it declares, up to 30 minutes. One action serves the clients and the API, where an agent's session runs it with its own token. The kernel checks the input against the schema before the extension sees it, and records every call with who made it, how long it took and whether it succeeded.
 - **Extension points**: contracts it opens, `publisher.extension/point@version`, with operations and their input schemas. Other extensions implement them under a name; the kernel routes a call to the implementation and checks its input against the contract.
 - **Events**: what it publishes, named under its ID (`acme.notes/saved`), and what it hears.
 - **Triggers**: an action to run on `event:<extension>/<event>` or on `schedule:<cron>`. A trigger's call is recorded as `trigger:…`.
