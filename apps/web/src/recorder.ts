@@ -32,6 +32,7 @@ export function useRecorder() {
     seconds:
       since === undefined ? 0 : Math.max(0, Math.floor((now - since) / 1000)),
     async start() {
+      if (!canRecord()) throw new Error("this page has no access to it");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
       const chunks: Blob[] = [];

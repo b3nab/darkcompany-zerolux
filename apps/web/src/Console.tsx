@@ -21,8 +21,6 @@ import {
   PinIcon,
   PinOffIcon,
   PlusIcon,
-  SendIcon,
-  SquareIcon,
   SquareTerminalIcon,
   UsersIcon,
   XIcon,
@@ -128,7 +126,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -150,6 +147,12 @@ import { ContinueInTerminal } from "./ContinueInTerminal";
 import { GoalCard } from "./SessionGoal";
 import type { Fork } from "./SessionFork";
 import type { CodePane } from "./SessionCode";
+import { Composer, ComposerChip } from "@/components/composer";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { SidePanel } from "@/components/side-panel";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { XL, useMedia } from "./media";
@@ -1173,6 +1176,7 @@ export function SessionView({
             compact={(instructions) => chat.compact(session.id, instructions)}
             interrupt={interrupt}
             usage={usage}
+            transcription={voice.available}
           >
             {plan?.some((step) => step.status !== "done") && (
               <PlanBar steps={plan} />
@@ -1402,6 +1406,7 @@ function SessionInput({
   compact,
   interrupt,
   usage,
+  transcription,
   children,
 }: {
   session: ChatSession;
@@ -1415,6 +1420,8 @@ function SessionInput({
   compact: (instructions: string) => Promise<void>;
   interrupt: () => void;
   usage: SessionUsage | null;
+  /** The workspace turns speech into text. */
+  transcription: boolean;
   /** What stays above the box while the session works, as its plan. */
   children?: ReactNode;
 }) {
@@ -1523,245 +1530,161 @@ function SessionInput({
     if (box.current) box.current.style.height = "auto";
   }
   return (
-    <form
-      className="flex flex-col gap-1.5 border-t px-3 pt-3 pb-2 md:px-5"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void submit();
+    <Composer
+      label={`Write to ${name}`}
+      placeholder={
+        !owner
+          ? "Read only"
+          : open
+            ? working
+              ? `Add to ${name}'s turn`
+              : `Write to ${name}, or / for commands`
+            : sessionState(session)
+      }
+      text={text}
+      setText={(next) => {
+        write(next);
+        setChosen(0);
+        setDismissed(false);
       }}
-      onDragOver={(event) => {
-        if (modes && open && event.dataTransfer.types.includes("Files"))
+      extra={picked.length > 0}
+      open={open}
+      busy={busy}
+      working={owner && working}
+      blocked={tooLong || !!imagesError}
+      box={box}
+      textarea={{
+        onSelect: (event) => setCursor(event.currentTarget.selectionStart),
+        onPaste: (event) => {
+          const pasted = [...event.clipboardData.files].filter((file) =>
+            file.type.startsWith("image/"),
+          );
+          if (!modes || !pasted.length) return;
           event.preventDefault();
-      }}
-      onDrop={(event) => {
-        if (!modes || !open) return;
-        event.preventDefault();
-        add(event.dataTransfer.files);
-      }}
-    >
-      {children}
-      {suggestions.length > 0 && (
-        <div
-          role="group"
-          aria-label={mention ? "Files" : "Commands"}
-          className="mx-auto max-h-64 w-full max-w-3xl overflow-y-auto rounded-md border bg-popover text-sm shadow-sm"
-        >
-          {suggestions.map((suggestion) => (
-            <button
-              key={suggestion.key}
-              type="button"
-              aria-current={suggestion === highlighted || undefined}
-              onClick={suggestion.take}
-              className="flex w-full items-baseline gap-3 px-3 py-2 text-left transition-colors outline-none hover:bg-accent focus-visible:bg-accent aria-[current]:bg-accent"
-            >
-              <span
-                className={cn(
-                  "font-mono text-[13px]",
-                  suggestion.description ? "shrink-0" : "truncate",
-                )}
-              >
-                {suggestion.label}
-              </span>
-              {suggestion.description && (
-                <span className="truncate text-muted-foreground">
-                  {suggestion.description}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
-      {picked.length > 0 && (
-        <ul
-          aria-label="Images to send"
-          className="mx-auto flex w-full max-w-3xl flex-wrap gap-2"
-        >
-          {picked.map(({ file, url }) => (
-            <li key={url} className="relative">
-              <img
-                src={url}
-                alt={file.name}
-                className="size-14 rounded-md border object-cover"
-              />
-              <button
-                type="button"
-                aria-label={`Remove ${file.name}`}
-                onClick={() => remove(url)}
-                className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full border bg-background text-muted-foreground transition-colors hover:text-foreground"
-              >
-                <XIcon className="size-3" />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
-        {modes && (
-          <>
-            <input
-              ref={picker}
-              type="file"
-              accept={inputImageTypes.join(",")}
-              multiple
-              hidden
-              onChange={(event) => {
-                add(event.target.files ?? []);
-                event.target.value = "";
-              }}
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-10.5 w-10"
-              aria-label="Add images"
-              title="Add images"
-              disabled={!open}
-              onClick={() => picker.current?.click()}
-            >
-              <ImagePlusIcon />
-            </Button>
-          </>
-        )}
-        <textarea
-          ref={box}
-          aria-label={`Write to ${name}`}
-          rows={1}
-          value={text}
-          disabled={!open}
-          placeholder={
-            !owner
-              ? "Read only"
-              : open
-                ? working
-                  ? `Add to ${name}'s turn`
-                  : `Write to ${name}`
-                : sessionState(session)
-          }
-          onChange={(event) => {
-            // Grows with the text, up to a few lines; then it scrolls.
-            event.target.style.height = "auto";
-            event.target.style.height = `${event.target.scrollHeight}px`;
-            write(event.target.value);
-            setCursor(event.target.selectionStart);
-            setChosen(0);
-            setDismissed(false);
-          }}
-          onSelect={(event) => setCursor(event.currentTarget.selectionStart)}
-          onPaste={(event) => {
-            const pasted = [...event.clipboardData.files].filter((file) =>
-              file.type.startsWith("image/"),
-            );
-            if (!modes || !pasted.length) return;
-            event.preventDefault();
-            add(pasted);
-          }}
-          onKeyDown={(event) => {
-            // While a list is shown: arrows move, Tab or Enter takes the one shown.
-            if (highlighted) {
-              if (event.key === "Escape") {
-                event.preventDefault();
-                setDismissed(true);
-                return;
-              }
-              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                event.preventDefault();
-                const step = event.key === "ArrowDown" ? 1 : -1;
-                setChosen(
-                  (suggestions.indexOf(highlighted) +
-                    step +
-                    suggestions.length) %
-                    suggestions.length,
-                );
-                return;
-              }
-              // Enter on a command already typed in full runs it, as a terminal does.
-              if (
-                event.key === "Tab" ||
-                (sendsOnEnter(event.nativeEvent) && !highlighted.whole)
-              ) {
-                event.preventDefault();
-                highlighted.take();
-                return;
-              }
+          add(pasted);
+        },
+        onKeyDown: (event) => {
+          setCursor(event.currentTarget.selectionStart);
+          // While a list is shown: arrows move, Tab or Enter takes the one shown.
+          if (highlighted) {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setDismissed(true);
+              return;
             }
-            if (!sendsOnEnter(event.nativeEvent)) return;
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              const step = event.key === "ArrowDown" ? 1 : -1;
+              setChosen(
+                (suggestions.indexOf(highlighted) + step + suggestions.length) %
+                  suggestions.length,
+              );
+              return;
+            }
+            // Enter on a command already typed in full runs it, as a terminal does.
+            if (
+              event.key === "Tab" ||
+              (sendsOnEnter(event.nativeEvent) && !highlighted.whole)
+            ) {
+              event.preventDefault();
+              highlighted.take();
+              return;
+            }
+          }
+          if (!sendsOnEnter(event.nativeEvent)) return;
+          event.preventDefault();
+          // Option Enter waits for the turn to end.
+          void submit(event.altKey && working && modes ? "queue" : "steer");
+        },
+      }}
+      form={{
+        onDragOver: (event) => {
+          if (modes && open && event.dataTransfer.types.includes("Files"))
             event.preventDefault();
-            // Option Enter waits for the turn to end, as Queue does.
-            void submit(event.altKey && working && modes ? "queue" : "steer");
-          }}
-          className="max-h-40 min-h-10.5 flex-1 resize-none rounded-md border border-input bg-background px-3 py-2.5 text-sm transition-[border-color,box-shadow] outline-none placeholder:text-faint focus:border-ring focus:ring-3 focus:ring-ring/20 disabled:opacity-60"
-        />
-        {stops ? (
-          <Button
-            type="button"
-            variant="outline"
-            className="h-10.5"
-            disabled={busy}
-            title="Interrupt (Esc)"
-            onClick={interrupt}
-          >
-            <SquareIcon data-icon="inline-start" />
-            Interrupt
-          </Button>
-        ) : (
-          <div className="flex">
-            <Button
-              type="submit"
-              disabled={busy || !open || empty || tooLong || !!imagesError}
-              className={cn("h-10.5", working && modes && "rounded-r-none")}
+        },
+        onDrop: (event) => {
+          if (!modes || !open) return;
+          event.preventDefault();
+          add(event.dataTransfer.files);
+        },
+      }}
+      above={
+        <>
+          {children}
+          {suggestions.length > 0 && (
+            <div
+              role="group"
+              aria-label={mention ? "Files" : "Commands"}
+              className="max-h-64 overflow-y-auto rounded-md border bg-popover text-sm shadow-sm"
             >
-              Send
-              <SendIcon data-icon="inline-end" />
-            </Button>
-            {working && modes && (
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  disabled={busy || !open || empty || tooLong || !!imagesError}
-                  render={
-                    <Button
-                      type="button"
-                      aria-label="Send options"
-                      className="h-10.5 rounded-l-none border-l border-l-background/30 px-2"
-                    />
-                  }
+              {suggestions.map((suggestion) => (
+                <button
+                  key={suggestion.key}
+                  type="button"
+                  aria-current={suggestion === highlighted || undefined}
+                  onClick={suggestion.take}
+                  className="flex w-full items-baseline gap-3 px-3 py-2 text-left transition-colors outline-none hover:bg-accent focus-visible:bg-accent aria-[current]:bg-accent"
                 >
-                  <ChevronDownIcon />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-64">
-                  <DropdownMenuItem onClick={() => void submit("steer")}>
-                    Add to this turn
-                    <DropdownMenuShortcut>Enter</DropdownMenuShortcut>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => void submit("queue")}>
-                    Send when this turn ends
-                    <DropdownMenuShortcut>⌥Enter</DropdownMenuShortcut>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => void submit("interrupt")}>
-                    Stop the turn and send
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-          </div>
-        )}
-      </div>
-      {/* Shown where the kernel reads them: not yet Codex's on a joined computer. */}
-      {open && <SessionSettings session={session} perform={perform} />}
-      <div className="mx-auto flex w-full max-w-3xl items-center gap-3 font-mono text-[11px] text-faint">
-        <p className="min-w-0 flex-1">
-          {tooLong
-            ? "Too long: up to 64 KB."
-            : imagesError
-              ? imagesError
-              : !owner || command?.name === "compact"
-                ? null
-                : working
-                  ? modes
-                    ? "⌥Enter sends when the turn ends · Esc interrupts"
-                    : "Esc interrupts"
-                  : "/ for commands · @ for files"}
-        </p>
+                  <span
+                    className={cn(
+                      "font-mono text-[13px]",
+                      suggestion.description ? "shrink-0" : "truncate",
+                    )}
+                  >
+                    {suggestion.label}
+                  </span>
+                  {suggestion.description && (
+                    <span className="truncate text-muted-foreground">
+                      {suggestion.description}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      }
+      chips={
+        picked.length > 0 &&
+        picked.map(({ file, url }) => (
+          <ComposerChip key={url} name={file.name} remove={() => remove(url)}>
+            <img
+              src={url}
+              alt={file.name}
+              className="size-14 rounded-md border object-cover"
+            />
+          </ComposerChip>
+        ))
+      }
+      add={
+        modes
+          ? [
+              {
+                label: "Images",
+                icon: <ImagePlusIcon />,
+                take: () => picker.current?.click(),
+              },
+            ]
+          : undefined
+      }
+      settings={
+        <>
+          <input
+            ref={picker}
+            type="file"
+            accept={inputImageTypes.join(",")}
+            multiple
+            hidden
+            onChange={(event) => {
+              add(event.target.files ?? []);
+              event.target.value = "";
+            }}
+          />
+          {/* Shown where the kernel reads them: not yet Codex's on a joined computer. */}
+          {open && <SessionSettings session={session} perform={perform} />}
+        </>
+      }
+      meter={
         <ContextMeter
           usage={usage}
           compact={
@@ -1770,8 +1693,24 @@ function SessionInput({
               : undefined
           }
         />
-      </div>
-    </form>
+      }
+      error={tooLong ? "Too long: up to 64 KB." : imagesError}
+      send={() => void submit("steer")}
+      later={
+        modes
+          ? {
+              queue: () => void submit("queue"),
+              stop: () => void submit("interrupt"),
+            }
+          : undefined
+      }
+      interrupt={owner ? interrupt : undefined}
+      voice={{
+        transcription: owner && transcription,
+        // What was said goes into the session as it is, without its recording.
+        send: (said) => send(said, "steer", []),
+      }}
+    />
   );
 }
 
@@ -1823,7 +1762,7 @@ export function ContextMeter({
           strokeDasharray={`${share * 100} 100`}
         />
       </svg>
-      {percent(share)} context
+      {percent(share)}
     </span>
   );
   return compact ? (
@@ -1905,66 +1844,93 @@ function SessionSettings({
   // One field at a time; the harness confirms it, or says why not.
   const change = (key: keyof AgentSettings, value: string) =>
     void perform(async () => void (await settings.apply({ [key]: value })));
+  // The pill names the model and the effort, and Plan while it plans.
+  const shown = fields
+    .filter(({ key }) => key === "model" || key === "effort")
+    .flatMap(({ key, options }) => {
+      const value = values[key];
+      return value ? [options[value] ?? value] : [];
+    });
   return (
-    <div
-      role="group"
-      aria-label="Session settings"
-      className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-1.5"
-    >
-      {fields.map(({ key, label, options }) => {
-        const value = values[key] ?? "";
-        return (
-          <NativeSelect
-            key={key}
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
             size="sm"
-            aria-label={label}
-            title={label}
-            value={value}
-            disabled={
-              !editable.includes(key) || Object.keys(options).length === 0
-            }
-            onChange={(event) => change(key, event.target.value)}
-          >
-            {!value && (
-              <NativeSelectOption value="" disabled>
-                {label}
-              </NativeSelectOption>
-            )}
-            {value && !Object.hasOwn(options, value) && (
-              <NativeSelectOption value={value} disabled>
-                {value}
-              </NativeSelectOption>
-            )}
-            {Object.entries(options).map(([option, text]) => (
-              <NativeSelectOption key={option} value={option}>
-                {key === "model" || key === "effort"
-                  ? text
-                  : `${label}: ${text}`}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
-        );
-      })}
-      {plan && (
-        <Toggle
-          size="sm"
-          variant="outline"
-          pressed={plan.on}
-          title="Plan mode"
-          onPressedChange={(on) =>
-            void perform(
-              async () => void (await settings.apply(plan.change(on))),
-            )
-          }
+            className="h-8 min-w-0 gap-1 px-2 font-normal text-muted-foreground"
+          />
+        }
+      >
+        <span className="truncate">
+          {[...shown, ...(plan?.on ? ["Plan"] : [])].join(" · ") || "Settings"}
+        </span>
+        <ChevronDownIcon />
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72">
+        <div
+          role="group"
+          aria-label="Session settings"
+          className="flex flex-col gap-2"
         >
-          <ListChecksIcon />
-          Plan
-        </Toggle>
-      )}
-      {settings.error && (
-        <span className="text-xs text-attention">{settings.error}</span>
-      )}
-    </div>
+          {fields.map(({ key, label, options }) => {
+            const value = values[key] ?? "";
+            return (
+              <NativeSelect
+                key={key}
+                size="sm"
+                className="w-full"
+                aria-label={label}
+                title={label}
+                value={value}
+                disabled={
+                  !editable.includes(key) || Object.keys(options).length === 0
+                }
+                onChange={(event) => change(key, event.target.value)}
+              >
+                {!value && (
+                  <NativeSelectOption value="" disabled>
+                    {label}
+                  </NativeSelectOption>
+                )}
+                {value && !Object.hasOwn(options, value) && (
+                  <NativeSelectOption value={value} disabled>
+                    {value}
+                  </NativeSelectOption>
+                )}
+                {Object.entries(options).map(([option, text]) => (
+                  <NativeSelectOption key={option} value={option}>
+                    {key === "model" || key === "effort"
+                      ? text
+                      : `${label}: ${text}`}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            );
+          })}
+          {plan && (
+            <Toggle
+              size="sm"
+              variant="outline"
+              pressed={plan.on}
+              title="Plan mode"
+              onPressedChange={(on) =>
+                void perform(
+                  async () => void (await settings.apply(plan.change(on))),
+                )
+              }
+            >
+              <ListChecksIcon />
+              Plan
+            </Toggle>
+          )}
+          {settings.error && (
+            <span className="text-xs text-attention">{settings.error}</span>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 

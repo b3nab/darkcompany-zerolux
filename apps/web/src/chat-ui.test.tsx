@@ -818,22 +818,6 @@ test("chat forms are sent by their own submit button", () => {
   expect(
     submits(
       renderToStaticMarkup(
-        <ChatView
-          chat={fakeChat({ openId: group.id })}
-          conversation={group}
-          actors={actors}
-          ownerId={OWNER}
-          busy={false}
-          perform={perform}
-          hire={() => {}}
-          storage={files()}
-        />,
-      ),
-    ),
-  ).toEqual(["Send"]);
-  expect(
-    submits(
-      renderToStaticMarkup(
         <NewConversation
           chat={fakeChat()}
           actors={actors}

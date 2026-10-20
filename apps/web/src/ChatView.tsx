@@ -4,18 +4,14 @@ import { Link, NavLink } from "react-router";
 import { cn } from "cn";
 import {
   ArrowDownIcon,
-  AudioLinesIcon,
   CheckIcon,
   ChevronLeftIcon,
   ClockIcon,
   MessagesSquareIcon,
-  MicIcon,
   PanelRightIcon,
   PaperclipIcon,
   PhoneIcon,
-  SendIcon,
   SquarePenIcon,
-  XIcon,
 } from "lucide-react";
 import type { Actor } from "./api";
 import {
@@ -28,7 +24,6 @@ import {
   deliveryLabels,
   draftOf,
   directChat,
-  errorMessage,
   harnessLabels,
   isThread,
   listChats,
@@ -41,7 +36,6 @@ import {
   saveDraft,
   sessionAccess,
   threadsOf,
-  transcribe,
   unreadIn,
   waitingChats,
   workingLabel,
@@ -60,9 +54,9 @@ import type {
   Storage,
 } from "@zerolux/chat";
 import { ApprovalCard, openApprovals } from "./Approvals";
+import { Composer } from "@/components/composer";
 import { Listen } from "@/components/listen";
 import { useReadAloud } from "./read-aloud";
-import { canRecord, useRecorder } from "./recorder";
 import { useMe } from "./AuthGate";
 import { ChatAbout } from "@/components/chat-about";
 import { LiveWork, WorkLine } from "@/components/chat-work";
@@ -703,7 +697,7 @@ export function ChatView({
               </p>
             )
           ) : (
-            <Composer
+            <ChatComposer
               key={conversation.id}
               chat={chat}
               conversation={conversation}
@@ -852,10 +846,10 @@ export const sendsOnEnter = (key: {
 }) => key.key === "Enter" && !key.shiftKey && !key.isComposing;
 
 /**
- * Where you write: Enter sends, Shift Enter adds a line. Files, dictation and voice messages go
- * through the kernel; each control waits for the capability it needs.
+ * Where you write to a chat: Enter sends, Shift Enter adds a line. Files go through "+";
+ * dictation and voice messages through the kernel's voice.
  */
-function Composer({
+function ChatComposer({
   chat,
   conversation,
   agents,
@@ -877,9 +871,6 @@ function Composer({
 }) {
   // The unsent text waits in its chat while you are elsewhere.
   const [text, setText] = useState(() => draftOf(conversation.id));
-  const [voice, setVoice] = useState<"dictation" | "message">();
-  const [voiceError, setVoiceError] = useState("");
-  const recorder = useRecorder();
   // Same ID while the draft is unchanged, so retrying a failed send is idempotent.
   const draft = useRef(newId());
   const box = useRef<HTMLTextAreaElement>(null);
@@ -926,195 +917,103 @@ function Composer({
     return () => document.removeEventListener("keydown", keys);
   }, []);
   const tooLong = new TextEncoder().encode(text).length > MAX_TEXT;
-  // What stops a message from going, or what went wrong with a recording or an upload.
-  const note = tooLong
-    ? "This message is too long (64 KB maximum)."
-    : !agents.length
-      ? "No agents in this chat."
-      : voiceError || storage.error;
-  const microphone = canRecord();
-  const edit = (change: () => void) => {
-    change();
+  const write = (next: string) => {
+    setText(next);
     draft.current = newId();
   };
 
-  async function submit(event?: SubmitEvent) {
-    event?.preventDefault();
-    if (!text.trim() || tooLong) return;
+  async function submit() {
+    if (!text.trim() || tooLong || !agents.length) return;
     sent();
     const id = draft.current;
     const ok = await perform(() =>
       chat.send(conversation, { id, text: text.trim() }),
     );
     // Only the draft that was sent is cleared: what you typed meanwhile is a new draft.
-    if (ok && draft.current === id) edit(() => setText(""));
+    if (ok && draft.current === id) write("");
   }
-
-  async function record(purpose: "dictation" | "message") {
-    setVoiceError("");
-    try {
-      await recorder.start();
-      setVoice(purpose);
-    } catch (e) {
-      setVoiceError(`The microphone is not available: ${errorMessage(e)}`);
-    }
-  }
-
-  async function finish() {
-    const purpose = voice;
-    setVoice(undefined);
-    const audio = await recorder.stop();
-    if (!audio) return;
-    if (purpose === "dictation")
-      await perform(async () => {
-        const said = await transcribe(audio);
-        edit(() =>
-          setText((t) => (t.trim() ? `${t.trimEnd()} ${said}` : said)),
-        );
-      });
-    else {
-      // What was said goes as the message; the recording rides along where the kernel keeps
-      // files.
-      if (transcription) {
-        sent();
-        await perform(async () => {
-          const said = (await transcribe(audio)).trim();
-          if (said) await chat.send(conversation, { id: newId(), text: said });
-        });
-      }
-      if (storage.available) {
-        const at = new Date().toTimeString().slice(0, 5).replace(":", ".");
-        // TODO: kernel: a file shared in a chat is announced to its members, as a message would be.
-        await storage.upload(
-          [new File([audio], `Voice message ${at}.webm`, { type: audio.type })],
-          { conversation_id: conversation.id },
-        );
-      }
-    }
-  }
-
-  function cancel() {
-    setVoice(undefined);
-    recorder.cancel();
-  }
-
-  if (voice)
-    return (
-      <div className="flex items-center gap-3 border-t px-3 py-3 md:px-5">
-        <span
-          aria-hidden
-          className="size-2.5 animate-pulse rounded-full bg-destructive"
-        />
-        <span role="status" className="flex-1 font-mono text-sm">
-          {voice === "dictation" ? "Listening" : "Recording"} ·{" "}
-          {Math.floor(recorder.seconds / 60)}:
-          {String(recorder.seconds % 60).padStart(2, "0")}
-        </span>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Discard"
-          onClick={cancel}
-        >
-          <XIcon />
-        </Button>
-        <Button disabled={busy} onClick={() => void finish()}>
-          {voice === "dictation" ? "Write it" : "Send voice message"}
-          <SendIcon data-icon="inline-end" />
-        </Button>
-      </div>
-    );
 
   return (
-    <form
-      className="flex flex-col gap-1.5 border-t px-3 pt-3 pb-2 md:px-5"
-      onSubmit={(e) => void submit(e)}
-    >
-      <div className="flex items-end gap-2">
-        <div className="flex min-w-0 flex-1 items-end gap-1 rounded-md border border-input bg-background p-1 transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/20">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Attach a file"
-            title="Attach a file"
-            disabled={!storage.available}
-            onClick={() => files.current?.click()}
-          >
-            <PaperclipIcon />
-          </Button>
-          <input
-            ref={files}
-            type="file"
-            multiple
-            hidden
-            onChange={(e) => {
-              const picked = [...(e.target.files ?? [])];
-              e.target.value = "";
-              if (picked.length)
-                void storage.upload(picked, {
-                  conversation_id: conversation.id,
-                });
-            }}
-          />
-          <textarea
-            ref={box}
-            aria-label="Message"
-            value={text}
-            onChange={(e) => {
-              // Grows with the text, up to a few lines; then it scrolls.
-              e.target.style.height = "auto";
-              e.target.style.height = `${e.target.scrollHeight}px`;
-              edit(() => setText(e.target.value));
-            }}
-            onKeyDown={(e) => {
-              if (!sendsOnEnter(e.nativeEvent)) return;
-              e.preventDefault();
-              void submit();
-            }}
-            rows={1}
-            className="max-h-40 min-h-8.5 flex-1 resize-none bg-transparent px-1.5 py-1.5 text-sm outline-none placeholder:text-faint"
-            placeholder={
-              conversation.kind === "group"
-                ? `Write to ${conversation.title}`
-                : `Write to ${agents[0]?.name ?? "the agent"}`
-            }
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Dictate"
-            title="Dictate"
-            disabled={!microphone || !transcription}
-            onClick={() => void record("dictation")}
-          >
-            <MicIcon />
-          </Button>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          aria-label="Record a voice message"
-          title="Record a voice message"
-          disabled={!microphone || (!transcription && !storage.available)}
-          onClick={() => void record("message")}
-          className="h-10.5 w-10.5"
-        >
-          <AudioLinesIcon />
-        </Button>
-        <Button
-          type="submit"
-          disabled={busy || !text.trim() || tooLong}
-          className="h-10.5"
-        >
-          Send
-          <SendIcon data-icon="inline-end" />
-        </Button>
-      </div>
-      {note && <p className="font-mono text-[11px] text-faint">{note}</p>}
-    </form>
+    <>
+      <input
+        ref={files}
+        type="file"
+        multiple
+        hidden
+        onChange={(event) => {
+          const picked = [...(event.target.files ?? [])];
+          event.target.value = "";
+          if (picked.length)
+            void storage.upload(picked, { conversation_id: conversation.id });
+        }}
+      />
+      <Composer
+        label="Message"
+        placeholder={
+          conversation.kind === "group"
+            ? `Write to ${conversation.title}`
+            : `Write to ${agents[0]?.name ?? "the agent"}`
+        }
+        text={text}
+        setText={write}
+        open
+        busy={busy}
+        blocked={tooLong || !agents.length}
+        box={box}
+        textarea={{
+          onKeyDown: (event) => {
+            if (!sendsOnEnter(event.nativeEvent)) return;
+            event.preventDefault();
+            void submit();
+          },
+        }}
+        add={
+          storage.available
+            ? [
+                {
+                  label: "Files",
+                  icon: <PaperclipIcon />,
+                  take: () => files.current?.click(),
+                },
+              ]
+            : undefined
+        }
+        error={
+          tooLong
+            ? "This message is too long (64 KB maximum)."
+            : !agents.length
+              ? "No agents in this chat."
+              : storage.error
+        }
+        send={() => void submit()}
+        voice={{
+          transcription,
+          // What was said goes as the message.
+          send: async (said) => {
+            sent();
+            await chat.send(conversation, { id: newId(), text: said });
+          },
+          // The recording rides along where the kernel keeps files.
+          keep: storage.available
+            ? async (audio) => {
+                const at = new Date()
+                  .toTimeString()
+                  .slice(0, 5)
+                  .replace(":", ".");
+                // TODO: kernel: a file shared in a chat is announced to its members, as a message would be.
+                await storage.upload(
+                  [
+                    new File([audio], `Voice message ${at}.webm`, {
+                      type: audio.type,
+                    }),
+                  ],
+                  { conversation_id: conversation.id },
+                );
+              }
+            : undefined,
+        }}
+      />
+    </>
   );
 }
 
