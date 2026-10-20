@@ -245,7 +245,8 @@
           "cameraPermission": "ZeroLux takes the photos you attach to what you send to a session.",
           "microphonePermission": "ZeroLux records your voice for dictation and voice messages."
         }
-      ]
+      ],
+      "expo-sharing"
     ]
   }
 }

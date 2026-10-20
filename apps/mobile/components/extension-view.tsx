@@ -1,7 +1,5 @@
 import * as Haptics from "expo-haptics";
-import * as Lucide from "lucide-react-native";
-import { ChevronRightIcon, PuzzleIcon } from "lucide-react-native";
-import type { LucideIcon } from "lucide-react-native";
+import { ChevronRightIcon } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ComponentType } from "react";
 import {
@@ -32,8 +30,10 @@ import type {
 } from "@zerolux/chat";
 import { ActionForm } from "@/components/action-form";
 import { MessageBody } from "@/components/message-body";
+import { NativeView } from "@/components/native-view";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
+import { lucideIcon } from "@/components/ui-components";
 import WebPiece from "@/components/web-piece";
 import { cn } from "@/lib/utils";
 import { useSession } from "../src/kernel";
@@ -45,21 +45,11 @@ export const nativeViews: Record<
 > = {};
 
 /** A piece's icon by its Lucide name (`kanban-square`); a puzzle when the app has none. */
-export function pieceIcon(piece: UiPiece): LucideIcon {
-  if (!piece.icon) return PuzzleIcon;
-  const name = piece.icon
-    .split(/[-_\s]/)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join("");
-  const icon = (Lucide as unknown as Record<string, unknown>)[`${name}Icon`];
-  return typeof icon === "object" || typeof icon === "function"
-    ? (icon as LucideIcon)
-    : PuzzleIcon;
-}
+export const pieceIcon = (piece: UiPiece) => lucideIcon(piece.icon);
 
 /**
- * An extension's piece where it shows: the app's own component for it, the view its
- * extension describes, or nothing when the app can't show it.
+ * An extension's piece where it shows: its native view, the view its extension describes,
+ * its own page, or nothing when the app can't show it.
  */
 export function ExtensionView({
   piece,
@@ -73,6 +63,8 @@ export function ExtensionView({
 }) {
   switch (piece.view.kind) {
     case "native": {
+      if (piece.view.entry)
+        return <NativeView piece={piece} context={context} />;
       const Native = nativeViews[`${piece.extension}/${piece.name}`];
       return Native ? <Native piece={piece} context={context} /> : null;
     }

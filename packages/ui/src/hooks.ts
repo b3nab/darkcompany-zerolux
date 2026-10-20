@@ -164,6 +164,10 @@ export function useActionResult<T = unknown>(
   const asked = JSON.stringify(input);
   // Read once the actions are known, so the place goes with the first read.
   const known = here.actions !== undefined;
+  // Read again when what it reads changes, not when the actions are read again.
+  const latest = useRef(here);
+  latest.current = here;
+  const place = JSON.stringify(here.context);
   // Only the latest read shows: an earlier one that ends later is dropped.
   const reads = useRef(0);
   const reload = useCallback(async () => {
@@ -171,18 +175,21 @@ export function useActionResult<T = unknown>(
     const at = ++reads.current;
     setState((was) => ({ ...was, loading: true }));
     try {
+      const now = latest.current;
       const data = (await callAction(
-        here,
+        now,
         name,
         JSON.parse(asked) as Record<string, unknown>,
-        schemaOf(here, name),
+        schemaOf(now, name),
       )) as T;
       if (at === reads.current) setState({ data, error: "", loading: false });
     } catch (e) {
       if (at === reads.current)
         setState((was) => ({ ...was, error: errorMessage(e), loading: false }));
     }
-  }, [here, name, asked, known]);
+    // What the view shows for: read from `latest`, named here so a change reads again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [here.piece.extension, here.kernel, place, name, asked, known]);
   useEffect(() => void reload(), [reload]);
   useEffect(
     () =>

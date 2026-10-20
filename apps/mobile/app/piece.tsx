@@ -37,7 +37,10 @@ export default function PiecePage() {
             <ExtensionView piece={piece} context={context} fill />
           </View>
         ) : (
-          <ScrollView contentContainerClassName="gap-4 px-5 pt-2 pb-10">
+          <ScrollView
+            contentContainerClassName="gap-4 px-5 pt-2 pb-10"
+            keyboardShouldPersistTaps="handled"
+          >
             <ExtensionView piece={piece} context={context} />
           </ScrollView>
         )

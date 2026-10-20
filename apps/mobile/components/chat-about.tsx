@@ -40,7 +40,10 @@ export function ChatAbout({
   const others = files.filter((f) => !images.includes(f));
   const open = (url: string) => void Linking.openURL(url);
   return (
-    <ScrollView contentContainerClassName="gap-7 px-5 py-5">
+    <ScrollView
+      contentContainerClassName="gap-7 px-5 py-5"
+      keyboardShouldPersistTaps="handled"
+    >
       <View className="gap-1">
         <Eyebrow className="mb-1">
           Members · {conversation.members.length}

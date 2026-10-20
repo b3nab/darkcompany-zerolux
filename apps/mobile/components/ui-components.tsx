@@ -1,0 +1,385 @@
+import * as Haptics from "expo-haptics";
+import * as Lucide from "lucide-react-native";
+import { ChevronRightIcon, PuzzleIcon } from "lucide-react-native";
+import type { LucideIcon } from "lucide-react-native";
+import { Children } from "react";
+import {
+  ActivityIndicator,
+  Image as NativeImage,
+  Modal,
+  Pressable,
+  ScrollView,
+  Switch as NativeSwitch,
+  View,
+} from "react-native";
+import { useCSSVariable } from "uniwind";
+import type { Tone, UiComponents } from "@zerolux/ui";
+import { ActorMark } from "@/components/member";
+import { MessageBody } from "@/components/message-body";
+import { Segmented } from "@/components/segmented";
+import { SettingSelect } from "@/components/setting-select";
+import { Button as AppButton } from "@/components/ui/button";
+import { Input as AppInput } from "@/components/ui/input";
+import { Text as AppText } from "@/components/ui/text";
+import { cn } from "@/lib/utils";
+import { useSession } from "../src/kernel";
+
+/** A Lucide icon by its name, as `kanban` or `file-text`; a puzzle when the app has none. */
+export function lucideIcon(name?: string): LucideIcon {
+  if (!name) return PuzzleIcon;
+  const named = name
+    .split(/[-_\s]/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join("");
+  const icon = (Lucide as unknown as Record<string, unknown>)[`${named}Icon`];
+  return typeof icon === "object" || typeof icon === "function"
+    ? (icon as LucideIcon)
+    : PuzzleIcon;
+}
+
+const textTone: Record<Tone, string> = {
+  default: "text-foreground",
+  muted: "text-muted-foreground",
+  success: "text-success",
+  warning: "text-warning",
+  danger: "text-destructive",
+};
+const badgeTone: Record<Tone, string> = {
+  default: "bg-muted",
+  muted: "bg-muted",
+  success: "bg-success/15",
+  warning: "bg-warning/15",
+  danger: "bg-destructive/15",
+};
+const toneColor: Record<Tone, string> = {
+  default: "--color-foreground",
+  muted: "--color-muted-foreground",
+  success: "--color-success",
+  warning: "--color-warning",
+  danger: "--color-destructive",
+};
+
+function Icon({
+  name,
+  size = 20,
+  tone = "muted",
+}: {
+  name: string;
+  size?: number;
+  tone?: Tone;
+}) {
+  const color = String(useCSSVariable(toneColor[tone]));
+  const Drawn = lucideIcon(name);
+  return <Drawn color={color} size={size} strokeWidth={1.5} />;
+}
+
+/**
+ * `@zerolux/ui`'s components on the phone, in the app's own design: what an extension's
+ * native view draws with.
+ */
+export const uiComponents: UiComponents = {
+  Stack: ({ direction = "column", gap = 12, align, children }) => (
+    <View
+      style={{
+        flexDirection: direction,
+        gap,
+        alignItems:
+          align === "start"
+            ? "flex-start"
+            : align === "end"
+              ? "flex-end"
+              : align === "center"
+                ? "center"
+                : direction === "row"
+                  ? "center"
+                  : "stretch",
+      }}
+    >
+      {children}
+    </View>
+  ),
+  Text: ({ tone = "default", size = "md", mono = false, children }) => (
+    <AppText
+      className={cn(
+        size === "sm"
+          ? "text-[13px] leading-[19px]"
+          : "text-[15px] leading-[22px]",
+        mono && "font-mono",
+        textTone[tone],
+      )}
+    >
+      {children}
+    </AppText>
+  ),
+  Heading: ({ level = 2, children }) => (
+    <AppText
+      accessibilityRole="header"
+      className={cn(
+        "font-semibold",
+        level === 1 ? "text-xl" : level === 2 ? "text-lg" : "text-base",
+      )}
+    >
+      {children}
+    </AppText>
+  ),
+  Markdown: ({ children }) => <MessageBody text={children} />,
+  Button: ({ title, onPress, variant = "primary", disabled, busy }) => (
+    <AppButton
+      variant={
+        variant === "danger"
+          ? "destructive"
+          : variant === "secondary"
+            ? "outline"
+            : variant === "ghost"
+              ? "ghost"
+              : "default"
+      }
+      disabled={disabled || busy}
+      onPress={onPress}
+      className="self-start"
+    >
+      {busy ? <ActivityIndicator size="small" /> : null}
+      <AppText>{title}</AppText>
+    </AppButton>
+  ),
+  IconButton: ({ icon, label, onPress, disabled }) => (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      hitSlop={4}
+      className={cn(
+        "size-10 items-center justify-center rounded-lg active:bg-accent",
+        disabled && "opacity-40",
+      )}
+    >
+      <Icon name={icon} />
+    </Pressable>
+  ),
+  Icon,
+  Input: ({
+    value,
+    onChange,
+    label,
+    placeholder,
+    multiline,
+    secure,
+    disabled,
+    onSubmit,
+  }) => (
+    <View className="flex-1 gap-1.5">
+      {label ? (
+        <AppText className="text-sm font-medium">{label}</AppText>
+      ) : null}
+      <AppInput
+        value={value}
+        onChangeText={onChange}
+        placeholder={placeholder}
+        accessibilityLabel={label ?? placeholder}
+        multiline={multiline}
+        secureTextEntry={secure}
+        editable={!disabled}
+        onSubmitEditing={onSubmit}
+        className={multiline ? "h-auto min-h-20 py-2" : undefined}
+      />
+    </View>
+  ),
+  Select: ({ value, options, onChange, label, placeholder, disabled }) => (
+    <SettingSelect
+      label={label ?? ""}
+      value={value}
+      options={Object.fromEntries(options.map((o) => [o.value, o.label]))}
+      onChange={onChange}
+      placeholder={placeholder}
+      disabled={disabled}
+    />
+  ),
+  Switch: ({ value, onChange, label, disabled }) => (
+    <View className="flex-row items-center justify-between gap-3">
+      {label ? <AppText className="flex-1 text-[15px]">{label}</AppText> : null}
+      <NativeSwitch
+        value={value}
+        onValueChange={onChange}
+        disabled={disabled}
+        accessibilityLabel={label}
+      />
+    </View>
+  ),
+  List: ({ children }) => (
+    <View className="overflow-hidden rounded-md border border-border bg-card">
+      {Children.toArray(children).map((row, i) => (
+        <View key={i} className={cn(i > 0 && "border-t border-border")}>
+          {row}
+        </View>
+      ))}
+    </View>
+  ),
+  ListItem: function ListItem({
+    title,
+    subtitle,
+    leading,
+    accessory,
+    onPress,
+  }) {
+    const faint = String(useCSSVariable("--color-faint"));
+    const body = (
+      <>
+        {leading}
+        <View className="min-w-0 flex-1 gap-0.5">
+          <AppText numberOfLines={2} className="text-[15px]">
+            {title}
+          </AppText>
+          {subtitle ? (
+            <AppText
+              numberOfLines={2}
+              className="text-[13px] text-muted-foreground"
+            >
+              {subtitle}
+            </AppText>
+          ) : null}
+        </View>
+        {accessory}
+        {onPress ? (
+          <ChevronRightIcon color={faint} size={16} strokeWidth={1.5} />
+        ) : null}
+      </>
+    );
+    const row = "min-h-12 flex-row items-center gap-3 px-3.5 py-2.5";
+    return onPress ? (
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => {
+          void Haptics.selectionAsync();
+          onPress();
+        }}
+        className={cn(row, "active:bg-accent")}
+      >
+        {body}
+      </Pressable>
+    ) : (
+      <View className={row}>{body}</View>
+    );
+  },
+  Table: ({ columns, rows }) => (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+      <View className="overflow-hidden rounded-md border border-border bg-card">
+        <View className="flex-row border-b border-border bg-muted">
+          {columns.map((column) => (
+            <AppText
+              key={column.key}
+              className="w-32 px-3 py-2 font-mono text-[11px] tracking-wider text-faint uppercase"
+            >
+              {column.title}
+            </AppText>
+          ))}
+        </View>
+        {rows.map((row, i) => (
+          <View
+            key={i}
+            className={cn("flex-row", i > 0 && "border-t border-border")}
+          >
+            {columns.map((column) => (
+              <View key={column.key} className="w-32 px-3 py-2">
+                {typeof row[column.key] === "string" ||
+                typeof row[column.key] === "number" ? (
+                  <AppText className="text-sm">{row[column.key]}</AppText>
+                ) : (
+                  row[column.key]
+                )}
+              </View>
+            ))}
+          </View>
+        ))}
+      </View>
+    </ScrollView>
+  ),
+  Badge: ({ tone = "default", children }) => (
+    <View className={cn("self-start rounded-sm px-2 py-0.5", badgeTone[tone])}>
+      <AppText
+        className={cn(
+          "font-mono text-[11px]",
+          tone === "default" ? "text-muted-foreground" : textTone[tone],
+        )}
+      >
+        {children}
+      </AppText>
+    </View>
+  ),
+  Divider: () => <View className="h-px bg-border" />,
+  Empty: ({ children }) => (
+    <AppText className="py-6 text-center text-sm text-faint">
+      {children}
+    </AppText>
+  ),
+  // Carried in the view itself: nothing loads from outside.
+  Image: ({ src, alt, height = 192 }) =>
+    src.startsWith("data:image/") ? (
+      <NativeImage
+        source={{ uri: src }}
+        accessibilityLabel={alt}
+        resizeMode="contain"
+        style={{ height }}
+        className="w-full rounded-md bg-muted"
+      />
+    ) : null,
+  Card: ({ title, children }) => (
+    <View className="gap-3 rounded-md border border-border bg-card p-4">
+      {title ? (
+        <AppText className="text-[15px] font-semibold">{title}</AppText>
+      ) : null}
+      {children}
+    </View>
+  ),
+  Tabs: ({ items, value, onChange }) => (
+    <Segmented
+      options={items.map((item) => [item.value, item.label])}
+      value={value}
+      choose={onChange}
+    />
+  ),
+  Sheet: ({ open, onClose, title, children }) => (
+    <Modal
+      visible={open}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={onClose}
+    >
+      <View className="flex-1 bg-background">
+        <View className="flex-row items-center justify-between border-b border-border px-5 py-3">
+          <AppText className="text-[17px] font-semibold">{title}</AppText>
+          <Pressable accessibilityRole="button" onPress={onClose} hitSlop={12}>
+            <AppText className="text-base font-medium text-human-foreground">
+              Done
+            </AppText>
+          </Pressable>
+        </View>
+        <ScrollView contentContainerClassName="gap-4 px-5 py-5">
+          {children}
+        </ScrollView>
+      </View>
+    </Modal>
+  ),
+  Spinner: function Spinner({ size = "md" }) {
+    const muted = String(useCSSVariable("--color-muted-foreground"));
+    return (
+      <ActivityIndicator
+        size={size === "sm" ? "small" : "large"}
+        color={muted}
+        className="self-start"
+      />
+    );
+  },
+  Avatar: function Avatar({ actorId, size = "md" }) {
+    const { actors } = useSession();
+    const actor = actors.find((a) => a.id === actorId);
+    return (
+      <ActorMark
+        kind={actor?.kind === "human" ? "human" : "agent"}
+        name={actor?.name ?? "?"}
+        size={size}
+      />
+    );
+  },
+};

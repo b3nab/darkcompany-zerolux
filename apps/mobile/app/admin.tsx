@@ -34,7 +34,10 @@ export default function Administration() {
   );
   return (
     <Screen back title="Administration">
-      <ScrollView contentContainerClassName="gap-6 px-5 py-6">
+      <ScrollView
+        contentContainerClassName="gap-6 px-5 py-6"
+        keyboardShouldPersistTaps="handled"
+      >
         <Section title="Workspace">
           <WorkspaceSettings
             workspace={workspace.workspace}
