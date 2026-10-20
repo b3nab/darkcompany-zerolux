@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ComponentProps, ReactNode, Ref } from "react";
 import {
   ArrowUpIcon,
@@ -13,6 +13,7 @@ import {
   XIcon,
 } from "lucide-react";
 import {
+  audioLevel,
   composerAction,
   dictated,
   HOLD_MS,
@@ -324,37 +325,20 @@ export function Composer({
                 className="composer-bin size-5 text-destructive"
               />
             </div>
-          ) : speech.use && held ? (
+          ) : speech.use ? (
             <div
               role="status"
               className="flex min-h-11 items-center gap-2.5 px-3.5 pt-2.5 text-sm"
             >
               <span
                 aria-hidden
-                className="size-2.5 animate-pulse rounded-full bg-destructive"
+                className="size-2.5 shrink-0 animate-pulse rounded-full bg-destructive"
               />
-              <span className="font-mono">{clock}</span>
-              <span
-                className="flex flex-1 animate-in items-center justify-center gap-1 whitespace-nowrap text-muted-foreground fade-in duration-150"
-                style={{
-                  opacity: Math.max(0, Math.min(1, 1 + slide / (CANCEL * 0.9))),
-                  transform: `translateX(${slide / 2}px)`,
-                }}
-              >
-                <ChevronLeftIcon className="composer-nudge size-4 text-faint" />
-                Slide to cancel
+              <span className="shrink-0 font-mono">
+                {speech.use === "dictation" ? "Listening" : "Recording"} ·{" "}
+                {clock}
               </span>
-            </div>
-          ) : speech.use ? (
-            <div
-              role="status"
-              className="flex min-h-11 items-center gap-2.5 px-3.5 pt-2.5 font-mono text-sm"
-            >
-              <span
-                aria-hidden
-                className="size-2.5 animate-pulse rounded-full bg-destructive"
-              />
-              {speech.use === "dictation" ? "Listening" : "Recording"} · {clock}
+              <Wave level={recorder.level} />
             </div>
           ) : speech.transcribing ? (
             <div
@@ -383,8 +367,18 @@ export function Composer({
             />
           )}
           <div className="flex items-center gap-1 px-1.5 pb-1.5">
-            {speech.use || binned ? (
-              !held &&
+            {speech.use && held ? (
+              <span
+                className="flex animate-in items-center gap-1 px-1.5 text-sm whitespace-nowrap text-muted-foreground fade-in duration-150"
+                style={{
+                  opacity: Math.max(0, Math.min(1, 1 + slide / (CANCEL * 0.9))),
+                  transform: `translateX(${slide / 2}px)`,
+                }}
+              >
+                <ChevronLeftIcon className="composer-nudge size-4 text-faint" />
+                Slide to cancel
+              </span>
+            ) : speech.use || binned ? (
               !binned && (
                 <Button
                   type="button"
@@ -481,6 +475,35 @@ export function Composer({
         </div>
       </div>
     </form>
+  );
+}
+
+/** How many bars the wave holds, and how often a new one comes in on the right. */
+const BARS = 34;
+const EVERY = 80;
+
+/** What the microphone hears, as bars scrolling left: a new one every 80 ms, flat in silence. */
+function Wave({ level }: { level: () => number }) {
+  const [bars, setBars] = useState<number[]>(() => Array(BARS).fill(0));
+  const read = useRef(level);
+  read.current = level;
+  useEffect(() => {
+    const timer = setInterval(
+      () => setBars((all) => [...all.slice(1), audioLevel(read.current())]),
+      EVERY,
+    );
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <span aria-hidden className="flex h-6 min-w-0 flex-1 items-center gap-0.5">
+      {bars.map((bar, i) => (
+        <i
+          key={i}
+          className="max-w-[3px] min-w-0.5 flex-1 rounded-full bg-foreground/70"
+          style={{ height: `max(2px, ${bar * 100}%)` }}
+        />
+      ))}
+    </span>
   );
 }
 

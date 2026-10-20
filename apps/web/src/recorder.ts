@@ -7,7 +7,12 @@ export const canRecord = () =>
 
 /** Records from the microphone: one recording at a time, kept until stopped or dropped. */
 export function useRecorder() {
-  const current = useRef<{ recorder: MediaRecorder; chunks: Blob[] }>(null);
+  const current = useRef<{
+    recorder: MediaRecorder;
+    chunks: Blob[];
+    context: AudioContext;
+    analyser: AnalyserNode;
+  }>(null);
   const [since, setSince] = useState<number>();
   const [now, setNow] = useState(0);
   useEffect(() => {
@@ -25,6 +30,7 @@ export function useRecorder() {
     if (!recording) return;
     if (recording.recorder.state !== "inactive") recording.recorder.stop();
     for (const track of recording.recorder.stream.getTracks()) track.stop();
+    void recording.context.close();
   }
 
   return {
@@ -38,7 +44,12 @@ export function useRecorder() {
       const chunks: Blob[] = [];
       recorder.ondataavailable = (e) => chunks.push(e.data);
       recorder.start();
-      current.current = { recorder, chunks };
+      // What it hears, to draw: the stream's level, read as it goes.
+      const context = new AudioContext();
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 1024;
+      context.createMediaStreamSource(stream).connect(analyser);
+      current.current = { recorder, chunks, context, analyser };
       setSince(Date.now());
       setNow(Date.now());
     },
@@ -57,5 +68,17 @@ export function useRecorder() {
     },
     /** Drops the recording. */
     cancel: end,
+    /** How loud the microphone hears now, in dBFS: -160 in silence or when not recording. */
+    level() {
+      const analyser = current.current?.analyser;
+      if (!analyser) return -160;
+      const samples = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(samples);
+      const rms = Math.sqrt(
+        samples.reduce((sum, sample) => sum + sample * sample, 0) /
+          samples.length,
+      );
+      return rms > 0 ? 20 * Math.log10(rms) : -160;
+    },
   };
 }
