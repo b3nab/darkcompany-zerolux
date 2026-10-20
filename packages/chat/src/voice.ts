@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { errorMessage, kernelUrl } from "./client";
 import {
   extensionsNotice,
@@ -132,9 +132,22 @@ export async function spoken(
   else await send(said);
 }
 
+/** How long a press on Dictate or Record lasts before its release ends the recording. */
+export const HOLD_MS = 300;
+
+/**
+ * Whether releasing Dictate or Record ends the recording: after a hold, as a walkie-talkie;
+ * after any press that came while it was recording. A tap that started it keeps it going.
+ */
+export const endsOnRelease = (
+  press: { at: number; recording: boolean },
+  now = Date.now(),
+) => press.recording || now - press.at >= HOLD_MS;
+
 /**
  * Speaking into a composer, Dictate or Record: what it records for, `transcribing` until
- * the text comes (seconds the first time), and what went wrong, in a sentence.
+ * the text comes (seconds the first time), and what went wrong, in a sentence. A tap starts
+ * recording until a press ends it; a hold records until it is released.
  */
 export function useVoiceInput(
   recorder: Recorder,
@@ -144,36 +157,54 @@ export function useVoiceInput(
   const [use, setUse] = useState<VoiceUse>();
   const [transcribing, setTranscribing] = useState(false);
   const [error, setError] = useState("");
+  // What records now, for a release that comes before the next render.
+  const recording = useRef<VoiceUse | "starting">(undefined);
+  const pressed = useRef({ at: 0, recording: false });
+  const start = async (next: VoiceUse) => {
+    setError("");
+    recording.current = "starting";
+    try {
+      await recorder.start();
+      recording.current = next;
+      setUse(next);
+    } catch (e) {
+      recording.current = undefined;
+      setError(`The microphone is not available: ${errorMessage(e)}`);
+    }
+  };
+  const finish = async () => {
+    const now = recording.current;
+    if (!now || now === "starting") return;
+    recording.current = undefined;
+    setUse(undefined);
+    setTranscribing(targets.transcription);
+    try {
+      const audio = await recorder.stop();
+      if (audio) await spoken(now, audio, targets, kernel);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setTranscribing(false);
+    }
+  };
   return {
     use,
     transcribing,
     error,
-    async start(next: VoiceUse) {
-      setError("");
-      try {
-        await recorder.start();
-        setUse(next);
-      } catch (e) {
-        setError(`The microphone is not available: ${errorMessage(e)}`);
-      }
-    },
-    async finish() {
-      const now = use;
-      setUse(undefined);
-      if (!now) return;
-      setTranscribing(targets.transcription);
-      try {
-        const audio = await recorder.stop();
-        if (audio) await spoken(now, audio, targets, kernel);
-      } catch (e) {
-        setError(errorMessage(e));
-      } finally {
-        setTranscribing(false);
-      }
-    },
+    start,
+    finish,
     discard() {
+      recording.current = undefined;
       setUse(undefined);
       void recorder.cancel();
+    },
+    /** Dictate or Record pressed: it records at once, or ends what records. */
+    press(next: VoiceUse) {
+      pressed.current = { at: Date.now(), recording: !!recording.current };
+      if (!recording.current) void start(next);
+    },
+    release() {
+      if (endsOnRelease(pressed.current)) void finish();
     },
   };
 }

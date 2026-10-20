@@ -4,6 +4,7 @@ import {
   chooseVoice,
   designVoice,
   forgetVoice,
+  endsOnRelease,
   readAloud,
   spoken,
   transcribe,
@@ -141,4 +142,10 @@ test("a failed transcription throws and leaves the box as it was", async () => {
   const box = targets();
   await expect(spoken("dictation", recording, box, kernel)).rejects.toThrow();
   expect(box.went).toEqual([]);
+});
+
+test("a tap keeps recording, a hold ends at its release, and a press while recording ends it", () => {
+  expect(endsOnRelease({ at: 1000, recording: false }, 1200)).toBe(false);
+  expect(endsOnRelease({ at: 1000, recording: false }, 1300)).toBe(true);
+  expect(endsOnRelease({ at: 1000, recording: true }, 1050)).toBe(true);
 });
