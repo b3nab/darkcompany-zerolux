@@ -749,16 +749,12 @@ export default function ChatScreen() {
             transcribing: voice.transcribing,
             seconds: recorder.seconds,
             dictation: transcription,
-            start: (use) => void voice.start(use),
-            finish: () => void voice.finish(),
+            press: voice.press,
+            release: voice.release,
             discard: voice.discard,
           }}
           action={action}
-          onAction={(now) => {
-            if (now === "record") return void voice.start("message");
-            if (voice.use) return void voice.finish();
-            void send();
-          }}
+          onAction={() => void send()}
           waiting={
             action === "send" && !voice.use && !(draft.trim() || chips.length)
           }

@@ -699,12 +699,9 @@ function Composer({
     voice: voice.use,
     transcribing: voice.transcribing,
   });
-  const act = (now: ComposerAction) => {
-    if (now === "record") return void voice.start("message");
-    if (now === "interrupt") return void stop.interrupt();
-    if (voice.use) return void voice.finish();
-    void send();
-  };
+  // Record, and ending a recording, are the composer's own: here Send and Interrupt.
+  const act = (now: ComposerAction) =>
+    void (now === "interrupt" ? stop.interrupt() : send());
   const above = (
     <>
       {children}
@@ -848,8 +845,8 @@ function Composer({
           transcribing: voice.transcribing,
           seconds: recorder.seconds,
           dictation: transcription && open,
-          start: (use) => void voice.start(use),
-          finish: () => void voice.finish(),
+          press: voice.press,
+          release: voice.release,
           discard: voice.discard,
         }}
         action={action}

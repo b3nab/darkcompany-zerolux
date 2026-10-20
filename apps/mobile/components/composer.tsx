@@ -50,10 +50,14 @@ export interface ComposerVoice {
   seconds: number;
   /** Dictate is offered: the workspace transcribes. */
   dictation: boolean;
-  start(use: VoiceUse): void;
-  finish(): void;
+  /** Dictate or Record pressed, and released: a tap records on, a hold until released. */
+  press(use: VoiceUse): void;
+  release(): void;
   discard(): void;
 }
+
+// A held finger may drift off the button without ending the recording.
+const RETAIN = { top: 60, bottom: 60, left: 120, right: 60 };
 
 const filled: Record<Exclude<ComposerAction, "transcribing">, LucideIcon> = {
   record: AudioLinesIcon,
@@ -114,13 +118,21 @@ export function Composer({
   error?: string;
 }) {
   const insets = useSafeAreaInsets();
-  const [faint, muted, onLamp] = useCSSVariable([
+  const [faint, muted, onLamp, destructive] = useCSSVariable([
     "--color-faint",
     "--color-muted-foreground",
     "--color-primary-foreground",
+    "--color-destructive",
   ]).map(String);
   const recording = voice.use !== undefined;
   const busy = voice.transcribing;
+  // Record, and the filled button while recording, answer to the press itself.
+  const held = action === "record" || recording;
+  const press = (use: VoiceUse) => {
+    if (!recording) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    voice.press(use);
+  };
+  const dictating = voice.use === "dictation";
   const Icon = action === "transcribing" ? undefined : filled[action];
   const tool = (
     icon: LucideIcon,
@@ -242,30 +254,48 @@ export function Composer({
               </>
             )}
             <View className="flex-1" />
-            {recording ? null : (
-              <>
-                {trailing}
-                {voice.dictation
-                  ? tool(
-                      MicIcon,
-                      "Dictate",
-                      () => voice.start("dictation"),
-                      busy,
-                    )
-                  : null}
-              </>
-            )}
+            {recording ? null : trailing}
+            {voice.dictation && (!recording || dictating) ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Dictate"
+                accessibilityState={{ disabled: busy, selected: dictating }}
+                disabled={busy}
+                onPressIn={() => press("dictation")}
+                onPressOut={voice.release}
+                pressRetentionOffset={RETAIN}
+                hitSlop={4}
+                className={cn(
+                  "size-10 items-center justify-center rounded-lg active:bg-accent",
+                  dictating && "bg-destructive/10",
+                  busy && "opacity-35",
+                )}
+              >
+                <MicIcon
+                  color={dictating ? destructive : muted}
+                  size={20}
+                  strokeWidth={1.5}
+                />
+              </Pressable>
+            ) : null}
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={labels[action]}
               accessibilityState={{ disabled: waiting || busy }}
               disabled={waiting || busy}
-              onPress={() => {
-                void Haptics.selectionAsync();
-                onAction(action);
-              }}
-              onLongPress={onHold}
+              onPress={
+                held
+                  ? undefined
+                  : () => {
+                      void Haptics.selectionAsync();
+                      onAction(action);
+                    }
+              }
+              onPressIn={held ? () => press(voice.use ?? "message") : undefined}
+              onPressOut={held ? voice.release : undefined}
+              onLongPress={held ? undefined : onHold}
               delayLongPress={350}
+              pressRetentionOffset={RETAIN}
               className={cn(
                 "ml-0.5 size-10 items-center justify-center rounded-lg bg-primary active:opacity-80",
                 (waiting || busy) && "opacity-40",
