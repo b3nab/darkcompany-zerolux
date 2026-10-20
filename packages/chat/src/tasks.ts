@@ -54,6 +54,21 @@ export function taskState(task: Task, now = Date.now()) {
     .join(" · ");
 }
 
+/**
+ * Output as plain text: without the escape codes a terminal reads (colors, cursor moves), and
+ * with each line as a carriage return last rewrote it, as a progress bar ends.
+ */
+export const plainOutput = (text: string) =>
+  text
+    // eslint-disable-next-line no-control-regex
+    .replace(
+      /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])/g,
+      "",
+    )
+    .split("\n")
+    .map((line) => line.split("\r").filter(Boolean).at(-1) ?? "")
+    .join("\n");
+
 /** How much of a task's output is kept to show: its end. */
 const KEPT = 200_000;
 /** How often a running task's output is read. */

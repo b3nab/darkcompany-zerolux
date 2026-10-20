@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { parseEvent } from "./chat";
 import { setKernelFetch } from "./client";
-import { readTaskOutput } from "./tasks";
+import { plainOutput, readTaskOutput } from "./tasks";
 import type { TaskOutput } from "./tasks";
 
 afterEach(() => setKernelFetch());
@@ -67,4 +67,12 @@ test("a task's notice is an event once per state", () => {
     )?.event_id;
   expect(notice("running")).toBe(notice("running"));
   expect(notice("exited")).not.toBe(notice("running"));
+});
+
+test("output reads as plain text: no escape codes, each line as a carriage return last left it", () => {
+  expect(
+    plainOutput(
+      "\x1b[32mok\x1b[0m\n\x1b]0;title\x07 10%\r 50%\r100%\ndone\r\n",
+    ),
+  ).toBe("ok\n100%\ndone\n");
 });
