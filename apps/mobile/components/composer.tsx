@@ -69,6 +69,10 @@ export interface ComposerVoice {
   discard(): void;
 }
 
+/** The box's height: one line at least, about six before its words scroll. */
+const LOWEST = 48;
+const HIGHEST = 144;
+
 /** How far left a held recording slides before it is dropped. */
 const CANCEL = 110;
 /** Which button a finger holds: none, the microphone, or the filled button. */
@@ -152,6 +156,8 @@ export function Composer({
   const holding = useRef(false);
   const dropped = useRef(false);
   const [sliding, setSliding] = useState(false);
+  // The box grows with its words however they arrive: typed, dictated, a mention or a draft.
+  const [height, setHeight] = useState(LOWEST);
   const [binned, setBinned] = useState(false);
   useEffect(() => {
     if (!binned) return;
@@ -303,16 +309,32 @@ export function Composer({
               </Text>
             </View>
           ) : (
-            <TextInput
-              ref={inputRef}
-              {...input}
-              multiline
-              placeholderTextColor={faint}
-              className={cn(
-                "max-h-36 min-h-12 px-3.5 pt-3 pb-1 font-sans text-base text-foreground",
-                input.editable === false && "opacity-60",
-              )}
-            />
+            <View>
+              {/* The same words, unseen, measure how tall the box must be. */}
+              <Text
+                aria-hidden
+                pointerEvents="none"
+                onLayout={(event) => setHeight(event.nativeEvent.layout.height)}
+                className="absolute inset-x-0 top-0 px-3.5 pt-3 pb-1 font-sans text-base opacity-0"
+              >
+                {`${input.value ?? ""}${input.value?.endsWith("\n") ? " " : ""}` ||
+                  " "}
+              </Text>
+              <TextInput
+                ref={inputRef}
+                {...input}
+                multiline
+                scrollEnabled={height > HIGHEST}
+                placeholderTextColor={faint}
+                style={{
+                  height: Math.min(HIGHEST, Math.max(LOWEST, height)),
+                }}
+                className={cn(
+                  "px-3.5 pt-3 pb-1 font-sans text-base text-foreground",
+                  input.editable === false && "opacity-60",
+                )}
+              />
+            </View>
           )}
           <View className="min-h-12 flex-row items-center gap-0.5 px-1.5 pt-0.5 pb-1.5">
             {recording ? (
