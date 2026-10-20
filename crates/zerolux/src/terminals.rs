@@ -334,9 +334,19 @@ mod tests {
         terminals
             .write(&info.id, if cfg!(windows) { "exit\r\n" } else { "exit\n" })
             .unwrap();
+        let mut after = terminals.info(&info.id).unwrap().end;
         for _ in 0..200 {
             if terminals.info(&info.id).unwrap().ended {
                 break;
+            }
+            // Its console may ask where the cursor is again, as a prompt is drawn.
+            let output = terminals.output(&info.id, after).unwrap();
+            after = output.next;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(output.data)
+                .unwrap();
+            if String::from_utf8_lossy(&bytes).contains("\u{1b}[6n") {
+                let _ = terminals.write(&info.id, "\u{1b}[1;1R");
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
