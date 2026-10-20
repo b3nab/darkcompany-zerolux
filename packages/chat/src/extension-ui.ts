@@ -149,9 +149,9 @@ export function validTree(
         return { type: "divider" };
       case "image": {
         const src = text(n.src, "an image's source");
-        // Drawn from the web or carried inline: never a file of the device.
-        if (!/^(https:|data:image\/)/.test(src))
-          throw new Invalid("an image's source is not https or data");
+        // Carried inline, as every image in the app: nothing loads from outside.
+        if (!src.startsWith("data:image/"))
+          throw new Invalid("an image is not carried inline");
         return { type: "image", src, alt: text(n.alt, "an image's alt") };
       }
       case "list":
@@ -388,11 +388,19 @@ export type UiNotice =
       tree: unknown;
     };
 
-const listeners = new Set<(notice: UiNotice) => void>();
+const listeners = new Set<(notice: UiNotice | { type: "resync" }) => void>();
 
 /** Every shown view hears an extension's event or tree. */
 export function uiNotice(notice: UiNotice) {
   listeners.forEach((listen) => listen(notice));
+}
+
+/**
+ * Every shown view reads its tree again: notices may have been missed while the app was
+ * away, or the extensions changed.
+ */
+export function uiResync() {
+  listeners.forEach((listen) => listen({ type: "resync" }));
 }
 
 const sameContext = (a: UiContext, b: UiContext) =>
@@ -463,7 +471,8 @@ export function useExtensionView(
   useEffect(() => void read(), [read]);
   const events = refreshOn.join("\n");
   useEffect(() => {
-    const listen = (notice: UiNotice) => {
+    const listen = (notice: UiNotice | { type: "resync" }) => {
+      if (notice.type === "resync") return void read();
       if (notice.type === "extension.event") {
         if (events.split("\n").includes(notice.event)) void read();
         return;

@@ -122,13 +122,20 @@ test("a part the client doesn't know is left out, and a broken one stops the vie
   expect(
     validTree({ type: "list", items: [{ subtitle: "no title" }] }).error,
   ).toBe("This view can't be shown: a list item has no text.");
-  // An image is drawn from the web or inline, never from the device.
+  // An image is carried inline: nothing loads from outside or from the device.
   expect(
     validTree({ type: "image", src: "file:///etc/hosts", alt: "x" }).error,
   ).toBeString();
   expect(
     validTree({ type: "image", src: "https://example.test/a.png", alt: "A" })
-      .tree,
+      .error,
+  ).toBeString();
+  expect(
+    validTree({
+      type: "image",
+      src: "data:image/png;base64,iVBORw0=",
+      alt: "A",
+    }).tree,
   ).toBeDefined();
   let deep: unknown = { type: "divider" };
   for (let i = 0; i < 20; i++) deep = { type: "stack", children: [deep] };

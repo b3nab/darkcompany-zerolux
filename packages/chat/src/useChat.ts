@@ -41,7 +41,7 @@ import type { SentInput } from "./inputs";
 import type { QueuedInput } from "./live";
 import type { SessionBlock } from "./session-events";
 import { backgroundNotice, backgroundResync } from "./background";
-import { uiNotice } from "./extension-ui";
+import { uiNotice, uiResync } from "./extension-ui";
 import { terminalNotice, terminalResync } from "./terminals";
 
 /** Chat state for the owner: LiveKit events say what to refetch from the kernel. */
@@ -248,7 +248,8 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       case "terminal.output":
         return terminalNotice(event);
       case "extensions.changed":
-        return extensionsNotice();
+        extensionsNotice();
+        return uiResync();
       case "background_command.changed":
         return backgroundNotice(event);
       case "extension.event":
@@ -282,6 +283,7 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
         liveResync();
         terminalResync();
         extensionsNotice();
+        uiResync();
         backgroundResync();
         void background(sync());
       },
