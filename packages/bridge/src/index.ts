@@ -1,6 +1,6 @@
 export * from "./chat-bridge.ts";
 export * from "./delegation.ts";
-export * from "./tasks.ts";
+export * from "./background.ts";
 export * from "./agent-settings.ts";
 export * from "./integration-code.ts";
 export { AgentLinkChild } from "./agent-link.ts";

@@ -15,14 +15,14 @@ import {
 import {
   ChatBridge,
   ChatHttpError,
-  listTasks,
+  listBackground,
   readSession,
-  readTask,
+  readBackground,
   sendSession,
   startSession,
-  startTask,
+  runInBackground,
   stopSession,
-  stopTask,
+  stopBackground,
   type Batch,
   type ChatRequest,
 } from "@zerolux/bridge";
@@ -47,11 +47,11 @@ const CHAT_TOOLS = [
   "mcp__zerolux__close_thread",
 ];
 /** The tools every session ZeroLux runs has: commands in the background. */
-const TASK_TOOLS = [
-  "mcp__zerolux__task_start",
-  "mcp__zerolux__task_read",
-  "mcp__zerolux__task_stop",
-  "mcp__zerolux__tasks",
+const BACKGROUND_TOOLS = [
+  "mcp__zerolux__background_run",
+  "mcp__zerolux__background_read",
+  "mcp__zerolux__background_stop",
+  "mcp__zerolux__background_list",
 ];
 
 interface Approval {
@@ -169,7 +169,7 @@ export class ClaudeAgent {
         // ZeroLux's own tools: never held for a permission check.
         allowedTools: [
           ...(options.allowedTools ?? []),
-          ...TASK_TOOLS,
+          ...BACKGROUND_TOOLS,
           ...(chat ? CHAT_TOOLS : []),
         ],
       },
@@ -431,11 +431,14 @@ export class ClaudeAgent {
 
   private tools(chat: boolean) {
     if (!chat)
-      return createSdkMcpServer({ name: "zerolux", tools: this.taskTools() });
+      return createSdkMcpServer({
+        name: "zerolux",
+        tools: this.backgroundTools(),
+      });
     return createSdkMcpServer({
       name: "zerolux",
       tools: [
-        ...this.taskTools(),
+        ...this.backgroundTools(),
         tool(
           "send",
           "Post to a ZeroLux chat or thread.",
@@ -509,7 +512,7 @@ export class ClaudeAgent {
   }
 
   /** Commands this session runs in the background; it is told how each ends. */
-  private taskTools() {
+  private backgroundTools() {
     const call = <T>(path: string, body?: unknown) =>
       this.bridge.call<T>(path, body);
     const reply = (value: unknown) => ({
@@ -522,43 +525,47 @@ export class ClaudeAgent {
     };
     return [
       tool(
-        "task_start",
+        "background_run",
         "Run a command in the background, in your folder. Returns at once; when it ends, its exit code and the end of its output arrive as a message.",
         { command: z.string().describe("Shell command") },
         async ({ command }) => {
-          const task = await startTask(call, session(), command);
-          return reply({ id: task.id, status: task.status });
+          const started = await runInBackground(call, session(), command);
+          return reply({ id: started.id, status: started.status });
         },
       ),
       tool(
-        "task_read",
-        "A background task's status and output: from `after`, or its end.",
+        "background_read",
+        "A background command's status and output: from `after`, or its end.",
         {
-          id: z.string().describe("Task ID"),
+          id: z.string().describe("Background command ID"),
           after: z.number().optional().describe("Byte offset"),
         },
-        async ({ id, after }) => reply(await readTask(call, id, after)),
+        async ({ id, after }) => reply(await readBackground(call, id, after)),
       ),
       tool(
-        "task_stop",
-        "Stop a background task.",
-        { id: z.string().describe("Task ID") },
+        "background_stop",
+        "Stop a background command.",
+        { id: z.string().describe("Background command ID") },
         async ({ id }) => {
-          const task = await stopTask(call, id);
-          return reply({ id: task.id, status: task.status });
+          const stopped = await stopBackground(call, id);
+          return reply({ id: stopped.id, status: stopped.status });
         },
       ),
-      tool("tasks", "Your background tasks, newest first.", {}, async () =>
-        reply(
-          (await listTasks(call, session())).map(
-            ({ id, command, status, exit_code }) => ({
-              id,
-              command,
-              status,
-              exit_code,
-            }),
+      tool(
+        "background_list",
+        "Your background commands, newest first.",
+        {},
+        async () =>
+          reply(
+            (await listBackground(call, session())).map(
+              ({ id, command, status, exit_code }) => ({
+                id,
+                command,
+                status,
+                exit_code,
+              }),
+            ),
           ),
-        ),
       ),
     ];
   }

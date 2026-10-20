@@ -249,10 +249,10 @@ test("a session ZeroLux owns starts in its folder, with its ID, mode and permiss
   expect(Object.keys(f.options().mcpServers!)).toEqual(["zerolux"]);
   // Its own chat tools are never held for a permission check.
   expect(f.options().allowedTools).toEqual([
-    "mcp__zerolux__task_start",
-    "mcp__zerolux__task_read",
-    "mcp__zerolux__task_stop",
-    "mcp__zerolux__tasks",
+    "mcp__zerolux__background_run",
+    "mcp__zerolux__background_read",
+    "mcp__zerolux__background_stop",
+    "mcp__zerolux__background_list",
     "mcp__zerolux__session_start",
     "mcp__zerolux__session_read",
     "mcp__zerolux__session_send",
@@ -267,14 +267,14 @@ test("a session ZeroLux owns starts in its folder, with its ID, mode and permiss
   expect(g.options().sessionId).toBeUndefined();
 });
 
-test("a session without an agent has no chat tools, only its tasks", async () => {
+test("a session without an agent has no chat tools, only its background commands", async () => {
   const f = fixture();
   await f.start(false, false);
   expect(f.options().allowedTools).toEqual([
-    "mcp__zerolux__task_start",
-    "mcp__zerolux__task_read",
-    "mcp__zerolux__task_stop",
-    "mcp__zerolux__tasks",
+    "mcp__zerolux__background_run",
+    "mcp__zerolux__background_read",
+    "mcp__zerolux__background_stop",
+    "mcp__zerolux__background_list",
   ]);
   expect(typeof f.options().canUseTool).toBe("function");
 });

@@ -15,14 +15,14 @@ import {
   localURL,
   nativeFingerprint,
   integrationCode,
-  listTasks,
+  listBackground,
   readSession,
-  readTask,
+  readBackground,
   sendSession,
   startSession,
-  startTask,
+  runInBackground,
   stopSession,
-  stopTask,
+  stopBackground,
   type ChatHost,
   type LiveChange,
 } from "@zerolux/bridge";
@@ -673,7 +673,7 @@ export default function chatExtension(pi: ExtensionAPI) {
     if (linked.length !== 1 || !linked[0]!.sessionId)
       throw new Error(
         linked.length
-          ? "Several ZeroLux workspaces are linked; run tasks from one"
+          ? "Several ZeroLux workspaces are linked; run background commands from one"
           : "No ZeroLux link is connected",
       );
     const bridge = linked[0]!;
@@ -683,8 +683,8 @@ export default function chatExtension(pi: ExtensionAPI) {
     };
   };
   pi.registerTool({
-    name: "zerolux_task_start",
-    label: "ZeroLux task",
+    name: "zerolux_background_run",
+    label: "ZeroLux background",
     description:
       "Run a command in the background, in your folder. Returns at once; when it ends, its exit code and the end of its output arrive as a message.",
     parameters: Type.Object({
@@ -692,45 +692,45 @@ export default function chatExtension(pi: ExtensionAPI) {
     }),
     async execute(_id, args) {
       const { session, call } = own();
-      const task = await startTask(call, session, args.command);
-      return result({ id: task.id, status: task.status });
+      const started = await runInBackground(call, session, args.command);
+      return result({ id: started.id, status: started.status });
     },
   });
   pi.registerTool({
-    name: "zerolux_task_read",
-    label: "ZeroLux task",
+    name: "zerolux_background_read",
+    label: "ZeroLux background",
     description:
-      "A background task's status and output: from `after`, or its end.",
+      "A background command's status and output: from `after`, or its end.",
     parameters: Type.Object({
-      id: Type.String({ description: "Task ID" }),
+      id: Type.String({ description: "Background command ID" }),
       after: Type.Optional(Type.Number({ description: "Byte offset" })),
     }),
     async execute(_id, args) {
-      return result(await readTask(own().call, args.id, args.after));
+      return result(await readBackground(own().call, args.id, args.after));
     },
   });
   pi.registerTool({
-    name: "zerolux_task_stop",
-    label: "ZeroLux task",
-    description: "Stop a background task.",
+    name: "zerolux_background_stop",
+    label: "ZeroLux background",
+    description: "Stop a background command.",
     parameters: Type.Object({
-      id: Type.String({ description: "Task ID" }),
+      id: Type.String({ description: "Background command ID" }),
     }),
     async execute(_id, args) {
-      const task = await stopTask(own().call, args.id);
-      return result({ id: task.id, status: task.status });
+      const stopped = await stopBackground(own().call, args.id);
+      return result({ id: stopped.id, status: stopped.status });
     },
   });
   pi.registerTool({
-    name: "zerolux_tasks",
-    label: "ZeroLux task",
-    description: "Your background tasks, newest first.",
+    name: "zerolux_background_list",
+    label: "ZeroLux background",
+    description: "Your background commands, newest first.",
     parameters: Type.Object({}),
     async execute() {
       const { session, call } = own();
-      const tasks = await listTasks(call, session);
+      const commands = await listBackground(call, session);
       return result(
-        tasks.map(({ id, command, status, exit_code }) => ({
+        commands.map(({ id, command, status, exit_code }) => ({
           id,
           command,
           status,
