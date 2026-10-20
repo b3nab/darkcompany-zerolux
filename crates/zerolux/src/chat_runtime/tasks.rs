@@ -72,12 +72,20 @@ impl ChatRuntime {
         self.tasks_dir.join(format!("{id}.{extension}"))
     }
 
+    /// The session itself, or a person who may read or work in it, as `need` says.
+    async fn task_access(&self, who: &ChatIdentity, session: &str, need: Access) -> Result<()> {
+        if who.session_id.as_deref() != Some(session) {
+            self.store.acting_for(who, session, need).await?;
+        }
+        Ok(())
+    }
+
     async fn task_row(&self, who: &ChatIdentity, id: &str, need: Access) -> Result<tasks::Model> {
         let row = tasks::Entity::find_by_id(id)
             .one(self.store.db())
             .await?
             .ok_or(Error::NotFound)?;
-        self.store.acting_for(who, &row.session_id, need).await?;
+        self.task_access(who, &row.session_id, need).await?;
         Ok(row)
     }
 
@@ -89,7 +97,8 @@ impl ChatRuntime {
         session: &str,
         command: &str,
     ) -> Result<Task> {
-        let owner = self.store.acting_for(who, session, Access::Write).await?;
+        self.task_access(who, session, Access::Write).await?;
+        let owner = self.store.session_person(session).await?;
         let command = command.trim();
         ensure!(
             !command.is_empty() && command.len() <= 8 * 1024,
@@ -152,7 +161,7 @@ impl ChatRuntime {
 
     /// A session's tasks, newest first.
     pub async fn tasks(&self, who: &ChatIdentity, session: &str) -> Result<Vec<Task>> {
-        self.store.acting_for(who, session, Access::Read).await?;
+        self.task_access(who, session, Access::Read).await?;
         Ok(tasks::Entity::find()
             .filter(tasks::Column::SessionId.eq(session))
             .order_by_desc(tasks::Column::StartedAt)

@@ -206,6 +206,15 @@ async fn a_session_runs_commands_in_the_background_and_reads_how_they_end() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+    // The session itself runs its tasks, with its own token.
+    let own = client
+        .post(format!("{url}/api/sessions/{session}/tasks"))
+        .bearer_auth(&issued.token)
+        .json(&json!({ "command": "echo mine" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(own.status(), StatusCode::OK);
 
     watcher.abort();
     runtime.shutdown().await.unwrap();
