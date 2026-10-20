@@ -52,7 +52,6 @@ jobs:
   # kernel's Windows port is through.
   windows:
     runs-on: windows-2025
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
