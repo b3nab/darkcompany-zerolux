@@ -341,11 +341,13 @@ fn terminate(pid: Option<i64>, child: Option<tokio::process::Child>) {
     {
         let _ = child;
         if let Some(pid) = pid.and_then(|pid| i32::try_from(pid).ok()) {
-            // Its own process group, from its own session.
-            let _ = nix::sys::signal::kill(
-                nix::unistd::Pid::from_raw(-pid),
-                nix::sys::signal::Signal::SIGTERM,
-            );
+            // Its own process group, from its own session, and the process itself.
+            for target in [-pid, pid] {
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(target),
+                    nix::sys::signal::Signal::SIGTERM,
+                );
+            }
         }
     }
     #[cfg(windows)]
