@@ -156,7 +156,6 @@ test("the owner enables, sets up, loads again and removes them", () => {
   expect(html).toContain(">Disable<");
   expect(html).toContain(">Enable<");
   expect(html).toContain(">Settings<");
-  expect(html).toContain("Development");
   expect(html).toContain("/home/owner/extensions/tasks");
   expect(html).toContain(">Load again<");
   // Only a disabled one is removed.

@@ -333,7 +333,7 @@ function ExtensionItem({
           {extension.version} · {extension.publisher}
         </span>
         <State extension={extension} />
-        {extension.dev && <Badge variant="outline">Development</Badge>}
+        {extension.dev && <Badge variant="outline">In development</Badge>}
       </div>
       {extension.description && (
         <p className="text-sm text-muted-foreground">{extension.description}</p>
@@ -569,7 +569,7 @@ function MarketplaceSection({
                       tone="primary"
                       confirm={
                         offer.parts?.includes("kernel")
-                          ? `Runs inside the kernel, signed by ${offer.publisher}.`
+                          ? `It runs inside the kernel, signed by ${offer.publisher}.`
                           : undefined
                       }
                       busy={installing !== undefined}
