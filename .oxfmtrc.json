@@ -12,6 +12,7 @@
     "ZEROLUX.md",
     "apps/web/generated/",
     "apps/mobile/uniwind-types.d.ts",
-    ".livekit/"
+    ".livekit/",
+    "**/ui/native/"
   ]
 }
