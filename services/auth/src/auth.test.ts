@@ -34,12 +34,16 @@ async function createFixture(backend: Backend) {
         if (schema) await admin?.query(`DROP SCHEMA "${schema}" CASCADE`);
       } finally {
         await admin?.end();
-        // Windows keeps a database file locked for a moment after it is closed.
+        // Windows keeps the database file locked while this test process holds any of its
+        // statements; the temporary folder is then left to the system to clean.
         await rm(root, {
           recursive: true,
           force: true,
-          maxRetries: 20,
+          maxRetries: 5,
           retryDelay: 100,
+        }).catch((error: NodeJS.ErrnoException) => {
+          if (process.platform !== "win32" || error.code !== "EBUSY")
+            throw error;
         });
       }
     }
