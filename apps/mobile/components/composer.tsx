@@ -3,14 +3,16 @@ import {
   ArrowUpIcon,
   AudioLinesIcon,
   CheckIcon,
+  ChevronLeftIcon,
   FileTextIcon,
   MicIcon,
   PlusIcon,
   SquareIcon,
+  Trash2Icon,
   XIcon,
 } from "lucide-react-native";
 import type { LucideIcon } from "lucide-react-native";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode, Ref } from "react";
 import {
   ActivityIndicator,
@@ -23,13 +25,22 @@ import {
 import type { TextInputInstance, TextInputProps } from "react-native";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import Animated, {
+  Extrapolation,
+  FadeIn,
+  FadeOut,
+  interpolate,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
+  withSequence,
+  withSpring,
   withTiming,
+  ZoomIn,
 } from "react-native-reanimated";
+import type { SharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCSSVariable } from "uniwind";
+import { HOLD_MS } from "@zerolux/chat";
 import type { ComposerAction, VoiceUse } from "@zerolux/chat";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
@@ -56,8 +67,11 @@ export interface ComposerVoice {
   discard(): void;
 }
 
-// A held finger may drift off the button without ending the recording.
-const RETAIN = { top: 60, bottom: 60, left: 120, right: 60 };
+/** How far left a held recording slides before it is dropped. */
+const CANCEL = 110;
+/** Which button a finger holds: none, the microphone, or the filled button. */
+const MIC = 1;
+const FILLED = 2;
 
 const filled: Record<Exclude<ComposerAction, "transcribing">, LucideIcon> = {
   record: AudioLinesIcon,
@@ -126,13 +140,69 @@ export function Composer({
   ]).map(String);
   const recording = voice.use !== undefined;
   const busy = voice.transcribing;
-  // Record, and the filled button while recording, answer to the press itself.
+  // Record, and the filled button while recording, answer to the touch itself.
   const held = action === "record" || recording;
-  const press = (use: VoiceUse) => {
-    if (!recording) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  const dictating = voice.use === "dictation";
+  // A press that starts recording may be held: then the finger slides left to drop it.
+  const slide = useSharedValue(0);
+  const lifted = useSharedValue(0);
+  const holder = useSharedValue(0);
+  const holding = useRef(false);
+  const dropped = useRef(false);
+  const [sliding, setSliding] = useState(false);
+  const [binned, setBinned] = useState(false);
+  useEffect(() => {
+    if (!binned) return;
+    const shown = setTimeout(() => setBinned(false), 900);
+    return () => clearTimeout(shown);
+  }, [binned]);
+  const settle = () => {
+    holding.current = false;
+    setSliding(false);
+    lifted.value = withSpring(0);
+    slide.value = withSpring(0, { damping: 16, stiffness: 200 });
+  };
+  const bin = () => {
+    voice.discard();
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    setBinned(true);
+  };
+  const down = (use: VoiceUse, id: number) => {
+    dropped.current = false;
+    holder.value = id;
+    if (!recording) {
+      holding.current = true;
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      // Held past a tap, it shows how to drop it.
+      setTimeout(() => {
+        if (!holding.current) return;
+        setSliding(true);
+        lifted.value = withSpring(1, { damping: 12, stiffness: 220 });
+      }, HOLD_MS);
+    }
     voice.press(use);
   };
-  const dictating = voice.use === "dictation";
+  const move = (dx: number) => {
+    if (!holding.current || dropped.current) return;
+    slide.value = Math.min(0, Math.max(-CANCEL, dx));
+    if (dx > -CANCEL) return;
+    dropped.current = true;
+    settle();
+    bin();
+  };
+  const up = () => {
+    settle();
+    if (!dropped.current) voice.release();
+  };
+  const hold = (use: VoiceUse, id: number) => ({
+    slide,
+    lifted,
+    holder,
+    id,
+    onDown: () => down(use, id),
+    onMove: move,
+    onUp: up,
+  });
   const Icon = action === "transcribing" ? undefined : filled[action];
   const tool = (
     icon: LucideIcon,
@@ -215,8 +285,15 @@ export function Composer({
               ))}
             </ScrollView>
           ) : null}
-          {recording ? (
-            <Recording use={voice.use!} seconds={voice.seconds} />
+          {binned ? (
+            <Binned />
+          ) : recording ? (
+            <Recording
+              use={voice.use!}
+              seconds={voice.seconds}
+              sliding={sliding}
+              slide={slide}
+            />
           ) : busy ? (
             <View className="min-h-12 flex-row items-center gap-2.5 px-3.5 pt-3 pb-1">
               <ActivityIndicator size="small" color={muted} />
@@ -238,7 +315,9 @@ export function Composer({
           )}
           <View className="min-h-12 flex-row items-center gap-0.5 px-1.5 pt-0.5 pb-1.5">
             {recording ? (
-              tool(XIcon, "Discard", voice.discard)
+              sliding ? null : (
+                tool(XIcon, "Discard", bin)
+              )
             ) : (
               <>
                 {add ? (
@@ -256,17 +335,13 @@ export function Composer({
             <View className="flex-1" />
             {recording ? null : trailing}
             {voice.dictation && (!recording || dictating) ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Dictate"
-                accessibilityState={{ disabled: busy, selected: dictating }}
+              <HoldButton
+                label="Dictate"
                 disabled={busy}
-                onPressIn={() => press("dictation")}
-                onPressOut={voice.release}
-                pressRetentionOffset={RETAIN}
-                hitSlop={4}
+                selected={dictating}
+                {...hold("dictation", MIC)}
                 className={cn(
-                  "size-10 items-center justify-center rounded-lg active:bg-accent",
+                  "size-10 items-center justify-center rounded-lg",
                   dictating && "bg-destructive/10",
                   busy && "opacity-35",
                 )}
@@ -276,42 +351,51 @@ export function Composer({
                   size={20}
                   strokeWidth={1.5}
                 />
-              </Pressable>
+              </HoldButton>
             ) : null}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={labels[action]}
-              accessibilityState={{ disabled: waiting || busy }}
-              disabled={waiting || busy}
-              onPress={
-                held
-                  ? undefined
-                  : () => {
-                      void Haptics.selectionAsync();
-                      onAction(action);
-                    }
-              }
-              onPressIn={held ? () => press(voice.use ?? "message") : undefined}
-              onPressOut={held ? voice.release : undefined}
-              onLongPress={held ? undefined : onHold}
-              delayLongPress={350}
-              pressRetentionOffset={RETAIN}
-              className={cn(
-                "ml-0.5 size-10 items-center justify-center rounded-lg bg-primary active:opacity-80",
-                (waiting || busy) && "opacity-40",
-              )}
-            >
-              {Icon ? (
-                <Icon
-                  color={onLamp}
-                  fill={action === "interrupt" ? onLamp : "none"}
-                  size={action === "interrupt" ? 14 : 19}
-                  strokeWidth={2}
-                />
-              ) : (
-                <ActivityIndicator size="small" color={onLamp} />
-              )}
-            </Pressable>
+            {held ? (
+              <HoldButton
+                label={labels[action]}
+                disabled={waiting || busy}
+                {...hold(voice.use ?? "message", FILLED)}
+                className={cn(
+                  "ml-0.5 size-10 items-center justify-center rounded-lg bg-primary",
+                  (waiting || busy) && "opacity-40",
+                )}
+              >
+                {Icon ? (
+                  <Icon color={onLamp} size={19} strokeWidth={2} />
+                ) : null}
+              </HoldButton>
+            ) : (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={labels[action]}
+                accessibilityState={{ disabled: waiting || busy }}
+                disabled={waiting || busy}
+                onPress={() => {
+                  void Haptics.selectionAsync();
+                  onAction(action);
+                }}
+                onLongPress={onHold}
+                delayLongPress={350}
+                className={cn(
+                  "ml-0.5 size-10 items-center justify-center rounded-lg bg-primary active:opacity-80",
+                  (waiting || busy) && "opacity-40",
+                )}
+              >
+                {Icon ? (
+                  <Icon
+                    color={onLamp}
+                    fill={action === "interrupt" ? onLamp : "none"}
+                    size={action === "interrupt" ? 14 : 19}
+                    strokeWidth={2}
+                  />
+                ) : (
+                  <ActivityIndicator size="small" color={onLamp} />
+                )}
+              </Pressable>
+            )}
           </View>
         </View>
       </View>
@@ -319,13 +403,129 @@ export function Composer({
   );
 }
 
-/** In the words' place while the microphone records: what for, and for how long. */
-function Recording({ use, seconds }: { use: VoiceUse; seconds: number }) {
+/**
+ * Dictate or Record under the finger. It gives a little under a touch; held, it grows and
+ * follows the finger sliding left. For VoiceOver, activating it is a tap.
+ */
+function HoldButton({
+  label,
+  disabled,
+  selected,
+  slide,
+  lifted,
+  holder,
+  id,
+  onDown,
+  onMove,
+  onUp,
+  className,
+  children,
+}: {
+  label: string;
+  disabled: boolean;
+  selected?: boolean;
+  slide: SharedValue<number>;
+  lifted: SharedValue<number>;
+  holder: SharedValue<number>;
+  id: number;
+  onDown: () => void;
+  onMove: (dx: number) => void;
+  onUp: () => void;
+  className: string;
+  children: ReactNode;
+}) {
+  const from = useRef(0);
+  const touched = useSharedValue(0);
+  const style = useAnimatedStyle(() => {
+    const mine = holder.value === id;
+    const grown = mine ? lifted.value : 0;
+    return {
+      zIndex: mine ? 1 : 0,
+      transform: [
+        { translateX: mine ? slide.value : 0 },
+        { scale: 1 + grown * 0.18 - touched.value * (1 - grown) * 0.08 },
+      ],
+    };
+  });
+  const release = () => {
+    touched.value = withSpring(0);
+    onUp();
+  };
+  return (
+    <Animated.View
+      accessible
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled, selected }}
+      accessibilityActions={[{ name: "activate" }]}
+      onAccessibilityAction={() => {
+        if (disabled) return;
+        onDown();
+        onUp();
+      }}
+      onStartShouldSetResponder={() => !disabled}
+      onResponderTerminationRequest={() => false}
+      onResponderGrant={(event) => {
+        from.current = event.nativeEvent.pageX;
+        touched.value = withTiming(1, { duration: 90 });
+        onDown();
+      }}
+      onResponderMove={(event) =>
+        onMove(event.nativeEvent.pageX - from.current)
+      }
+      onResponderRelease={release}
+      onResponderTerminate={release}
+      hitSlop={4}
+      style={style}
+      className={className}
+    >
+      {children}
+    </Animated.View>
+  );
+}
+
+/**
+ * In the words' place while the microphone records: what for, and for how long. While a
+ * finger holds it, how to drop it, fading as the finger slides.
+ */
+function Recording({
+  use,
+  seconds,
+  sliding,
+  slide,
+}: {
+  use: VoiceUse;
+  seconds: number;
+  sliding: boolean;
+  slide: SharedValue<number>;
+}) {
+  const [faint] = useCSSVariable(["--color-faint"]).map(String);
   const lit = useSharedValue(1);
+  const nudge = useSharedValue(0);
   useEffect(() => {
     lit.value = withRepeat(withTiming(0.3, { duration: 700 }), -1, true);
-  }, [lit]);
+    nudge.value = withRepeat(
+      withSequence(
+        withTiming(-4, { duration: 450 }),
+        withTiming(0, { duration: 450 }),
+      ),
+      -1,
+    );
+  }, [lit, nudge]);
   const dot = useAnimatedStyle(() => ({ opacity: lit.value }));
+  const hint = useAnimatedStyle(() => ({
+    opacity: interpolate(
+      slide.value,
+      [-CANCEL, -CANCEL * 0.35, 0],
+      [0, 0.55, 1],
+      Extrapolation.CLAMP,
+    ),
+    transform: [{ translateX: slide.value * 0.5 }],
+  }));
+  const chevron = useAnimatedStyle(() => ({
+    transform: [{ translateX: nudge.value }],
+  }));
+  const time = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
   return (
     <View className="min-h-12 flex-row items-center gap-2.5 px-3.5 pt-3 pb-1">
       <Animated.View
@@ -333,12 +533,57 @@ function Recording({ use, seconds }: { use: VoiceUse; seconds: number }) {
         className="size-2.5 rounded-full bg-destructive"
       />
       <Text className="font-mono text-sm font-medium">
-        {use === "dictation" ? "Listening" : "Recording"}
-        <Text className="font-mono text-sm text-faint">
-          {" "}
-          · {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
-        </Text>
+        {sliding ? (
+          time
+        ) : (
+          <>
+            {use === "dictation" ? "Listening" : "Recording"}
+            <Text className="font-mono text-sm text-faint"> · {time}</Text>
+          </>
+        )}
       </Text>
+      {sliding ? (
+        <Animated.View
+          entering={FadeIn.duration(160)}
+          style={hint}
+          className="flex-1 flex-row items-center justify-center gap-1"
+        >
+          <Animated.View style={chevron}>
+            <ChevronLeftIcon color={faint} size={16} strokeWidth={2} />
+          </Animated.View>
+          <Text className="text-sm text-muted-foreground">Slide to cancel</Text>
+        </Animated.View>
+      ) : null}
     </View>
+  );
+}
+
+/** A dropped recording, gone into the bin. */
+function Binned() {
+  const [destructive] = useCSSVariable(["--color-destructive"]).map(String);
+  const tilt = useSharedValue(0);
+  useEffect(() => {
+    tilt.value = withSequence(
+      withTiming(-14, { duration: 90 }),
+      withTiming(12, { duration: 110 }),
+      withTiming(-6, { duration: 90 }),
+      withTiming(0, { duration: 90 }),
+    );
+  }, [tilt]);
+  const shake = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${tilt.value}deg` }],
+  }));
+  return (
+    <Animated.View
+      exiting={FadeOut.duration(200)}
+      accessibilityLabel="Recording discarded"
+      className="min-h-12 flex-row items-center px-3.5 pt-3 pb-1"
+    >
+      <Animated.View entering={ZoomIn.springify().damping(12)}>
+        <Animated.View style={shake}>
+          <Trash2Icon color={destructive} size={18} strokeWidth={1.75} />
+        </Animated.View>
+      </Animated.View>
+    </Animated.View>
   );
 }
