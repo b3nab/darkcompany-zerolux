@@ -232,7 +232,8 @@ migrations with Atlas, using local Docker for a disposable database. See
 Commits follow [Conventional Commits](https://www.conventionalcommits.org). `bun run release
 <version>` sets the version everywhere, writes `CHANGELOG.md` from the commits
 and tags the release; pushing the tag builds the kernel, the desktop app and the Android app,
-and publishes them.
+and publishes them. A pre-release is a number, such as `0.0.1-1`, as the Windows installer
+takes no other; its changes go into the release that follows it.
 
 ## License
 

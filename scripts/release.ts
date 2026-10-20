@@ -14,7 +14,8 @@ export const versioned: [string, RegExp][] = [
   ["apps/mobile/app.json", /("version": ")([^"]+)"/],
 ];
 
-export const semver = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
+// A pre-release is a number, such as 0.0.1-1: the Windows installer (MSI) takes no other.
+export const semver = /^\d+\.\d+\.\d+(-\d+)?$/;
 
 /** The text with its version set, or an error when the file no longer says where it is. */
 export function withVersion(file: string, text: string, version: string) {
@@ -26,7 +27,9 @@ export function withVersion(file: string, text: string, version: string) {
 if (import.meta.main) {
   const version = process.argv[2]?.replace(/^v/, "") ?? "";
   if (!semver.test(version))
-    throw new Error("Usage: bun run release <version>, for example 0.0.1");
+    throw new Error(
+      "Usage: bun run release <version>, for example 0.0.1 or 0.0.1-1",
+    );
   const tag = `v${version}`;
   $.cwd(root);
   const files = [
@@ -55,7 +58,7 @@ if (import.meta.main) {
   }
   // The workspace's own crates in Cargo.lock, nothing else.
   await $`cargo update --workspace --offline`.quiet();
-  await $`bun x git-cliff --tag ${tag} --output CHANGELOG.md`.quiet();
+  await $`bun x --bun git-cliff --tag ${tag} --output CHANGELOG.md`.quiet();
 
   await $`git add -- ${files}`;
   await $`git commit -q -m ${`chore(release): ${tag}`} -- ${files}`;

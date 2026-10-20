@@ -18,9 +18,10 @@ test("only the workspace's version changes in Cargo.toml", () => {
   expect(next).toContain('serde = { version = "1" }');
 });
 
-test("a release version is semver", () => {
+test("a release version is semver, its pre-release a number", () => {
   expect(semver.test("0.0.1")).toBe(true);
-  expect(semver.test("0.1.0-rc.1")).toBe(true);
+  expect(semver.test("0.1.0-1")).toBe(true);
+  expect(semver.test("0.1.0-rc.1")).toBe(false);
   expect(semver.test("0.1")).toBe(false);
   expect(semver.test("latest")).toBe(false);
 });

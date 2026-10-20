@@ -22,6 +22,7 @@
     "check": "bun scripts/require-test-postgres.ts && livekit-server --version && bun run --cwd apps/desktop assets && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && bun scripts/test-rust.ts && bun run format:check && bun run typecheck && bun run test && bun run build"
   },
   "devDependencies": {
+    "git-cliff": "^2.14.2",
     "oxfmt": "^0.72.0"
   },
   "packageManager": "bun@1.4.2",
