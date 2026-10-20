@@ -426,16 +426,23 @@ fn client_url(value: &str) -> anyhow::Result<String> {
 /// Loopback only, on every socket: `bind_addresses` covers signaling, the `ips` filter covers
 /// RTC over UDP, and RTC over TCP is disabled because it binds every interface. An exposed
 /// kernel adds that one address, which this computer reaches as well.
-fn managed_config(port: u16, udp_port: u16, secret: &str, expose: Option<IpAddr>) -> String {
+/// `media` is one more address of this computer offered for media only, not for signalling:
+/// on Windows a client on this computer cannot reach the server's loopback address from its
+/// own network address, as WebRTC does there.
+fn managed_config(
+    port: u16,
+    udp_port: u16,
+    secret: &str,
+    expose: Option<IpAddr>,
+    media: Option<IpAddr>,
+) -> String {
+    let included = |ip: IpAddr| format!("\n      - {ip}/{}", if ip.is_ipv4() { 32 } else { 128 });
     // A node address would be the only one offered to clients. Without it LiveKit offers
     // every address that passes the filter: loopback for this computer, the other for the rest.
-    let (bind, include, node) = match expose {
-        Some(ip) => (
-            format!("\n  - {ip}"),
-            format!("\n      - {ip}/{}", if ip.is_ipv4() { 32 } else { 128 }),
-            "",
-        ),
-        None => (String::new(), String::new(), "node_ip: 127.0.0.1\n  "),
+    let (bind, include, node) = match (expose, media) {
+        (Some(ip), _) => (format!("\n  - {ip}"), included(ip), ""),
+        (None, Some(ip)) => (String::new(), included(ip), ""),
+        (None, None) => (String::new(), String::new(), "node_ip: 127.0.0.1\n  "),
     };
     format!(
         "port: {port}\n\
@@ -445,6 +452,14 @@ fn managed_config(port: u16, udp_port: u16, secret: &str, expose: Option<IpAddr>
          ips:\n    includes:\n      - 127.0.0.1/32{include}\n\
          keys:\n  {MANAGED_KEY}: {secret}\n"
     )
+}
+
+/// This computer's own network address, the one it would reach others from; none offline.
+fn this_computer() -> Option<IpAddr> {
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    // Connecting a UDP socket sends nothing: it only picks the route and its address.
+    socket.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
+    Some(socket.local_addr().ok()?.ip()).filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
 }
 
 async fn start_managed(
@@ -468,7 +483,17 @@ async fn start_managed(
     let mut child = Command::new(crate::platform::executable("livekit-server"))
         .env(
             "LIVEKIT_CONFIG",
-            managed_config(port, udp_port, &secret, expose),
+            managed_config(
+                port,
+                udp_port,
+                &secret,
+                expose,
+                if cfg!(windows) && expose.is_none() {
+                    this_computer()
+                } else {
+                    None
+                }
+            ),
         )
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
@@ -600,12 +625,30 @@ mod tests {
 
     #[test]
     fn managed_server_is_configured_for_loopback_only() {
-        let exposed = managed_config(7880, 7882, "generated", Some("192.0.2.7".parse().unwrap()));
+        let exposed = managed_config(
+            7880,
+            7882,
+            "generated",
+            Some("192.0.2.7".parse().unwrap()),
+            None,
+        );
         assert!(exposed.contains("bind_addresses:\n  - 127.0.0.1\n  - 192.0.2.7\n"));
         assert!(!exposed.contains("node_ip"));
         assert!(exposed.contains("      - 127.0.0.1/32\n      - 192.0.2.7/32\n"));
         assert!(!exposed.contains("0.0.0.0"));
-        let yaml = managed_config(7880, 7882, "generated", None);
+        // An address offered for media alone is not one the server listens on.
+        let media = managed_config(
+            7880,
+            7882,
+            "generated",
+            None,
+            Some("192.0.2.8".parse().unwrap()),
+        );
+        assert!(media.contains("bind_addresses:\n  - 127.0.0.1\n"));
+        assert!(!media.contains("  - 192.0.2.8\n"));
+        assert!(media.contains("      - 127.0.0.1/32\n      - 192.0.2.8/32\n"));
+        assert!(!media.contains("node_ip"));
+        let yaml = managed_config(7880, 7882, "generated", None, None);
         for line in [
             "  - 127.0.0.1",
             "  tcp_port: 0",
