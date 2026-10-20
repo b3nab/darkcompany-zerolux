@@ -36,3 +36,4 @@ export * from "./accounts";
 export * from "./action-form";
 export * from "./extensions";
 export * from "./tasks";
+export * from "./inputs";

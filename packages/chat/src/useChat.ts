@@ -6,6 +6,7 @@ import {
   freshness,
   mergeConversation,
   mergeMessages,
+  newId,
   outbox,
   pageBefore,
   refreshesSessions,
@@ -35,6 +36,10 @@ import type { LiveRead } from "./live";
 import { connectRealtime } from "./realtime";
 import type { RealtimeStatus } from "./realtime";
 import { extensionsNotice } from "./extensions";
+import { unseenInputs } from "./inputs";
+import type { SentInput } from "./inputs";
+import type { QueuedInput } from "./live";
+import type { SessionBlock } from "./session-events";
 import { taskNotice, tasksResync } from "./tasks";
 import { terminalNotice, terminalResync } from "./terminals";
 
@@ -66,9 +71,35 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
   // An older response never overwrites a newer one (e.g. Working after Idle).
   const [order] = useState(freshness);
   const [unsent, setUnsent] = useState<Outgoing[]>([]);
+  // The owner's inputs to sessions, until their records or queues show them.
+  const [inputs, setInputs] = useState<SentInput[]>([]);
   const [outgoing] = useState(() =>
     outbox(post, setUnsent, (e) => setError(errorMessage(e))),
   );
+
+  async function sendInput(input: SentInput) {
+    // In place, in the order they were sent.
+    const now = (status: SentInput["status"], error?: string) =>
+      setInputs((all) =>
+        all.some((i) => i.id === input.id)
+          ? all.map((i) =>
+              i.id === input.id ? { ...input, status, error } : i,
+            )
+          : [...all, { ...input, status, error }],
+      );
+    now("sending");
+    try {
+      await api(`/sessions/${input.session_id}/input`, {
+        text: input.text,
+        mode: input.mode,
+        ...(input.images.length ? { images: input.images } : {}),
+      });
+      now("sent");
+    } catch (e) {
+      now("failed", errorMessage(e));
+      throw e;
+    }
+  }
 
   function merge(id: string, incoming: Message[]) {
     outgoing.received(incoming.map((m) => m.id));
@@ -473,19 +504,40 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
      * Writes the owner's own words into a session as native input, not as a chat message. A
      * session at rest starts a turn with them; a working one takes them into the running turn
      * (`steer`), after it (`queue`), or in place of it (`interrupt`). Images go with them;
-     * with images the text may be empty. The events show them.
+     * with images the text may be empty. It shows at the session's end, by `sentInputs`,
+     * until the events show it; `after` is where the record shown ends, else the last notice
+     * says. A failed one stays there with its error.
      */
-    async input(
+    input: (
       sessionId: string,
       text: string,
       mode: InputMode = "steer",
       images: InputImage[] = [],
-    ) {
-      await api(`/sessions/${sessionId}/input`, {
+      after = outputs[sessionId]?.end ?? 0,
+    ) =>
+      sendInput({
+        id: newId(),
+        session_id: sessionId,
         text,
+        images,
         mode,
-        ...(images.length ? { images } : {}),
-      });
+        after,
+        status: "sending",
+      }),
+    /** A session's inputs that neither its record nor its queue show yet, failed ones included. */
+    sentInputs: (
+      sessionId: string,
+      blocks: SessionBlock[],
+      queue: QueuedInput[],
+    ) => unseenInputs(inputs, sessionId, blocks, queue),
+    /** Sends a failed input again, the same, where it was. */
+    async retryInput(id: string) {
+      const input = inputs.find((i) => i.id === id);
+      if (input) await sendInput(input);
+    },
+    /** Lets a failed input go. */
+    dropInput(id: string) {
+      setInputs((all) => all.filter((i) => i.id !== id));
     },
     /**
      * Takes one of the owner's inputs out of a session's queue before it runs. Codex allows it;
