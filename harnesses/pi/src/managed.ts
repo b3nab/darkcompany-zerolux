@@ -7,6 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   controlRequest,
+  nativeProcess,
   readControlDescriptor,
   type ControlDescriptor,
 } from "@zerolux/bridge";
@@ -59,9 +60,9 @@ export async function verifyManaged(
   const model = actual.model as { provider?: string; id?: string } | undefined;
   if (
     ctx.mode !== "rpc" ||
-    descriptor.pid !== process.ppid ||
+    descriptor.pid !== nativeProcess().parent ||
     actual.kind !== "pi-runner" ||
-    actual.native_pid !== process.pid ||
+    actual.native_pid !== nativeProcess().pid ||
     actual.native_session_id !== native ||
     actual.workspace !== workspace ||
     actual.session_file !== file ||
@@ -79,7 +80,7 @@ export async function verifyManaged(
   // Existing hosts can outlive an application update; their original guard stays valid.
   if (actual.guard_version === 1)
     await controlRequest(descriptor, "verify", {
-      native_pid: process.pid,
+      native_pid: nativeProcess().pid,
       session_file: file,
       cli_version: VERSION,
       model: { provider: ctx.model.provider, id: ctx.model.id },
@@ -101,7 +102,7 @@ export async function verifyManaged(
 export async function canPairManaged(proof: Proof | undefined) {
   if (!proof) return;
   const state = await controlRequest(proof.descriptor, "describe");
-  if (state.phase !== "running" || state.native_pid !== process.pid)
+  if (state.phase !== "running" || state.native_pid !== nativeProcess().pid)
     throw new Error("The pi execution host has not confirmed startup");
 }
 /**
@@ -115,7 +116,7 @@ export async function reportManagedLinks(
 ) {
   if (proof)
     await controlRequest(proof.descriptor, "links", {
-      native_pid: process.pid,
+      native_pid: nativeProcess().pid,
       link_ids: ids,
       ...(control ? { control } : {}),
     });
@@ -126,7 +127,7 @@ export async function nativeMetadata(
   ctx: ExtensionContext,
   proof?: Proof,
 ): Promise<NativeMetadata> {
-  const metadata: NativeMetadata = { pid: process.pid };
+  const metadata: NativeMetadata = { pid: nativeProcess().pid };
   const named = ctx.sessionManager.getSessionFile?.();
   if (!named) return metadata;
   try {
@@ -148,7 +149,7 @@ export async function nativeMetadata(
       workspace,
       agentDir,
       cliVersion: VERSION,
-      lastPid: process.pid,
+      lastPid: nativeProcess().pid,
       args: [],
     };
     try {

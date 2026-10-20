@@ -33,7 +33,11 @@ export async function waitAndExec(harness = "pi") {
     // end is the native end, and ending the gate ends its child with it.
     const child = Bun.spawn(windowsCommand(exec, args as string[]), {
       stdio: ["inherit", "inherit", "inherit"],
-      env: process.env,
+      env: {
+        ...process.env,
+        ZEROLUX_NATIVE_PID: String(process.pid),
+        ZEROLUX_NATIVE_PARENT: String(process.ppid),
+      },
       windowsVerbatimArguments: /\.(cmd|bat)$/i.test(exec),
     });
     process.exit(await child.exited);
