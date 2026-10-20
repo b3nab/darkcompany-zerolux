@@ -1,4 +1,5 @@
 // A child of one kernel, not an independently supervised authentication daemon.
+import { createServer, type AddressInfo } from "node:net";
 import { createInterface } from "node:readline";
 import { createAuth } from "./auth.ts";
 import { parseConfig } from "./config.ts";
@@ -46,6 +47,18 @@ function stop(code = 0) {
   })());
 }
 
+/** A free loopback port: Bun on Windows cannot serve on port 0. */
+function freePort() {
+  return new Promise<number>((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const { port } = probe.address() as AddressInfo;
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
 async function start(line: string) {
   const config = parseConfig(JSON.parse(line));
   stage = "database";
@@ -54,7 +67,7 @@ async function start(line: string) {
   stage = "listen";
   server = Bun.serve({
     hostname: "127.0.0.1",
-    port: 0,
+    port: process.platform === "win32" ? await freePort() : 0,
     maxRequestBodySize: 64 * 1024,
     fetch: auth.fetch,
     error: () =>
