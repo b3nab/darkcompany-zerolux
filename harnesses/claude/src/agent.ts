@@ -15,10 +15,14 @@ import {
 import {
   ChatBridge,
   ChatHttpError,
+  listTasks,
   readSession,
+  readTask,
   sendSession,
   startSession,
+  startTask,
   stopSession,
+  stopTask,
   type Batch,
   type ChatRequest,
 } from "@zerolux/bridge";
@@ -41,6 +45,13 @@ const CHAT_TOOLS = [
   "mcp__zerolux__send",
   "mcp__zerolux__thread",
   "mcp__zerolux__close_thread",
+];
+/** The tools every session ZeroLux runs has: commands in the background. */
+const TASK_TOOLS = [
+  "mcp__zerolux__task_start",
+  "mcp__zerolux__task_read",
+  "mcp__zerolux__task_stop",
+  "mcp__zerolux__tasks",
 ];
 
 interface Approval {
@@ -154,13 +165,13 @@ export class ClaudeAgent {
         includePartialMessages: true,
         // A checkpoint of the files before each of the owner's messages, to rewind them.
         enableFileCheckpointing: true,
-        ...(chat
-          ? {
-              mcpServers: { zerolux: this.tools() },
-              // The agent's own chat tools, ZeroLux's: never held for a permission check.
-              allowedTools: [...(options.allowedTools ?? []), ...CHAT_TOOLS],
-            }
-          : {}),
+        mcpServers: { zerolux: this.tools(chat) },
+        // ZeroLux's own tools: never held for a permission check.
+        allowedTools: [
+          ...(options.allowedTools ?? []),
+          ...TASK_TOOLS,
+          ...(chat ? CHAT_TOOLS : []),
+        ],
       },
     });
     for await (const message of this.query) this.handle(message);
@@ -418,10 +429,13 @@ export class ClaudeAgent {
     }
   }
 
-  private tools() {
+  private tools(chat: boolean) {
+    if (!chat)
+      return createSdkMcpServer({ name: "zerolux", tools: this.taskTools() });
     return createSdkMcpServer({
       name: "zerolux",
       tools: [
+        ...this.taskTools(),
         tool(
           "send",
           "Post to a ZeroLux chat or thread.",
@@ -492,6 +506,61 @@ export class ClaudeAgent {
         ...this.delegationTools(),
       ],
     });
+  }
+
+  /** Commands this session runs in the background; it is told how each ends. */
+  private taskTools() {
+    const call = <T>(path: string, body?: unknown) =>
+      this.bridge.call<T>(path, body);
+    const reply = (value: unknown) => ({
+      content: [{ type: "text" as const, text: JSON.stringify(value) }],
+    });
+    const session = () => {
+      const id = this.bridge.sessionId;
+      if (!id) throw new Error("No ZeroLux link is connected");
+      return id;
+    };
+    return [
+      tool(
+        "task_start",
+        "Run a command in the background, in your folder. Returns at once; when it ends, its exit code and the end of its output arrive as a message.",
+        { command: z.string().describe("Shell command") },
+        async ({ command }) => {
+          const task = await startTask(call, session(), command);
+          return reply({ id: task.id, status: task.status });
+        },
+      ),
+      tool(
+        "task_read",
+        "A background task's status and output: from `after`, or its end.",
+        {
+          id: z.string().describe("Task ID"),
+          after: z.number().optional().describe("Byte offset"),
+        },
+        async ({ id, after }) => reply(await readTask(call, id, after)),
+      ),
+      tool(
+        "task_stop",
+        "Stop a background task.",
+        { id: z.string().describe("Task ID") },
+        async ({ id }) => {
+          const task = await stopTask(call, id);
+          return reply({ id: task.id, status: task.status });
+        },
+      ),
+      tool("tasks", "Your background tasks, newest first.", {}, async () =>
+        reply(
+          (await listTasks(call, session())).map(
+            ({ id, command, status, exit_code }) => ({
+              id,
+              command,
+              status,
+              exit_code,
+            }),
+          ),
+        ),
+      ),
+    ];
   }
 
   /** Sessions this one starts, follows and steers to delegate work. */

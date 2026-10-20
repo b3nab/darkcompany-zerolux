@@ -277,6 +277,10 @@ describe("permanent pi chat", () => {
       "zerolux_session_read",
       "zerolux_session_send",
       "zerolux_session_stop",
+      "zerolux_task_start",
+      "zerolux_task_read",
+      "zerolux_task_stop",
+      "zerolux_tasks",
       "zerolux_reload",
     ]);
   });
