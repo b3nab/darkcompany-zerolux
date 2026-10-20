@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage, kernelUrl, request } from "./client";
+import { spanLabel } from "./session-events";
 
 /** A command a session runs in the background, in its folder on the kernel's computer. */
 export interface Task {
@@ -31,6 +32,26 @@ export interface TaskNotice {
   task_id: string;
   session_id: string;
   status: Task["status"];
+}
+
+const states: Record<Task["status"], string> = {
+  running: "Running",
+  exited: "Exited",
+  stopped: "Stopped",
+  lost: "Lost",
+};
+
+/** A task in a few words: how it stands, with its exit code, and how long it ran. */
+export function taskState(task: Task, now = Date.now()) {
+  const end = task.status === "running" ? now : task.ended_at;
+  return [
+    task.status === "exited" && task.exit_code !== null
+      ? `Exited ${task.exit_code}`
+      : states[task.status],
+    end === null ? null : spanLabel(end - task.started_at),
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /** How much of a task's output is kept to show: its end. */
