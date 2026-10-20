@@ -16,6 +16,12 @@ Sign in and complete owner setup before hiring. From Team > Hire, pick an existi
 
 You can also start a new pi, Claude Code or Codex session in a folder on the kernel's computer. On mobile, use Org > New agent. The harness keeps its own configuration and credentials; creating a session does not configure a model provider for it.
 
+### On Windows
+
+- **Codex** needs version 0.154 or later, the first with its background server on Windows. The kernel reaches it through `codex app-server proxy`.
+- **pi and Claude Code** started by ZeroLux run under a gate that keeps them as its child, since Windows cannot replace a process in place; the gate lives exactly as long as the session.
+- **Claude Code in a terminal** cannot be hired yet: on Windows its inbox takes a message only with a token Claude Code gives its own processes. Start Claude Code sessions from ZeroLux there.
+
 ## Native observability and control
 
 ZeroLux provides full observability and control over agents and all their output, uniformly for pi, Claude Code and Codex. Native history, output, tool calls and results, errors and intervention requests are available through the kernel, alongside input, approval and interruption controls. This data and these controls are reusable throughout ZeroLux.
