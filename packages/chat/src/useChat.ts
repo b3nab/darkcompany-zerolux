@@ -35,6 +35,7 @@ import type { LiveRead } from "./live";
 import { connectRealtime } from "./realtime";
 import type { RealtimeStatus } from "./realtime";
 import { extensionsNotice } from "./extensions";
+import { taskNotice, tasksResync } from "./tasks";
 import { terminalNotice, terminalResync } from "./terminals";
 
 /** Chat state for the owner: LiveKit events say what to refetch from the kernel. */
@@ -216,6 +217,8 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
         return terminalNotice(event);
       case "extensions.changed":
         return extensionsNotice();
+      case "task.changed":
+        return taskNotice(event);
       case "session.output": {
         const { session_id, end, type: _, event_id: __, ...tail } = event;
         setOutputs((all) => ({
@@ -239,11 +242,12 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       kernel: server,
       event: onEvent,
       sync: () => {
-        // Notices may have been missed meanwhile: live state, terminals and extensions are read
-        // again too.
+        // Notices may have been missed meanwhile: live state, terminals, extensions and tasks
+        // are read again too.
         liveResync();
         terminalResync();
         extensionsNotice();
+        tasksResync();
         void background(sync());
       },
       status: setRealtime,
