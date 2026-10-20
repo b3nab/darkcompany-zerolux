@@ -1181,9 +1181,9 @@ export function SessionView({
               <QueueCards
                 queue={queue}
                 busy={busy}
-                // Codex lets a waiting input change; the other harnesses only show it.
+                // Each waiting input says whether its harness lets it change.
                 change={
-                  access.write && session.harness === "codex"
+                  access.write
                     ? {
                         remove: (item) =>
                           perform(() => chat.removeQueued(session.id, item.id)),
@@ -2076,7 +2076,7 @@ export function QueueCards({
               {item.text}
             </p>
           )}
-          {change && editing?.id !== item.id && (
+          {change && item.changeable && editing?.id !== item.id && (
             <span className="flex shrink-0 gap-0.5">
               <Button
                 type="button"
