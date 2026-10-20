@@ -2,10 +2,12 @@ import { afterEach, expect, test } from "bun:test";
 import { parseEvent } from "./chat";
 import { setKernelFetch } from "./client";
 import {
+  answerBridge,
   resultLine,
   runPieceAction,
   uiPieces,
   validTree,
+  webPieceUrl,
   withContext,
   withoutContext,
 } from "./extension-ui";
@@ -234,4 +236,61 @@ test("an extension's events and trees are each their own notice", () => {
     }),
   );
   expect(view?.event_id).toStartWith("extension.view:aspen.board:board:");
+});
+
+test("a web piece opens at the address the kernel gives, and its tools/call runs an action", async () => {
+  setKernelFetch(async (url, init) => {
+    expect(String(url)).toBe(`${kernel}/api/extensions/aspen.board/ui`);
+    expect(JSON.parse(String(init?.body))).toEqual({ entry: "index.html" });
+    return Response.json({ url: "/api/extension-ui/k1/index.html" });
+  });
+  const piece: UiPiece = {
+    extension: "aspen.board",
+    space: "settings",
+    name: "options",
+    title: "Options",
+    view: { kind: "web", entry: "index.html" },
+  };
+  expect(await webPieceUrl(piece, kernel)).toBe(
+    `${kernel}/api/extension-ui/k1/index.html`,
+  );
+  const ran: unknown[] = [];
+  const call = async (name: string, input: Record<string, unknown>) => {
+    ran.push([name, input]);
+    if (name === "fail") throw new Error("Nothing to pin");
+    return { pinned: true };
+  };
+  expect(
+    await answerBridge(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "pin", arguments: { id: 3 } },
+      },
+      call,
+    ),
+  ).toEqual({ jsonrpc: "2.0", id: 1, result: { pinned: true } });
+  expect(
+    await answerBridge(
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "fail" } },
+      call,
+    ),
+  ).toEqual({
+    jsonrpc: "2.0",
+    id: 2,
+    error: { code: -32000, message: "Nothing to pin" },
+  });
+  expect(
+    (await answerBridge({ jsonrpc: "2.0", id: 3, method: "tools/list" }, call))
+      ?.error,
+  ).toBeDefined();
+  // A notice asks nothing, and nothing is answered.
+  expect(
+    await answerBridge({ jsonrpc: "2.0", method: "ui/ready" }, call),
+  ).toBeUndefined();
+  expect(ran).toEqual([
+    ["pin", { id: 3 }],
+    ["fail", {}],
+  ]);
 });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { JsonSchema } from "./action-form";
-import { errorMessage, kernelUrl } from "./client";
+import { errorMessage, kernelUrl, request } from "./client";
 import { runAction, useActions, useExtensions } from "./extensions";
 import type { Extension, ExtensionAction } from "./extensions";
 
@@ -300,6 +300,63 @@ export const runPieceAction = (
         kernel,
       )
     : Promise.reject(new Error(`${piece.title} is not an action`));
+
+/**
+ * A web piece's page: an address the kernel opens for an hour, to that extension's `ui/`
+ * folder only. Shown isolated, `sandbox="allow-scripts allow-forms"`, never same-origin.
+ */
+export async function webPieceUrl(piece: UiPiece, kernel = kernelUrl()) {
+  if (piece.view.kind !== "web")
+    throw new Error(`${piece.title} is not a web page`);
+  const { url } = await request<{ url: string }>(
+    kernel,
+    `/extensions/${encodeURIComponent(piece.extension)}/ui`,
+    { entry: piece.view.entry },
+  );
+  return new URL(url, kernel).toString();
+}
+
+/** The app's answer to a web piece, as JSON-RPC. */
+export interface BridgeReply {
+  jsonrpc: "2.0";
+  id: string | number;
+  result?: unknown;
+  error?: { code: number; message: string };
+}
+
+/**
+ * A web piece's request to the app, as MCP Apps ask: `tools/call {name, arguments}` runs one
+ * of its extension's actions. The JSON-RPC reply to post back, or nothing for a message
+ * that asks nothing.
+ */
+export async function answerBridge(
+  message: unknown,
+  call: (name: string, input: Record<string, unknown>) => Promise<unknown>,
+): Promise<BridgeReply | undefined> {
+  if (typeof message !== "object" || message === null) return undefined;
+  const { id, method, params } = message as {
+    id?: string | number;
+    method?: unknown;
+    params?: { name?: unknown; arguments?: unknown };
+  };
+  if (id === undefined) return undefined;
+  const reply = (
+    body: Pick<BridgeReply, "result"> | Pick<BridgeReply, "error">,
+  ): BridgeReply => ({ jsonrpc: "2.0", id, ...body });
+  if (method !== "tools/call" || typeof params?.name !== "string")
+    return reply({
+      error: { code: -32601, message: "Only tools/call is known" },
+    });
+  const input =
+    typeof params.arguments === "object" && params.arguments !== null
+      ? (params.arguments as Record<string, unknown>)
+      : {};
+  try {
+    return reply({ result: await call(params.name, input) });
+  } catch (error) {
+    return reply({ error: { code: -32000, message: errorMessage(error) } });
+  }
+}
 
 /** What an action gave back, in one line. */
 export function resultLine(value: unknown) {
