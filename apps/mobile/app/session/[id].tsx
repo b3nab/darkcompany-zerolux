@@ -6,14 +6,11 @@ import {
   ActivityIcon,
   ChevronDownIcon,
   ClockIcon,
-  ImagePlusIcon,
   PencilIcon,
   ChevronRightIcon,
   FileDiffIcon,
   ListChecksIcon,
   PanelRightIcon,
-  SendIcon,
-  SquareIcon,
   SquareTerminalIcon,
   XIcon,
 } from "lucide-react-native";
@@ -22,7 +19,6 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
-  Image,
   Modal,
   Platform,
   Pressable,
@@ -32,8 +28,8 @@ import {
   View,
 } from "react-native";
 import * as Haptics from "expo-haptics";
-import Animated, { FadeIn } from "react-native-reanimated";
-import { KeyboardStickyView } from "react-native-keyboard-controller";
+import Animated, { FadeIn, SlideInDown } from "react-native-reanimated";
+import Svg, { Circle } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { useCSSVariable } from "uniwind";
@@ -77,10 +73,14 @@ import {
   useSessionLive,
   useSessionSettings,
   useVoice,
+  useVoiceInput,
+  composerAction,
+  dictated,
 } from "@zerolux/chat";
 import type {
   Actor,
   AgentSettings,
+  ComposerAction,
   Subagent,
   Approval,
   ApprovalItem,
@@ -96,6 +96,7 @@ import type {
   SessionBlock,
 } from "@zerolux/chat";
 import { ApprovalCard, ApprovalReceipt } from "@/components/approval-card";
+import { Composer as ComposerBox } from "@/components/composer";
 import { ActorMark, Fact } from "@/components/member";
 import { Screen } from "@/components/screen";
 import { Segmented } from "@/components/segmented";
@@ -131,6 +132,7 @@ import { useAccess } from "../../src/me";
 import { dismissNotice } from "../../src/notices";
 import { pickPhotos } from "../../src/photos";
 import type { Photo } from "../../src/photos";
+import { useRecorder } from "../../src/voice";
 
 /** What the stream lists: the session's own blocks and the requests it made. */
 type Item = SessionBlock | ApprovalItem;
@@ -502,10 +504,10 @@ export default function SessionPage() {
 
 /**
  * The box to write to the session as its owner: the words go into the native session, a new
- * turn when it is idle, or joining the turn it is working on. With nothing typed while it
- * works, Interrupt takes Send's place. `/compact` runs the harness's own compaction instead,
- * and typing "/" offers the commands. What stays above it while the session works, as its
- * plan, comes as children.
+ * turn when it is idle, or joining the turn it is working on; held, Send waits for the turn
+ * or stops it first. `/compact` runs the harness's own compaction, "/" offers the commands
+ * and "@" the files. What stays above it while the session works, as its plan, comes as
+ * children.
  */
 function Composer({
   session,
@@ -532,21 +534,23 @@ function Composer({
   const harnessCommands = useSessionCommands(session.id, url);
   const queue = useSessionQueue(session.id, chat.live);
   const usage = useSessionUsage(session.id, chat.live);
+  const settings = useSessionSettings(
+    session.id,
+    `${session.status}:${session.activity}`,
+    url,
+  );
+  const { available: transcription } = useVoice(url);
   // The unsent text waits in its session while you are elsewhere in the app.
   const [draft, setDraft] = useState(() => draftOf(session.id));
   const box = useRef<TextInputInstance>(null);
   const [cursor, setCursor] = useState(draft.length);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
-  // Photos go with the words, or alone; they wait here until sent.
+  // Photos go with the words, or alone; they wait in the box until sent.
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [picking, setPicking] = useState(false);
-  const [faint, onLamp, agent, muted] = useCSSVariable([
-    "--color-faint",
-    "--color-primary-foreground",
-    "--color-agent",
-    "--color-muted-foreground",
-  ]).map(String);
+  const [sheet, setSheet] = useState(false);
+  const agent = String(useCSSVariable("--color-agent"));
   const commands = commandsFor(draft, harnessCommands);
   // "@" offers the session's files; a command's menu comes first.
   const mention = commands.length ? undefined : mentionAt(draft, cursor);
@@ -563,6 +567,34 @@ function Composer({
   };
   useEffect(() => saveDraft(session.id, draft), [session.id, draft]);
   const open = write && session.status === "connected";
+  const recorder = useRecorder();
+  const voice = useVoiceInput(
+    recorder,
+    {
+      write: (said) => setDraft((now) => dictated(now, said)),
+      // The session takes words: what was said goes as the input, shown at once.
+      send: async (said) =>
+        void chat
+          .input(session.id, said, undefined, [], recordEnd)
+          .catch(() => undefined),
+      transcription,
+    },
+    url,
+  );
+  const compact = async (args?: string) => {
+    setSending(true);
+    setError("");
+    try {
+      await chat.compact(session.id, args);
+      compactStarted();
+      return true;
+    } catch (e) {
+      setError(errorMessage(e));
+      return false;
+    } finally {
+      setSending(false);
+    }
+  };
   // While it works, words join the turn; held, Send waits for the turn or stops it first.
   const send = async (mode?: InputMode) => {
     const text = draft;
@@ -596,23 +628,13 @@ function Composer({
         )
         .catch(() => undefined);
     }
-    setSending(true);
-    try {
-      await chat.compact(session.id, command.args);
-      compactStarted();
-      clear();
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setSending(false);
-    }
+    if (await compact(command.args)) clear();
   };
   // Claude Code in a terminal only takes words, into the running turn.
   const choosable = !(
     session.harness === "claude-code" && session.origin !== "owned"
   );
   const filled = Boolean(draft.trim() || photos.length);
-  const interrupting = !filled && stop.allowed;
   const room = MAX_INPUT_IMAGES - photos.length;
   const pick = (from: "library" | "camera") => {
     setPicking(true);
@@ -638,15 +660,15 @@ function Composer({
         },
       );
     else
-      Alert.alert("Attach a photo", undefined, [
+      Alert.alert("Add a photo", undefined, [
         { text: "Photo library", onPress: () => pick("library") },
         { text: "Take photo", onPress: () => pick("camera") },
         { text: "Cancel", style: "cancel" },
       ]);
   };
   const modes: [string, InputMode][] = [
-    ["Send when this turn ends", "queue"],
-    ["Stop the turn and send", "interrupt"],
+    ["When the turn ends", "queue"],
+    ["Stop and send", "interrupt"],
   ];
   const chooseMode = () => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -670,236 +692,197 @@ function Composer({
         { text: "Cancel", style: "cancel" as const },
       ]);
   };
-  const shown = notice || error || stop.error;
-  return (
-    <KeyboardStickyView offset={{ closed: 0, opened: insets.bottom }}>
+  const action = composerAction({
+    filled,
+    interruptible: stop.allowed,
+    recordable: transcription && open,
+    voice: voice.use,
+    transcribing: voice.transcribing,
+  });
+  const act = (now: ComposerAction) => {
+    if (now === "record") return void voice.start("message");
+    if (now === "interrupt") return void stop.interrupt();
+    if (voice.use) return void voice.finish();
+    void send();
+  };
+  const above = (
+    <>
+      {children}
+      {compacting ? (
+        <View className="flex-row items-center gap-2 px-1.5">
+          <ActivityIndicator
+            size="small"
+            color={agent}
+            style={{ transform: [{ scale: 0.7 }] }}
+          />
+          <Text className="flex-1 text-xs text-muted-foreground">
+            Compacting…
+          </Text>
+        </View>
+      ) : null}
+      {queue.map((item) => (
+        <QueueCard
+          key={item.id}
+          session={session}
+          item={item}
+          changeable={write && item.changeable}
+        />
+      ))}
+      {mention && files.length ? (
+        <View className="max-h-56 overflow-hidden rounded-lg border border-border bg-popover">
+          <ScrollView keyboardShouldPersistTaps="always">
+            {files.map((path) => {
+              const cut = path.lastIndexOf("/") + 1;
+              return (
+                <Pressable
+                  key={path}
+                  onPress={() => mentionFile(path)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Mention ${path}`}
+                  className="flex-row items-baseline gap-2 px-3 py-2.5 active:bg-accent"
+                >
+                  <Text className="font-mono text-sm text-agent-foreground">
+                    {path.slice(cut)}
+                  </Text>
+                  <Text
+                    numberOfLines={1}
+                    className="flex-1 font-mono text-xs text-faint"
+                  >
+                    {path.slice(0, cut)}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      ) : null}
+      {commands.length ? (
+        <View className="overflow-hidden rounded-lg border border-border bg-popover">
+          {commands.map((command) => (
+            <Pressable
+              key={command.invoke}
+              onPress={() => {
+                void Haptics.selectionAsync();
+                setDraft(`${command.invoke} `);
+              }}
+              accessibilityRole="button"
+              className="flex-row items-baseline gap-2 px-3 py-2.5 active:bg-accent"
+            >
+              <Text className="font-mono text-sm text-agent-foreground">
+                {command.invoke}
+                {command.hint ? (
+                  <Text className="font-mono text-xs text-faint">
+                    {" "}
+                    {command.hint}
+                  </Text>
+                ) : null}
+              </Text>
+              <Text
+                numberOfLines={1}
+                className="flex-1 text-xs text-muted-foreground"
+              >
+                {command.description}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+    </>
+  );
+  if (!write)
+    return (
       <View
-        className="gap-2 border-t border-border bg-card px-2 pt-2"
+        className="gap-2 px-2.5 pt-2"
         style={{ paddingBottom: 8 + insets.bottom }}
       >
-        {children}
-        {compacting ? (
-          <View className="flex-row items-center gap-2 px-1.5">
-            <ActivityIndicator
-              size="small"
-              color={agent}
-              style={{ transform: [{ scale: 0.7 }] }}
-            />
-            <Text className="flex-1 text-xs text-muted-foreground">
-              Compacting…
-            </Text>
-          </View>
-        ) : null}
-        {queue.length ? (
-          <View className="gap-1.5">
-            <Text className="px-1.5 font-mono text-[11px] text-faint">
-              Waiting for the turn to end · {queue.length}
-            </Text>
-            {queue.map((item) => (
-              <QueueCard key={item.id} session={session} item={item} />
-            ))}
-          </View>
-        ) : null}
-        {mention && files.length ? (
-          <View className="max-h-56 overflow-hidden rounded-md border border-border bg-background">
-            <ScrollView keyboardShouldPersistTaps="always">
-              {files.map((path) => {
-                const cut = path.lastIndexOf("/") + 1;
-                return (
-                  <Pressable
-                    key={path}
-                    onPress={() => mentionFile(path)}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Mention ${path}`}
-                    className="flex-row items-baseline gap-2 px-3 py-2.5 active:bg-accent"
-                  >
-                    <Text className="font-mono text-sm text-agent-foreground">
-                      {path.slice(cut)}
-                    </Text>
-                    <Text
-                      numberOfLines={1}
-                      className="flex-1 font-mono text-xs text-faint"
-                    >
-                      {path.slice(0, cut)}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </View>
-        ) : null}
-        {commands.length ? (
-          <View className="overflow-hidden rounded-md border border-border bg-background">
-            {commands.map((command) => (
-              <Pressable
-                key={command.invoke}
-                onPress={() => {
-                  void Haptics.selectionAsync();
-                  setDraft(`${command.invoke} `);
-                }}
-                accessibilityRole="button"
-                className="flex-row items-baseline gap-2 px-3 py-2.5 active:bg-accent"
-              >
-                <Text className="font-mono text-sm text-agent-foreground">
-                  {command.invoke}
-                  {command.hint ? (
-                    <Text className="font-mono text-xs text-faint">
-                      {" "}
-                      {command.hint}
-                    </Text>
-                  ) : null}
-                </Text>
-                <Text
-                  numberOfLines={1}
-                  className="flex-1 text-xs text-muted-foreground"
-                >
-                  {command.description}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-        ) : null}
-        {shown ? (
-          <Text className="px-1.5 text-sm text-destructive">{shown}</Text>
-        ) : null}
-        {photos.length ? (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerClassName="gap-2 px-0.5"
-          >
-            {photos.map((photo, i) => (
-              <View key={photo.uri} className="relative">
-                <Image
-                  source={{ uri: photo.uri }}
-                  accessibilityLabel={`Photo ${i + 1} of ${photos.length}`}
-                  className="size-14 rounded-md border border-border"
-                />
-                <Pressable
-                  onPress={() =>
-                    setPhotos((now) => now.filter((other) => other !== photo))
-                  }
-                  accessibilityRole="button"
-                  accessibilityLabel={`Remove photo ${i + 1}`}
-                  hitSlop={8}
-                  className="absolute -top-1.5 -right-1.5 size-5 items-center justify-center rounded-full border border-border bg-card"
-                >
-                  <XIcon color={muted} size={11} strokeWidth={2.5} />
-                </Pressable>
-              </View>
-            ))}
-          </ScrollView>
-        ) : null}
-        {write ? (
-          <View className="flex-row items-end gap-1.5">
-            {choosable ? (
-              <Pressable
-                onPress={attach}
-                disabled={!open || picking || room <= 0}
-                accessibilityRole="button"
-                accessibilityLabel="Attach a photo"
-                hitSlop={4}
-                className={cn(
-                  "size-10 items-center justify-center rounded-sm active:bg-accent",
-                  (!open || room <= 0) && "opacity-40",
-                )}
-              >
-                {picking ? (
-                  <ActivityIndicator size="small" color={muted} />
-                ) : (
-                  <ImagePlusIcon color={muted} size={20} strokeWidth={1.5} />
-                )}
-              </Pressable>
-            ) : null}
-            <View className="min-h-10 flex-1 flex-row items-end rounded-md border border-input bg-background">
-              <TextInput
-                className={cn(
-                  "max-h-36 flex-1 px-3 py-2.5 font-sans text-base text-foreground",
-                  !open && "opacity-60",
-                )}
-                placeholderTextColor={faint}
-                placeholder={
-                  open
-                    ? stop.allowed
-                      ? `Add to ${name}'s turn`
-                      : `Write to ${name}, or / for commands`
-                    : sessionState(session)
-                }
-                ref={box}
-                editable={open}
-                value={draft}
-                onChangeText={setDraft}
-                onSelectionChange={(event) =>
-                  setCursor(event.nativeEvent.selection.start)
-                }
-                multiline
-              />
-            </View>
-            {interrupting ? (
-              <Pressable
-                className="size-10 items-center justify-center rounded-sm bg-primary active:opacity-80"
-                disabled={stop.busy}
-                onPress={() => void stop.interrupt()}
-                accessibilityRole="button"
-                accessibilityLabel="Interrupt"
-              >
-                <SquareIcon
-                  color={onLamp}
-                  fill={onLamp}
-                  size={14}
-                  strokeWidth={1.75}
-                />
-              </Pressable>
-            ) : (
-              <Pressable
-                className={cn(
-                  "size-10 items-center justify-center rounded-sm bg-primary active:opacity-80",
-                  (!open || !filled || sending) && "opacity-40",
-                )}
-                disabled={!open || !filled || sending}
-                onPress={() => void send()}
-                onLongPress={
-                  stop.allowed && open && choosable ? chooseMode : undefined
-                }
-                accessibilityRole="button"
-                accessibilityLabel="Send"
-                accessibilityHint={
-                  stop.allowed && choosable
-                    ? "Joins the turn in progress; hold to send it when the turn ends, or to stop the turn and send"
-                    : undefined
-                }
-              >
-                <SendIcon color={onLamp} size={18} strokeWidth={1.75} />
-              </Pressable>
-            )}
-          </View>
-        ) : (
-          <Text className="px-1.5 pb-1 text-xs text-muted-foreground">
-            Shared with you to read
-          </Text>
-        )}
-        {write && stop.allowed && filled && !sessionCommand(draft) ? (
-          <Text className="px-1.5 text-xs text-faint">
-            {choosable
-              ? "Joins the turn in progress. Hold Send for more."
-              : "Joins the turn in progress."}
-          </Text>
-        ) : null}
-        <View className="flex-row items-start gap-2">
-          <View className="flex-1">
-            {write && session.status !== "stopped" ? (
-              <SettingsBar session={session} />
-            ) : null}
-          </View>
-          <ContextMeter
-            usage={usage}
-            compact={
-              open ? () => setDraft((now) => now || "/compact ") : undefined
-            }
-          />
-        </View>
+        {above}
+        <Text className="px-1.5 pb-1 text-xs text-muted-foreground">
+          Shared with you to read
+        </Text>
       </View>
-    </KeyboardStickyView>
+    );
+  return (
+    <>
+      <ComposerBox
+        above={above}
+        error={notice || error || stop.error || voice.error}
+        chips={photos.map((photo, i) => ({
+          key: photo.uri,
+          uri: photo.uri,
+          name: `photo ${i + 1}`,
+          image: true,
+        }))}
+        removeChip={(key) =>
+          setPhotos((now) => now.filter((photo) => photo.uri !== key))
+        }
+        inputRef={box}
+        input={{
+          value: draft,
+          onChangeText: setDraft,
+          editable: open,
+          onSelectionChange: (event) =>
+            setCursor(event.nativeEvent.selection.start),
+          placeholder: open
+            ? stop.allowed
+              ? `Add to ${name}'s turn`
+              : `Write to ${name}, or / for commands`
+            : sessionState(session),
+        }}
+        add={
+          choosable
+            ? { onPress: attach, busy: picking, disabled: !open || room <= 0 }
+            : undefined
+        }
+        middle={
+          session.status !== "stopped" ? (
+            <SettingsPill
+              session={session}
+              settings={settings}
+              onPress={() => setSheet(true)}
+            />
+          ) : null
+        }
+        trailing={<ContextRing usage={usage} onPress={() => setSheet(true)} />}
+        voice={{
+          use: voice.use,
+          transcribing: voice.transcribing,
+          seconds: recorder.seconds,
+          dictation: transcription && open,
+          start: (use) => void voice.start(use),
+          finish: () => void voice.finish(),
+          discard: voice.discard,
+        }}
+        action={action}
+        onAction={act}
+        onHold={
+          action === "send" && !voice.use && stop.allowed && open && choosable
+            ? chooseMode
+            : undefined
+        }
+        waiting={
+          action === "interrupt"
+            ? stop.busy
+            : action === "record"
+              ? !open
+              : action === "send" && !voice.use && (!open || !filled || sending)
+        }
+      />
+      <SessionSheet
+        visible={sheet}
+        close={() => setSheet(false)}
+        session={session}
+        settings={settings}
+        usage={usage}
+        compact={
+          open
+            ? () => {
+                setSheet(false);
+                void compact();
+              }
+            : undefined
+        }
+      />
+    </>
   );
 }
 
@@ -1043,82 +1026,190 @@ function About({
   );
 }
 
-/**
- * Under the box, the session's model, effort and permissions as pills, as on the web: one
- * changes at a time, through its harness, which confirms it or says why not.
- */
-function SettingsBar({ session }: { session: ChatSession }) {
-  const { url } = useSession();
-  const settings = useSessionSettings(
-    session.id,
-    `${session.status}:${session.activity}`,
-    url,
-  );
-  const [error, setError] = useState("");
-  const values = settings.data?.values ?? {};
-  const models = settings.data?.models ?? [];
-  const editable = settings.data?.editable ?? [];
-  if (!settings.data || !editable.length) return null;
+type Settings = ReturnType<typeof useSessionSettings>;
+
+/** The session's settings as the box shows them: model, effort and Plan; tapped, the sheet. */
+function SettingsPill({
+  session,
+  settings,
+  onPress,
+}: {
+  session: ChatSession;
+  settings: Settings;
+  onPress: () => void;
+}) {
+  const [agent, muted] = useCSSVariable([
+    "--color-agent",
+    "--color-muted-foreground",
+  ]).map(String);
+  if (!settings.data?.editable.length) return null;
   const harness = session.harness as Actor["harness"];
+  const { values, models, editable } = settings.data;
   const fields = agentSettingFields(harness, models, values.model);
-  // Plan mode is a switch beside them, set in each harness's own terms.
   const plan = planMode(harness, values, editable);
+  const named = (key: "model" | "effort") => {
+    const value = values[key];
+    return value
+      ? (fields.find((field) => field.key === key)?.options[value] ?? value)
+      : undefined;
+  };
+  const effort = named("effort");
+  return (
+    <Pressable
+      onPress={() => {
+        void Haptics.selectionAsync();
+        onPress();
+      }}
+      accessibilityRole="button"
+      accessibilityLabel="Session settings"
+      className="ml-1 h-8 min-w-0 shrink flex-row items-center gap-1.5 rounded-md bg-muted px-2.5 active:opacity-70"
+    >
+      <Text numberOfLines={1} className="shrink text-[13px] font-medium">
+        {named("model") ?? "Model"}
+      </Text>
+      {effort ? (
+        <Text
+          numberOfLines={1}
+          className="shrink-0 text-[13px] text-muted-foreground"
+        >
+          · {effort}
+        </Text>
+      ) : null}
+      {plan?.on ? (
+        <>
+          <Text className="text-[13px] text-faint">·</Text>
+          <ListChecksIcon color={agent} size={13} strokeWidth={1.75} />
+          <Text className="text-[13px] text-agent-foreground">Plan</Text>
+        </>
+      ) : null}
+      <ChevronDownIcon color={muted} size={14} strokeWidth={2} />
+    </Pressable>
+  );
+}
+
+/**
+ * The session's model, effort, permissions and Plan, changed one at a time through its
+ * harness, which confirms it or says why not; and how full its context is, with Compact.
+ */
+function SessionSheet({
+  visible,
+  close,
+  session,
+  settings,
+  usage,
+  compact,
+}: {
+  visible: boolean;
+  close: () => void;
+  session: ChatSession;
+  settings: Settings;
+  usage: SessionUsage | null;
+  compact?: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const [error, setError] = useState("");
+  const harness = session.harness as Actor["harness"];
+  const values = settings.data?.values ?? {};
+  const editable = settings.data?.editable ?? [];
+  const fields = agentSettingFields(
+    harness,
+    settings.data?.models ?? [],
+    values.model,
+  );
+  const plan = planMode(harness, values, editable);
+  const share = contextShare(usage);
   const apply = (change: AgentSettings) => {
     setError("");
     settings.apply(change).catch((e: unknown) => setError(errorMessage(e)));
   };
   return (
-    <View className="gap-1 px-0.5">
-      <View className="flex-row flex-wrap gap-1.5">
-        {fields.map(({ key, label, options }) => (
-          <SettingSelect
-            key={key}
-            compact
-            label={label}
-            value={values[key] ?? ""}
-            options={options}
-            placeholder={`${label}: the harness's own`}
-            disabled={
-              !editable.includes(key) || Object.keys(options).length === 0
-            }
-            onChange={(value) => apply({ [key]: value })}
-          />
-        ))}
-        {plan ? (
-          <Pressable
-            accessibilityRole="switch"
-            accessibilityLabel="Plan"
-            accessibilityState={{ checked: plan.on }}
-            onPress={() => apply(plan.change(!plan.on))}
-            className={cn(
-              "rounded-full border border-border px-2.5 py-1 active:bg-accent",
-              plan.on && "border-primary bg-primary/15",
-            )}
-          >
-            <Text
-              className={cn(
-                "text-xs",
-                plan.on ? "text-foreground" : "text-muted-foreground",
-              )}
-            >
-              Plan
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={close}
+    >
+      <Pressable
+        className="flex-1 bg-black/40"
+        onPress={close}
+        accessibilityRole="button"
+        accessibilityLabel="Close"
+      />
+      <Animated.View
+        entering={SlideInDown.duration(240)}
+        accessibilityViewIsModal
+        className="gap-4 rounded-t-[22px] bg-popover px-5 pt-2"
+        style={{ paddingBottom: insets.bottom + 16 }}
+      >
+        <View className="h-1.5 w-10 self-center rounded-full bg-input" />
+        <View className="flex-row items-center justify-between">
+          <Text accessibilityRole="header" className="text-lg font-semibold">
+            Session
+          </Text>
+          <Pressable onPress={close} accessibilityRole="button" hitSlop={8}>
+            <Text className="text-base font-medium text-human-foreground">
+              Done
             </Text>
           </Pressable>
+        </View>
+        {editable.length
+          ? fields.map(({ key, label, options }) => (
+              <SettingSelect
+                key={key}
+                label={label}
+                value={values[key] ?? ""}
+                options={options}
+                disabled={
+                  !editable.includes(key) || Object.keys(options).length === 0
+                }
+                onChange={(value) => apply({ [key]: value })}
+              />
+            ))
+          : null}
+        {plan ? (
+          <View className="flex-row items-center justify-between">
+            <Text className="text-sm font-medium">Plan</Text>
+            <Switch
+              value={plan.on}
+              onValueChange={(on) => apply(plan.change(on))}
+              accessibilityLabel="Plan"
+            />
+          </View>
         ) : null}
-      </View>
-      {error || settings.error ? (
-        <Text className="text-xs text-attention">
-          {error || settings.error}
-        </Text>
-      ) : null}
-    </View>
+        {share !== undefined && usage ? (
+          <View className="gap-2">
+            <Text className="text-sm font-medium">Context</Text>
+            <View className="h-1.5 overflow-hidden rounded-full bg-muted">
+              <View
+                className={cn("h-1.5 rounded-full", contextTone(share))}
+                style={{ width: `${Math.max(3, share * 100)}%` }}
+              />
+            </View>
+            <View className="flex-row items-center justify-between">
+              <Text className="font-mono text-xs text-muted-foreground">
+                {percent(share)}
+                {usage.context_tokens !== null && usage.context_window
+                  ? ` · ${tokenCount(usage.context_tokens)} of ${tokenCount(usage.context_window)}`
+                  : ""}
+              </Text>
+              {compact ? (
+                <Button size="sm" variant="outline" onPress={compact}>
+                  <Text>Compact</Text>
+                </Button>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
+        {error || settings.error ? (
+          <Text className="text-sm text-attention">
+            {error || settings.error}
+          </Text>
+        ) : null}
+      </Animated.View>
+    </Modal>
   );
 }
 
-/**
- * An input of the owner's waiting for the turn to end, above the box. Codex lets it be
- * rewritten or taken back; the other harnesses show it as it waits.
- */
 /** An input of the owner's on its way: sending, sent, or failed with its error and Retry. */
 function SentInputView({ input }: { input: SentInput }) {
   const { chat } = useSession();
@@ -1168,12 +1259,18 @@ function SentInputView({ input }: { input: SentInput }) {
   );
 }
 
+/**
+ * An input of the owner's waiting for the turn to end, above the box: rewritten or taken
+ * back where its harness allows it.
+ */
 function QueueCard({
   session,
   item,
+  changeable,
 }: {
   session: ChatSession;
   item: QueuedInput;
+  changeable: boolean;
 }) {
   const { chat } = useSession();
   const [editing, setEditing] = useState<string>();
@@ -1215,7 +1312,7 @@ function QueueCard({
             className="max-h-28 flex-1 font-sans text-sm text-foreground"
           />
         )}
-        {item.changeable && editing === undefined ? (
+        {changeable && editing === undefined ? (
           <View className="flex-row gap-3">
             <Pressable
               onPress={() => setEditing(item.text)}
@@ -1267,41 +1364,35 @@ function QueueCard({
   );
 }
 
-/**
- * How full the session's context is, as its harness last said: a short bar by the box that
- * warms as it fills. For the owner, a tap starts `/compact` in the box.
- */
-function ContextMeter({
+const contextTone = (share: number) =>
+  share >= 0.95 ? "bg-destructive" : share >= 0.8 ? "bg-attention" : "bg-agent";
+
+/** How full the session's context is, as its harness last said: a ring that warms as it fills. */
+function ContextRing({
   usage,
-  compact,
+  onPress,
 }: {
   usage: SessionUsage | null;
-  compact?: () => void;
+  onPress: () => void;
 }) {
+  const [track, agent, attention, destructive] = useCSSVariable([
+    "--color-input",
+    "--color-agent",
+    "--color-attention",
+    "--color-destructive",
+  ]).map(String);
   const share = contextShare(usage);
   if (share === undefined) return null;
-  const tone =
-    share >= 0.95
-      ? "bg-destructive"
-      : share >= 0.8
-        ? "bg-attention"
-        : "bg-agent";
+  const tone = share >= 0.95 ? destructive : share >= 0.8 ? attention : agent;
+  const round = 2 * Math.PI * 7.5;
   return (
     <Pressable
-      onPress={compact}
-      disabled={!compact}
-      accessibilityRole={compact ? "button" : "text"}
+      onPress={onPress}
+      accessibilityRole="button"
       accessibilityLabel={`Context ${percent(share)} full`}
-      accessibilityHint={compact ? "Writes /compact in the box" : undefined}
-      hitSlop={6}
-      className="mt-1.5 flex-row items-center gap-1.5 active:opacity-70"
+      hitSlop={4}
+      className="h-10 flex-row items-center gap-1 px-1 active:opacity-70"
     >
-      <View className="h-1 w-10 overflow-hidden rounded-full bg-border">
-        <View
-          className={cn("h-1 rounded-full", tone)}
-          style={{ width: `${Math.max(4, share * 100)}%` }}
-        />
-      </View>
       <Text
         className={cn(
           "font-mono text-[11px] text-faint",
@@ -1311,6 +1402,31 @@ function ContextMeter({
       >
         {percent(share)}
       </Text>
+      <Svg
+        width={20}
+        height={20}
+        viewBox="0 0 20 20"
+        style={{ transform: [{ rotate: "-90deg" }] }}
+      >
+        <Circle
+          cx={10}
+          cy={10}
+          r={7.5}
+          stroke={track}
+          strokeWidth={3}
+          fill="none"
+        />
+        <Circle
+          cx={10}
+          cy={10}
+          r={7.5}
+          stroke={tone}
+          strokeWidth={3}
+          fill="none"
+          strokeLinecap="round"
+          strokeDasharray={`${round * Math.max(share, 0.03)} ${round}`}
+        />
+      </Svg>
     </Pressable>
   );
 }

@@ -1,4 +1,5 @@
 import * as DocumentPicker from "expo-document-picker";
+import * as Haptics from "expo-haptics";
 import {
   useFocusEffect,
   useLocalSearchParams,
@@ -8,22 +9,24 @@ import {
 } from "expo-router";
 import {
   ArrowDownIcon,
-  AudioLinesIcon,
   MessagesSquareIcon,
-  MicIcon,
   PanelRightIcon,
-  PaperclipIcon,
   PhoneIcon,
-  SendIcon,
-  XIcon,
 } from "lucide-react-native";
 import type { NativeStackNavigationProp } from "expo-router";
 import type { LucideIcon } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LegendListRef } from "@legendapp/list/react-native";
-import { Modal, Pressable, ScrollView, TextInput, View } from "react-native";
+import {
+  ActionSheetIOS,
+  Alert,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  View,
+} from "react-native";
 import type { TextInputInstance } from "react-native";
-import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCSSVariable } from "uniwind";
 import {
@@ -39,8 +42,10 @@ import {
   receipt,
   saveDraft,
   threadsOf,
-  transcribe,
   useChatWork,
+  useVoiceInput,
+  composerAction,
+  dictated,
   useVoice,
   workingSessions,
   sessionAccess,
@@ -56,6 +61,8 @@ import type {
 import { ApprovalCard } from "@/components/approval-card";
 import { ChatAbout } from "@/components/chat-about";
 import { ChatMark } from "@/components/chat-mark";
+import { Composer } from "@/components/composer";
+import type { Chip } from "@/components/composer";
 import { LiveWork, WorkLine } from "@/components/chat-work";
 import { ActorMark } from "@/components/member";
 import { MessageBody } from "@/components/message-body";
@@ -66,6 +73,7 @@ import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "../../src/kernel";
 import { useMe } from "../../src/me";
+import { pickPhotos } from "../../src/photos";
 import { asFile, useRecorder } from "../../src/voice";
 
 type Row =
@@ -84,6 +92,8 @@ type Row =
   | { key: string; kind: "note"; text: string };
 
 const marks = { sent: "✓", delivered: "✓✓", read: "✓✓" };
+/** The time as a file is named by it: "18.02". */
+const clockName = () => new Date().toTimeString().slice(0, 5).replace(":", ".");
 // Messages from one author a few minutes apart read as one turn.
 const TURN = 5 * 60 * 1000;
 const open = new Set<Approval["status"]>(["pending", "decided", "uncertain"]);
@@ -100,16 +110,17 @@ export default function ChatScreen() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [about, setAbout] = useState(false);
-  const [voice, setVoice] = useState<"dictation" | "message">();
+  // Photos and files wait in the box until sent.
+  const [chips, setChips] = useState<(Chip & { type?: string })[]>([]);
+  const [picking, setPicking] = useState(false);
   // More than a screen above the latest messages: a button brings the reader back down.
   const [away, setAway] = useState(false);
   const list = useRef<LegendListRef>(null);
   const input = useRef<TextInputInstance>(null);
   const recorder = useRecorder();
-  const [muted, faint, onLamp] = useCSSVariable([
+  const [muted, faint] = useCSSVariable([
     "--color-muted-foreground",
     "--color-faint",
-    "--color-primary-foreground",
   ]).map(String);
   const conversation = chat.conversations.find((c) => c.id === id);
   const me = useMe().me?.id;
@@ -177,6 +188,32 @@ export default function ChatScreen() {
       return next;
     });
   const { available: transcription, voices } = useVoice(url);
+  const voice = useVoiceInput(
+    recorder,
+    {
+      write: (said) => setDraft((now) => dictated(now, said)),
+      send: async (said) => {
+        if (conversation)
+          await chat.send(conversation, { id: newId(), text: said });
+      },
+      // The recording is kept first, so a failed transcription loses nothing.
+      // TODO: kernel: a file shared in a chat is announced to its members, as a message would be.
+      keep:
+        storage.available && conversation
+          ? (audio) =>
+              storage.upload(
+                [
+                  new File([audio], `Voice message ${clockName()}.m4a`, {
+                    type: audio.type,
+                  }),
+                ],
+                { conversation_id: conversation.id },
+              )
+          : undefined,
+      transcription,
+    },
+    url,
+  );
   // A row is drawn again only when its item or this changes: what else the rows read.
   const drawn = useMemo(
     () => ({ detail, opened, busy, voices }),
@@ -266,6 +303,14 @@ export default function ChatScreen() {
     id,
   ]);
 
+  const action = composerAction({
+    filled: Boolean(draft.trim() || chips.length),
+    interruptible: false,
+    recordable: transcription || storage.available,
+    voice: voice.use,
+    transcribing: voice.transcribing,
+  });
+
   async function act(work: () => Promise<void>) {
     setBusy(true);
     setError("");
@@ -280,58 +325,87 @@ export default function ChatScreen() {
 
   async function send() {
     const text = draft.trim();
-    if (!conversation || !text) return;
+    const files = chips;
+    if (!conversation || (!text && !files.length)) return;
     // Cleared now: what the owner types while this one travels belongs to the next.
     setDraft("");
+    setChips([]);
     setError("");
+    let shared = false;
     try {
-      await chat.send(conversation, { id: newId(), text });
+      // The files go first, so the words that speak of them follow them.
+      if (files.length) {
+        await storage.upload(
+          await Promise.all(files.map((f) => asFile(f.uri, f.name, f.type))),
+          { conversation_id: conversation.id },
+        );
+        shared = true;
+      }
+      if (text) await chat.send(conversation, { id: newId(), text });
     } catch (e) {
       setError(errorMessage(e));
       setDraft((typed) => (typed ? typed : text));
+      if (!shared) setChips((now) => (now.length ? now : files));
     }
   }
 
-  async function attach() {
+  async function addPhotos(from: "library" | "camera") {
+    setPicking(true);
+    setError("");
+    try {
+      const picked = await pickPhotos(from, 10);
+      setChips((now) => [
+        ...now,
+        ...picked.map((photo, i) => ({
+          key: photo.uri,
+          uri: photo.uri,
+          name: `Photo ${clockName()}${picked.length > 1 ? `-${i + 1}` : ""}.jpg`,
+          type: photo.media_type,
+          image: true,
+        })),
+      ]);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setPicking(false);
+    }
+  }
+
+  async function addFiles() {
     const picked = await DocumentPicker.getDocumentAsync({ multiple: true });
-    if (picked.canceled || !conversation) return;
-    await act(async () =>
-      storage.upload(
-        await Promise.all(
-          picked.assets.map((a) => asFile(a.uri, a.name, a.mimeType)),
-        ),
-        { conversation_id: conversation.id },
-      ),
-    );
+    if (picked.canceled) return;
+    setChips((now) => [
+      ...now,
+      ...picked.assets.map((a) => ({
+        key: a.uri,
+        uri: a.uri,
+        name: a.name,
+        type: a.mimeType,
+        image: Boolean(a.mimeType?.startsWith("image/")),
+      })),
+    ]);
   }
 
-  async function record(purpose: "dictation" | "message") {
-    await act(async () => {
-      await recorder.start();
-      setVoice(purpose);
-    });
-  }
-
-  async function finish() {
-    const purpose = voice;
-    setVoice(undefined);
-    if (!conversation) return;
-    const at = new Date().toTimeString().slice(0, 5).replace(":", ".");
-    await act(async () => {
-      const audio = await recorder.stop(`Voice message ${at}.m4a`);
-      if (!audio) return;
-      if (purpose === "dictation") {
-        const said = await transcribe(audio);
-        setDraft((t) => (t.trim() ? `${t.trimEnd()} ${said}` : said));
-        return;
-      }
-      // The recording is kept first, so a failed transcription loses nothing; its text is the message.
-      // TODO: kernel: a file shared in a chat is announced to its members, as a message would be.
-      if (storage.available)
-        await storage.upload([audio], { conversation_id: conversation.id });
-      const said = transcription ? (await transcribe(audio)).trim() : "";
-      if (said) await chat.send(conversation, { id: newId(), text: said });
-    });
+  function add() {
+    void Haptics.selectionAsync();
+    const choices: [string, () => void][] = [
+      ["Photo library", () => void addPhotos("library")],
+      ["Take photo", () => void addPhotos("camera")],
+      ["Files", () => void addFiles()],
+    ];
+    if (Platform.OS === "ios")
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: [...choices.map(([label]) => label), "Cancel"],
+          cancelButtonIndex: choices.length,
+        },
+        (index) => choices[index]?.[1](),
+      );
+    else
+      Alert.alert("Add", undefined, [
+        ...choices.map(([text, onPress]) => ({ text, onPress })),
+        { text: "Cancel", style: "cancel" as const },
+      ]);
   }
 
   function message(m: Message, continued: boolean, below?: Conversation) {
@@ -644,100 +718,52 @@ export default function ChatScreen() {
           </Pressable>
         ) : null}
       </GestureArea>
-      <KeyboardStickyView offset={{ closed: 0, opened: insets.bottom }}>
-        {error || chat.error || storage.error ? (
-          <Text className="bg-card px-3.5 py-1.5 text-sm text-destructive">
-            {error || chat.error || storage.error}
-          </Text>
-        ) : null}
-        {thread ? (
-          <Text
-            className="border-t border-border bg-card px-4 pt-3 text-xs text-muted-foreground"
-            style={{ paddingBottom: 12 + insets.bottom }}
-          >
-            {conversation?.closed_at
-              ? "This thread is closed."
-              : `Agents' thread in «${parent?.title ?? "the chat"}»`}
-          </Text>
-        ) : voice ? (
-          <View
-            className="flex-row items-center gap-3 border-t border-border bg-card px-4 pt-3"
-            style={{ paddingBottom: 12 + insets.bottom }}
-          >
-            <View className="size-2.5 rounded-full bg-destructive" />
-            <Text className="flex-1 font-mono text-sm">
-              {voice === "dictation" ? "Listening" : "Recording"} ·{" "}
-              {Math.floor(recorder.seconds / 60)}:
-              {String(recorder.seconds % 60).padStart(2, "0")}
-            </Text>
-            {tool(
-              XIcon,
-              "Discard",
-              () => {
-                setVoice(undefined);
-                void recorder.cancel();
-              },
-              false,
-            )}
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => void finish()}
-              className="h-10 flex-row items-center gap-2 rounded-sm bg-primary px-4 active:opacity-80"
-            >
-              <Text className="text-sm font-medium text-primary-foreground">
-                {voice === "dictation" ? "Write it" : "Send"}
-              </Text>
-              <SendIcon color={onLamp} size={16} strokeWidth={1.75} />
-            </Pressable>
-          </View>
-        ) : (
-          <View
-            className="flex-row items-end gap-1.5 border-t border-border bg-card px-2 pt-2"
-            style={{ paddingBottom: 8 + insets.bottom }}
-          >
-            {tool(PaperclipIcon, "Attach a file", attach, !storage.available)}
-            <View className="min-h-10 flex-1 flex-row items-end rounded-md border border-input bg-background">
-              <TextInput
-                ref={input}
-                className="max-h-36 flex-1 px-3 py-2.5 font-sans text-base text-foreground"
-                placeholderTextColor={faint}
-                value={draft}
-                onChangeText={setDraft}
-                placeholder={
-                  conversation?.kind === "group"
-                    ? `Write to ${conversation.title}`
-                    : `Write to ${agents[0]?.name ?? "the agent"}`
-                }
-                multiline
-              />
-              {tool(
-                MicIcon,
-                "Dictate",
-                () => void record("dictation"),
-                !transcription,
-              )}
-            </View>
-            {tool(
-              AudioLinesIcon,
-              "Record a voice message",
-              () => void record("message"),
-              !storage.available && !transcription,
-            )}
-            <Pressable
-              className={cn(
-                "size-10 items-center justify-center rounded-sm bg-primary active:opacity-80",
-                !draft.trim() && "opacity-40",
-              )}
-              disabled={!draft.trim()}
-              onPress={send}
-              accessibilityRole="button"
-              accessibilityLabel="Send"
-            >
-              <SendIcon color={onLamp} size={18} strokeWidth={1.75} />
-            </Pressable>
-          </View>
-        )}
-      </KeyboardStickyView>
+      {thread ? (
+        <Text
+          className="border-t border-border bg-card px-4 pt-3 text-xs text-muted-foreground"
+          style={{ paddingBottom: 12 + insets.bottom }}
+        >
+          {conversation?.closed_at
+            ? "This thread is closed."
+            : `Agents' thread in «${parent?.title ?? "the chat"}»`}
+        </Text>
+      ) : (
+        <Composer
+          error={error || chat.error || storage.error || voice.error}
+          chips={chips}
+          removeChip={(key) =>
+            setChips((now) => now.filter((chip) => chip.key !== key))
+          }
+          inputRef={input}
+          input={{
+            value: draft,
+            onChangeText: setDraft,
+            placeholder:
+              conversation?.kind === "group"
+                ? `Write to ${conversation.title}`
+                : `Write to ${agents[0]?.name ?? "the agent"}`,
+          }}
+          add={storage.available ? { onPress: add, busy: picking } : undefined}
+          voice={{
+            use: voice.use,
+            transcribing: voice.transcribing,
+            seconds: recorder.seconds,
+            dictation: transcription,
+            start: (use) => void voice.start(use),
+            finish: () => void voice.finish(),
+            discard: voice.discard,
+          }}
+          action={action}
+          onAction={(now) => {
+            if (now === "record") return void voice.start("message");
+            if (voice.use) return void voice.finish();
+            void send();
+          }}
+          waiting={
+            action === "send" && !voice.use && !(draft.trim() || chips.length)
+          }
+        />
+      )}
       <Modal
         visible={about}
         animationType="slide"

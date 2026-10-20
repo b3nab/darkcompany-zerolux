@@ -11,6 +11,7 @@ import {
 import type { AudioPlayer } from "expo-audio";
 import { File as Saved, Paths } from "expo-file-system";
 import { errorMessage, readAloud } from "@zerolux/chat";
+import type { Recorder } from "@zerolux/chat";
 
 /** A file on this phone as the `File` the kernel's storage takes. */
 export async function asFile(uri: string, name: string, type?: string) {
@@ -19,16 +20,15 @@ export async function asFile(uri: string, name: string, type?: string) {
 }
 
 /** Records from the microphone: one recording at a time, kept until stopped or dropped. */
-export function useRecorder() {
+export function useRecorder(): Recorder & { seconds: number } {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const state = useAudioRecorderState(recorder, 250);
   const release = () => setAudioModeAsync({ allowsRecording: false });
   return {
-    recording: state.isRecording,
     seconds: Math.floor(state.durationMillis / 1000),
     async start() {
       if (!(await requestRecordingPermissionsAsync()).granted)
-        throw new Error("Allow the microphone for ZeroLux in Settings.");
+        throw new Error("allow it for ZeroLux in Settings");
       await setAudioModeAsync({
         playsInSilentMode: true,
         allowsRecording: true,
@@ -36,11 +36,11 @@ export function useRecorder() {
       await recorder.prepareToRecordAsync();
       recorder.record();
     },
-    /** Ends the recording and gives it as a file with this name. */
-    async stop(name: string) {
+    /** Ends the recording and gives its audio. */
+    async stop() {
       await recorder.stop();
       await release();
-      return recorder.uri ? asFile(recorder.uri, name) : undefined;
+      return recorder.uri ? (await fetch(recorder.uri)).blob() : undefined;
     },
     /** Drops the recording. */
     async cancel() {
