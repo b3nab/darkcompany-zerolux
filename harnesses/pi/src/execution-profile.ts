@@ -1,3 +1,4 @@
+import { privateMode } from "@zerolux/bridge";
 // Native launch configuration stays on the execution host, never in a chat or kernel row.
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
@@ -152,7 +153,7 @@ export async function savePiProfile(
   const root = join(await realpath(profile.agentDir), "zerolux-profiles");
   await mkdir(root, { recursive: true, mode: 0o700 });
   const info = await lstat(root);
-  if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 0o077) !== 0)
+  if (!info.isDirectory() || info.isSymbolicLink() || !privateMode(info.mode))
     throw new Error(
       "Pi profiles require a private directory on the execution host",
     );
@@ -193,7 +194,7 @@ export async function loadPiProfile(
     if (
       !info.isFile() ||
       info.nlink !== 1 ||
-      (info.mode & 0o077) !== 0 ||
+      !privateMode(info.mode) ||
       info.size > 64 * 1024
     )
       throw new Error("Pi profile is not a bounded private regular file");

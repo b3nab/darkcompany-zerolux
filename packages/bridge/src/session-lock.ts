@@ -12,6 +12,7 @@ import {
   readSync,
   writeSync,
 } from "node:fs";
+import { privateMode } from "./private-mode.ts";
 
 export interface SessionLock {
   /** Metadata left by the previous holder, read only after obtaining the lock. */
@@ -47,11 +48,7 @@ export function acquireSessionLock(path: string): SessionLock | undefined {
   try {
     const info = fstatSync(fd);
     // On Windows the user's profile is private by its permissions; modes do not apply.
-    if (
-      !info.isFile() ||
-      info.nlink !== 1 ||
-      (!windows && (info.mode & 0o077) !== 0)
-    )
+    if (!info.isFile() || info.nlink !== 1 || !privateMode(info.mode))
       throw new Error(
         "The session lock must be a private, unaliased regular file",
       );

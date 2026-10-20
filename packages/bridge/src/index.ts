@@ -5,6 +5,7 @@ export * from "./integration-code.ts";
 export { AgentLinkChild } from "./agent-link.ts";
 export { Transport } from "./transport.ts";
 export { localURL } from "./local-url.ts";
+export { privateMode } from "./private-mode.ts";
 export {
   controlRequest,
   readControlDescriptor,

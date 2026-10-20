@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { connect } from "node:net";
 import { isAbsolute } from "node:path";
+import { privateMode } from "./private-mode.ts";
 
 export interface ControlDescriptor extends Record<string, unknown> {
   instance_id: string;
@@ -21,7 +22,7 @@ export async function readControlDescriptor(
     if (
       !stat.isFile() ||
       stat.nlink !== 1 ||
-      (stat.mode & 0o077) !== 0 ||
+      !privateMode(stat.mode) ||
       stat.size > 64 * 1024
     )
       throw new Error(
