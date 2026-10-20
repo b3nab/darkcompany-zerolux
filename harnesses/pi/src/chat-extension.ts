@@ -1283,8 +1283,15 @@ export default function chatExtension(pi: ExtensionAPI) {
               .filter((part) => part.type === "text")
               .map((part) => part.text ?? "")
               .join("\n");
+      // pi adds a note of its own for each image it resizes: the owner's words are the rest.
+      const typed = text.replace(/\[Image: [^\]]*\]/g, "").trim();
       for (const waiter of ownerInputs)
-        if (waiter.expanded || waiter.text === text) waiter.seen();
+        if (
+          waiter.expanded ||
+          waiter.text === text ||
+          waiter.text.trim() === typed
+        )
+          waiter.seen();
       // Inputs pi joined into one message, as after an interrupt, leave the queue with it;
       // with nothing left in pi's queue, nothing of the owner's waits there.
       const before = ownerQueue.length;

@@ -1111,6 +1111,32 @@ while IFS= read -r line; do :; done
         ctx,
       );
       expect((await pictured).ok).toBe(true);
+      // A picture alone, which pi resizes and notes in the message: seen all the same.
+      const before = sent.length;
+      const alone = control({
+        method: "input",
+        link_id: "link-b",
+        text: "",
+        images: [{ path: shot, media_type: "image/png" }],
+      });
+      for (let i = 0; i < 100 && sent.length === before; i++)
+        await Bun.sleep(20);
+      await handlers.get("message_start")!(
+        {
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "[Image: original 2048x1536, displayed at 2000x1500. Multiply coordinates by 1.02 to map to original image.]",
+              },
+              { type: "image", data: "AQID", mimeType: "image/png" },
+            ],
+          },
+        },
+        ctx,
+      );
+      expect((await alone).ok).toBe(true);
       const offered = await control({ method: "commands", link_id: "link-b" });
       expect(offered.commands).toEqual([
         {
