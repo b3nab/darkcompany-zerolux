@@ -565,7 +565,7 @@ function DeviceNotices() {
       {(
         [
           ["needs", "When you're needed"],
-          ["finished", "Session finished"],
+          ["finished", "When a session finishes"],
         ] as const
       ).map(([key, label]) => (
         <Label key={key} className="font-normal">
