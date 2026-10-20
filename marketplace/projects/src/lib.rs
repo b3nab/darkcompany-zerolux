@@ -113,6 +113,41 @@ impl Projects {
         Ok(result)
     }
 
+    /// Tells an agent a task is now its own, in its running session; a person is told by the
+    /// apps. Whether an agent heard it: the session it went to, or why not.
+    fn tell(context: &Context, task: &Value) -> Value {
+        let Some(assignee) = task["assignee"].as_str() else {
+            return Value::Null;
+        };
+        let agent = context.workspace().ok().is_some_and(|workspace| {
+            workspace["actors"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|actor| actor["id"] == assignee && actor["kind"] == "agent")
+        });
+        if !agent {
+            return Value::Null;
+        }
+        let text = format!(
+            "Task {} is yours: {}\nstatus {}, priority {}{}\n{}\nRead it with zerolux.projects/task {{\"id\": \"{}\"}}; change it with update_task, comment with comment.",
+            task["key"].as_str().unwrap_or_default(),
+            task["title"].as_str().unwrap_or_default(),
+            task["status"].as_str().unwrap_or_default(),
+            task["priority"].as_str().unwrap_or_default(),
+            task["due"]
+                .as_str()
+                .map(|due| format!(", due {due}"))
+                .unwrap_or_default(),
+            task["description"].as_str().unwrap_or_default(),
+            task["id"].as_str().unwrap_or_default(),
+        );
+        match context.tell_agent(assignee, &text) {
+            Ok(session) => json!({"session_id": session}),
+            Err(error) => json!({"error": error}),
+        }
+    }
+
     /// The tracker a project's tasks are kept in, and its id there; none for a local one.
     fn tracker(project: &Value) -> Option<(String, String)> {
         Some((
@@ -303,7 +338,7 @@ impl Extension for Projects {
                     )?),
                     None => None,
                 };
-                self.change(context, |work| {
+                let mut task = self.change(context, |work| {
                     let project = work
                         .projects
                         .get_mut(&project_id)
@@ -333,7 +368,9 @@ impl Extension for Projects {
                         events.push(("task.assigned", json!({"task": task})));
                     }
                     Ok((task, events))
-                })
+                })?;
+                task["told"] = Self::tell(context, &task);
+                Ok(task)
             }
             "update_task" => {
                 let work = Self::read(context)?;
@@ -362,7 +399,7 @@ impl Extension for Projects {
                         json!({"remote_id": remote_id, "task_id": task_id, "changes": sent}),
                     )?;
                 }
-                self.change(context, |work| {
+                let (mut task, assigned) = self.change(context, |work| {
                     let task = work.tasks.get_mut(&id).ok_or("No such task")?;
                     let assigned = changes.get("assignee").is_some_and(|assignee| {
                         assignee.is_string() && *assignee != task["assignee"]
@@ -382,8 +419,12 @@ impl Extension for Projects {
                     if assigned {
                         events.push(("task.assigned", json!({"task": task})));
                     }
-                    Ok((task, events))
-                })
+                    Ok(((task, assigned), events))
+                })?;
+                if assigned {
+                    task["told"] = Self::tell(context, &task);
+                }
+                Ok(task)
             }
             "comment" => {
                 let text = text_of(&input["text"], 20_000, "A comment")?;
