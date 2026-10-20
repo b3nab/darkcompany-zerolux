@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { PlusIcon } from "lucide-react";
-import { taskState, useSessionTasks, useTaskOutput } from "@zerolux/chat";
+import {
+  plainOutput,
+  taskState,
+  useSessionTasks,
+  useTaskOutput,
+} from "@zerolux/chat";
 import type { ChatSession, Perform, Task } from "@zerolux/chat";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,7 +42,7 @@ function TaskOutput({ task }: { task: Task }) {
         }}
         className="max-h-64 overflow-auto rounded-md bg-muted p-2 font-mono text-[12px] break-all whitespace-pre-wrap"
       >
-        {text || "No output."}
+        {plainOutput(text) || "No output."}
       </pre>
     </>
   );
