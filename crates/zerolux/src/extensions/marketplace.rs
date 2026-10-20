@@ -41,6 +41,9 @@ pub struct Release {
     pub version: String,
     /// The kernel versions it works with, as a semver range.
     pub kernel: Option<String>,
+    /// What its package runs: `kernel`, `process`; a package that runs anything else is refused.
+    #[serde(default)]
+    pub parts: Vec<String>,
     /// A package for each computer, or `any`.
     pub packages: BTreeMap<String, Package>,
 }
@@ -76,9 +79,12 @@ pub async fn read(url: &str) -> Result<Index> {
         .get(url)
         .send()
         .await
-        .with_context(|| format!("Cannot reach {url}"))?
-        .error_for_status()
-        .with_context(|| format!("{url} did not give its index"))?;
+        .with_context(|| format!("Cannot reach {url}"))?;
+    let status = response.status();
+    anyhow::ensure!(
+        status.is_success(),
+        "{url} did not give its index ({status})"
+    );
     response
         .json()
         .await

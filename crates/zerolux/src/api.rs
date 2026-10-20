@@ -369,7 +369,13 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/actions", get(list_actions))
         .route(
             "/ext/{extension}/{action}",
-            post(run_action).layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+            post(run_action)
+                .get(read_action)
+                .layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+        )
+        .route(
+            "/ext/{extension}/{action}/file",
+            post(run_action_on_file).layer(DefaultBodyLimit::disable()),
         )
         .route("/invites", get(list_invites).post(create_invite))
         .route("/invites/{id}", axum::routing::delete(revoke_invite))
@@ -3160,6 +3166,176 @@ async fn run_action(
         .await
         .map_err(said)?;
     Ok(Json(json!({ "result": result })))
+}
+
+#[derive(Deserialize)]
+struct ActionQuery {
+    /// The action's input, as JSON.
+    #[serde(default)]
+    input: Option<String>,
+    /// The file's name, for one sent with the action.
+    #[serde(default)]
+    name: Option<String>,
+}
+
+fn query_input(query: &ActionQuery) -> Result<Value, ApiFailure> {
+    match query.input.as_deref() {
+        None | Some("") => Ok(json!({})),
+        Some(text) => serde_json::from_str(text)
+            .map_err(|_| ApiFailure::from(Error::Invalid("The input is not JSON".into()))),
+    }
+}
+
+/// The largest file sent with an action.
+const ACTION_FILE: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Runs an action with a file: the body, kept in the extension's folder while it runs, given
+/// to it as `file {path, size, name, content_type}` beside the input.
+async fn run_action_on_file(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path((extension, action)): Path<(String, String)>,
+    Query(query): Query<ActionQuery>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Body,
+) -> Result<Json<Value>, ApiFailure> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+    let mut input = query_input(&query)?;
+    ensure_object(&input)?;
+    let runtime = runtime(&state)?;
+    let path = runtime.extensions.incoming(&extension).map_err(said)?;
+    let mut file = tokio::fs::File::create(&path)
+        .await
+        .map_err(|error| said(error.into()))?;
+    let mut size = 0u64;
+    let mut stream = body.into_data_stream();
+    let written: Result<(), ApiFailure> = async {
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|error| said(anyhow::anyhow!(error)))?;
+            size += chunk.len() as u64;
+            if size > ACTION_FILE {
+                return Err(Error::Invalid("The file is larger than 2 GiB".into()).into());
+            }
+            file.write_all(&chunk)
+                .await
+                .map_err(|error| said(error.into()))?;
+        }
+        file.flush().await.map_err(|error| said(error.into()))?;
+        Ok(())
+    }
+    .await;
+    drop(file);
+    if let Err(error) = written {
+        let _ = tokio::fs::remove_file(&path).await;
+        return Err(error);
+    }
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    input["file"] = json!({"path": path, "size": size,
+        "name": query.name.clone().unwrap_or_default(), "content_type": content_type});
+    let result = runtime
+        .extensions
+        .run(
+            crate::extensions::Caller::of(&who),
+            &extension,
+            &action,
+            input,
+        )
+        .await;
+    // What the action did not move is let go.
+    let _ = tokio::fs::remove_file(&path).await;
+    Ok(Json(json!({ "result": result.map_err(said)? })))
+}
+
+fn ensure_object(input: &Value) -> Result<(), ApiFailure> {
+    if input.is_object() {
+        Ok(())
+    } else {
+        Err(Error::Invalid("The input is a JSON object".into()).into())
+    }
+}
+
+/// Runs an action that reads, its input in the address: its result, or the file it gives,
+/// `{"$file": {path, name?, content_type?, temporary?}}`, sent as the response.
+async fn read_action(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path((extension, action)): Path<(String, String)>,
+    Query(query): Query<ActionQuery>,
+) -> Result<Response, ApiFailure> {
+    let input = query_input(&query)?;
+    ensure_object(&input)?;
+    let runtime = runtime(&state)?;
+    let result = runtime
+        .extensions
+        .run(
+            crate::extensions::Caller::of(&who),
+            &extension,
+            &action,
+            input,
+        )
+        .await
+        .map_err(said)?;
+    let Some(given) = result.get("$file") else {
+        return Ok(Json(json!({ "result": result })).into_response());
+    };
+    let path = runtime
+        .extensions
+        .outgoing(given["path"].as_str().unwrap_or_default())
+        .map_err(said)?;
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|_| ApiFailure::from(Error::NotFound))?;
+    let size = file
+        .metadata()
+        .await
+        .map_err(|error| said(error.into()))?
+        .len();
+    // A temporary file goes once it is open: what is read stays readable until sent.
+    if given["temporary"] == true {
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+    let name = given["name"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default();
+    let kind = given["content_type"]
+        .as_str()
+        .unwrap_or("application/octet-stream")
+        .to_owned();
+    let disposition = format!(
+        "inline; filename*=UTF-8''{}",
+        name.bytes()
+            .map(|byte| match byte {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-' | b'_' => {
+                    (byte as char).to_string()
+                }
+                other => format!("%{other:02X}"),
+            })
+            .collect::<String>()
+    );
+    let body = axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file));
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, kind),
+            (axum::http::header::CONTENT_DISPOSITION, disposition),
+            (axum::http::header::CONTENT_LENGTH, size.to_string()),
+            (
+                axum::http::header::X_CONTENT_TYPE_OPTIONS,
+                "nosniff".to_owned(),
+            ),
+        ],
+        body,
+    )
+        .into_response())
 }
 
 /// The computers that run the workspace's sessions, and which joined ones are connected now.

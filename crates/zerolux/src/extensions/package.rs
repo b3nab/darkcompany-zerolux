@@ -24,6 +24,7 @@ pub const SKIPPED: &[&str] = &[
     ".venv",
     "__pycache__",
     "target",
+    "dist",
     ".DS_Store",
 ];
 /// The most a package may hold, unpacked.

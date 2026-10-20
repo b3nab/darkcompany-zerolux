@@ -229,6 +229,30 @@ impl Extensions {
         Ok(file)
     }
 
+    /// Where a file given to one of an extension's actions is kept while the action runs: in
+    /// the extension's own folder, which the action may move it from.
+    pub fn incoming(&self, extension: &str) -> Result<PathBuf> {
+        ensure!(
+            manifest::Manifest::valid_id(extension),
+            Error::Invalid("An extension's id is `publisher.name`".into())
+        );
+        let folder = self.folder(extension).join(".incoming");
+        crate::platform::private_dir(&folder)?;
+        Ok(folder.join(uuid::Uuid::new_v4().simple().to_string()))
+    }
+
+    /// A file an action's result gives, `{"$file": {"path": …}}`: one in an extension's own
+    /// folder only.
+    pub fn outgoing(&self, path: &str) -> Result<PathBuf> {
+        let root = dunce::canonicalize(&self.root).map_err(|_| Error::NotFound)?;
+        let file = dunce::canonicalize(path).map_err(|_| Error::NotFound)?;
+        ensure!(
+            file.starts_with(&root) && file.is_file(),
+            Error::Invalid("An action gives only files in an extension's folder".into())
+        );
+        Ok(file)
+    }
+
     /// Where an installed extension's log is kept.
     pub fn log_path(&self, id: &str) -> Result<PathBuf> {
         ensure!(
@@ -357,6 +381,7 @@ impl Extensions {
                         offers.push(json!({"index": url, "id": listing.id,
                             "name": listing.name, "description": listing.description,
                             "publisher": listing.publisher, "version": release.version,
+                            "parts": release.parts,
                             "installed": installed.get(&listing.id)}));
                     }
                 }
@@ -422,9 +447,23 @@ impl Extensions {
             let manifest =
                 tokio::task::spawn_blocking(move || package::unpack(&bytes, &key, &target))
                     .await??;
+            let mut parts = Vec::new();
+            if manifest.kernel.is_some() {
+                parts.push("kernel".to_owned());
+            }
+            if manifest.process.is_some() {
+                parts.push("process".to_owned());
+            }
+            if manifest.remote.is_some() {
+                parts.push("remote".to_owned());
+            }
+            let mut listed = release.parts.clone();
+            listed.sort();
+            parts.sort();
             if manifest.extension.id != id
                 || manifest.extension.version != release.version
                 || manifest.extension.publisher != listing.publisher
+                || parts != listed
             {
                 let _ = std::fs::remove_dir_all(&into);
                 bail!(Error::Invalid(

@@ -821,7 +821,7 @@ async fn extensions_are_installed_from_an_index_only_as_their_publisher_signed_t
     .unwrap();
     let forged_digest = package::sha256(&std::fs::read(&forged).unwrap());
     let listing = |version: &str, path: &str, sha256: &str| {
-        json!({"version": version, "kernel": ">=0.0.1",
+        json!({"version": version, "kernel": ">=0.0.1", "parts": ["kernel"],
             "packages": {library::platform(): {"url": path, "sha256": sha256}}})
     };
     std::fs::write(
@@ -857,6 +857,7 @@ async fn extensions_are_installed_from_an_index_only_as_their_publisher_signed_t
     // The newest version that runs here: 9.0.0 needs another kernel.
     assert_eq!(offered["offers"][0]["id"], "zerolux.tally");
     assert_eq!(offered["offers"][0]["version"], "1.0.2");
+    assert_eq!(offered["offers"][0]["parts"], json!(["kernel"]));
     // Not as the index lists it, or not signed by its publisher: refused.
     for version in ["1.0.2", "1.0.1"] {
         let (status, refused) = kernel
