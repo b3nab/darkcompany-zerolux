@@ -81,6 +81,49 @@ pub struct CodexRpc {
     connection_id: String,
 }
 
+/// A connection through `codex app-server proxy`, which lives as long as it does.
+#[cfg(windows)]
+struct Proxied {
+    _proxy: tokio::process::Child,
+    io: tokio::io::Join<tokio::process::ChildStdout, tokio::process::ChildStdin>,
+}
+
+#[cfg(windows)]
+impl AsyncRead for Proxied {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.io).poll_read(cx, buf)
+    }
+}
+
+#[cfg(windows)]
+impl AsyncWrite for Proxied {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.io).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.io).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.io).poll_shutdown(cx)
+    }
+}
+
 impl CodexRpc {
     pub async fn connect(endpoint: &str) -> Result<Self> {
         Self::connect_with_timeout(endpoint, RPC_TIMEOUT).await
@@ -112,10 +155,35 @@ impl CodexRpc {
                         .context("Codex WebSocket handshake failed")?;
                     Ok(Self::from_socket(socket, timeout))
                 }
-                #[cfg(not(unix))]
+                // Codex's daemon listens on a Unix socket on Windows too, which Tokio cannot
+                // open there: Codex's own proxy carries the connection over its input and
+                // output, and ends with it.
+                #[cfg(windows)]
                 {
-                    let _ = path;
-                    bail!("This Codex runtime uses a Unix socket unavailable on this platform")
+                    let mut proxy =
+                        tokio::process::Command::new(crate::platform::executable("codex"))
+                            .args(["app-server", "proxy", "--sock", path])
+                            .stdin(std::process::Stdio::piped())
+                            .stdout(std::process::Stdio::piped())
+                            .stderr(std::process::Stdio::null())
+                            .kill_on_drop(true)
+                            .spawn()
+                            .context("Cannot run `codex` to reach its runtime")?;
+                    let (output, input) = (
+                        proxy
+                            .stdout
+                            .take()
+                            .context("No output from the Codex proxy")?,
+                        proxy.stdin.take().context("No input to the Codex proxy")?,
+                    );
+                    let stream = Proxied {
+                        _proxy: proxy,
+                        io: tokio::io::join(output, input),
+                    };
+                    let (socket, _) = tokio_tungstenite::client_async("ws://localhost/", stream)
+                        .await
+                        .context("Codex WebSocket handshake failed")?;
+                    Ok(Self::from_socket(socket, timeout))
                 }
             } else {
                 let url = reqwest::Url::parse(endpoint)
