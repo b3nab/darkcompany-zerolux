@@ -43,6 +43,7 @@ import {
   saveDraft,
   threadsOf,
   useChatWork,
+  useUiPieces,
   useVoiceInput,
   composerAction,
   dictated,
@@ -61,6 +62,7 @@ import type {
 import { ApprovalCard } from "@/components/approval-card";
 import { ChatAbout } from "@/components/chat-about";
 import { ChatMark } from "@/components/chat-mark";
+import { MessagePieces } from "@/components/extension-view";
 import { Composer } from "@/components/composer";
 import type { Chip } from "@/components/composer";
 import { LiveWork, WorkLine } from "@/components/chat-work";
@@ -188,6 +190,8 @@ export default function ChatScreen() {
       return next;
     });
   const { available: transcription, voices } = useVoice(url);
+  // What extensions do with a message, under it once its details are open.
+  const messagePieces = useUiPieces("message", url);
   const voice = useVoiceInput(
     recorder,
     {
@@ -216,8 +220,8 @@ export default function ChatScreen() {
   );
   // A row is drawn again only when its item or this changes: what else the rows read.
   const drawn = useMemo(
-    () => ({ detail, opened, busy, voices }),
-    [detail, opened, busy, voices],
+    () => ({ detail, opened, busy, voices, messagePieces }),
+    [detail, opened, busy, voices, messagePieces],
   );
 
   // The chat on screen is the open one: a thread pushed over its chat takes over, and the
@@ -453,6 +457,12 @@ export default function ChatScreen() {
           <MessageBody text={m.text} />
           {stamp}
           {deliveries}
+          {shown && conversation ? (
+            <MessagePieces
+              pieces={messagePieces}
+              context={{ conversation_id: conversation.id, message_id: m.id }}
+            />
+          ) : null}
           {below ? (
             <ThreadChip thread={below} name={name} className="mt-1.5" />
           ) : null}
@@ -501,6 +511,12 @@ export default function ChatScreen() {
             stamp
           )}
           {deliveries}
+          {shown && conversation ? (
+            <MessagePieces
+              pieces={messagePieces}
+              context={{ conversation_id: conversation.id, message_id: m.id }}
+            />
+          ) : null}
           {below ? (
             <ThreadChip thread={below} name={name} className="mt-1.5" />
           ) : null}

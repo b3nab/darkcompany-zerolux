@@ -11,6 +11,7 @@ import {
   FileDiffIcon,
   ListChecksIcon,
   PanelRightIcon,
+  PuzzleIcon,
   SquareTerminalIcon,
   XIcon,
 } from "lucide-react-native";
@@ -72,6 +73,7 @@ import {
   usdCost,
   useSessionLive,
   useSessionSettings,
+  useUiPieces,
   useVoice,
   useVoiceInput,
   composerAction,
@@ -97,6 +99,7 @@ import type {
 } from "@zerolux/chat";
 import { ApprovalCard, ApprovalReceipt } from "@/components/approval-card";
 import { Composer as ComposerBox } from "@/components/composer";
+import { pieceIcon } from "@/components/extension-view";
 import { ActorMark, Fact } from "@/components/member";
 import { Screen } from "@/components/screen";
 import { Segmented } from "@/components/segmented";
@@ -387,6 +390,7 @@ export default function SessionPage() {
               ) : null}
             </Pressable>
           ) : null}
+          {access.read ? <SessionPieces session={id} /> : null}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="About this session"
@@ -881,6 +885,55 @@ function Composer({
         }
       />
     </>
+  );
+}
+
+/**
+ * In the session's header, its extensions' panels: one opens at once, several ask which.
+ */
+function SessionPieces({ session }: { session: string }) {
+  const { url } = useSession();
+  const router = useRouter();
+  const pieces = useUiPieces("session", url);
+  const muted = String(useCSSVariable("--color-muted-foreground"));
+  if (!pieces.length) return null;
+  const open = (index: number) => {
+    const piece = pieces[index];
+    if (!piece) return;
+    router.push({
+      pathname: "/piece",
+      params: {
+        extension: piece.extension,
+        name: piece.name,
+        space: "session",
+        session,
+      },
+    });
+  };
+  const choose = () => {
+    if (pieces.length === 1) return open(0);
+    const titles = pieces.map((piece) => piece.title);
+    if (Platform.OS === "ios")
+      return ActionSheetIOS.showActionSheetWithOptions(
+        { options: [...titles, "Cancel"], cancelButtonIndex: titles.length },
+        open,
+      );
+    Alert.alert("Extensions", undefined, [
+      ...titles.map((text, i) => ({ text, onPress: () => open(i) })),
+      { text: "Cancel", style: "cancel" as const },
+    ]);
+  };
+  const Icon = pieces.length === 1 ? pieceIcon(pieces[0]!) : PuzzleIcon;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={pieces.length === 1 ? pieces[0]!.title : "Extensions"}
+      onPress={choose}
+      hitSlop={6}
+      className="size-10 items-center justify-center rounded-sm active:bg-accent"
+    >
+      <Icon color={muted} size={20} strokeWidth={1.5} />
+    </Pressable>
   );
 }
 

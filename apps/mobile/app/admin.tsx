@@ -2,7 +2,9 @@ import { useRouter } from "expo-router";
 import { ChevronRightIcon, UserIcon } from "lucide-react-native";
 import { ScrollView, View } from "react-native";
 import { useCSSVariable } from "uniwind";
-import { activeActors, capabilityStatus } from "@zerolux/chat";
+import { activeActors, capabilityStatus, useUiPieces } from "@zerolux/chat";
+import { ExtensionView } from "@/components/extension-view";
+import { Eyebrow } from "@/components/meter";
 import { Screen } from "@/components/screen";
 import { Row, Section, Unavailable } from "@/components/settings";
 import { WorkspaceSettings } from "@/components/workspace-settings";
@@ -13,7 +15,9 @@ import { useMe } from "../src/me";
 
 /** The workspace as its owner runs it: its name, people, agents, modules, storage, updates. */
 export default function Administration() {
-  const { workspace, version, capabilities, renameWorkspace } = useSession();
+  const { workspace, version, capabilities, renameWorkspace, url } =
+    useSession();
+  const settings = useUiPieces("settings", url);
   const { owner } = useMe();
   const router = useRouter();
   const faint = String(useCSSVariable("--color-faint"));
@@ -37,6 +41,12 @@ export default function Administration() {
             save={renameWorkspace}
           />
         </Section>
+        {settings.map((piece) => (
+          <View key={`${piece.extension}/${piece.name}`} className="gap-2">
+            <Eyebrow>{piece.title}</Eyebrow>
+            <ExtensionView piece={piece} context={{}} />
+          </View>
+        ))}
         <Section title="People">
           {people.map((person) => (
             <Row

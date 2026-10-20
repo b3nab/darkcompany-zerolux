@@ -1,6 +1,7 @@
 import { Image, Linking, Pressable, ScrollView, View } from "react-native";
 import { useRouter } from "expo-router";
 import {
+  useUiPieces,
   fileKind,
   fileSize,
   fileUrl,
@@ -9,11 +10,13 @@ import {
   sessionTone,
 } from "@zerolux/chat";
 import type { Actor, ChatSession, Conversation, Storage } from "@zerolux/chat";
+import { ExtensionView } from "@/components/extension-view";
 import { FileGlyph } from "@/components/file";
 import { ActorMark } from "@/components/member";
 import { Eyebrow } from "@/components/meter";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
+import { useSession } from "../src/kernel";
 
 /** About a chat: who is in it, what each is doing and the files shared in it. */
 export function ChatAbout({
@@ -28,6 +31,8 @@ export function ChatAbout({
   storage: Storage;
 }) {
   const router = useRouter();
+  const { url } = useSession();
+  const pieces = useUiPieces("chat", url);
   const files = storage.files
     .filter((f) => f.conversation_id === conversation.id)
     .sort((a, b) => b.updated_at - a.updated_at);
@@ -140,6 +145,15 @@ export function ChatAbout({
           </Text>
         )}
       </View>
+      {pieces.map((piece) => (
+        <View key={`${piece.extension}/${piece.name}`} className="gap-2">
+          <Eyebrow className="mb-1">{piece.title}</Eyebrow>
+          <ExtensionView
+            piece={piece}
+            context={{ conversation_id: conversation.id }}
+          />
+        </View>
+      ))}
     </ScrollView>
   );
 }

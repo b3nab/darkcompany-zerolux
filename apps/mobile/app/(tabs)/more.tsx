@@ -11,17 +11,22 @@ import {
 } from "lucide-react-native";
 import { Pressable, ScrollView, View } from "react-native";
 import { useCSSVariable } from "uniwind";
+import { useUiPieces } from "@zerolux/chat";
 import { Wordmark } from "@/components/brand";
+import { pieceIcon } from "@/components/extension-view";
 import { ActorMark } from "@/components/member";
 import { Screen } from "@/components/screen";
 import { Row, Section } from "@/components/settings";
 import { Text } from "@/components/ui/text";
+import { useSession } from "../../src/kernel";
 import { useMe } from "../../src/me";
 
 /** You first, then your settings, the workspace's administration and the rest of it. */
 export default function More() {
   const router = useRouter();
   const { me, email, owner } = useMe();
+  const { url } = useSession();
+  const pages = useUiPieces("page", url);
   const faint = String(useCSSVariable("--color-faint"));
   const go = (href: Href) => () => router.push(href);
   const next = <ChevronRightIcon color={faint} size={18} strokeWidth={1.5} />;
@@ -95,6 +100,22 @@ export default function More() {
             onPress={go("/extensions")}
             trailing={next}
           />
+          {pages.map((piece) => (
+            <Row
+              key={`${piece.extension}/${piece.name}`}
+              icon={pieceIcon(piece)}
+              label={piece.title}
+              onPress={go({
+                pathname: "/piece",
+                params: {
+                  extension: piece.extension,
+                  name: piece.name,
+                  space: "page",
+                },
+              })}
+              trailing={next}
+            />
+          ))}
         </Section>
         <View className="items-center gap-2 pt-4">
           <Wordmark height={16} />

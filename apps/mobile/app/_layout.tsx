@@ -75,6 +75,7 @@ function Navigator() {
         <Stack.Screen name="accounts/[id]" />
         <Stack.Screen name="extensions" />
         <Stack.Screen name="extension/[id]" />
+        <Stack.Screen name="piece" />
         <Stack.Screen name="action" options={{ presentation: "modal" }} />
       </Stack.Protected>
       <Stack.Protected guard={Boolean(url) && !authorized}>
