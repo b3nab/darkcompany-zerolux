@@ -3,6 +3,7 @@ import { setKernelFetch } from "./client";
 import {
   installOffer,
   offerAction,
+  offerWarning,
   disableExtension,
   enableExtension,
   installExtension,
@@ -110,4 +111,18 @@ test("installing an offer asks its index for that version, and gives the extensi
       },
     },
   ]);
+});
+
+test("an offer warns before it is installed only of what runs beyond its own process", () => {
+  expect(offerWarning(offer)).toBeUndefined();
+  expect(offerWarning({ ...offer, parts: ["process"] })).toBeUndefined();
+  const kernel = offerWarning({ ...offer, parts: ["kernel"] });
+  const ui = offerWarning({ ...offer, parts: ["interface"] });
+  expect(kernel).toContain("aspen");
+  expect(ui).toContain("aspen");
+  expect(ui).not.toBe(kernel);
+  // Both, in one warning.
+  expect(offerWarning({ ...offer, parts: ["kernel", "interface"] })).toBe(
+    `${kernel} ${ui}`,
+  );
 });

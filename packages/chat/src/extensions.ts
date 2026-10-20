@@ -239,6 +239,21 @@ export const offerAction = (offer: MarketplaceOffer) =>
       ? "installed"
       : "update";
 
+/**
+ * What installing an offer lets run beyond its own process, said before it is installed:
+ * code inside the kernel, an interface inside the apps; nothing when it is neither.
+ */
+export function offerWarning(offer: MarketplaceOffer) {
+  const by = `signed by ${offer.publisher}.`;
+  const said = [
+    offer.parts?.includes("kernel") ? `It runs inside the kernel, ${by}` : "",
+    offer.parts?.includes("interface")
+      ? `Its interface runs inside the app with your access, ${by}`
+      : "",
+  ].filter(Boolean);
+  return said.length ? said.join(" ") : undefined;
+}
+
 /** The owner installs an extension from an index, or updates it, and enables it. */
 export const installOffer = (offer: MarketplaceOffer, kernel = kernelUrl()) =>
   changed(
