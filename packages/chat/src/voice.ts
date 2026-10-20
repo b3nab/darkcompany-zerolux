@@ -160,20 +160,28 @@ export function useVoiceInput(
   // What records now, for a release that comes before the next render.
   const recording = useRef<VoiceUse | "starting">(undefined);
   const pressed = useRef({ at: 0, recording: false });
+  // Ended while the microphone was still starting: it ends as soon as it records.
+  const ending = useRef(false);
   const start = async (next: VoiceUse) => {
     setError("");
     recording.current = "starting";
+    ending.current = false;
     try {
       await recorder.start();
-      recording.current = next;
-      setUse(next);
     } catch (e) {
       recording.current = undefined;
       setError(`The microphone is not available: ${errorMessage(e)}`);
+      return;
     }
+    // Dropped while starting: nothing is kept.
+    if (recording.current !== "starting") return void recorder.cancel();
+    recording.current = next;
+    setUse(next);
+    if (ending.current) void finish();
   };
   const finish = async () => {
     const now = recording.current;
+    if (now === "starting") ending.current = true;
     if (!now || now === "starting") return;
     recording.current = undefined;
     setUse(undefined);
