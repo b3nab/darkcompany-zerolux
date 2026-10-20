@@ -1,0 +1,13 @@
+[extension]
+id = "zerolux.storage"
+name = "Storage"
+version = "0.1.0"
+publisher = "zerolux"
+description = "The workspace's files, uploaded by people and written by agents, kept where its provider keeps them"
+kernel = ">=0.0.1"
+
+[kernel]
+library = "zerolux_storage"
+
+[settings]
+provider = { type = "text", label = "Provider", description = "Where files are kept: local, or a provider extension's name", default = "local" }

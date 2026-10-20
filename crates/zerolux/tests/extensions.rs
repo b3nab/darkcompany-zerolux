@@ -654,16 +654,16 @@ async fn the_owner_works_on_an_extension_from_this_computer() {
 
 /// The `tally` kernel module of the Rust SDK's examples, built for this computer.
 fn tally_module() -> std::path::PathBuf {
+    built_module(&["-p", "zerolux-extension", "--example", "tally"], "tally")
+}
+
+/// A kernel module built for this computer by Cargo, as `args` say.
+fn built_module(args: &[&str], target: &str) -> std::path::PathBuf {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let output = std::process::Command::new(cargo)
-        .args([
-            "build",
-            "-p",
-            "zerolux-extension",
-            "--example",
-            "tally",
-            "--message-format=json",
-        ])
+        .arg("build")
+        .args(args)
+        .arg("--message-format=json")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .unwrap();
@@ -675,14 +675,14 @@ fn tally_module() -> std::path::PathBuf {
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|message| message["target"]["name"] == "tally")
+        .filter(|message| message["target"]["name"] == target)
         .flat_map(|message| message["filenames"].as_array().cloned().unwrap_or_default())
         .filter_map(|file| file.as_str().map(std::path::PathBuf::from))
         .find(|file| {
             file.extension()
                 .is_some_and(|kind| std::env::consts::DLL_EXTENSION == kind)
         })
-        .expect("the tally module")
+        .expect("the kernel module")
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -900,5 +900,168 @@ async fn extensions_are_installed_from_an_index_only_as_their_publisher_signed_t
     runtime.shutdown().await.unwrap();
     server.abort();
     site_server.abort();
+    livekit.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn storage_keeps_files_and_gives_them_back() {
+    use zerolux::extensions::library;
+    if std::process::Command::new("livekit-server")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("livekit-server not installed: skipped");
+        return;
+    }
+    let built = built_module(&["-p", "zerolux-storage", "--lib"], "zerolux_storage");
+    let dir = tempfile::tempdir().unwrap();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../marketplace/storage");
+    let folder = dir.path().join("storage");
+    let modules = folder.join("kernel").join(library::platform());
+    std::fs::create_dir_all(&modules).unwrap();
+    std::fs::copy(
+        source.join("zerolux-extension.toml"),
+        folder.join("zerolux-extension.toml"),
+    )
+    .unwrap();
+    std::fs::copy(&built, modules.join(library::file_name("zerolux_storage"))).unwrap();
+    let (kernel, runtime, livekit, server, _database) = kernel_for(dir.path()).await;
+    let (status, installed) = kernel
+        .call(
+            Method::POST,
+            "/extensions/folder",
+            Some(json!({"folder": folder})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{installed}");
+    // An agent's text, written and read back.
+    let (status, written) = kernel
+        .call(
+            Method::POST,
+            "/ext/zerolux.storage/write",
+            Some(json!({"name": "notes.md", "folder": "plans/q4", "text": "# Q4"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{written}");
+    let notes = written["result"]["id"].as_str().unwrap().to_owned();
+    let (_, read) = kernel
+        .call(
+            Method::POST,
+            "/ext/zerolux.storage/read",
+            Some(json!({"id": notes})),
+        )
+        .await;
+    assert_eq!(read["result"]["text"], "# Q4", "{read}");
+    // A person's upload, shared in a chat, and downloaded as it was.
+    let bytes: Vec<u8> = (0..300_000u32).map(|n| (n % 251) as u8).collect();
+    let input = serde_json::to_string(&json!({"conversation_id": "c1"})).unwrap();
+    let uploaded: Value = kernel
+        .client
+        .post(format!(
+            "{}/api/ext/zerolux.storage/upload/file",
+            kernel.url
+        ))
+        .query(&[("input", input.as_str()), ("name", "photo.png")])
+        .header("content-type", "image/png")
+        .body(bytes.clone())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let photo = uploaded["result"]["id"]
+        .as_str()
+        .expect("uploaded")
+        .to_owned();
+    assert_eq!(uploaded["result"]["size"], 300_000, "{uploaded}");
+    assert_eq!(uploaded["result"]["conversation_id"], "c1");
+    let input = serde_json::to_string(&json!({"id": photo})).unwrap();
+    let response = kernel
+        .client
+        .get(format!("{}/api/ext/zerolux.storage/download", kernel.url))
+        .query(&[("input", input.as_str())])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "image/png");
+    assert!(
+        response.headers()["content-disposition"]
+            .to_str()
+            .unwrap()
+            .contains("photo.png")
+    );
+    assert_eq!(response.bytes().await.unwrap().to_vec(), bytes);
+    // What was given to the action is gone from its folder.
+    let incoming = dir.path().join("extensions/zerolux.storage/.incoming");
+    assert_eq!(std::fs::read_dir(&incoming).unwrap().count(), 0);
+    // Listed by folder and by chat; renamed, moved, deleted.
+    let (_, in_chat) = kernel
+        .call(
+            Method::POST,
+            "/ext/zerolux.storage/files",
+            Some(json!({"conversation_id": "c1"})),
+        )
+        .await;
+    assert_eq!(in_chat["result"]["files"].as_array().unwrap().len(), 1);
+    let (_, folders) = kernel
+        .call(
+            Method::POST,
+            "/ext/zerolux.storage/folders",
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(folders["result"]["folders"], json!(["plans/q4"]));
+    for (action, input) in [
+        ("rename", json!({"id": notes, "name": "plan.md"})),
+        ("move", json!({"id": notes, "folder": "plans"})),
+    ] {
+        let (status, changed) = kernel
+            .call(
+                Method::POST,
+                &format!("/ext/zerolux.storage/{action}"),
+                Some(input),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{changed}");
+    }
+    let (_, moved) = kernel
+        .call(
+            Method::POST,
+            "/ext/zerolux.storage/files",
+            Some(json!({"folder": "plans"})),
+        )
+        .await;
+    assert_eq!(moved["result"]["files"][0]["name"], "plan.md", "{moved}");
+    let (status, _) = kernel
+        .call(
+            Method::POST,
+            "/ext/zerolux.storage/move",
+            Some(json!({"id": notes, "folder": "../out"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = kernel
+        .call(
+            Method::POST,
+            "/ext/zerolux.storage/delete",
+            Some(json!({"id": photo})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, all) = kernel
+        .call(Method::POST, "/ext/zerolux.storage/files", Some(json!({})))
+        .await;
+    assert_eq!(all["result"]["files"].as_array().unwrap().len(), 1);
+    assert!(
+        !dir.path()
+            .join(format!("extensions/zerolux.storage/files/{photo}"))
+            .exists()
+    );
+    // A file outside an extension's folder is never given.
+    runtime.shutdown().await.unwrap();
+    server.abort();
     livekit.shutdown().await.unwrap();
 }

@@ -1,0 +1,16 @@
+[package]
+name = "zerolux-storage"
+description = "ZeroLux's Storage: the workspace's files, kept where its providers keep them"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "zerolux_storage"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+zerolux-extension = { path = "../../crates/zerolux-extension" }
+uuid.workspace = true
