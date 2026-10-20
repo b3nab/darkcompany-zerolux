@@ -21,6 +21,7 @@ import {
 } from "@zerolux/chat";
 import {
   desktopConnection,
+  desktopSignIn,
   kernelAddress,
   windowDragProps,
   WORKSPACES_LINK,
@@ -66,22 +67,12 @@ const invited = () =>
 export function AuthGate({ children }: { children: ReactNode }) {
   const [client] = useState(() => {
     const desktop = desktopConnection();
-    // Packaged desktop pages are cross-origin: keep their bearer only in this
-    // connection's memory. A new window requires login; there is no native storage IPC.
-    let token: string | null = null;
+    // Packaged desktop pages are cross-origin to their kernel: no cookie reaches it, so
+    // their bearer is kept by the desktop for this connection.
     return new AuthConnection(
       kernelAddress(),
       desktop?.workspaceId,
-      desktop
-        ? {
-            async read() {
-              return token;
-            },
-            async write(_kernel, _workspaceId, value) {
-              token = value;
-            },
-          }
-        : undefined,
+      desktop ? desktopSignIn() : undefined,
     );
   });
   const [health, setHealth] = useState<AuthHealth>();

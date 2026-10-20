@@ -5,6 +5,7 @@ mod catalog;
 mod chrome;
 mod computer;
 mod connection;
+mod credentials;
 mod local;
 mod preferences;
 

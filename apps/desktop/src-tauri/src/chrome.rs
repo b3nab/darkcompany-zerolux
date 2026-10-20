@@ -16,16 +16,15 @@ pub struct WindowState {
     maximized: bool,
 }
 
-fn allowed(label: &str, url: &tauri::Url) -> bool {
-    let Some((id, generation)) = label
+/// The saved connection whose packaged workspace view this is, if it is one.
+pub fn workspace_profile<'a>(label: &'a str, url: &tauri::Url) -> Option<&'a str> {
+    let (id, generation) = label
         .strip_prefix("workspace-")
-        .and_then(|label| label.rsplit_once('-'))
-    else {
-        return false;
-    };
-    uuid::Uuid::parse_str(id).is_ok_and(|parsed| parsed.to_string() == id)
+        .and_then(|label| label.rsplit_once('-'))?;
+    (uuid::Uuid::parse_str(id).is_ok_and(|parsed| parsed.to_string() == id)
         && generation.parse::<u64>().is_ok_and(|n| n > 0)
-        && local::app_page(url)
+        && local::app_page(url))
+    .then_some(id)
 }
 
 #[tauri::command]
@@ -36,7 +35,7 @@ pub async fn window_control(
     if !window
         .url()
         .ok()
-        .is_some_and(|url| allowed(window.label(), &url))
+        .is_some_and(|url| workspace_profile(window.label(), &url).is_some())
     {
         return Err("Window controls belong to this packaged workspace view only".into());
     }
@@ -68,9 +67,9 @@ mod tests {
     fn only_packaged_workspace_callers_can_use_window_controls() {
         let label = format!("workspace-{}-1", uuid::Uuid::new_v4());
         let page = tauri::Url::parse("tauri://localhost/index.html").unwrap();
-        assert!(allowed(&label, &page));
+        assert!(workspace_profile(&label, &page).is_some());
         for label in ["manager", "workspace-not-a-profile-1", "workspace-other"] {
-            assert!(!allowed(label, &page));
+            assert!(workspace_profile(label, &page).is_none());
         }
         for url in [
             "http://127.0.0.1:4310/",
@@ -79,7 +78,7 @@ mod tests {
             "tauri://user@localhost/index.html",
             "http://tauri.localhost:4310/",
         ] {
-            assert!(!allowed(&label, &url.parse().unwrap()));
+            assert!(workspace_profile(&label, &url.parse().unwrap()).is_none());
         }
         assert!(serde_json::from_str::<WindowAction>("\"destroy\"").is_err());
     }

@@ -721,6 +721,7 @@ impl Host {
                     self.unfreeze(&id);
                     return Err(error);
                 }
+                crate::credentials::forget(&id);
                 if let Some(view) = self.windows.remove(&id) {
                     view.close()?;
                 }
@@ -820,7 +821,9 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             workspace_action,
-            crate::chrome::window_control
+            crate::chrome::window_control,
+            crate::credentials::read_workspace_credential,
+            crate::credentials::write_workspace_credential
         ])
         .on_menu_event(|app, event| {
             if event.id().as_ref() == "workspaces" {

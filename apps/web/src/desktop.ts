@@ -23,6 +23,32 @@ export function desktopConnection() {
   return typeof window !== "undefined" ? window.zeroluxDesktop : undefined;
 }
 
+/**
+ * The sign-in of this page's connection, kept by the desktop in the system's credential store
+ * across restarts. Where the store is missing or refuses, it lasts while the window is open.
+ */
+export function desktopSignIn() {
+  let kept: string | null = null;
+  const call = <T>(command: string, args: Record<string, unknown>) =>
+    import("@tauri-apps/api/core").then(({ invoke }) =>
+      invoke<T>(command, args),
+    );
+  return {
+    async read(_kernel: string, workspaceId: string) {
+      const saved = await call<string | null>("read_workspace_credential", {
+        workspaceId,
+      }).catch(() => null);
+      return saved ?? kept;
+    },
+    async write(_kernel: string, workspaceId: string, token: string | null) {
+      kept = token;
+      await call("write_workspace_credential", { workspaceId, token }).catch(
+        () => {},
+      );
+    },
+  };
+}
+
 /** Where this page's kernel is: the desktop names it, a browser uses the page's own origin. */
 export const kernelAddress = () => desktopConnection()?.kernelUrl ?? "";
 
