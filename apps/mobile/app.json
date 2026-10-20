@@ -12,7 +12,8 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSAppTransportSecurity": {
-          "NSAllowsLocalNetworking": true
+          "NSAllowsLocalNetworking": true,
+          "NSAllowsArbitraryLoadsInWebContent": true
         },
         "NSLocalNetworkUsageDescription": "ZeroLux talks to the kernel on your network."
       },
