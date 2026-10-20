@@ -71,6 +71,6 @@ jobs:
       - run: livekit-server --version
       - run: bun run --cwd apps/desktop assets
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo test --workspace --no-fail-fast
       - run: bun run typecheck
       - run: bun run test
