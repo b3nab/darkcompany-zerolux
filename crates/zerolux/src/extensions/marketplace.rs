@@ -91,18 +91,12 @@ pub async fn read(url: &str) -> Result<Index> {
         .with_context(|| format!("{url} is not an extension index"))
 }
 
-/// This kernel's version, as ranges are matched against it.
-fn kernel_version() -> semver::Version {
-    let mut version = semver::Version::parse(env!("CARGO_PKG_VERSION")).expect("a version");
-    version.pre = semver::Prerelease::EMPTY;
-    version
-}
-
 impl Release {
     /// Whether it works with this kernel, and its package for this computer.
     pub fn package(&self) -> Option<&Package> {
         let fits = self.kernel.as_deref().is_none_or(|range| {
-            semver::VersionReq::parse(range).is_ok_and(|range| range.matches(&kernel_version()))
+            semver::VersionReq::parse(range)
+                .is_ok_and(|range| range.matches(&super::manifest::kernel_version()))
         });
         if !fits {
             return None;

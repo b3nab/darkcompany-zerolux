@@ -84,6 +84,14 @@ pub struct SettingOption {
     pub label: String,
 }
 
+/// This kernel's version as extensions' ranges are matched against it: a build before a
+/// release, such as `0.0.1-dev`, counts as that release.
+pub fn kernel_version() -> semver::Version {
+    let mut version = semver::Version::parse(env!("CARGO_PKG_VERSION")).expect("a version");
+    version.pre = semver::Prerelease::EMPTY;
+    version
+}
+
 /// The longest an action may take, when it says so; otherwise a minute.
 pub const LONGEST: u64 = 30 * 60;
 
@@ -129,8 +137,7 @@ impl Manifest {
         if let Some(range) = &identity.kernel {
             let range = semver::VersionReq::parse(range)
                 .map_err(|_| invalid("The kernel versions are a semver range, such as >=0.1"))?;
-            let kernel = semver::Version::parse(env!("CARGO_PKG_VERSION"))
-                .map_err(|_| invalid("This kernel's version is not semver"))?;
+            let kernel = kernel_version();
             if !range.matches(&kernel) {
                 return Err(invalid(format!(
                     "This extension works with kernel {range}; this one is {kernel}"
