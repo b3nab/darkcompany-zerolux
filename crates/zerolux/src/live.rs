@@ -208,7 +208,10 @@ impl Live {
                 }
                 Change::Done { item } => state.items.retain(|open| &open.id != item),
                 Change::Clear => state.items.clear(),
-                Change::Queue { items } => state.queue.clone_from(items),
+                Change::Queue { items } => {
+                    tracing::info!(session, waiting = items.len(), "Queue reported");
+                    state.queue.clone_from(items);
+                }
                 Change::Usage(usage) => state.usage = Some(usage.clone()),
                 Change::Goal { goal } => state.goal.clone_from(goal),
             }

@@ -347,6 +347,9 @@ impl ChatRuntime {
         let saved = self.save_images(id, images, decoded)?;
         let request = json!({"method":"input","link_id":session.id,"text":text,"mode":mode,
             "images": saved.iter().map(|(path, media_type)| json!({"path":path,"media_type":media_type})).collect::<Vec<_>>()});
+        // How long the harness takes to take an input: what the Console waits for.
+        let started = std::time::Instant::now();
+        let _took = scopeguard_log(id, &session.harness, started);
         match control {
             Control::Codex(control) => {
                 let paths: Vec<String> = saved.into_iter().map(|(path, _)| path).collect();
@@ -401,6 +404,26 @@ impl ChatRuntime {
         };
         Ok(interrupted)
     }
+}
+
+/// Logs, when dropped, how long an input took to reach the harness.
+fn scopeguard_log<'a>(
+    session: &'a str,
+    harness: &'a str,
+    started: std::time::Instant,
+) -> impl Drop + 'a {
+    struct Took<'a>(&'a str, &'a str, std::time::Instant);
+    impl Drop for Took<'_> {
+        fn drop(&mut self) {
+            tracing::info!(
+                session = self.0,
+                harness = self.1,
+                elapsed_ms = self.2.elapsed().as_millis() as u64,
+                "Input handed to the harness"
+            );
+        }
+    }
+    Took(session, harness, started)
 }
 
 /// A Claude runner started before a control existed says it needs an update.
