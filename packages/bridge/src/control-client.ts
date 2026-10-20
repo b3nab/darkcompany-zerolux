@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { connect } from "node:net";
 import { isAbsolute } from "node:path";
-import { privateMode } from "./private-mode.ts";
+import { privateMode } from "./private-mode";
 
 export interface ControlDescriptor extends Record<string, unknown> {
   instance_id: string;
