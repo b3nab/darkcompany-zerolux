@@ -5,12 +5,12 @@ import type { ScrollViewInstance } from "react-native";
 import {
   errorMessage,
   plainOutput,
-  taskState,
-  useSessionTasks,
-  useTaskOutput,
+  backgroundState,
+  useBackgroundCommands,
+  useBackgroundOutput,
 } from "@zerolux/chat";
 import { Screen } from "@/components/screen";
-import { useNow } from "@/components/tasks";
+import { useNow } from "@/components/background";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { useSession } from "../../src/kernel";
@@ -20,20 +20,20 @@ import { useAccess } from "../../src/me";
 const DRAWN = 60_000;
 
 /**
- * A session's task: its command and how it stands, its output as it grows, following its end
+ * A session's background command: what it runs and how it stands, its output as it grows, following its end
  * unless scrolled up; and Stop, for whoever works in the session.
  */
-export default function TaskPage() {
+export default function BackgroundCommandPage() {
   const { id, session: sessionId } = useLocalSearchParams<{
     id: string;
     session: string;
   }>();
   const { url, chat } = useSession();
   const { write } = useAccess(chat.sessions.find((s) => s.id === sessionId));
-  const tasks = useSessionTasks(sessionId, url);
-  const task = tasks.tasks?.find((t) => t.id === id);
-  const running = task?.status === "running";
-  const output = useTaskOutput(task ? id : undefined, running, url);
+  const background = useBackgroundCommands(sessionId, url);
+  const command = background.commands?.find((c) => c.id === id);
+  const running = command?.status === "running";
+  const output = useBackgroundOutput(command ? id : undefined, running, url);
   const now = useNow(running);
   const scroll = useRef<ScrollViewInstance>(null);
   // At the end, the view follows the output; scrolled up, it stays.
@@ -42,7 +42,7 @@ export default function TaskPage() {
   const [error, setError] = useState("");
   const text = plainOutput(output.text).slice(-DRAWN);
   const stop = () =>
-    Alert.alert("Stop this task?", undefined, [
+    Alert.alert("Stop this command?", undefined, [
       { text: "Cancel", style: "cancel" },
       {
         text: "Stop",
@@ -50,7 +50,7 @@ export default function TaskPage() {
         onPress: () => {
           setBusy(true);
           setError("");
-          tasks
+          background
             .stop(id)
             .catch((e: unknown) => setError(errorMessage(e)))
             .finally(() => setBusy(false));
@@ -60,17 +60,17 @@ export default function TaskPage() {
   return (
     <Screen
       back
-      title="Task"
-      subtitle={task ? taskState(task, now) : undefined}
+      title="Background command"
+      subtitle={command ? backgroundState(command, now) : undefined}
     >
-      {task ? (
+      {command ? (
         <View className="flex-1 gap-3 px-5 pb-5 pt-2">
           <Text selectable className="font-mono text-[13px]">
-            {task.command}
+            {command.command}
           </Text>
-          {task.error || output.error || error ? (
+          {command.error || output.error || error ? (
             <Text className="text-sm text-destructive">
-              {error || output.error || task.error}
+              {error || output.error || command.error}
             </Text>
           ) : null}
           <ScrollView
@@ -104,7 +104,8 @@ export default function TaskPage() {
         </View>
       ) : (
         <Text className="px-5 pt-2 text-sm text-faint">
-          {tasks.error || (tasks.tasks ? "This task is gone." : "Reading it…")}
+          {background.error ||
+            (background.commands ? "This command is gone." : "Reading it…")}
         </Text>
       )}
     </Screen>

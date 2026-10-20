@@ -2,24 +2,24 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { ScrollView, TextInput, View } from "react-native";
 import { useCSSVariable } from "uniwind";
-import { errorMessage, useSessionTasks } from "@zerolux/chat";
+import { errorMessage, useBackgroundCommands } from "@zerolux/chat";
 import { Screen } from "@/components/screen";
-import { TaskList } from "@/components/tasks";
+import { BackgroundList } from "@/components/background";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { useSession } from "../../src/kernel";
 import { useAccess } from "../../src/me";
 
 /**
- * A session's tasks, beside its terminal: each command it runs in the background. Whoever
- * works in the session starts a new one, and its output opens.
+ * What a session runs in the background, beside its terminal: each command and how it stands.
+ * Whoever works in the session runs a new one, and its output opens.
  */
-export default function TasksPage() {
+export default function BackgroundPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { chat, url } = useSession();
   const session = chat.sessions.find((s) => s.id === id);
   const { write } = useAccess(session);
-  const tasks = useSessionTasks(session ? id : undefined, url);
+  const background = useBackgroundCommands(session ? id : undefined, url);
   const router = useRouter();
   const faint = String(useCSSVariable("--color-faint"));
   const [command, setCommand] = useState("");
@@ -29,20 +29,20 @@ export default function TasksPage() {
     if (!command.trim()) return;
     setBusy(true);
     setError("");
-    tasks
-      .start(command.trim())
-      .then((task) => {
+    background
+      .run(command.trim())
+      .then((started) => {
         setCommand("");
         router.push({
-          pathname: "/task/[id]",
-          params: { id: task.id, session: id },
+          pathname: "/background-command/[id]",
+          params: { id: started.id, session: id },
         });
       })
       .catch((e: unknown) => setError(errorMessage(e)))
       .finally(() => setBusy(false));
   };
   return (
-    <Screen back title="Tasks" subtitle={session?.title || undefined}>
+    <Screen back title="Background" subtitle={session?.title || undefined}>
       {session ? (
         <ScrollView
           contentContainerClassName="gap-4 px-5 pb-10 pt-2"
@@ -55,7 +55,7 @@ export default function TasksPage() {
                   value={command}
                   onChangeText={setCommand}
                   onSubmitEditing={run}
-                  placeholder="New task"
+                  placeholder="Command"
                   placeholderTextColor={faint}
                   autoCapitalize="none"
                   autoCorrect={false}
@@ -64,7 +64,7 @@ export default function TasksPage() {
                   className="h-10 flex-1 rounded-md border border-input bg-background px-3 font-mono text-[14px] text-foreground"
                 />
                 <Button disabled={busy || !command.trim()} onPress={run}>
-                  <Text>{busy ? "Starting…" : "Run"}</Text>
+                  <Text>{busy ? "Starting…" : "Run in background"}</Text>
                 </Button>
               </View>
               {error ? (
@@ -72,7 +72,11 @@ export default function TasksPage() {
               ) : null}
             </View>
           ) : null}
-          <TaskList session={session} tasks={tasks.tasks} error={tasks.error} />
+          <BackgroundList
+            session={session}
+            commands={background.commands}
+            error={background.error}
+          />
         </ScrollView>
       ) : (
         <Text className="px-5 pt-2 text-sm text-faint">

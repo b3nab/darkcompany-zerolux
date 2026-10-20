@@ -64,7 +64,7 @@ import {
   useSessionEvents,
   useSessionFiles,
   useSessionGit,
-  useSessionTasks,
+  useBackgroundCommands,
   useSessionSubagents,
   useSessionQueue,
   useSessionUsage,
@@ -181,10 +181,10 @@ export default function SessionPage() {
   const changed =
     useSessionGit(access.read ? id : undefined, session?.output_at, url).status
       ?.changes.length ?? 0;
-  // How many of its tasks run now, on the Tasks button.
+  // How many of its background commands run now, on the Background button.
   const running =
-    useSessionTasks(access.read ? id : undefined, url).tasks?.filter(
-      (task) => task.status === "running",
+    useBackgroundCommands(access.read ? id : undefined, url).commands?.filter(
+      (command) => command.status === "running",
     ).length ?? 0;
   // Read from the start, then again from where it stopped at each session.output notice.
   const {
@@ -369,9 +369,9 @@ export default function SessionPage() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={
-                running ? `Tasks, ${running} running` : "Tasks"
+                running ? `Background, ${running} running` : "Background"
               }
-              onPress={() => router.push(`/tasks/${id}`)}
+              onPress={() => router.push(`/background/${id}`)}
               hitSlop={6}
               className="size-10 items-center justify-center rounded-sm active:bg-accent"
             >

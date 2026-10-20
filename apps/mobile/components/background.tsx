@@ -3,8 +3,8 @@ import { ChevronRightIcon } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 import { useCSSVariable } from "uniwind";
-import { taskState } from "@zerolux/chat";
-import type { ChatSession, Task } from "@zerolux/chat";
+import { backgroundState } from "@zerolux/chat";
+import type { BackgroundCommand, ChatSession } from "@zerolux/chat";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 
@@ -24,31 +24,31 @@ export function useNow(ticking: boolean) {
  * The commands a session runs in the background, newest first, each with how it stands; a
  * tap opens its output.
  */
-export function TaskList({
+export function BackgroundList({
   session,
-  tasks,
+  commands,
   error,
 }: {
   session: ChatSession;
-  tasks: Task[] | undefined;
+  commands: BackgroundCommand[] | undefined;
   error: string;
 }) {
   const router = useRouter();
   const faint = String(useCSSVariable("--color-faint"));
-  const now = useNow(Boolean(tasks?.some((t) => t.status === "running")));
+  const now = useNow(Boolean(commands?.some((c) => c.status === "running")));
   return (
     <View className="gap-2">
       {error ? <Text className="text-xs text-destructive">{error}</Text> : null}
-      {tasks?.length ? (
+      {commands?.length ? (
         <View className="overflow-hidden rounded-md border border-border">
-          {tasks.map((task, index) => (
+          {commands.map((command, index) => (
             <Pressable
-              key={task.id}
+              key={command.id}
               accessibilityRole="button"
               onPress={() =>
                 router.push({
-                  pathname: "/task/[id]",
-                  params: { id: task.id, session: session.id },
+                  pathname: "/background-command/[id]",
+                  params: { id: command.id, session: session.id },
                 })
               }
               className={cn(
@@ -59,27 +59,27 @@ export function TaskList({
               <View
                 className={cn(
                   "size-2 rounded-full",
-                  task.status === "running"
+                  command.status === "running"
                     ? "bg-success"
-                    : task.status === "exited" && task.exit_code === 0
+                    : command.status === "exited" && command.exit_code === 0
                       ? "bg-faint"
                       : "bg-destructive",
                 )}
               />
               <View className="min-w-0 flex-1 gap-0.5">
                 <Text numberOfLines={1} className="font-mono text-[13px]">
-                  {task.command}
+                  {command.command}
                 </Text>
                 <Text className="text-xs text-faint">
-                  {taskState(task, now)}
+                  {backgroundState(command, now)}
                 </Text>
               </View>
               <ChevronRightIcon color={faint} size={16} strokeWidth={1.5} />
             </Pressable>
           ))}
         </View>
-      ) : tasks ? (
-        <Text className="text-sm text-faint">No tasks.</Text>
+      ) : commands ? (
+        <Text className="text-sm text-faint">No background commands.</Text>
       ) : null}
     </View>
   );
