@@ -34,6 +34,7 @@ test("changes build what is in progress, in order, each applied once", () => {
     queue: [],
     usage: null,
     goal: null,
+    compacting: false,
   });
   const goal = {
     objective: "Ship the release",
@@ -74,6 +75,7 @@ test("changes build what is in progress, in order, each applied once", () => {
     queue: [{ id: "q1", text: "then run the tests", changeable: true }],
     usage,
     goal,
+    compacting: false,
   });
   // The turn's end leaves what waits for the next one, what it used and its goal.
   expect(
@@ -84,11 +86,32 @@ test("changes build what is in progress, in order, each applied once", () => {
     queue: [{ id: "q1", text: "then run the tests", changeable: true }],
     usage,
     goal,
+    compacting: false,
   });
   // A missing change: the state is read again.
   expect(
     applyLive(state!, { first: 11, changes: [{ type: "clear" }] }),
   ).toBeUndefined();
+});
+
+test("a compaction shows from its start to its end, through a turn's end", () => {
+  const started = applyLive(noLive, {
+    first: 1,
+    changes: [{ type: "compacting", active: true }],
+  });
+  expect(started?.compacting).toBe(true);
+  // A compaction runs outside turns too: the turn's end leaves it.
+  const cleared = applyLive(started!, {
+    first: 2,
+    changes: [{ type: "clear" }],
+  });
+  expect(cleared?.compacting).toBe(true);
+  expect(
+    applyLive(cleared!, {
+      first: 3,
+      changes: [{ type: "compacting", active: false }],
+    })?.compacting,
+  ).toBe(false);
 });
 
 test("a followed session reads its state, then follows the notices", async () => {
@@ -133,6 +156,7 @@ test("a followed session reads its state, then follows the notices", async () =>
     queue: [{ id: "q1", text: "next", changeable: false }],
     usage: null,
     goal: null,
+    compacting: false,
   });
   // So does a reconnection.
   liveResync();

@@ -31,6 +31,8 @@ export type SessionEvent = {
   | { type: "turn_ended"; status: string }
   | { type: "error"; message: string }
   | { type: "compacted"; summary: string | null }
+  /** A command of the owner's to the harness, as `/compact`: it opens no turn. */
+  | { type: "command"; text: string }
 );
 
 export interface SessionEventPage {
@@ -87,8 +89,16 @@ export type SessionBlock = {
     }
   | { kind: "error"; message: string }
   | { kind: "compacted"; summary: string | null }
+  | { kind: "command"; text: string }
 );
 export type ToolBlock = Extract<SessionBlock, { kind: "tool" }>;
+
+/** Events that can come between turns: the owner's commands, compactions, errors. */
+const between = new Set<SessionEvent["type"]>([
+  "command",
+  "compacted",
+  "error",
+]);
 
 /** The blocks of a session, in order: each tool result joins its call; a turn's start draws nothing. */
 export function sessionBlocks(events: SessionEvent[]): SessionBlock[] {
@@ -103,7 +113,8 @@ export function sessionBlocks(events: SessionEvent[]): SessionBlock[] {
     record = event.at;
     const key = `${event.at}.${place}`;
     const { time } = event;
-    since ??= time;
+    // What can come between turns starts no turn's time: a turn's starts at its own work.
+    if (!between.has(event.type)) since ??= time;
     if (thought) {
       thought.until = time;
       thought = undefined;
@@ -121,6 +132,9 @@ export function sessionBlocks(events: SessionEvent[]): SessionBlock[] {
         break;
       case "text":
         blocks.push({ key, time, kind: "text", text: event.text });
+        break;
+      case "command":
+        blocks.push({ key, time, kind: "command", text: event.text });
         break;
       case "thinking":
         thought = { key, time, kind: "thinking", text: event.text };
@@ -273,7 +287,11 @@ export function chatTurns(events: SessionEvent[], chatId: string): ChatTurn[] {
             }
           : undefined;
       if (current) turns.push(current);
-    } else if (current && event.type !== "turn_started") {
+    } else if (
+      current &&
+      event.type !== "turn_started" &&
+      event.type !== "command"
+    ) {
       current.events.push(event);
       if (event.type === "turn_ended") {
         current.ended = true;
@@ -571,7 +589,8 @@ export function useSessionEvents(
     error: record.error,
     /** There is earlier work to read. */
     more: !!record.first,
-    earlier: () => void reader.current?.earlier(),
+    /** Reads the page before; it resolves once that page is read. */
+    earlier: () => reader.current?.earlier() ?? Promise.resolve(),
   };
 }
 

@@ -309,6 +309,45 @@ test("a kernel that reads only forward asks for an update instead of looping", a
   expect(calls).toBe(1);
 });
 
+test("an owner's command is a block of its own, opening no turn and no chat's work", () => {
+  const t = (s: number) => `2026-01-01T10:00:${String(s).padStart(2, "0")}Z`;
+  const events = [
+    at({ type: "command", text: "/compact keep the plan" }, 0, t(0)),
+    at({ type: "compacted", summary: "The plan" }, 10, t(5)),
+    at(
+      { type: "input", text: "go", chat: "c-group", delivery: "d1" },
+      20,
+      t(30),
+    ),
+    at({ type: "text", text: "done" }, 30, t(40)),
+    at({ type: "turn_ended", status: "completed" }, 40, t(42)),
+  ];
+  const blocks = sessionBlocks(events);
+  expect(blocks.map((b) => b.kind)).toEqual([
+    "command",
+    "compacted",
+    "input",
+    "text",
+    "turn",
+  ]);
+  expect(blocks[0]).toMatchObject({
+    kind: "command",
+    text: "/compact keep the plan",
+  });
+  // The turn's time starts at its input, not at the command or compaction before it.
+  expect(blocks.at(-1)).toMatchObject({ kind: "turn", since: t(30) });
+  // Nor is the command part of a chat's work.
+  const [turn] = chatTurns(
+    [
+      at({ type: "input", text: "go", chat: "c-group", delivery: "d1" }, 0),
+      at({ type: "command", text: "/compact" }, 10),
+      at({ type: "text", text: "done" }, 20),
+    ],
+    "c-group",
+  );
+  expect(turn?.events.map((e) => e.type)).toEqual(["text"]);
+});
+
 test("a turn knows when it began, reasoning how long it took, a summary what it changed", () => {
   const t = (s: number) => `2026-01-01T10:00:${String(s).padStart(2, "0")}Z`;
   const blocks = sessionBlocks([

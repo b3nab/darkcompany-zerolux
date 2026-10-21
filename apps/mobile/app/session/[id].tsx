@@ -63,6 +63,7 @@ import {
   useSessionGit,
   useBackgroundCommands,
   useSessionSubagents,
+  useSessionCompacting,
   useSessionQueue,
   useSessionUsage,
   withMention,
@@ -250,7 +251,7 @@ export default function SessionPage() {
   }, [marked]);
   useEffect(() => {
     if (target === undefined || reached === target || !events.length) return;
-    if (events[0]!.at > target && more) return earlier();
+    if (events[0]!.at > target && more) return void earlier();
     const index = rows.findIndex((row) => {
       const offset = rowAt(row);
       return offset !== undefined && offset >= target;
@@ -269,13 +270,6 @@ export default function SessionPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target, reached, events, rows, more]);
   const plan = latestPlan(blocks);
-  // Where its work stood when /compact started: the summary, or why it failed, comes after.
-  const [compactAfter, setCompactAfter] = useState<string | null>();
-  const compacting =
-    compactAfter !== undefined &&
-    !blocks
-      .slice(blocks.findIndex((block) => block.key === compactAfter) + 1)
-      .some((block) => block.kind === "compacted" || block.kind === "error");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // A row is drawn again only when its item or this changes: what else the rows read.
@@ -479,8 +473,6 @@ export default function SessionPage() {
         session={session}
         name={name}
         notice={error}
-        compacting={compacting}
-        compactStarted={() => setCompactAfter(blocks.at(-1)?.key ?? null)}
         recordEnd={(events.at(-1)?.at ?? -1) + 1}
       >
         {plan?.some((step) => step.status !== "done") ? (
@@ -517,16 +509,12 @@ function Composer({
   session,
   name,
   notice,
-  compacting,
-  compactStarted,
   recordEnd,
   children,
 }: {
   session: ChatSession;
   name: string;
   notice: string;
-  compacting: boolean;
-  compactStarted: () => void;
   /** Where the record shown ends: what is sent now comes after. */
   recordEnd: number;
   children?: ReactNode;
@@ -538,6 +526,8 @@ function Composer({
   const harnessCommands = useSessionCommands(session.id, url);
   const queue = useSessionQueue(session.id, chat.live);
   const usage = useSessionUsage(session.id, chat.live);
+  // Shown for every compaction, whoever started it, until its summary or failure.
+  const compacting = useSessionCompacting(session.id, chat.live);
   const settings = useSessionSettings(
     session.id,
     `${session.status}:${session.activity}`,
@@ -590,7 +580,6 @@ function Composer({
     setError("");
     try {
       await chat.compact(session.id, args);
-      compactStarted();
       return true;
     } catch (e) {
       setError(errorMessage(e));

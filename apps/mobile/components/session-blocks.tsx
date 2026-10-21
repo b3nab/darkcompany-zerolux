@@ -202,6 +202,15 @@ function Block({
           </Text>
         </Pressable>
       );
+    case "command":
+      // The owner's own command, as `/compact`: in the owner's bubble, as it was typed.
+      return (
+        <View className="max-w-[86%] self-end rounded-md rounded-br-xs border border-human/25 bg-human/10 px-3 py-2">
+          <Text selectable className="font-mono text-sm">
+            {block.text.trim()}
+          </Text>
+        </View>
+      );
     case "text":
       return voice ? (
         <View className="gap-1.5">

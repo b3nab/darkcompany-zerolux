@@ -38,7 +38,9 @@ export type LiveChange =
   /** The latest usage, in place of the one before. */
   | ({ type: "usage" } & Partial<SessionUsage>)
   /** The goal as it is now; null once cleared. */
-  | { type: "goal"; goal: SessionGoal | null };
+  | { type: "goal"; goal: SessionGoal | null }
+  /** Its context began or stopped being summarized. */
+  | { type: "compacting"; active: boolean };
 
 /** What is in progress and what waits, and the number of the last change it includes. */
 export interface LiveState {
@@ -48,6 +50,8 @@ export interface LiveState {
   usage: SessionUsage | null;
   /** What it works toward on its own: Codex's goal. */
   goal: SessionGoal | null;
+  /** Its context is being summarized, from the start until the summary or its failure. */
+  compacting: boolean;
 }
 
 /** The kernel's notice of a session's changes, numbered from `first`. */
@@ -64,6 +68,7 @@ export const noLive: LiveState = {
   queue: [],
   usage: null,
   goal: null,
+  compacting: false,
 };
 
 /** What the kernel sends of a usage: what is missing is unknown. */
@@ -96,10 +101,12 @@ export function applyLive(
   let queue = state.queue;
   let usage = state.usage;
   let goal = state.goal;
+  let compacting = state.compacting;
   notice.changes.forEach((change, n) => {
     if (notice.first + n <= state.seq) return;
-    // The turn's end leaves the queue: what waits starts the next one.
+    // The turn's end leaves the queue, and a compaction, which runs outside turns too.
     if (change.type === "clear") items = [];
+    else if (change.type === "compacting") compacting = change.active;
     else if (change.type === "queue") queue = change.items;
     else if (change.type === "usage") usage = usageOf(change);
     else if (change.type === "goal") goal = change.goal;
@@ -129,6 +136,7 @@ export function applyLive(
     queue,
     usage,
     goal,
+    compacting,
   };
 }
 
@@ -163,6 +171,7 @@ function reread(sessionId: string) {
         queue: read.queue ?? [],
         usage: read.usage ? usageOf(read.usage) : null,
         goal: read.goal ?? null,
+        compacting: read.compacting ?? false,
       };
       for (const notice of waiting) state = state && applyLive(state, notice);
       if (state) publish(entry, state);
@@ -222,6 +231,18 @@ export function watchLive(sessionId: string, read: Read, listener: () => void) {
 export const liveState = (sessionId: string) =>
   watched.get(sessionId)?.state ?? noLive;
 
+/** A session's live state, followed while shown. */
+function useLiveState(sessionId: string, read: Read) {
+  const subscribe = useCallback(
+    (listener: () => void) => watchLive(sessionId, read, listener),
+    // The reader stays the same for a session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionId],
+  );
+  const snapshot = () => liveState(sessionId);
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
+}
+
 /**
  * What the session is producing right now, to show at the end of its stream after the
  * record's events. `read` gets `/sessions/{id}/live`; `record` changes whenever the record
@@ -232,55 +253,22 @@ export function useSessionLive(
   read: Read,
   record: unknown,
 ): LiveItem[] {
-  const subscribe = useCallback(
-    (listener: () => void) => watchLive(sessionId, read, listener),
-    // The reader stays the same for a session.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionId],
-  );
-  const snapshot = () => liveState(sessionId);
   useEffect(() => settle(sessionId), [sessionId, record]);
-  return useSyncExternalStore(subscribe, snapshot, snapshot).items;
+  return useLiveState(sessionId, read).items;
 }
 
 /** The owner's inputs waiting in the session's queue, in order, to show above the box. */
-export function useSessionQueue(sessionId: string, read: Read): QueuedInput[] {
-  const subscribe = useCallback(
-    (listener: () => void) => watchLive(sessionId, read, listener),
-    // The reader stays the same for a session.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionId],
-  );
-  const snapshot = () => liveState(sessionId);
-  return useSyncExternalStore(subscribe, snapshot, snapshot).queue;
-}
+export const useSessionQueue = (sessionId: string, read: Read) =>
+  useLiveState(sessionId, read).queue;
 
 /** How full the session's context is and what it has used, as its harness last reported. */
-export function useSessionUsage(
-  sessionId: string,
-  read: Read,
-): SessionUsage | null {
-  const subscribe = useCallback(
-    (listener: () => void) => watchLive(sessionId, read, listener),
-    // The reader stays the same for a session.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionId],
-  );
-  const snapshot = () => liveState(sessionId);
-  return useSyncExternalStore(subscribe, snapshot, snapshot).usage;
-}
+export const useSessionUsage = (sessionId: string, read: Read) =>
+  useLiveState(sessionId, read).usage;
 
 /** The goal the session works toward on its own, as its harness last reported. */
-export function useSessionGoal(
-  sessionId: string,
-  read: Read,
-): SessionGoal | null {
-  const subscribe = useCallback(
-    (listener: () => void) => watchLive(sessionId, read, listener),
-    // The reader stays the same for a session.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionId],
-  );
-  const snapshot = () => liveState(sessionId);
-  return useSyncExternalStore(subscribe, snapshot, snapshot).goal;
-}
+export const useSessionGoal = (sessionId: string, read: Read) =>
+  useLiveState(sessionId, read).goal;
+
+/** Whether the session's context is being summarized now, whoever started it. */
+export const useSessionCompacting = (sessionId: string, read: Read) =>
+  useLiveState(sessionId, read).compacting;
