@@ -1052,7 +1052,11 @@ export default function chatExtension(pi: ExtensionAPI) {
           throw new Error(
             "pi is working: wait for the turn to end or interrupt it",
           );
-        // Started is the answer: the summary, or why it failed, lands in the session.
+        // The owner's request stays in the record, as their input does. Started is the
+        // answer: the summary, or why it failed, lands in the session.
+        pi.appendEntry("zerolux-compaction-requested", {
+          instructions: instructions ?? null,
+        });
         ctx.compact({ customInstructions: instructions });
       },
       interrupt: async (linkId) => {
@@ -1252,8 +1256,16 @@ export default function chatExtension(pi: ExtensionAPI) {
     settled = false;
     for (const bridge of bridges()) bridge.agentStarted();
   });
-  // pi tells only its extensions why a compaction failed; the session's record keeps it.
+  // pi tells only its extensions when a compaction, asked for or its own, starts and ends.
+  pi.on("session_before_compact", () => {
+    live({ type: "compacting", active: true });
+  });
+  pi.on("session_compact", () => {
+    live({ type: "compacting", active: false });
+  });
+  // Nor why one failed; the session's record keeps it.
   pi.on("session_compact_failed", (event) => {
+    live({ type: "compacting", active: false });
     if (event.aborted) return;
     pi.appendEntry("zerolux-compaction-failed", {
       error: event.errorMessage ?? "Compaction failed",

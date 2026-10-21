@@ -1398,6 +1398,8 @@ test("streamed output travels together, the end of an item at once, in pieces Ze
   ]);
   f.bridge.live({ type: "append", item: "m", kind: "text", text: "!" });
   f.bridge.live({ type: "done", item: "m" });
+  // Reports go in order, each once the one before has arrived.
+  await Bun.sleep(0);
   expect(reports()[1]).toEqual([
     { type: "append", item: "m", kind: "text", text: "!" },
     { type: "done", item: "m" },
@@ -1409,7 +1411,35 @@ test("streamed output travels together, the end of an item at once, in pieces Ze
     text: "x".repeat(40_000),
   });
   f.bridge.live({ type: "clear" });
+  await Bun.sleep(0);
   expect(
     reports()[2]!.map((change: { text?: string }) => change.text?.length),
   ).toEqual([16_384, 16_384, 7_232, undefined]);
+});
+
+test("live reports reach ZeroLux in the order they happened, a slow one first", async () => {
+  const f = fixture();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const reports: unknown[] = [];
+  const bridge = new ChatBridge(
+    f.host,
+    async <T>(path: string, body?: unknown) => {
+      if (!path.endsWith("/live")) return f.transport<T>(path, body);
+      if (!reports.length) await held;
+      reports.push((body as { changes: unknown }).changes);
+      return {} as T;
+    },
+  );
+  await bridge.connect();
+  bridge.live({ type: "compacting", active: true });
+  bridge.live({ type: "compacting", active: false });
+  await Bun.sleep(10);
+  expect(reports).toEqual([]);
+  release();
+  await Bun.sleep(10);
+  expect(reports).toEqual([
+    [{ type: "compacting", active: true }],
+    [{ type: "compacting", active: false }],
+  ]);
 });

@@ -183,7 +183,9 @@ export type LiveChange =
       context_window?: number | null;
       total_tokens?: number | null;
       cost_usd?: number | null;
-    };
+    }
+  /** A compaction of the session's history under way, or over. */
+  | { type: "compacting"; active: boolean };
 /** How often streamed output reaches ZeroLux. */
 const LIVE_EVERY_MS = 150;
 /** Characters of one report's append: within what ZeroLux takes. */
@@ -277,6 +279,8 @@ export class ChatBridge {
   /** Streamed output not yet reported, and its timer. */
   private liveChanges: LiveChange[] = [];
   private liveTimer?: ReturnType<typeof setTimeout>;
+  // Reports go one after another, so ZeroLux takes them in the order they happened.
+  private liveSent: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly host: ChatHost,
@@ -868,7 +872,12 @@ export class ChatBridge {
    */
   live(change: LiveChange) {
     if (!this.session || this.closed) return;
-    if (change.type === "queue" || change.type === "usage") {
+    // States: the latest replaces one still waiting, and goes at once.
+    if (
+      change.type === "queue" ||
+      change.type === "usage" ||
+      change.type === "compacting"
+    ) {
       this.liveChanges = this.liveChanges.filter(
         (waiting) => waiting.type !== change.type,
       );
@@ -917,10 +926,10 @@ export class ChatBridge {
     const changes = this.liveChanges;
     this.liveChanges = [];
     if (!changes.length || !this.session || this.closed) return;
-    void this.request(
-      `/chat/sessions/${encodeURIComponent(this.session.id)}/live`,
-      { changes },
-    ).catch(() => {});
+    const path = `/chat/sessions/${encodeURIComponent(this.session.id)}/live`;
+    this.liveSent = this.liveSent
+      .then(() => this.request(path, { changes }))
+      .catch(() => {});
   }
   /** Stop cancels only a turn a chat message started and nobody else joined. */
   async stop() {

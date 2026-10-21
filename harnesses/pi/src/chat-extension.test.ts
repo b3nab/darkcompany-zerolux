@@ -1328,6 +1328,8 @@ while IFS= read -r line; do :; done
       { mode: 0o700 },
     );
     const live: unknown[] = [];
+    const entries: [string, unknown][] = [];
+    const compactions: unknown[] = [];
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -1387,6 +1389,7 @@ while IFS= read -r line; do :; done
         percent: 21,
       }),
       abort() {},
+      compact: (options: unknown) => compactions.push(options),
       ui: { setStatus() {}, notify() {} },
     };
     const agentDir = process.env.PI_CODING_AGENT_DIR;
@@ -1404,6 +1407,7 @@ while IFS= read -r line; do :; done
         command = value;
       },
       sendUserMessage() {},
+      appendEntry: (type: string, data: unknown) => entries.push([type, data]),
       events: { on: () => () => {}, emit() {} },
     } as unknown as ExtensionAPI);
     try {
@@ -1501,6 +1505,35 @@ while IFS= read -r line; do :; done
       );
       for (let i = 0; i < 100 && live.length < 12; i++) await Bun.sleep(20);
       expect(live[11]).toEqual({ type: "queue", items: [] });
+      // The owner's compaction stays in the record; any compaction shows while it runs.
+      const compacting = await rpc(record.endpoint, {
+        nonce: record.nonce,
+        method: "compact",
+        link_id: "own",
+        instructions: "keep the plan",
+      });
+      expect(compacting.ok).toBe(true);
+      expect(entries).toEqual([
+        ["zerolux-compaction-requested", { instructions: "keep the plan" }],
+      ]);
+      expect(compactions).toEqual([{ customInstructions: "keep the plan" }]);
+      const compaction = (name: string, event: object = {}) =>
+        handlers.get(name)!(event, ctx);
+      await compaction("session_before_compact", { reason: "manual" });
+      await compaction("session_compact");
+      await compaction("session_before_compact", { reason: "threshold" });
+      await compaction("session_compact_failed", {
+        reason: "threshold",
+        errorMessage: "Auto-compaction failed: token cap",
+        aborted: false,
+      });
+      for (let i = 0; i < 100 && live.length < 16; i++) await Bun.sleep(20);
+      expect(live.slice(12)).toEqual([
+        { type: "compacting", active: true },
+        { type: "compacting", active: false },
+        { type: "compacting", active: true },
+        { type: "compacting", active: false },
+      ]);
     } finally {
       await command?.handler("off", ctx);
       await handlers.get("session_shutdown")?.({}, ctx);
