@@ -1,0 +1,65 @@
+import { expect, test } from "bun:test";
+import { byStatus, dueTone, keyFrom, labelsOf } from "./model";
+import type { Task } from "./model";
+
+const task = (id: string, fields: Partial<Task> = {}): Task => ({
+  id,
+  key: `AS-${id}`,
+  number: 1,
+  project_id: "aspen",
+  title: id,
+  description: "",
+  status: "todo",
+  priority: "none",
+  assignee: null,
+  labels: [],
+  due: null,
+  url: null,
+  updated_at: 0,
+  ...fields,
+});
+
+test("tasks group by state in the order work goes, the most pressing first", () => {
+  const groups = byStatus([
+    task("late", { due: "2026-03-02" }),
+    task("soon", { due: "2026-03-01" }),
+    task("urgent", { priority: "urgent" }),
+    task("shipped", { status: "done" }),
+  ]);
+  expect(groups.map((g) => g.value)).toEqual([
+    "backlog",
+    "todo",
+    "in_progress",
+    "in_review",
+    "done",
+    "cancelled",
+  ]);
+  expect(groups[1]!.tasks.map((t) => t.id)).toEqual(["urgent", "soon", "late"]);
+  expect(groups[4]!.tasks.map((t) => t.id)).toEqual(["shipped"]);
+});
+
+test("a due day turns red when due and amber in the week before, only while open", () => {
+  const now = new Date(2026, 2, 10);
+  expect(dueTone(task("a", { due: "2026-03-09" }), now)).toBe("danger");
+  expect(dueTone(task("a", { due: "2026-03-10" }), now)).toBe("danger");
+  expect(dueTone(task("a", { due: "2026-03-14" }), now)).toBe("warning");
+  expect(dueTone(task("a", { due: "2026-03-30" }), now)).toBe("default");
+  expect(dueTone(task("a", { due: "2026-03-09", status: "done" }), now)).toBe(
+    "default",
+  );
+});
+
+test("a new project's key comes from its name, and starts with a letter", () => {
+  expect(keyFrom("Mobile app")).toBe("MA");
+  expect(keyFrom("birch")).toBe("BIR");
+  expect(keyFrom("2026 plan")).toBe("");
+});
+
+test("labels in use are listed once, in order", () => {
+  expect(
+    labelsOf([
+      task("a", { labels: ["ui", "bug"] }),
+      task("b", { labels: ["bug"] }),
+    ]),
+  ).toEqual(["bug", "ui"]);
+});

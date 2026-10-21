@@ -161,6 +161,7 @@ export const uiComponents: UiComponents = {
     multiline,
     secure,
     disabled,
+    autoFocus,
     onSubmit,
   }) => (
     <Labelled label={label}>
@@ -169,6 +170,7 @@ export const uiComponents: UiComponents = {
           value={value}
           placeholder={placeholder}
           disabled={disabled}
+          autoFocus={autoFocus}
           onChange={(event) => onChange(event.target.value)}
         />
       ) : (
@@ -177,6 +179,7 @@ export const uiComponents: UiComponents = {
           type={secure ? "password" : "text"}
           placeholder={placeholder}
           disabled={disabled}
+          autoFocus={autoFocus}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
             if (

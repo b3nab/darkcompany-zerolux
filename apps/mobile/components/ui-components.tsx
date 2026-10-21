@@ -143,6 +143,7 @@ export const uiComponents: UiComponents = {
     multiline,
     secure,
     disabled,
+    autoFocus,
     onSubmit,
   }) => (
     <View className="flex-1 gap-1.5">
@@ -157,6 +158,7 @@ export const uiComponents: UiComponents = {
         multiline={multiline}
         secureTextEntry={secure}
         editable={!disabled}
+        autoFocus={autoFocus}
         onSubmitEditing={onSubmit}
         className={multiline ? "h-auto min-h-20 py-2" : undefined}
       />

@@ -69,6 +69,8 @@ export interface InputProps {
   multiline?: boolean;
   secure?: boolean;
   disabled?: boolean;
+  /** Ready to type in as it shows, as in a sheet that asks for a name. */
+  autoFocus?: boolean;
   onSubmit?: () => void;
 }
 
