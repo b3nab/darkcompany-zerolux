@@ -28,7 +28,7 @@ export function FileGlyph({
   file,
   by = "agent",
 }: {
-  file: StoredFile;
+  file: Pick<StoredFile, "content_type">;
   by?: "human" | "agent";
 }) {
   const color = String(

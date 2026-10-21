@@ -61,7 +61,6 @@ function Navigator() {
         <Stack.Screen name="chat/new" options={{ presentation: "modal" }} />
         <Stack.Screen name="member/[id]" />
         <Stack.Screen name="meetings" />
-        <Stack.Screen name="storage" />
         <Stack.Screen name="settings" />
         <Stack.Screen name="admin" />
         <Stack.Screen name="invites" />

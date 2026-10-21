@@ -1,4 +1,5 @@
 import { ApiError } from "./client";
+import { linkedFiles } from "./storage";
 import type {
   Actor,
   ClaudeMode,
@@ -390,6 +391,12 @@ export const workingIn = (
 export const workingLabel = (names: string[]) =>
   `${names.join(", ")} ${names.length === 1 ? "is" : "are"} working`;
 /** A chat's line in the list: who works on it or its threads now, else paused, else its last message. */
+/** A message as a preview says it: its words, or the names of the files it shares. */
+const said = (text: string) => {
+  const read = linkedFiles(text);
+  return read.text || read.files.map((file) => file.name).join(", ");
+};
+
 export function chatPreview(
   conversation: Conversation,
   conversations: Conversation[],
@@ -410,7 +417,7 @@ export function chatPreview(
       : conversation.paused
         ? "Paused"
         : last
-          ? `${name(last.author_id)}: ${last.text}`
+          ? `${name(last.author_id)}: ${said(last.text)}`
           : presenceLine(conversation, sessions, name),
     working: working.length > 0,
   };

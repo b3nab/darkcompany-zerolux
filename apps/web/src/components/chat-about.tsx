@@ -1,36 +1,23 @@
 import { cn } from "cn";
-import {
-  fileUrl,
-  harnessLabels,
-  sessionState,
-  useUiPieces,
-} from "@zerolux/chat";
-import type { Actor, ChatSession, Conversation, Storage } from "@zerolux/chat";
+import { harnessLabels, sessionState, useUiPieces } from "@zerolux/chat";
+import type { Actor, ChatSession, Conversation } from "@zerolux/chat";
 import { ExtensionView } from "../extension-view";
 import { sessionTone } from "../presence";
-import { FileGlyph, fileSize } from "./file";
 import { Lamp } from "./lamp";
 import { ActorMark, Eyebrow } from "./presence";
 
-/** Beside a chat: who is in it, what each is doing, the files shared in it, and its extensions. */
+/** Beside a chat: who is in it, what each is doing, and what its extensions show there. */
 export function ChatAbout({
   conversation,
   actors,
   sessions,
-  storage,
   className,
 }: {
   conversation: Conversation;
   actors: Actor[];
   sessions: ChatSession[];
-  storage: Storage;
   className?: string;
 }) {
-  const files = storage.files
-    .filter((f) => f.conversation_id === conversation.id)
-    .sort((a, b) => b.updated_at - a.updated_at);
-  const images = files.filter((f) => f.content_type.startsWith("image/"));
-  const others = files.filter((f) => !images.includes(f));
   const sections = useUiPieces("chat");
   return (
     <aside
@@ -99,48 +86,6 @@ export function ChatAbout({
             );
           })}
         </ul>
-      </section>
-      <section className="flex flex-col gap-2">
-        <Eyebrow>Files · {files.length}</Eyebrow>
-        {images.length > 0 && (
-          <ul className="grid grid-cols-3 gap-1.5">
-            {images.map((file) => (
-              <li key={file.id}>
-                <a href={fileUrl(file)} target="_blank" rel="noreferrer">
-                  <img
-                    src={fileUrl(file)}
-                    alt={file.name}
-                    loading="lazy"
-                    className="aspect-square w-full rounded-sm border object-cover"
-                  />
-                </a>
-              </li>
-            ))}
-          </ul>
-        )}
-        <ul className="flex flex-col">
-          {others.map((file) => (
-            <li key={file.id}>
-              <a
-                href={fileUrl(file)}
-                target="_blank"
-                rel="noreferrer"
-                className="-mx-2 flex items-center gap-2.5 rounded-sm px-2 py-1.5 text-sm transition-colors hover:bg-accent"
-              >
-                <FileGlyph file={file} className="size-4 shrink-0 text-faint" />
-                <span className="truncate">{file.name}</span>
-                <span className="ml-auto shrink-0 font-mono text-[11px] text-faint">
-                  {fileSize(file.size)}
-                </span>
-              </a>
-            </li>
-          ))}
-        </ul>
-        {files.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            {storage.error || (storage.available ? "No files" : "No storage")}
-          </p>
-        )}
       </section>
       {sections.map((piece) => (
         <section

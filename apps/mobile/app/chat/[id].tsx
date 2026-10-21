@@ -17,15 +17,7 @@ import type { NativeStackNavigationProp } from "expo-router";
 import type { LucideIcon } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LegendListRef } from "@legendapp/list/react-native";
-import {
-  ActionSheetIOS,
-  Alert,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  View,
-} from "react-native";
+import { Modal, Pressable, ScrollView, View } from "react-native";
 import type { TextInputInstance } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCSSVariable } from "uniwind";
@@ -43,8 +35,12 @@ import {
   saveDraft,
   threadsOf,
   useChatWork,
+  useSharedFiles,
+  useStorage,
   useUiPieces,
   useVoiceInput,
+  withFiles,
+  linkedFiles,
   composerAction,
   dictated,
   useVoice,
@@ -52,6 +48,7 @@ import {
   sessionAccess,
 } from "@zerolux/chat";
 import type {
+  StoredFile,
   Actor,
   Approval,
   ChatSession,
@@ -67,7 +64,8 @@ import { Composer } from "@/components/composer";
 import type { Chip } from "@/components/composer";
 import { LiveWork, WorkLine } from "@/components/chat-work";
 import { ActorMark } from "@/components/member";
-import { MessageBody } from "@/components/message-body";
+import { useActionSheet } from "@/components/action-menu";
+import { MessageContent } from "@/components/message-files";
 import { Screen } from "@/components/screen";
 import { Listen } from "@/components/listen";
 import { ChatList, GestureArea } from "@/components/ui/native";
@@ -102,7 +100,7 @@ const open = new Set<Approval["status"]>(["pending", "decided", "uncertain"]);
 
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { chat, actors, name, storage, url } = useSession();
+  const { chat, actors, name, url } = useSession();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   // The unsent text waits in its chat while you are elsewhere in the app.
@@ -125,6 +123,10 @@ export default function ChatScreen() {
     "--color-faint",
   ]).map(String);
   const conversation = chat.conversations.find((c) => c.id === id);
+  // Files go through Storage, shared in this chat; a message links to them.
+  const storage = useStorage(url);
+  const shared = useSharedFiles(conversation?.id, url);
+  const sheet = useActionSheet();
   const me = useMe().me?.id;
   const actor = (actorId: string | null) =>
     actors.find((a) => a.id === actorId);
@@ -196,23 +198,27 @@ export default function ChatScreen() {
     recorder,
     {
       write: (said) => setDraft((now) => dictated(now, said)),
-      send: async (said) => {
+      send: async (said, kept) => {
         if (conversation)
-          await chat.send(conversation, { id: newId(), text: said });
+          await chat.send(conversation, {
+            id: newId(),
+            text: withFiles(said, kept ? [kept] : []),
+          });
       },
       // The recording is kept first, so a failed transcription loses nothing.
-      // TODO: kernel: a file shared in a chat is announced to its members, as a message would be.
       keep:
         storage.available && conversation
-          ? (audio) =>
-              storage.upload(
+          ? async (audio) => {
+              const [kept] = await storage.upload(
                 [
                   new File([audio], `Voice message ${clockName()}.m4a`, {
                     type: audio.type,
                   }),
                 ],
                 { conversation_id: conversation.id },
-              )
+              );
+              return kept!;
+            }
           : undefined,
       transcription,
     },
@@ -220,8 +226,8 @@ export default function ChatScreen() {
   );
   // A row is drawn again only when its item or this changes: what else the rows read.
   const drawn = useMemo(
-    () => ({ detail, opened, busy, voices, messagePieces }),
-    [detail, opened, busy, voices, messagePieces],
+    () => ({ detail, opened, busy, voices, messagePieces, shared }),
+    [detail, opened, busy, voices, messagePieces, shared],
   );
 
   // The chat on screen is the open one: a thread pushed over its chat takes over, and the
@@ -335,21 +341,23 @@ export default function ChatScreen() {
     setDraft("");
     setChips([]);
     setError("");
-    let shared = false;
+    let kept: StoredFile[] = [];
     try {
-      // The files go first, so the words that speak of them follow them.
-      if (files.length) {
-        await storage.upload(
+      // The files go first, so the message links them.
+      if (files.length)
+        kept = await storage.upload(
           await Promise.all(files.map((f) => asFile(f.uri, f.name, f.type))),
           { conversation_id: conversation.id },
         );
-        shared = true;
-      }
-      if (text) await chat.send(conversation, { id: newId(), text });
+      await chat.send(conversation, {
+        id: newId(),
+        text: withFiles(text, kept),
+      });
     } catch (e) {
       setError(errorMessage(e));
-      setDraft((typed) => (typed ? typed : text));
-      if (!shared) setChips((now) => (now.length ? now : files));
+      // What did not go comes back: the words, with the files already kept as their links.
+      setDraft((typed) => typed || withFiles(text, kept));
+      if (!kept.length) setChips((now) => (now.length ? now : files));
     }
   }
 
@@ -391,25 +399,11 @@ export default function ChatScreen() {
   }
 
   function add() {
-    void Haptics.selectionAsync();
-    const choices: [string, () => void][] = [
-      ["Photo library", () => void addPhotos("library")],
-      ["Take photo", () => void addPhotos("camera")],
-      ["Files", () => void addFiles()],
-    ];
-    if (Platform.OS === "ios")
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options: [...choices.map(([label]) => label), "Cancel"],
-          cancelButtonIndex: choices.length,
-        },
-        (index) => choices[index]?.[1](),
-      );
-    else
-      Alert.alert("Add", undefined, [
-        ...choices.map(([text, onPress]) => ({ text, onPress })),
-        { text: "Cancel", style: "cancel" as const },
-      ]);
+    sheet.show([
+      { title: "Photo library", onPress: () => void addPhotos("library") },
+      { title: "Take photo", onPress: () => void addPhotos("camera") },
+      { title: "Files", onPress: () => void addFiles() },
+    ]);
   }
 
   function message(m: Message, continued: boolean, below?: Conversation) {
@@ -454,7 +448,7 @@ export default function ChatScreen() {
           )}
           onLongPress={() => setDetail(shown ? undefined : m.id)}
         >
-          <MessageBody text={m.text} />
+          <MessageContent text={m.text} shared={shared} by="human" />
           {stamp}
           {deliveries}
           {shown && conversation ? (
@@ -501,11 +495,19 @@ export default function ChatScreen() {
               ) : null}
             </View>
           )}
-          <MessageBody text={m.text} />
+          <MessageContent
+            text={m.text}
+            shared={shared}
+            by={agent ? "agent" : "human"}
+          />
           {author && voices?.some((v) => v.actor_id === author.id) ? (
             <View className="flex-row items-center gap-3">
               {stamp}
-              <Listen id={m.id} actorId={author.id} text={m.text} />
+              <Listen
+                id={m.id}
+                actorId={author.id}
+                text={linkedFiles(m.text).text}
+              />
             </View>
           ) : (
             stamp
@@ -801,11 +803,11 @@ export default function ChatScreen() {
               conversation={conversation}
               actors={actors}
               sessions={chat.sessions}
-              storage={storage}
             />
           ) : null}
         </View>
       </Modal>
+      {sheet.sheet}
     </Screen>
   );
 }

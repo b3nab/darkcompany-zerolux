@@ -6,6 +6,7 @@ import {
   useActions,
   useKernelList,
 } from "./extensions";
+import type { FileLink } from "./storage";
 
 /** The official extension that turns speech into text and gives agents their voices. */
 export const VOICE = "zerolux.voice";
@@ -102,10 +103,10 @@ export type VoiceUse = "dictation" | "message";
 export interface VoiceTargets {
   /** What was dictated, for the box. */
   write: (said: string) => void;
-  /** What was recorded as a message, said. */
-  send: (said: string) => Promise<void>;
-  /** A message's recording, kept before it is transcribed. */
-  keep?: (audio: Blob) => Promise<void>;
+  /** What was recorded as a message: its words, and its recording where it was kept. */
+  send: (said: string, kept?: FileLink) => Promise<void>;
+  /** A message's recording, kept before it is transcribed: the file the message links. */
+  keep?: (audio: Blob) => Promise<FileLink>;
   /** Whether the workspace transcribes: without it, a message is only kept. */
   transcription: boolean;
 }
@@ -115,8 +116,9 @@ export const dictated = (text: string, said: string) =>
   text.trim() ? `${text.trimEnd()} ${said}` : said;
 
 /**
- * A recording where it goes: dictated words to the box, a message kept and then sent as
- * said. A failure throws and leaves the box as it was.
+ * A recording where it goes: dictated words to the box; a message kept first, then sent as
+ * said with its recording, or with the recording alone when nothing is said. A failure
+ * throws and leaves the box as it was.
  */
 export async function spoken(
   use: VoiceUse,
@@ -124,12 +126,18 @@ export async function spoken(
   { write, send, keep, transcription }: VoiceTargets,
   kernel = kernelUrl(),
 ) {
-  if (use === "message" && keep) await keep(audio);
-  if (!transcription) return;
-  const said = (await transcribe(audio, kernel)).trim();
-  if (!said) return;
-  if (use === "dictation") write(said);
-  else await send(said);
+  const kept = use === "message" && keep ? await keep(audio) : undefined;
+  let said = "";
+  try {
+    if (transcription) said = (await transcribe(audio, kernel)).trim();
+  } catch (e) {
+    // The recording is kept: the message goes with it alone.
+    if (kept) await send("", kept);
+    throw e;
+  }
+  if (use === "dictation") {
+    if (said) write(said);
+  } else if (said || kept) await send(said, kept);
 }
 
 /** The quietest and the loudest the microphone's level is drawn between, in dBFS. */

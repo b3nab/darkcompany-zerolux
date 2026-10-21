@@ -14,9 +14,9 @@ import {
 } from "./ChatView";
 import { Meetings } from "./Meetings";
 import { Organization } from "./Org";
-import { Storage } from "./Storage";
 import { Tonight } from "./Tonight";
 import { ChatAbout } from "./components/chat-about";
+import { FileCard } from "./components/file";
 import { LiveWork, WorkLine } from "./components/chat-work";
 import { setDensity } from "./components/density";
 import { LiveItems, SessionBlocks } from "./components/session-blocks";
@@ -43,7 +43,7 @@ import type {
   Message,
 } from "@zerolux/chat";
 import { placeApprovals, saveDraft, sessionState } from "@zerolux/chat";
-import type { Chat, Storage as Files, StoredFile } from "@zerolux/chat";
+import type { Chat, Storage as Files } from "@zerolux/chat";
 
 /** Views render inside the app's router, as in the app. */
 const renderToStaticMarkup = (view: ReactNode) =>
@@ -1236,22 +1236,10 @@ test("tonight lists approvals and live sessions without projects or workers", ()
 
 const files = (overrides: Partial<Files> = {}): Files => ({
   available: true,
-  files: [],
   error: "",
-  upload: nothing,
+  upload: async () => [],
   ...overrides,
 });
-const file = (id: string, name: string, conversation_id: string | null) =>
-  ({
-    id,
-    name,
-    folder: "",
-    size: 2048,
-    content_type: "text/markdown",
-    created_by: ASPEN,
-    updated_at: 1,
-    conversation_id,
-  }) satisfies StoredFile;
 
 test("a chat's Meet opens a meeting for that chat, titled after it", () => {
   const html = render(
@@ -1267,7 +1255,7 @@ test("a chat's Meet opens a meeting for that chat, titled after it", () => {
   expect(html).toMatch(/<input[^>]*name="title"[^>]*value="General"/);
 });
 
-test("beside a chat: members and shared files, without task controls", () => {
+test("beside a chat: its members, without task controls", () => {
   const html = renderToStaticMarkup(
     <ChatAbout
       conversation={group}
@@ -1276,12 +1264,6 @@ test("beside a chat: members and shared files, without task controls", () => {
         { ...session("s-aspen", ASPEN), activity: "working" },
         session("s-birch", BIRCH, "stopped"),
       ]}
-      storage={files({
-        files: [
-          file("f-notes", "notes.md", group.id),
-          file("f-other", "elsewhere.md", dm.id),
-        ],
-      })}
     />,
   );
   noUuids(html);
@@ -1791,4 +1773,25 @@ test("each tool reads as its own kind: a command, a file, a ZeroLux message, an 
       },
     ),
   );
+});
+
+test("a file a message shares downloads with a press where Storage is, and is only its name where not", () => {
+  const link = { id: "f-notes", name: "notes.md" };
+  const stored = {
+    ...link,
+    folder: "",
+    size: 2048,
+    content_type: "text/markdown",
+    created_by: ASPEN,
+    created_at: 1,
+    updated_at: 1,
+    conversation_id: group.id,
+  };
+  const card = (available: boolean) =>
+    renderToStaticMarkup(
+      <FileCard link={link} file={stored} available={available} />,
+    );
+  expect(card(true)).toMatch(/<button[^>]*>.*notes\.md.*\d KB/);
+  expect(card(false)).not.toContain("<button");
+  expect(card(false)).toContain("notes.md");
 });

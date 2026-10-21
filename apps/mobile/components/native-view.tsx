@@ -1,5 +1,3 @@
-import * as Sharing from "expo-sharing";
-import { File, Paths } from "expo-file-system";
 import * as React from "react";
 import { Component, useEffect, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
@@ -14,6 +12,7 @@ import {
 } from "@zerolux/chat";
 import type { UiContext, UiPiece } from "@zerolux/chat";
 import { moduleHost, uiModule, UiSpace } from "@zerolux/ui/host";
+import { saveFile } from "@/components/save-file";
 import { Text } from "@/components/ui/text";
 import { uiComponents } from "@/components/ui-components";
 import { useSession } from "../src/kernel";
@@ -42,26 +41,6 @@ async function loadView(address: string) {
   const view = host.view(address);
   if (!view) throw new Error("This view's bundle gives no view");
   return view;
-}
-
-/** A file a view gives, written here and offered to save or share. */
-async function save(file: Blob, name: string) {
-  const base64 = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const url = String(reader.result);
-      resolve(url.slice(url.indexOf(",") + 1));
-    };
-    reader.onerror = () => reject(new Error("The file can't be read"));
-    reader.readAsDataURL(file);
-  });
-  const kept = new File(Paths.cache, name.replace(/[/\\]/g, "_"));
-  kept.create({ overwrite: true });
-  kept.write(base64, { encoding: "base64" });
-  await Sharing.shareAsync(kept.uri, {
-    mimeType: file.type || undefined,
-    dialogTitle: name,
-  });
 }
 
 /** A view that breaks shows why, in its place, and the rest of the app goes on. */
@@ -131,7 +110,7 @@ export function NativeView({
         piece={piece}
         context={context}
         kernel={url}
-        save={save}
+        save={saveFile}
         actors={activeActors(workspace?.actors ?? [])}
       >
         <View />

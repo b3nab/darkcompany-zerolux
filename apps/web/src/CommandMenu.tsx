@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import {
   BlocksIcon,
-  FolderIcon,
   LayoutDashboardIcon,
   MessagesSquareIcon,
   MoonIcon,
@@ -56,7 +55,6 @@ const pages = () => [
     icon: SquareTerminalIcon,
   },
   { to: "/chats", label: "Chat", icon: MessagesSquareIcon },
-  { to: "/storage", label: "Storage", icon: FolderIcon },
   {
     to: "/extensions",
     label: "Extensions",

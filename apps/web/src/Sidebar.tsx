@@ -3,7 +3,6 @@ import { cn } from "cn";
 import {
   BlocksIcon,
   ChevronsUpDownIcon,
-  FolderIcon,
   LayoutDashboardIcon,
   LogOutIcon,
   MessagesSquareIcon,
@@ -104,7 +103,6 @@ export function Sidebar({
       <Item to="/team" icon={UsersIcon} label="Team" toggle={toggle} />
       <Item to="/org" icon={NetworkIcon} label="Org" />
       <Item to="/meetings" icon={PhoneIcon} label="Meetings" />
-      <Item to="/storage" icon={FolderIcon} label="Storage" />
       {pages.map((piece) => (
         <Item
           key={`${piece.extension}/${piece.name}`}

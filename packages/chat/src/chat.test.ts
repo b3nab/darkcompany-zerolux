@@ -528,6 +528,15 @@ test("the activity bubble shows only agents whose current turn serves this chat"
   const idle = [session("s-maple", "idle", "general")];
   expect(preview(idle)).toEqual({ text: "Owner: Hello", working: false });
   expect(preview(idle, { ...general, paused: true }).text).toBe("Paused");
+  // A message that only shares files is listed by their names.
+  const shared = {
+    ...general,
+    last_message: {
+      ...general.last_message!,
+      text: "[plan.md](zerolux:file/f1)\n[photo.png](zerolux:file/f2)",
+    },
+  };
+  expect(preview(idle, shared).text).toBe("Owner: plan.md, photo.png");
   // Threads are not listed: their work shows on their chat, each agent once.
   const thread: Conversation = {
     ...general,

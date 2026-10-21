@@ -205,14 +205,7 @@ test("every page has its own address, and the bar links to them", () => {
     /<a[^>]*aria-label="New chat"[^>]*href="\/chats\/new"/,
   );
   const home = at("/", app);
-  for (const page of [
-    "/chats",
-    "/team",
-    "/org",
-    "/meetings",
-    "/storage",
-    "/approvals",
-  ])
+  for (const page of ["/chats", "/team", "/org", "/meetings", "/approvals"])
     expect(home).toContain(`href="${page}"`);
   expect(home).not.toContain('href="/projects');
   expect(home).not.toContain("Create project");

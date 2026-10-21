@@ -41,7 +41,6 @@ import { OwnerOnboarding } from "./OwnerOnboarding";
 import { Organization } from "./Org";
 import { AgentList, Sidebar, WorkspaceMenu } from "./Sidebar";
 import type { Kernel } from "./Sidebar";
-import { Storage } from "./Storage";
 import { AgentPage, Hire, Team } from "./Team";
 import { Tonight } from "./Tonight";
 import { ExtensionPage } from "./extension-view";
@@ -164,8 +163,8 @@ export function App({
     [authentication?.guard, chat.canLeave],
   );
   useEffect(() => workspaceNavigationGuard(chat.canLeave), [chat.canLeave]);
-  // One list of files for the whole app: storage page, chats, their panels.
-  const storage = useStorage(capabilities.includes("storage-v1"));
+  // Files shared in chats are kept by the Storage extension, where it is enabled.
+  const storage = useStorage();
   const conversation = chat.conversations.find((c) => c.id === chatId);
   useEffect(() => {
     // The open chat follows the address, also once the chat list has loaded.
@@ -500,16 +499,6 @@ export function App({
                           />,
                         )
                       : chatHome
-                  }
-                />
-                <Route
-                  path="/storage"
-                  element={
-                    <Storage
-                      workspace={workspace}
-                      chat={chat}
-                      storage={storage}
-                    />
                   }
                 />
                 <Route

@@ -2,7 +2,6 @@ import { useRouter } from "expo-router";
 import type { Href } from "expo-router";
 import {
   ChevronRightIcon,
-  FolderIcon,
   PhoneIcon,
   PuzzleIcon,
   SettingsIcon,
@@ -82,12 +81,6 @@ export default function More() {
           ) : null}
         </Section>
         <Section title="Workspace">
-          <Row
-            icon={FolderIcon}
-            label="Storage"
-            onPress={go("/storage")}
-            trailing={next}
-          />
           <Row
             icon={PhoneIcon}
             label="Meetings"

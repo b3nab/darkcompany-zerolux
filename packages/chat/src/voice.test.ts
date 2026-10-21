@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { setKernelFetch } from "./client";
+import type { FileLink } from "./storage";
 import {
   audioLevel,
   chooseVoice,
@@ -107,42 +108,50 @@ function targets(transcription = true) {
   return {
     went,
     write: (said: string) => void went.push(`write ${said}`),
-    send: async (said: string) => void went.push(`send ${said}`),
-    keep: async () => void went.push("keep"),
+    send: async (said: string, kept?: FileLink) =>
+      void went.push(["send", said, kept?.name].filter(Boolean).join(" ")),
+    keep: async () => {
+      went.push("keep");
+      return { id: "f1", name: "voice.m4a" };
+    },
     transcription,
   };
 }
 
 const recording = new Blob([new Uint8Array([1, 2, 3])], { type: "audio/mp4" });
 
-test("dictated words go to the box, and a message is kept, then sent as said", async () => {
+test("dictated words go to the box, and a message is kept, then sent as said with its recording", async () => {
   fake(() => ({ text: " Run the tests " }));
   const dictation = targets();
   await spoken("dictation", recording, dictation, kernel);
   expect(dictation.went).toEqual(["write Run the tests"]);
   const message = targets();
   await spoken("message", recording, message, kernel);
-  expect(message.went).toEqual(["keep", "send Run the tests"]);
+  expect(message.went).toEqual(["keep", "send Run the tests voice.m4a"]);
 });
 
-test("without transcription a message is only kept, and silence goes nowhere", async () => {
+test("without transcription a message goes with its recording alone, and silence goes nowhere", async () => {
   const asked = fake(() => ({ text: "  " }));
   const kept = targets(false);
   await spoken("message", recording, kept, kernel);
-  expect(kept.went).toEqual(["keep"]);
+  expect(kept.went).toEqual(["keep", "send voice.m4a"]);
   expect(asked).toEqual([]);
   const silent = targets();
   await spoken("dictation", recording, silent, kernel);
   expect(silent.went).toEqual([]);
 });
 
-test("a failed transcription throws and leaves the box as it was", async () => {
+test("a failed transcription throws, leaves the box as it was, and sends a kept recording alone", async () => {
   setKernelFetch(async () =>
     Response.json({ error: "The voice is starting" }, { status: 503 }),
   );
   const box = targets();
   await expect(spoken("dictation", recording, box, kernel)).rejects.toThrow();
   expect(box.went).toEqual([]);
+  // A message's recording still goes, alone.
+  const message = targets();
+  await expect(spoken("message", recording, message, kernel)).rejects.toThrow();
+  expect(message.went).toEqual(["keep", "send voice.m4a"]);
 });
 
 test("a tap keeps recording, a hold ends at its release, and a press while recording ends it", () => {

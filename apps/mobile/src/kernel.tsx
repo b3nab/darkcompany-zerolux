@@ -18,15 +18,8 @@ import {
   setKernelUrl,
   useChat,
   useHosts,
-  useStorage,
 } from "@zerolux/chat";
-import type {
-  Actor,
-  AgentSettings,
-  Chat,
-  Storage,
-  Workspace,
-} from "@zerolux/chat";
+import type { Actor, AgentSettings, Chat, Workspace } from "@zerolux/chat";
 import { AuthenticationProvider, useAuthentication } from "./auth";
 
 // Pin Expo SDK 57's compliant transport even if the RN-fetch compatibility flag is set.
@@ -57,7 +50,6 @@ interface Session {
   setAgentSettings(id: string, settings: AgentSettings): Promise<Actor>;
   capabilities: string[];
   version: string | undefined;
-  storage: Storage;
 }
 const KernelContext = createContext<Kernel | undefined>(undefined);
 const SessionContext = createContext<Session | undefined>(undefined);
@@ -85,7 +77,6 @@ function Connected({ url, children }: { url: string; children: ReactNode }) {
   const chat = useChat(enabled);
   const hosts = useHosts(url, enabled);
   const readHosts = hosts.reload;
-  const storage = useStorage(enabled && capabilities.includes("storage-v1"));
   const guard = auth?.guard;
   useEffect(() => guard?.(chat.canLeave), [guard, chat.canLeave]);
   useEffect(() => {
@@ -165,7 +156,6 @@ function Connected({ url, children }: { url: string; children: ReactNode }) {
         },
         capabilities,
         version: health?.version,
-        storage,
       }}
     >
       {children}

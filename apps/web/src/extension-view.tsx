@@ -22,6 +22,7 @@ import { cn } from "cn";
 import { ActionForm } from "./ActionForm";
 import { extensionUiAddress } from "./desktop";
 import { lucideIcon, UiActors, uiComponents } from "./native-ui";
+import { saveFile } from "@/components/file";
 import { MessageText } from "@/components/message-text";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -400,16 +401,6 @@ function loadView(address: string) {
   return loaded;
 }
 
-/** A file a view gives, saved as the browser saves a download; the desktop puts it in Downloads. */
-async function save(file: Blob, name: string) {
-  const url = URL.createObjectURL(file);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = name;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
-
 /** A view that breaks says why in its place; the rest of the app goes on. */
 class ViewBoundary extends Component<
   { children: ReactNode },
@@ -470,7 +461,7 @@ function NativeView({
       piece={piece}
       context={context}
       kernel={kernelUrl()}
-      save={save}
+      save={saveFile}
       actors={actors}
     >
       <ViewBoundary>

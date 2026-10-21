@@ -173,6 +173,7 @@ test("files get an icon kind and a readable size", () => {
     size: 1,
     content_type,
     created_by: "lin",
+    created_at: 1,
     updated_at: 1,
     conversation_id: null,
   });

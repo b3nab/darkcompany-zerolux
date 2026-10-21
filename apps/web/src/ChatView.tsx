@@ -43,6 +43,9 @@ import {
   useChatWork,
   useVoice,
   useUiPieces,
+  linkedFiles,
+  useSharedFiles,
+  withFiles,
 } from "@zerolux/chat";
 import type {
   Chat,
@@ -53,10 +56,12 @@ import type {
   Perform,
   Receipt,
   Storage,
+  StoredFile,
 } from "@zerolux/chat";
 import { ApprovalCard, openApprovals } from "./Approvals";
 import { MessageActions } from "./extension-view";
 import { Composer, ComposerChip } from "@/components/composer";
+import { FileCard } from "@/components/file";
 import { Listen } from "@/components/listen";
 import { useReadAloud } from "./read-aloud";
 import { useMe } from "./AuthGate";
@@ -269,6 +274,8 @@ export function ChatView({
   const [adding, setAdding] = useState(false);
   // Speech to text, and the agents that read their messages aloud in their own voice.
   const voice = useVoice();
+  // What Storage knows of the files this chat's messages link to: name, kind and size.
+  const shared = useSharedFiles(conversation.id);
   // What extensions do with a message, in its menu.
   const messageActions = useUiPieces("message");
   const aloud = useReadAloud();
@@ -381,7 +388,6 @@ export function ChatView({
       conversation={conversation}
       actors={actors}
       sessions={chat.sessions}
-      storage={storage}
       className="h-full border-l-0"
     />
   );
@@ -564,6 +570,8 @@ export function ChatView({
                         )
                       }
                       message={m}
+                      shared={shared}
+                      files={storage.available}
                       mine={m.author_id === ownerId}
                       continued={
                         !newDay &&
@@ -736,9 +744,41 @@ export function ChatView({
   );
 }
 
+/** A message's words, and a card for each file it shares on a line of its own. */
+function MessageBody({
+  text,
+  shared,
+  files,
+}: {
+  text: string;
+  shared: Map<string, StoredFile>;
+  files: boolean;
+}) {
+  const linked = linkedFiles(text);
+  return (
+    <>
+      {linked.text && <MessageText text={linked.text} />}
+      {linked.files.length > 0 && (
+        <div className="mt-1.5 flex flex-col gap-1.5">
+          {linked.files.map((link, i) => (
+            <FileCard
+              key={`${link.id}:${i}`}
+              link={link}
+              file={shared.get(link.id)}
+              available={files}
+            />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 /** One message: yours on the right; anyone else's with their mark and name, once per turn. */
 function MessageRow({
   message: m,
+  shared,
+  files,
   mine,
   continued,
   author,
@@ -748,6 +788,10 @@ function MessageRow({
   children,
 }: {
   message: Message;
+  /** The files its chat shares, for its links' cards. */
+  shared: Map<string, StoredFile>;
+  /** Storage is there to download them. */
+  files: boolean;
   mine: boolean;
   continued: boolean;
   author?: Actor;
@@ -759,6 +803,7 @@ function MessageRow({
   children?: React.ReactNode;
 }) {
   const agent = author?.kind !== "human";
+  const body = <MessageBody text={m.text} shared={shared} files={files} />;
   if (mine)
     return (
       <li
@@ -768,7 +813,7 @@ function MessageRow({
           !continued && "mt-3",
         )}
       >
-        <MessageText text={m.text} />
+        {body}
         <div className="flex flex-wrap items-center justify-end gap-2">
           {actions}
           <Stamp message={m} name={name} className="justify-end" />
@@ -812,7 +857,7 @@ function MessageRow({
             )}
           </div>
         )}
-        <MessageText text={m.text} />
+        {body}
         <div className="flex flex-wrap items-center gap-2">
           <Stamp message={m} name={name} />
           {listen && <Listen {...listen} />}
@@ -960,14 +1005,15 @@ function ChatComposer({
     const id = draft.current;
     const going = picked;
     const ok = await perform(async () => {
-      if (going.length) {
-        await storage.upload(
-          going.map(({ file }) => file),
-          { conversation_id: conversation.id },
-        );
-        going.forEach(({ file }) => drop(file));
-      }
-      if (text.trim()) await chat.send(conversation, { id, text: text.trim() });
+      // Files are kept by Storage, shared in this chat, and go as links in the message.
+      const uploaded = going.length
+        ? await storage.upload(
+            going.map(({ file }) => file),
+            { conversation_id: conversation.id },
+          )
+        : [];
+      going.forEach(({ file }) => drop(file));
+      await chat.send(conversation, { id, text: withFiles(text, uploaded) });
     });
     // Only the draft that was sent is cleared: what you typed meanwhile is a new draft.
     if (ok && draft.current === id) write("");
@@ -1059,20 +1105,21 @@ function ChatComposer({
         send={() => void submit()}
         voice={{
           transcription,
-          // What was said goes as the message.
-          send: async (said) => {
+          // What was said goes as the message, with its recording when Storage keeps it.
+          send: async (said, kept) => {
             sent();
-            await chat.send(conversation, { id: newId(), text: said });
+            await chat.send(conversation, {
+              id: newId(),
+              text: withFiles(said, kept ? [kept] : []),
+            });
           },
-          // The recording rides along where the kernel keeps files.
           keep: storage.available
             ? async (audio) => {
                 const at = new Date()
                   .toTimeString()
                   .slice(0, 5)
                   .replace(":", ".");
-                // TODO: kernel: a file shared in a chat is announced to its members, as a message would be.
-                await storage.upload(
+                const [kept] = await storage.upload(
                   [
                     new File([audio], `Voice message ${at}.webm`, {
                       type: audio.type,
@@ -1080,6 +1127,7 @@ function ChatComposer({
                   ],
                   { conversation_id: conversation.id },
                 );
+                return kept!;
               }
             : undefined,
         }}

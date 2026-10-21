@@ -26,10 +26,6 @@ export const capabilities: Capability[] = [
     id: "meetings-v1",
     name: "Meetings",
   },
-  {
-    id: "storage-v1",
-    name: "Storage",
-  },
 ];
 
 /**

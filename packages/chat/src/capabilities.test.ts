@@ -8,6 +8,5 @@ test("every known feature says whether this kernel has it, and unknown ones stil
   expect(available("chat-v1")).toBe(true);
   expect(available("auth-v1")).toBe(true);
   expect(available("meetings-v1")).toBe(false);
-  expect(available("storage-v1")).toBe(false);
   expect(available("console-v1")).toBe(true);
 });

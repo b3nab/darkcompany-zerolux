@@ -13,7 +13,7 @@ import { File as Saved, Paths } from "expo-file-system";
 import { audioLevel, errorMessage, readAloud } from "@zerolux/chat";
 import type { Recorder } from "@zerolux/chat";
 
-/** A file on this phone as the `File` the kernel's storage takes. */
+/** A file on this phone as the `File` Storage takes. */
 export async function asFile(uri: string, name: string, type?: string) {
   const blob = await (await fetch(uri)).blob();
   return new File([blob], name, { type: type ?? blob.type });
