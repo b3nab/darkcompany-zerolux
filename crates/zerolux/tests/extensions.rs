@@ -1029,7 +1029,7 @@ async fn storage_keeps_files_and_gives_them_back() {
             Some(json!({})),
         )
         .await;
-    assert_eq!(folders["result"]["folders"], json!(["plans/q4"]));
+    assert_eq!(folders["result"]["folders"], json!(["plans", "plans/q4"]));
     for (action, input) in [
         ("rename", json!({"id": notes, "name": "plan.md"})),
         ("move", json!({"id": notes, "folder": "plans"})),
@@ -1076,7 +1076,49 @@ async fn storage_keeps_files_and_gives_them_back() {
             .join(format!("extensions/zerolux.storage/files/{photo}"))
             .exists()
     );
-    // A file outside an extension's folder is never given.
+    // Folders: made empty, renamed and moved with what they hold, deleted with it.
+    let storage = |action: &'static str, input: Value| {
+        let kernel = &kernel;
+        async move {
+            kernel
+                .call(
+                    Method::POST,
+                    &format!("/ext/zerolux.storage/{action}"),
+                    Some(input),
+                )
+                .await
+        }
+    };
+    let (status, _) = storage("create_folder", json!({"folder": "drafts/empty"})).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, folders) = storage("folders", json!({})).await;
+    assert_eq!(
+        folders["result"]["folders"],
+        json!(["drafts", "drafts/empty", "plans"]),
+        "{folders}"
+    );
+    storage(
+        "rename_folder",
+        json!({"folder": "plans", "name": "roadmap"}),
+    )
+    .await;
+    storage(
+        "move_folder",
+        json!({"folder": "roadmap", "into": "drafts"}),
+    )
+    .await;
+    let (_, moved) = storage("files", json!({"folder": "drafts/roadmap"})).await;
+    assert_eq!(moved["result"]["files"][0]["name"], "plan.md", "{moved}");
+    let (status, _) = storage(
+        "move_folder",
+        json!({"folder": "drafts", "into": "drafts/roadmap"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, deleted) = storage("delete_folder", json!({"folder": "drafts"})).await;
+    assert_eq!(deleted["result"]["deleted"], 1, "{deleted}");
+    let (_, left) = storage("folders", json!({})).await;
+    assert_eq!(left["result"]["folders"], json!([]), "{left}");
     runtime.shutdown().await.unwrap();
     server.abort();
     livekit.shutdown().await.unwrap();

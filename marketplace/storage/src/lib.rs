@@ -49,6 +49,34 @@ impl Storage {
         Ok(result)
     }
 
+    /// The folders made on their own, empty or not.
+    fn read_folders(context: &Context) -> Result<std::collections::BTreeSet<String>, String> {
+        let stored = context.get_value("folders")?;
+        if stored.is_null() {
+            return Ok(Default::default());
+        }
+        serde_json::from_value(stored).map_err(|error| error.to_string())
+    }
+
+    /// Changes the files and the folders together, one change at a time.
+    fn change_all<T>(
+        &self,
+        context: &Context,
+        change: impl FnOnce(
+            &mut BTreeMap<String, Value>,
+            &mut std::collections::BTreeSet<String>,
+        ) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let _held = self.files.lock().map_err(|_| "Storage is unavailable")?;
+        let mut files = Self::read_files(context)?;
+        let mut folders = Self::read_folders(context)?;
+        let result = change(&mut files, &mut folders)?;
+        context.set_value("files", json!(files))?;
+        context.set_value("folders", json!(folders))?;
+        context.publish("changed", json!({}))?;
+        Ok(result)
+    }
+
     fn provider(context: &Context) -> String {
         context.settings()["provider"]
             .as_str()
@@ -207,7 +235,17 @@ impl Extension for Storage {
             "actions": [
                 {"name": "files", "title": "Files", "description": "The workspace's files, in a folder or a chat, or all",
                     "input": object(json!({"folder": {"type": "string"}, "conversation_id": {"type": "string"}}), &[])},
-                {"name": "folders", "title": "Folders", "description": "The folders that hold files"},
+                {"name": "folders", "title": "Folders", "description": "Every folder, empty or not"},
+                {"name": "create_folder", "title": "New folder", "description": "Makes a folder, which stays while empty",
+                    "effects": "write", "input": object(json!({"folder": {"type": "string"}}), &["folder"])},
+                {"name": "rename_folder", "title": "Rename folder", "description": "Gives a folder another name, with what it holds",
+                    "effects": "write",
+                    "input": object(json!({"folder": {"type": "string"}, "name": {"type": "string"}}), &["folder", "name"])},
+                {"name": "move_folder", "title": "Move folder", "description": "Puts a folder, with what it holds, in another",
+                    "effects": "write",
+                    "input": object(json!({"folder": {"type": "string"}, "into": {"type": "string"}}), &["folder", "into"])},
+                {"name": "delete_folder", "title": "Delete folder", "description": "Deletes a folder and everything in it",
+                    "effects": "destructive", "input": object(json!({"folder": {"type": "string"}}), &["folder"])},
                 {"name": "upload", "title": "Upload", "description": "Keeps the file sent with it, in a folder or shared in a chat",
                     "effects": "write", "seconds": 600,
                     "input": object(json!({"file": {"type": "object"}, "folder": {"type": "string"},
@@ -275,14 +313,104 @@ impl Extension for Storage {
                 Ok(json!({"files": files}))
             }
             "folders" => {
-                let mut folders: Vec<String> = Self::read_files(context)?
-                    .values()
-                    .filter_map(|file| file["folder"].as_str().map(str::to_owned))
-                    .filter(|folder| !folder.is_empty())
-                    .collect();
-                folders.sort();
-                folders.dedup();
-                Ok(json!({"folders": folders}))
+                // Those made on their own, those that hold files, and every folder above them.
+                let mut folders = Self::read_folders(context)?;
+                folders.extend(
+                    Self::read_files(context)?
+                        .values()
+                        .filter_map(|file| file["folder"].as_str().map(str::to_owned)),
+                );
+                let mut all = std::collections::BTreeSet::new();
+                for folder in folders.into_iter().filter(|folder| !folder.is_empty()) {
+                    let mut parts = Vec::new();
+                    for part in folder.split('/') {
+                        parts.push(part);
+                        all.insert(parts.join("/"));
+                    }
+                }
+                Ok(json!({"folders": all}))
+            }
+            "create_folder" => {
+                let folder = clean_folder(&text("folder"))?;
+                if folder.is_empty() {
+                    return Err("Name the folder".into());
+                }
+                self.change_all(context, |_, folders| {
+                    folders.insert(folder.clone());
+                    Ok(json!({"folder": folder}))
+                })
+            }
+            "rename_folder" | "move_folder" => {
+                let from = clean_folder(&text("folder"))?;
+                if from.is_empty() {
+                    return Err("Name the folder".into());
+                }
+                let leaf = from.rsplit('/').next().unwrap_or_default().to_owned();
+                let to = if name == "rename_folder" {
+                    let renamed = clean_name(&text("name"))?;
+                    match from.rsplit_once('/') {
+                        Some((parent, _)) => format!("{parent}/{renamed}"),
+                        None => renamed,
+                    }
+                } else {
+                    let into = clean_folder(&text("into"))?;
+                    if into == from || into.starts_with(&format!("{from}/")) {
+                        return Err("A folder cannot go inside itself".into());
+                    }
+                    if into.is_empty() {
+                        leaf
+                    } else {
+                        format!("{into}/{leaf}")
+                    }
+                };
+                let moved = |folder: &str| -> Option<String> {
+                    if folder == from {
+                        Some(to.clone())
+                    } else {
+                        folder
+                            .strip_prefix(&format!("{from}/"))
+                            .map(|rest| format!("{to}/{rest}"))
+                    }
+                };
+                self.change_all(context, |files, folders| {
+                    let now = now_ms();
+                    for file in files.values_mut() {
+                        if let Some(folder) = file["folder"].as_str().and_then(moved) {
+                            file["folder"] = json!(folder);
+                            file["updated_at"] = json!(now);
+                        }
+                    }
+                    *folders = folders
+                        .iter()
+                        .map(|folder| moved(folder).unwrap_or_else(|| folder.clone()))
+                        .collect();
+                    if !folders.contains(&to) {
+                        folders.insert(to.clone());
+                    }
+                    Ok(json!({"folder": to}))
+                })
+            }
+            "delete_folder" => {
+                let folder = clean_folder(&text("folder"))?;
+                if folder.is_empty() {
+                    return Err("Name the folder".into());
+                }
+                let inside = |path: &str| path == folder || path.starts_with(&format!("{folder}/"));
+                let gone = self.change_all(context, |files, folders| {
+                    let gone: Vec<Value> = files
+                        .values()
+                        .filter(|file| file["folder"].as_str().is_some_and(inside))
+                        .cloned()
+                        .collect();
+                    files.retain(|_, file| !file["folder"].as_str().is_some_and(inside));
+                    folders.retain(|path| !inside(path));
+                    Ok(gone)
+                })?;
+                for file in &gone {
+                    let provider = file["provider"].as_str().unwrap_or("local").to_owned();
+                    let _ = self.provide(context, &provider, "delete", json!({"key": file["id"]}));
+                }
+                Ok(json!({"deleted": gone.len()}))
             }
             "upload" => {
                 let file = &input["file"];
