@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { SubmitEvent } from "react";
 import { Link, NavLink } from "react-router";
 import { cn } from "cn";
@@ -64,6 +64,7 @@ import { Composer, ComposerChip } from "@/components/composer";
 import { FileCard } from "@/components/file";
 import { Listen } from "@/components/listen";
 import { useReadAloud } from "./read-aloud";
+import { useReadingPlace } from "./reading";
 import { useMe } from "./AuthGate";
 import { ChatAbout } from "@/components/chat-about";
 import { LiveWork, WorkLine } from "@/components/chat-work";
@@ -283,8 +284,8 @@ export function ChatView({
   const [about, setAbout] = useState(true);
   const [aboutSheet, setAboutSheet] = useState(false);
   const wide = useMedia(XL);
-  const scroller = useRef<HTMLDivElement>(null);
-  const list = useRef<HTMLOListElement>(null);
+  // At the bottom new messages are followed; reading further up, the place is kept.
+  const reading = useReadingPlace<HTMLOListElement>();
   const last = chat.messages.at(-1)?.seq;
   const unsent = chat.unsent.filter(
     (m) => m.conversation_id === conversation.id,
@@ -338,30 +339,13 @@ export function ChatView({
   const asks = openApprovals(chat.approvals).filter(
     (a) => a.conversation_id === conversation.id,
   );
-  // Follows new messages only while you are at the bottom: reading older ones is not interrupted.
-  const following = useRef(true);
-  // More than a screen above the latest messages: a button brings the reader back down.
-  const [away, setAway] = useState(false);
-  // The content height the reader last scrolled against.
-  const height = useRef(0);
-  const toBottom = () => {
-    const l = scroller.current;
-    if (!l) return;
-    if (following.current) l.scrollTop = l.scrollHeight;
-    height.current = l.scrollHeight;
-  };
-  useEffect(toBottom, [last, unsent.length, busyHere.length, asks.length]);
-  useEffect(() => {
-    // The bottom stays in view while content grows once shown (a diagram, highlighted code)
-    // and while the view itself shrinks (a strip of open threads, a taller draft).
-    if (!list.current || !scroller.current) return;
-    const observer = new ResizeObserver(toBottom);
-    observer.observe(list.current);
-    observer.observe(scroller.current);
-    return () => observer.disconnect();
-    // toBottom only reads refs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useLayoutEffect(reading.settle, [
+    reading.settle,
+    last,
+    unsent.length,
+    busyHere.length,
+    asks.length,
+  ]);
 
   const chatTitle = (id: string | null) =>
     chat.conversations.find((c) => c.id === id)?.title;
@@ -524,19 +508,14 @@ export function ChatView({
             </p>
           )}
           <div
-            ref={scroller}
-            className="min-h-0 flex-1 overflow-y-auto px-3 py-4 md:px-6"
-            onScroll={(e) => {
-              const l = e.currentTarget;
-              // The browser also scrolls when content changes size (scroll anchoring): only a
-              // scroll over unchanged content is the reader moving.
-              if (l.scrollHeight !== height.current) return;
-              const below = l.scrollHeight - l.scrollTop - l.clientHeight;
-              following.current = below < 80;
-              setAway(below > l.clientHeight);
-            }}
+            ref={reading.scroller}
+            className="min-h-0 flex-1 overflow-y-auto px-3 py-4 [overflow-anchor:none] md:px-6"
+            onScroll={reading.onScroll}
           >
-            <ol ref={list} className="mx-auto flex max-w-3xl flex-col gap-1">
+            <ol
+              ref={reading.list}
+              className="mx-auto flex max-w-3xl flex-col gap-1"
+            >
               {(chat.messages[0]?.seq ?? 1) > 1 && (
                 <li className="self-center pb-2">
                   <Button
@@ -692,7 +671,7 @@ export function ChatView({
               )}
             </ol>
             {/* No height of its own: it rides the bottom edge without moving the content. */}
-            {away && (
+            {reading.away && (
               <div className="sticky bottom-0 mx-auto h-0 max-w-3xl">
                 <Button
                   variant="outline"
@@ -700,13 +679,7 @@ export function ChatView({
                   aria-label="Back to the latest messages"
                   title="Back to the latest messages"
                   className="absolute right-0 bottom-0 rounded-full bg-card shadow-md"
-                  onClick={() => {
-                    following.current = true;
-                    scroller.current?.scrollTo({
-                      top: scroller.current.scrollHeight,
-                      behavior: "smooth",
-                    });
-                  }}
+                  onClick={reading.toLatest}
                 >
                   <ArrowDownIcon />
                 </Button>
@@ -729,7 +702,7 @@ export function ChatView({
               perform={perform}
               storage={storage}
               transcription={voice.available}
-              sent={() => (following.current = true)}
+              sent={reading.follow}
             />
           )}
         </section>

@@ -144,6 +144,7 @@ import { SubagentList, SubagentPanel } from "./SessionSubagents";
 import { AskOnTheSide, InputActions } from "./SessionFork";
 import { SessionSchedules } from "./SessionSchedules";
 import { BackgroundPanel } from "./SessionBackground";
+import { useReadingPlace } from "./reading";
 import { ExtensionView, pieceIcon } from "./extension-view";
 import { SessionTriggers } from "./SessionTriggers";
 import { ContinueInTerminal } from "./ContinueInTerminal";
@@ -787,37 +788,25 @@ export function SessionView({
     document.addEventListener("visibilitychange", look);
     return () => document.removeEventListener("visibilitychange", look);
   }, [session.id, at]);
-  const scroller = useRef<HTMLDivElement>(null);
   // A link to a point of its work (`?at=`, from a search) opens there, not at the bottom.
   const [params] = useSearchParams();
   const target = params.get("at");
-  // New work follows at the bottom, as in a chat, while you are there.
-  const following = useRef(target === null);
-  // Earlier work comes in above: the distance from the bottom keeps your place.
-  const fromBottom = useRef<number>(undefined);
-  const top = useRef<number>(undefined);
-  useLayoutEffect(() => {
-    const view = scroller.current;
-    if (!view) return;
-    const earlierCame = events[0]?.at !== top.current;
-    top.current = events[0]?.at;
-    if (earlierCame && fromBottom.current !== undefined) {
-      view.scrollTop = view.scrollHeight - fromBottom.current;
-      fromBottom.current = undefined;
-    } else if (following.current) view.scrollTop = view.scrollHeight;
-  }, [events, live]);
+  // New work follows at the bottom, as in a chat, while you are there; reading further up,
+  // earlier work coming in above or anything changing size keeps your place.
+  const reading = useReadingPlace(target === null);
+  useLayoutEffect(reading.settle, [reading.settle, events, live]);
   // Earlier work is read until the point is in; then it is shown, marked for a moment.
   const reached = useRef<string>(undefined);
   useEffect(() => {
     if (target === null || reached.current === target || !events.length) return;
     const at = Number(target);
     if (events[0]!.at > at && more) return void earlier();
-    const place = scroller.current?.querySelector<HTMLElement>(
+    const place = reading.view.current?.querySelector<HTMLElement>(
       `[data-at="${at}"]`,
     );
     if (!place) return;
     reached.current = target;
-    following.current = false;
+    reading.stay();
     place.scrollIntoView({ block: "center" });
     place.classList.add("rounded-md", "ring-2", "ring-primary/60");
     setTimeout(
@@ -1085,26 +1074,20 @@ export function SessionView({
             )}
           </header>
           <div
-            ref={scroller}
-            className="min-h-0 flex-1 overflow-y-auto px-3 py-4 md:px-6"
-            onScroll={(event) => {
-              const view = event.currentTarget;
-              following.current =
-                view.scrollHeight - view.scrollTop - view.clientHeight < 80;
-            }}
+            ref={reading.scroller}
+            className="min-h-0 flex-1 overflow-y-auto px-3 py-4 [overflow-anchor:none] md:px-6"
+            onScroll={reading.onScroll}
           >
-            <div className="mx-auto flex max-w-3xl flex-col gap-3">
+            <div
+              ref={reading.list}
+              className="mx-auto flex max-w-3xl flex-col gap-3"
+            >
               {more && (
                 <Button
                   variant="outline"
                   size="sm"
                   className="self-center"
-                  onClick={() => {
-                    const view = scroller.current;
-                    if (view)
-                      fromBottom.current = view.scrollHeight - view.scrollTop;
-                    earlier();
-                  }}
+                  onClick={earlier}
                 >
                   Show earlier work
                 </Button>
