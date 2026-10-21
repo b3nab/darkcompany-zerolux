@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject, UIEvent } from "react";
 
 /**
@@ -6,9 +6,16 @@ import type { RefObject, UIEvent } from "react";
  * follows what comes; anywhere else the first item in view stays where it is, whatever grows
  * or shrinks above or below it. The view keeps it itself, the same in every browser, so the
  * browser's own anchoring is turned off where it is used (`[overflow-anchor:none]`).
+ * With `earlier`, the items before the first come by themselves as the reader nears the top.
  */
 export function useReadingPlace<List extends HTMLElement = HTMLDivElement>(
   following = true,
+  earlier?: {
+    /** There are items before the first. */
+    more: boolean;
+    /** Reads the page before; done when it is in. */
+    load: () => Promise<unknown>;
+  },
 ) {
   const scroller = useRef<HTMLDivElement>(null);
   const list = useRef<List>(null);
@@ -84,6 +91,53 @@ export function useReadingPlace<List extends HTMLElement = HTMLDivElement>(
     return { scroller: kept(scroller), list: kept(list) };
   }, [settle]);
 
+  // A page before is read once the top is within a screen and a half, one page at a time,
+  // and again while it still is, as after a short page.
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const before = useRef(earlier);
+  before.current = earlier;
+  // Observing the top again says at once whether it is near.
+  const look = useRef<() => void>(undefined);
+  const top = useCallback((element: HTMLElement | null) => {
+    if (!element) return;
+    let loading = false;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        const wanted = before.current;
+        if (!entry?.isIntersecting || !wanted?.more || loading) return;
+        loading = true;
+        setLoadingEarlier(true);
+        const done = () => {
+          loading = false;
+          setLoadingEarlier(false);
+        };
+        wanted.load().then(
+          () => {
+            done();
+            look.current?.();
+          },
+          // Not now: tried again as the reader comes back near the top.
+          done,
+        );
+      },
+      { root: element.parentElement, rootMargin: "150% 0px 0px 0px" },
+    );
+    look.current = () => {
+      observer.unobserve(element);
+      observer.observe(element);
+    };
+    observer.observe(element);
+    return () => {
+      look.current = undefined;
+      observer.disconnect();
+    };
+  }, []);
+  // There are earlier items now, as once the first page is in: the top may be near already.
+  const more = !!earlier?.more;
+  useEffect(() => {
+    if (more) look.current?.();
+  }, [more]);
+
   const onScroll = useCallback(
     (event: UIEvent<HTMLDivElement>) => {
       const view = event.currentTarget;
@@ -104,6 +158,10 @@ export function useReadingPlace<List extends HTMLElement = HTMLDivElement>(
     ...refs,
     /** The scrolled view, to find what is in it. */
     view: scroller,
+    /** Where the scrolled view starts, before the list: earlier items come as it nears. */
+    top,
+    /** A page before is being read. */
+    loadingEarlier,
     away,
     settle,
     onScroll,

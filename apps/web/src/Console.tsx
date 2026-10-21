@@ -70,6 +70,7 @@ import {
   useSessionCommands,
   useSessionEvents,
   useSessionFiles,
+  useSessionCompacting,
   useSessionLive,
   useSessionQueue,
   useSessionUsage,
@@ -107,6 +108,7 @@ import { Eyebrow, Presence } from "@/components/presence";
 import { SessionMark } from "@/components/profile";
 import {
   InputBubble,
+  Compacting,
   LiveItems,
   SessionBlocks,
 } from "@/components/session-blocks";
@@ -145,6 +147,7 @@ import { AskOnTheSide, InputActions } from "./SessionFork";
 import { SessionSchedules } from "./SessionSchedules";
 import { BackgroundPanel } from "./SessionBackground";
 import { useReadingPlace } from "./reading";
+import { LoadingEarlier } from "@/components/loading-earlier";
 import { ExtensionView, pieceIcon } from "./extension-view";
 import { SessionTriggers } from "./SessionTriggers";
 import { ContinueInTerminal } from "./ContinueInTerminal";
@@ -560,6 +563,8 @@ export function SessionView({
   const blocks = sessionBlocks(events);
   // What it produces before its record has it, after the recorded work.
   const live = useSessionLive(session.id, chat.live, events.length);
+  // Its context being summarized, asked for or the harness's own.
+  const compacting = useSessionCompacting(session.id, chat.live);
   // The owner's inputs waiting for the turn to end, as the harness queues them.
   const queue = useSessionQueue(session.id, chat.live);
   // The owner's inputs on their way, until the record or the queue has them.
@@ -793,7 +798,7 @@ export function SessionView({
   const target = params.get("at");
   // New work follows at the bottom, as in a chat, while you are there; reading further up,
   // earlier work coming in above or anything changing size keeps your place.
-  const reading = useReadingPlace(target === null);
+  const reading = useReadingPlace(target === null, { more, load: earlier });
   useLayoutEffect(reading.settle, [reading.settle, events, live]);
   // Earlier work is read until the point is in; then it is shown, marked for a moment.
   const reached = useRef<string>(undefined);
@@ -1078,20 +1083,15 @@ export function SessionView({
             className="min-h-0 flex-1 overflow-y-auto px-3 py-4 [overflow-anchor:none] md:px-6"
             onScroll={reading.onScroll}
           >
+            <LoadingEarlier
+              loading={reading.loadingEarlier}
+              label="Loading earlier work"
+            />
+            <div ref={reading.top} />
             <div
               ref={reading.list}
               className="mx-auto flex max-w-3xl flex-col gap-3"
             >
-              {more && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="self-center"
-                  onClick={earlier}
-                >
-                  Show earlier work
-                </Button>
-              )}
               <SessionBlocks
                 blocks={placeApprovals(
                   blocks,
@@ -1166,9 +1166,14 @@ export function SessionView({
                 />
               ))}
               <LiveItems items={live} />
-              {!blocks.length && !live.length && !sent.length && !error && (
-                <p className="text-sm text-faint">Nothing recorded yet.</p>
-              )}
+              {compacting && <Compacting />}
+              {!blocks.length &&
+                !live.length &&
+                !sent.length &&
+                !compacting &&
+                !error && (
+                  <p className="text-sm text-faint">Nothing recorded yet.</p>
+                )}
               {error && (
                 <p role="alert" className="text-sm text-destructive">
                   {error}

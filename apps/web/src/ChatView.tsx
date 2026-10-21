@@ -40,6 +40,7 @@ import {
   waitingChats,
   workingLabel,
   workingSessions,
+  useArrivals,
   useChatWork,
   useVoice,
   useUiPieces,
@@ -65,6 +66,8 @@ import { FileCard } from "@/components/file";
 import { Listen } from "@/components/listen";
 import { useReadAloud } from "./read-aloud";
 import { useReadingPlace } from "./reading";
+import { LoadingEarlier } from "@/components/loading-earlier";
+import { ARRIVE } from "@/components/session-blocks";
 import { useMe } from "./AuthGate";
 import { ChatAbout } from "@/components/chat-about";
 import { LiveWork, WorkLine } from "@/components/chat-work";
@@ -284,8 +287,14 @@ export function ChatView({
   const [about, setAbout] = useState(true);
   const [aboutSheet, setAboutSheet] = useState(false);
   const wide = useMedia(XL);
-  // At the bottom new messages are followed; reading further up, the place is kept.
-  const reading = useReadingPlace<HTMLOListElement>();
+  // At the bottom new messages are followed; reading further up, the place is kept, and
+  // earlier messages come as the top nears.
+  const reading = useReadingPlace<HTMLOListElement>(true, {
+    more: (chat.messages[0]?.seq ?? 1) > 1,
+    load: chat.loadEarlier,
+  });
+  // What comes while the chat is open slides in; earlier messages above are simply there.
+  const arrivals = useArrivals(chat.messages.map((m) => ({ key: m.id })));
   const last = chat.messages.at(-1)?.seq;
   const unsent = chat.unsent.filter(
     (m) => m.conversation_id === conversation.id,
@@ -512,22 +521,15 @@ export function ChatView({
             className="min-h-0 flex-1 overflow-y-auto px-3 py-4 [overflow-anchor:none] md:px-6"
             onScroll={reading.onScroll}
           >
+            <LoadingEarlier
+              loading={reading.loadingEarlier}
+              label="Loading earlier messages"
+            />
+            <div ref={reading.top} />
             <ol
               ref={reading.list}
               className="mx-auto flex max-w-3xl flex-col gap-1"
             >
-              {(chat.messages[0]?.seq ?? 1) > 1 && (
-                <li className="self-center pb-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => void perform(chat.loadEarlier)}
-                  >
-                    Show earlier messages
-                  </Button>
-                </li>
-              )}
               {chat.messages.map((m, i) => {
                 const previous = chat.messages[i - 1];
                 const day = dayLabel(m.created_at);
@@ -549,6 +551,7 @@ export function ChatView({
                         )
                       }
                       message={m}
+                      arrived={arrivals.has(m.id)}
                       shared={shared}
                       files={storage.available}
                       mine={m.author_id === ownerId}
@@ -758,6 +761,7 @@ function MessageRow({
   name,
   listen,
   actions,
+  arrived,
   children,
 }: {
   message: Message;
@@ -773,6 +777,8 @@ function MessageRow({
   listen?: { reading: boolean; error?: string; toggle: () => void };
   /** What extensions do with it, in its menu. */
   actions?: React.ReactNode;
+  /** It came while the chat was open: it slides in. */
+  arrived?: boolean;
   children?: React.ReactNode;
 }) {
   const agent = author?.kind !== "human";
@@ -799,6 +805,7 @@ function MessageRow({
       className={cn(
         "group/message grid grid-cols-[2rem_minmax(0,1fr)] gap-x-3",
         !continued && "mt-3",
+        arrived && ARRIVE,
       )}
     >
       {continued ? (

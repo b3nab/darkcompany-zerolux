@@ -22,9 +22,11 @@ import { MessageText } from "@/components/message-text";
 import { ExploredCalls, SubagentCard, ToolCall } from "@/components/tool-call";
 import type { ChatTitle } from "@/components/tool-call";
 import { Reveal } from "@/components/reveal";
+import { Spinner } from "@/components/ui/spinner";
 import { useDensity, useOpen } from "@/components/density";
 
-const ARRIVE =
+/** How something that arrives while you look comes in: chat messages too. */
+export const ARRIVE =
   "animate-in fade-in slide-in-from-bottom-1 duration-300 motion-reduce:animate-none";
 
 /**
@@ -171,11 +173,14 @@ export type TextBlock = Extract<SessionBlock, { kind: "text" }>;
 export function InputBubble({
   text,
   from,
+  command,
   children,
 }: {
   text: string;
   /** The chat they came from. */
   from?: string | null | false;
+  /** A command to the harness, as `/compact`: written as in a terminal. */
+  command?: boolean;
   children?: ReactNode;
 }) {
   return (
@@ -184,7 +189,14 @@ export function InputBubble({
         {from && (
           <p className="mb-1 font-mono text-[11px] text-faint">From {from}</p>
         )}
-        <p className="text-sm whitespace-pre-wrap break-words">{text}</p>
+        <p
+          className={cn(
+            "text-sm whitespace-pre-wrap break-words",
+            command && "font-mono text-[13px]",
+          )}
+        >
+          {text}
+        </p>
       </div>
       {children}
     </div>
@@ -214,6 +226,8 @@ function Block({
           {inputActions?.(block)}
         </InputBubble>
       );
+    case "command":
+      return <InputBubble text={block.text} command />;
     case "text":
       return (
         <>
@@ -283,6 +297,22 @@ function Block({
         </Fold>
       );
   }
+}
+
+/** The session's context being summarized now, whoever started it: at the end of its stream. */
+export function Compacting() {
+  return (
+    <p
+      role="status"
+      className={cn(
+        "flex items-center gap-2 font-mono text-[11px] text-faint",
+        ARRIVE,
+      )}
+    >
+      <Spinner aria-hidden className="size-3" />
+      Compacting context…
+    </p>
+  );
 }
 
 /** A running command's output in the stream: its last lines, as a terminal shows them. */
