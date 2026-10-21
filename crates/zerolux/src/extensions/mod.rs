@@ -364,7 +364,7 @@ impl Extensions {
             .map(|row| (row.id, row.version))
             .collect();
         let (mut offers, mut errors) = (Vec::new(), Vec::new());
-        for url in marketplace::indexes() {
+        for url in marketplace::indexes(self.root.parent().unwrap_or(&self.root)) {
             match marketplace::read(&url).await {
                 Ok(index) => {
                     for listing in &index.extensions {
@@ -396,7 +396,7 @@ impl Extensions {
     ) -> Result<Installed> {
         self.owner_only(who).await?;
         ensure!(
-            marketplace::indexes()
+            marketplace::indexes(self.root.parent().unwrap_or(&self.root))
                 .iter()
                 .any(|known| known == index_url),
             Error::Invalid("This kernel does not read that index".into())
