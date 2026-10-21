@@ -3,7 +3,7 @@ import {
   Host as ComposeHost,
 } from "@expo/ui/jetpack-compose";
 import { DatePicker, Host } from "@expo/ui/swift-ui";
-import { datePickerStyle } from "@expo/ui/swift-ui/modifiers";
+import { datePickerStyle, tint } from "@expo/ui/swift-ui/modifiers";
 import { CalendarIcon, XIcon } from "lucide-react-native";
 import { useState } from "react";
 import { Modal, Platform, Pressable, View } from "react-native";
@@ -40,9 +40,10 @@ export function DateInput({
   disabled,
 }: DateInputProps) {
   const { resolved } = useTheme();
-  const [faint, muted] = useCSSVariable([
+  const [faint, muted, accent] = useCSSVariable([
     "--color-faint",
     "--color-muted-foreground",
+    "--color-human-foreground",
   ]).map(String);
   const [open, setOpen] = useState(false);
   const pick = (date: string) => {
@@ -105,7 +106,7 @@ export function DateInput({
           presentationStyle="formSheet"
           onRequestClose={() => setOpen(false)}
         >
-          <View className="flex-1 gap-2 bg-background px-4">
+          <View className="flex-1 gap-2 bg-background px-5">
             <View className="flex-row items-center justify-between py-3">
               <Text className="text-[17px] font-semibold">
                 {label ?? "Date"}
@@ -120,14 +121,16 @@ export function DateInput({
                 </Text>
               </Pressable>
             </View>
-            <Host matchContents colorScheme={resolved}>
-              <DatePicker
-                selection={value ? local(value) : new Date()}
-                displayedComponents={["date"]}
-                modifiers={[datePickerStyle("graphical")]}
-                onDateChange={(date) => pick(day(date, false))}
-              />
-            </Host>
+            <View className="items-center">
+              <Host matchContents colorScheme={resolved}>
+                <DatePicker
+                  selection={value ? local(value) : new Date()}
+                  displayedComponents={["date"]}
+                  modifiers={[datePickerStyle("graphical"), tint(accent!)]}
+                  onDateChange={(date) => pick(day(date, false))}
+                />
+              </Host>
+            </View>
           </View>
         </Modal>
       ) : null}

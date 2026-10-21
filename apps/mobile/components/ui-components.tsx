@@ -1,6 +1,7 @@
 import * as Haptics from "expo-haptics";
 import { ChevronRightIcon } from "lucide-react-native";
 import { Children } from "react";
+import type { ReactNode } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -46,6 +47,14 @@ const badgeTone: Record<Tone, string> = {
 /** Columns as wide as most of the screen, so the next one shows at its edge. */
 const COLUMN = 0.8;
 
+/**
+ * As wide as what it holds, in a column or a row alike: a row of its own keeps it from
+ * stretching across a column, and leaves a row's alignment to the row.
+ */
+function Fit({ children }: { children: ReactNode }) {
+  return <View className="flex-row">{children}</View>;
+}
+
 const Button: UiComponents["Button"] = ({
   title,
   onPress,
@@ -53,23 +62,24 @@ const Button: UiComponents["Button"] = ({
   disabled,
   busy,
 }) => (
-  <AppButton
-    variant={
-      variant === "danger"
-        ? "destructive"
-        : variant === "secondary"
-          ? "outline"
-          : variant === "ghost"
-            ? "ghost"
-            : "default"
-    }
-    disabled={disabled || busy}
-    onPress={onPress}
-    className="self-start"
-  >
-    {busy ? <ActivityIndicator size="small" /> : null}
-    <AppText>{title}</AppText>
-  </AppButton>
+  <Fit>
+    <AppButton
+      variant={
+        variant === "danger"
+          ? "destructive"
+          : variant === "secondary"
+            ? "outline"
+            : variant === "ghost"
+              ? "ghost"
+              : "default"
+      }
+      disabled={disabled || busy}
+      onPress={onPress}
+    >
+      {busy ? <ActivityIndicator size="small" /> : null}
+      <AppText>{title}</AppText>
+    </AppButton>
+  </Fit>
 );
 
 /**
@@ -262,16 +272,18 @@ export const uiComponents: UiComponents = {
     </ScrollView>
   ),
   Badge: ({ tone = "default", children }) => (
-    <View className={cn("self-start rounded-sm px-2 py-0.5", badgeTone[tone])}>
-      <AppText
-        className={cn(
-          "font-mono text-[11px]",
-          tone === "default" ? "text-muted-foreground" : textTone[tone],
-        )}
-      >
-        {children}
-      </AppText>
-    </View>
+    <Fit>
+      <View className={cn("rounded-sm px-2 py-0.5", badgeTone[tone])}>
+        <AppText
+          className={cn(
+            "font-mono text-[11px]",
+            tone === "default" ? "text-muted-foreground" : textTone[tone],
+          )}
+        >
+          {children}
+        </AppText>
+      </View>
+    </Fit>
   ),
   Divider: () => <View className="h-px bg-border" />,
   Empty: ({ children }) => (
@@ -405,11 +417,12 @@ export const uiComponents: UiComponents = {
   Spinner: function Spinner({ size = "md" }) {
     const muted = String(useCSSVariable("--color-muted-foreground"));
     return (
-      <ActivityIndicator
-        size={size === "sm" ? "small" : "large"}
-        color={muted}
-        className="self-start"
-      />
+      <Fit>
+        <ActivityIndicator
+          size={size === "sm" ? "small" : "large"}
+          color={muted}
+        />
+      </Fit>
     );
   },
   Avatar: function Avatar({ actorId, size = "md" }) {
