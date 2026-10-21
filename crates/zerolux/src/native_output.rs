@@ -464,7 +464,8 @@ async fn watch_once(
             // Read again only when the record grew, or at first sight.
             _ => read_tail(&path, &session.harness).await,
         };
-        if last.is_some_and(|last| last != end) {
+        // Grown, or first seen since the kernel started: a client that read before then hears it.
+        if last != Some(end) {
             let mut notice = serde_json::to_value(&ending)?;
             notice["type"] = json!("session.output");
             notice["session_id"] = json!(session.id);
