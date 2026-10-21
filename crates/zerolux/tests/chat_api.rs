@@ -525,7 +525,7 @@ async fn livekit_tickets_are_scoped_to_the_authenticated_actor_and_restart_requi
         .unwrap();
     assert_eq!(
         state,
-        json!({"seq":2,"items":[{"id":"m","kind":"text","text":"Working"}],"queue":[],"usage":null,"goal":null})
+        json!({"seq":2,"items":[{"id":"m","kind":"text","text":"Working"}],"queue":[],"usage":null,"goal":null,"compacting":false})
     );
     // At its budget, the session's work stops for the owner; a higher budget lets it go on.
     let session_path = format!("{url}/api/sessions/{}", agent.session.id);
