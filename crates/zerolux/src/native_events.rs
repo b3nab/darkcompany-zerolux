@@ -50,6 +50,11 @@ pub enum Event {
     Compacted {
         summary: Option<String>,
     },
+    /// A command the owner gave the harness itself rather than the agent, as typed:
+    /// `/compact keep the plan`. It opens no turn.
+    Command {
+        text: String,
+    },
 }
 
 /// How a session's record ends, for the Console's inbox.
@@ -67,11 +72,12 @@ const SUMMARY_CHARS: usize = 200;
 
 /// The end of a session's events: how its last turn ended and its latest line.
 pub fn tail(items: &[Item], output_at: Option<i64>) -> Tail {
-    // Compaction happens between turns; anything else after the last end is a turn running.
+    // Compaction and commands happen between turns; anything else after the last end is a
+    // turn running.
     let last_turn = items
         .iter()
         .rev()
-        .find(|item| !matches!(item.event, Event::Compacted { .. }))
+        .find(|item| !matches!(item.event, Event::Compacted { .. } | Event::Command { .. }))
         .and_then(|item| match &item.event {
             Event::TurnEnded { status } => Some(status.clone()),
             Event::Error { .. } => Some("error".into()),
@@ -262,6 +268,12 @@ fn pi(record: &Value) -> Vec<Event> {
         Some("compaction") => vec![Event::Compacted {
             summary: record["summary"].as_str().map(str::to_owned),
         }],
+        // ZeroLux's extension keeps the compaction asked of pi, which pi does not record.
+        Some("custom") if record["customType"] == "zerolux-compaction-requested" => {
+            vec![compact_command(
+                record["data"]["instructions"].as_str().unwrap_or_default(),
+            )]
+        }
         // pi reports a failed compaction only to its extensions; ZeroLux's keeps it here.
         Some("custom") if record["customType"] == "zerolux-compaction-failed" => {
             vec![Event::Error {
@@ -275,21 +287,61 @@ fn pi(record: &Value) -> Vec<Event> {
     }
 }
 
+/// `/compact`, with the instructions given to it.
+fn compact_command(instructions: &str) -> Event {
+    let instructions = instructions.trim();
+    Event::Command {
+        text: if instructions.is_empty() {
+            "/compact".into()
+        } else {
+            format!("/compact {instructions}")
+        },
+    }
+}
+
+/// A command typed in Claude Code, as it records it:
+/// `<command-name>/compact</command-name> … <command-args>keep the plan</command-args>`.
+fn claude_command(text: &str) -> Option<Event> {
+    let between = |open: &str, close: &str| {
+        let start = text.find(open)? + open.len();
+        let end = start + text[start..].find(close)?;
+        Some(text[start..end].trim().to_owned())
+    };
+    if !text.trim_start().starts_with("<command-name>") {
+        return None;
+    }
+    let name = between("<command-name>", "</command-name>")?;
+    let args = between("<command-args>", "</command-args>").unwrap_or_default();
+    Some(Event::Command {
+        text: if args.is_empty() {
+            name
+        } else {
+            format!("{name} {args}")
+        },
+    })
+}
+
 fn claude(record: &Value) -> Vec<Event> {
     match record["type"].as_str() {
         Some("user") if record["isCompactSummary"] == true => vec![Event::Compacted {
             summary: Some(text_of(&record["message"]["content"], &["text"])),
         }],
+        // What Claude Code writes for itself around a command: a caveat for the model, and
+        // the command's own output.
+        Some("user") if record["isMeta"] == true => Vec::new(),
         Some("user") => {
             let content = &record["message"]["content"];
             let mut events = Vec::new();
             let text = text_of(content, &["text"]);
+            if let Some(command) = claude_command(&text) {
+                events.push(command);
             // Claude Code writes an interruption as the user's line.
-            if text.starts_with("[Request interrupted by user") {
+            } else if text.starts_with("[Request interrupted by user") {
                 events.push(Event::TurnEnded {
                     status: "interrupted".into(),
                 });
-            } else if !text.trim().is_empty() {
+            // A command's output is Claude Code's own, for its terminal.
+            } else if !text.trim().is_empty() && !text.starts_with("<local-command-stdout>") {
                 events.push(input(text));
             }
             for block in content.as_array().into_iter().flatten() {
@@ -513,7 +565,9 @@ mod tests {
                     json!({"type":"message","message":{"role":"toolResult","toolCallId":"c1","toolName":"read","content":[{"type":"text","text":"x"}],"isError":false}}),
                     json!({"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Done"}],"stopReason":"stop"}}),
                     json!({"type":"model_change","modelId":"m"}),
+                    json!({"type":"custom","customType":"zerolux-compaction-requested","data":{"instructions":" keep the plan "}}),
                     json!({"type":"custom","customType":"zerolux-compaction-failed","data":{"error":"Compaction failed: 429"}}),
+                    json!({"type":"custom","customType":"zerolux-compaction-requested","data":{}}),
                     json!({"type":"custom","customType":"other-extension","data":{"error":"not ours"}}),
                 ]
             ),
@@ -545,8 +599,14 @@ mod tests {
                 Event::TurnEnded {
                     status: "completed".into()
                 },
+                Event::Command {
+                    text: "/compact keep the plan".into()
+                },
                 Event::Error {
                     message: "Compaction failed: 429".into()
+                },
+                Event::Command {
+                    text: "/compact".into()
                 },
             ]
         );
@@ -564,6 +624,12 @@ mod tests {
                 json!({"type":"system","subtype":"turn_duration"}),
                 json!({"type":"permission-mode"}),
                 json!({"type":"user","message":{"content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}),
+                json!({"type":"system","subtype":"compact_boundary"}),
+                json!({"type":"user","isCompactSummary":true,"message":{"content":"Summary"}}),
+                json!({"type":"user","isMeta":true,"message":{"content":"<local-command-caveat>Caveat</local-command-caveat>"}}),
+                json!({"type":"user","message":{"content":"<command-name>/compact</command-name>\n  <command-message>compact</command-message>\n  <command-args>keep the plan</command-args>"}}),
+                json!({"type":"user","message":{"content":"<local-command-stdout>Compacted</local-command-stdout>"}}),
+                json!({"type":"user","message":{"content":"<command-name>/model</command-name>\n<command-args></command-args>"}}),
             ]),
             vec![
                 Event::Input {
@@ -586,6 +652,10 @@ mod tests {
                 Event::Text { text: "Fine".into() },
                 Event::TurnEnded { status: "completed".into() },
                 Event::TurnEnded { status: "interrupted".into() },
+                Event::Compacted { summary: None },
+                Event::Compacted { summary: Some("Summary".into()) },
+                Event::Command { text: "/compact keep the plan".into() },
+                Event::Command { text: "/model".into() },
             ]
         );
     }
@@ -618,6 +688,9 @@ mod tests {
                 text("First"),
                 text("Fixed the build.\n\nAll   tests pass."),
                 ended("completed"),
+                Event::Command {
+                    text: "/compact".into(),
+                },
                 Event::Compacted { summary: None },
             ]),
             Some(7),

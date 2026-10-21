@@ -505,6 +505,12 @@ fn live_change(event: &Value) -> Option<crate::live::Change> {
         "item/agentMessage/delta" => append(Kind::Text),
         "item/reasoning/textDelta" | "item/reasoning/summaryTextDelta" => append(Kind::Thinking),
         "item/commandExecution/outputDelta" | "item/fileChange/outputDelta" => append(Kind::Output),
+        "item/started" if params["item"]["type"] == "contextCompaction" => {
+            Some(Change::Compacting { active: true })
+        }
+        "item/completed" if params["item"]["type"] == "contextCompaction" => {
+            Some(Change::Compacting { active: false })
+        }
         "item/completed" => Some(Change::Done {
             item: params["item"]["id"].as_str()?.to_owned(),
         }),
@@ -1856,6 +1862,25 @@ fn approval_result(request: &Value, decision: &str, scope: &str) -> Result<Value
 #[cfg(test)]
 mod approval_tests {
     use super::*;
+
+    #[test]
+    fn a_compaction_item_reports_compacting_while_it_runs() {
+        use crate::live::Change;
+        let item = |method: &str, kind: &str| json!({"method": method, "params": {"item": {"id": "i", "type": kind}}});
+        assert_eq!(
+            live_change(&item("item/started", "contextCompaction")),
+            Some(Change::Compacting { active: true })
+        );
+        assert_eq!(
+            live_change(&item("item/completed", "contextCompaction")),
+            Some(Change::Compacting { active: false })
+        );
+        assert_eq!(
+            live_change(&item("item/completed", "agentMessage")),
+            Some(Change::Done { item: "i".into() })
+        );
+        assert_eq!(live_change(&item("item/started", "agentMessage")), None);
+    }
 
     fn command(available: Value, amendment: Option<Value>) -> Value {
         let mut params = json!({"availableDecisions": available});

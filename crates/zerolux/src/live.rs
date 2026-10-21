@@ -64,6 +64,8 @@ pub enum Change {
     Usage(Usage),
     /// The goal the session works toward on its own, as its harness keeps it; none when cleared.
     Goal { goal: Option<Goal> },
+    /// The harness started or ended compacting its context, inside a turn or between turns.
+    Compacting { active: bool },
 }
 
 /// What a session works toward across turns until it is done, and what that has used so far.
@@ -131,6 +133,8 @@ pub struct State {
     pub queue: Vec<Queued>,
     pub usage: Option<Usage>,
     pub goal: Option<Goal>,
+    /// The harness is compacting its context; the end of a turn does not end it.
+    pub compacting: bool,
 }
 
 /// Changes as they were applied, numbered from `first`.
@@ -163,7 +167,7 @@ impl Live {
                     item.is_empty() || item.len() > 200 || text.len() > APPEND_BYTES
                 }
                 Change::Done { item } => item.is_empty() || item.len() > 200,
-                Change::Clear => false,
+                Change::Clear | Change::Compacting { .. } => false,
                 Change::Usage(usage) => usage
                     .cost_usd
                     .is_some_and(|cost| !cost.is_finite() || cost < 0.0),
@@ -217,6 +221,7 @@ impl Live {
                 }
                 Change::Usage(usage) => state.usage = Some(usage.clone()),
                 Change::Goal { goal } => state.goal.clone_from(goal),
+                Change::Compacting { active } => state.compacting = *active,
             }
             state.seq += 1;
         }
@@ -419,6 +424,27 @@ mod tests {
         live.apply("s", vec![Change::Queue { items: vec![] }])
             .unwrap();
         assert!(live.state("s").queue.is_empty());
+    }
+
+    #[test]
+    fn compacting_outlives_the_end_of_a_turn_until_it_ends() {
+        let live = Live::default();
+        live.apply(
+            "s",
+            vec![Change::Compacting { active: true }, Change::Clear],
+        )
+        .unwrap();
+        assert!(live.state("s").compacting);
+        live.apply("s", vec![Change::Compacting { active: false }])
+            .unwrap();
+        assert!(!live.state("s").compacting);
+        assert_eq!(
+            serde_json::from_value::<Change>(
+                serde_json::json!({"type":"compacting","active":true})
+            )
+            .unwrap(),
+            Change::Compacting { active: true }
+        );
     }
 
     #[test]
