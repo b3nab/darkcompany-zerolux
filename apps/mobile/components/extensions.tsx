@@ -1,12 +1,18 @@
 import { useState } from "react";
-import { Pressable, Switch, View } from "react-native";
-import { errorMessage, setExtensionSettings } from "@zerolux/chat";
+import { Alert, Pressable, Switch, View } from "react-native";
+import {
+  errorMessage,
+  proposalWarning,
+  proposer,
+  setExtensionSettings,
+} from "@zerolux/chat";
 import type { Extension, ExtensionSetting } from "@zerolux/chat";
 import { Choice } from "@/components/choice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
+import { useSession } from "../src/kernel";
 
 /** How an extension stands: running, enabled but stopped, off, or failed with its reason. */
 export function extensionState(extension: Extension) {
@@ -15,6 +21,26 @@ export function extensionState(extension: Extension) {
   return extension.running
     ? { label: "Running", tone: "on" as const }
     : { label: "Enabled", tone: "off" as const };
+}
+
+/** Who proposed an extension, by name. */
+export function useProposer(extension: Extension) {
+  const { workspace, chat } = useSession();
+  return proposer(extension, workspace?.actors ?? [], chat.sessions);
+}
+
+/** The owner enables an agent's proposal once what it lets run beyond its own process is said. */
+export function enableProposal(
+  extension: Extension,
+  agent: string,
+  enable: () => void,
+) {
+  const warning = proposalWarning(extension, agent);
+  if (!warning) return enable();
+  Alert.alert(`Enable ${extension.name}?`, warning, [
+    { text: "Cancel", style: "cancel" },
+    { text: "Enable", onPress: enable },
+  ]);
 }
 
 /** The dot of an extension's state, as a light. */

@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ChevronRightIcon } from "lucide-react-native";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Pressable, ScrollView, Switch, View } from "react-native";
 import { useCSSVariable } from "uniwind";
 import {
@@ -8,11 +8,13 @@ import {
   enableExtension,
   errorMessage,
   loadExtensionFolder,
+  proposer,
   removeExtension,
   useActions,
   useExtensions,
 } from "@zerolux/chat";
 import {
+  enableProposal,
   ExtensionSettings,
   extensionState,
   StateDot,
@@ -23,15 +25,16 @@ import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "../../src/kernel";
 import { useMe } from "../../src/me";
+import { dismissNotice } from "../../src/notices";
 
 /**
  * One extension: what it is, how it stands and why, and its actions, each run from its own
- * form. The owner enables or disables it, sets its settings, loads it again from its folder
- * in development, and removes it.
+ * form. The owner enables an agent's proposal or removes it; enables or disables the rest,
+ * sets its settings, loads it again from its folder in development, and removes it.
  */
 export default function ExtensionPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { url } = useSession();
+  const { url, workspace, chat } = useSession();
   const { owner } = useMe();
   const router = useRouter();
   const faint = String(useCSSVariable("--color-faint"));
@@ -40,6 +43,8 @@ export default function ExtensionPage() {
   const extension = extensions?.find((e) => e.id === id);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState("");
+  // Its proposal's notification goes once you look at it.
+  useEffect(() => dismissNotice(`extension:${id}`), [id]);
   const act = (work: () => Promise<unknown>) => {
     setBusy(true);
     setFailure("");
@@ -56,6 +61,9 @@ export default function ExtensionPage() {
       </Screen>
     );
   const state = extensionState(extension);
+  const agent = extension.proposed_by
+    ? proposer(extension, workspace?.actors ?? [], chat.sessions)
+    : undefined;
   const dependencies = Object.entries(extension.dependencies);
   return (
     <Screen back title={extension.name} subtitle={extension.version}>
@@ -73,7 +81,7 @@ export default function ExtensionPage() {
             <StateDot extension={extension} />
             <Text className="text-sm text-muted-foreground">
               {[
-                state.label,
+                agent ? `Proposed by ${agent}` : state.label,
                 extension.publisher,
                 extension.dev ? "In development" : null,
               ]
@@ -98,23 +106,37 @@ export default function ExtensionPage() {
         </View>
         {owner ? (
           <View className="gap-3">
-            <View className="flex-row items-center gap-3">
-              <Text className="flex-1 text-base">Enabled</Text>
-              <Switch
-                accessibilityLabel={`Enable ${extension.name}`}
-                value={extension.enabled}
-                disabled={busy}
-                onValueChange={(on) =>
-                  act(() =>
-                    on
-                      ? enableExtension(extension.id, url)
-                      : disableExtension(extension.id, url),
-                  )
-                }
-              />
-            </View>
+            {agent ? null : (
+              <View className="flex-row items-center gap-3">
+                <Text className="flex-1 text-base">Enabled</Text>
+                <Switch
+                  accessibilityLabel={`Enable ${extension.name}`}
+                  value={extension.enabled}
+                  disabled={busy}
+                  onValueChange={(on) =>
+                    act(() =>
+                      on
+                        ? enableExtension(extension.id, url)
+                        : disableExtension(extension.id, url),
+                    )
+                  }
+                />
+              </View>
+            )}
             <View className="flex-row flex-wrap gap-2">
-              {extension.dev ? (
+              {agent ? (
+                <Button
+                  size="sm"
+                  disabled={busy}
+                  onPress={() =>
+                    enableProposal(extension, agent, () =>
+                      act(() => enableExtension(extension.id, url)),
+                    )
+                  }
+                >
+                  <Text>Enable</Text>
+                </Button>
+              ) : extension.dev ? (
                 <Button
                   size="sm"
                   variant="outline"

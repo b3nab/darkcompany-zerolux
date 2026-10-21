@@ -5,7 +5,7 @@ import { homeLabel, requestsFor, unreadIn, waitingChats } from "@zerolux/chat";
 import { useCSSVariable } from "uniwind";
 import { useKernel, useSession } from "../../src/kernel";
 import { useMe } from "../../src/me";
-import { useSessionNotices } from "../../src/notices";
+import { useProposalNotices, useSessionNotices } from "../../src/notices";
 
 export default function TabsLayout() {
   const { url } = useKernel();
@@ -27,6 +27,7 @@ function Connected() {
   const { chat } = useSession();
   const { me } = useMe();
   useSessionNotices();
+  useProposalNotices();
   const [tint, muted, bar, indicator] = useCSSVariable([
     "--color-human-foreground",
     "--color-muted-foreground",

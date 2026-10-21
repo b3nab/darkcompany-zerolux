@@ -9,7 +9,6 @@ import {
   proposer,
   disableExtension,
   enableExtension,
-  installExtension,
   loadExtensionFolder,
   removeExtension,
   runAction,
@@ -45,7 +44,6 @@ test("the owner's changes go to the kernel's extension routes", async () => {
     kernel,
   );
   await loadExtensionFolder("/work/notes", kernel);
-  await installExtension("zerolux.voice", kernel);
   await removeExtension("acme.notes", kernel);
   expect(
     await runAction("acme.notes", "notes.add", { text: "a/b" }, kernel),
@@ -62,11 +60,6 @@ test("the owner's changes go to the kernel's extension routes", async () => {
       method: "POST",
       path: "/api/extensions/folder",
       body: { folder: "/work/notes" },
-    },
-    {
-      method: "POST",
-      path: "/api/extensions/available/zerolux.voice",
-      body: {},
     },
     { method: "DELETE", path: "/api/extensions/acme.notes", body: undefined },
     {

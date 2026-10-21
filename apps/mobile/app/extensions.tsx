@@ -4,18 +4,22 @@ import { useState } from "react";
 import { Alert, Platform, Pressable, ScrollView, View } from "react-native";
 import { useCSSVariable } from "uniwind";
 import {
+  enableExtension,
   errorMessage,
-  installExtension,
   installOffer,
   loadExtensionFolder,
   offerAction,
   offerWarning,
   useExtensions,
   useMarketplace,
-  useOfficialExtensions,
 } from "@zerolux/chat";
-import type { MarketplaceOffer } from "@zerolux/chat";
-import { extensionState, StateDot } from "@/components/extensions";
+import type { Extension, MarketplaceOffer } from "@zerolux/chat";
+import {
+  enableProposal,
+  extensionState,
+  StateDot,
+  useProposer,
+} from "@/components/extensions";
 import { Screen } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
@@ -23,18 +27,78 @@ import { cn } from "@/lib/utils";
 import { useSession } from "../src/kernel";
 import { useMe } from "../src/me";
 
+/** What of a package runs beyond its own process, as labels. */
+const partLabels = (parts?: string[]) => [
+  parts?.includes("kernel") ? "Kernel" : null,
+  parts?.includes("interface") ? "Interface" : null,
+];
+
+/** An agent's proposal: who proposed it and what it brings; the owner enables it here. */
+function Proposal({
+  extension,
+  first,
+  busy,
+  enable,
+}: {
+  extension: Extension;
+  first: boolean;
+  busy?: string;
+  enable?: () => void;
+}) {
+  const router = useRouter();
+  const agent = useProposer(extension);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={() => router.push(`/extension/${extension.id}`)}
+      className={cn(
+        "flex-row items-center gap-3 px-4 py-3 active:bg-accent",
+        !first && "border-t border-border",
+      )}
+    >
+      <View className="min-w-0 flex-1 gap-0.5">
+        <Text numberOfLines={1} className="text-[15px]">
+          {extension.name}
+        </Text>
+        <Text numberOfLines={1} className="text-xs text-faint">
+          {[
+            `Proposed by ${agent}`,
+            extension.version,
+            ...partLabels(extension.parts),
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </Text>
+        {extension.description ? (
+          <Text numberOfLines={2} className="text-xs text-muted-foreground">
+            {extension.description}
+          </Text>
+        ) : null}
+      </View>
+      {enable ? (
+        <Button
+          size="sm"
+          disabled={Boolean(busy)}
+          onPress={() => enableProposal(extension, agent, enable)}
+        >
+          <Text>{busy === extension.id ? "Enabling…" : "Enable"}</Text>
+        </Button>
+      ) : null}
+    </Pressable>
+  );
+}
+
 /**
  * The workspace's extensions, each with what it is and how it stands; a tap opens it. The
- * owner installs the official ones ZeroLux brings and those the indexes offer, and loads one
- * from a folder on the kernel's computer, in development.
+ * owner enables those agents propose, installs those the indexes offer, and loads one from
+ * a folder on the kernel's computer, in development.
  */
 export default function Extensions() {
   const { url } = useSession();
   const { owner } = useMe();
   const { extensions, error } = useExtensions(url);
-  const available = useOfficialExtensions(url, owner).official?.filter(
-    (e) => !e.installed,
-  );
+  const installed = extensions?.filter((e) => !e.proposed_by);
+  const proposed = extensions?.filter((e) => e.proposed_by);
   const { marketplace } = useMarketplace(url, owner);
   const router = useRouter();
   const faint = String(useCSSVariable("--color-faint"));
@@ -75,13 +139,13 @@ export default function Extensions() {
         {error || failure ? (
           <Text className="text-sm text-destructive">{failure || error}</Text>
         ) : null}
-        {extensions === undefined ? (
+        {installed === undefined ? (
           <Text className="text-sm text-faint">Reading the extensions…</Text>
-        ) : extensions.length === 0 ? (
+        ) : installed.length === 0 ? (
           <Text className="text-sm text-faint">No extension is installed.</Text>
         ) : (
           <View className="overflow-hidden rounded-md border border-border bg-card">
-            {extensions.map((extension, index) => {
+            {installed.map((extension, index) => {
               const state = extensionState(extension);
               return (
                 <Pressable
@@ -115,41 +179,25 @@ export default function Extensions() {
             })}
           </View>
         )}
-        {available?.length ? (
+        {proposed?.length ? (
           <View className="gap-2">
-            <Text className="text-sm text-faint">Available</Text>
+            <Text className="text-sm text-faint">Proposed</Text>
             <View className="overflow-hidden rounded-md border border-border bg-card">
-              {available.map((extension, index) => (
-                <View
+              {proposed.map((extension, index) => (
+                <Proposal
                   key={extension.id}
-                  className={cn(
-                    "flex-row items-center gap-3 px-4 py-3",
-                    index > 0 && "border-t border-border",
-                  )}
-                >
-                  <View className="min-w-0 flex-1">
-                    <Text numberOfLines={1} className="text-[15px]">
-                      {extension.name}
-                    </Text>
-                    <Text numberOfLines={2} className="text-xs text-faint">
-                      {extension.description}
-                    </Text>
-                  </View>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={Boolean(busy)}
-                    onPress={() =>
-                      add(extension.id, () =>
-                        installExtension(extension.id, url),
-                      )
-                    }
-                  >
-                    <Text>
-                      {busy === extension.id ? "Installing…" : "Install"}
-                    </Text>
-                  </Button>
-                </View>
+                  extension={extension}
+                  first={index === 0}
+                  busy={busy}
+                  enable={
+                    owner
+                      ? () =>
+                          add(extension.id, () =>
+                            enableExtension(extension.id, url),
+                          )
+                      : undefined
+                  }
+                />
               ))}
             </View>
           </View>
@@ -180,10 +228,7 @@ export default function Extensions() {
                             action === "update"
                               ? `${offer.installed} → ${offer.version}`
                               : offer.version,
-                            offer.parts?.includes("kernel") ? "Kernel" : null,
-                            offer.parts?.includes("interface")
-                              ? "Interface"
-                              : null,
+                            ...partLabels(offer.parts),
                           ]
                             .filter(Boolean)
                             .join(" · ")}

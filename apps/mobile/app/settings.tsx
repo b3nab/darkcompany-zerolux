@@ -270,7 +270,7 @@ function Devices() {
   );
 }
 
-/** What this phone tells you about sessions, through its notifications. */
+/** What this phone tells you, through its notifications. */
 function DeviceNotices() {
   const choice = noticeChoice.use();
   const [permission, setPermission] =
@@ -312,7 +312,7 @@ function DeviceNotices() {
     <View>
       {(
         [
-          ["needs", "When a session needs you"],
+          ["needs", "When you're needed"],
           ["finished", "When a session finishes"],
         ] as const
       ).map(([key, label]) => (
