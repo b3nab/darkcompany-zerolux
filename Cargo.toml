@@ -32,6 +32,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 
+# Builds stay small: libraries without debug information, our own code with file and line only,
+# which is what errors and backtraces show.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 # Searching native records runs in the dev kernel too: its byte search is optimized.
 [profile.dev.package.aho-corasick]
 opt-level = 3
