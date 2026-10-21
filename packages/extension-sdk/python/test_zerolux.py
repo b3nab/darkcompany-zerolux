@@ -129,7 +129,7 @@ class SDK(unittest.TestCase):
         kernel.close()
 
     def test_the_voice_extension_carries_this_sdk(self):
-        carried = HERE.parent.parent.parent / "extensions" / "voice" / "zerolux.py"
+        carried = HERE.parent.parent.parent / "marketplace" / "voice" / "zerolux.py"
         self.assertEqual(carried.read_text(), (HERE / "zerolux.py").read_text())
 
 

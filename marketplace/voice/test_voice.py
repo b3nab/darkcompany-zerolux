@@ -1,7 +1,7 @@
 """What the voice does without its models: numbers in words, sentences, the gate's agreement,
 languages' codes and the scores that choose a take.
 
-    uv run --no-project --with numpy python -m unittest discover -s extensions/voice
+    uv run --no-project --with numpy python -m unittest discover -s marketplace/voice
 """
 
 import unittest

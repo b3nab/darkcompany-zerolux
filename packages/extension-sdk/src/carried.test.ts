@@ -13,7 +13,7 @@ test("the extensions ZeroLux brings carry the SDK as it is", async () => {
   );
   for (const [glob, sdk] of [
     ["marketplace/*/zerolux.ts", typescript],
-    ["{marketplace,extensions}/*/zerolux.py", python],
+    ["marketplace/*/zerolux.py", python],
   ] as const)
     for await (const path of new Bun.Glob(glob).scan({ cwd: root }))
       expect(await readFile(join(root, path), "utf8"), path).toBe(sdk);
