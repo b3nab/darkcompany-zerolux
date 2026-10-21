@@ -18,12 +18,19 @@ import { useSession } from "../src/kernel";
 /** The largest photo shown in the chat itself; a larger one is a card to open. */
 const PREVIEW = 8 * 1024 ** 2;
 
+/** A photo's place in a message, the same before and after it shows. */
+const PHOTO = { width: 240, height: 180 };
+
+/** A photo by its name, before Storage tells its type: its place is kept from the start. */
+const photoName = (name: string) =>
+  /\.(jpe?g|png|gif|webp|heic|heif|avif)$/i.test(name);
+
 // A photo is read once while the app runs, however often its message is drawn.
 const previews = new Map<string, Promise<string>>();
 
-/** A photo's bytes, to show, read once. */
+/** A photo's bytes, to show, read once; `null` when they can't be read. */
 function usePreview(id: string | undefined, kernel: string) {
-  const [uri, setUri] = useState<string>();
+  const [uri, setUri] = useState<string | null>();
   useEffect(() => {
     if (!id) return;
     let shown = true;
@@ -36,7 +43,7 @@ function usePreview(id: string | undefined, kernel: string) {
     }
     read.then(
       (url) => shown && setUri(url),
-      () => undefined,
+      () => shown && setUri(null),
     );
     return () => {
       shown = false;
@@ -58,11 +65,12 @@ function FileCard({
   const { url } = useSession();
   const muted = String(useCSSVariable("--color-muted-foreground"));
   const [busy, setBusy] = useState(false);
-  const photo =
-    file && fileKind(file) === "image" && file.size <= PREVIEW
-      ? file.id
-      : undefined;
-  const preview = usePreview(photo, url);
+  // A photo keeps its size while it loads, so the messages around it do not move.
+  const image = file
+    ? fileKind(file) === "image" && file.size <= PREVIEW
+    : photoName(link.name);
+  const preview = usePreview(image ? link.id : undefined, url);
+  const photo = image && preview !== null;
   const open = () => {
     setBusy(true);
     downloadFile(link.id, url)
@@ -78,12 +86,14 @@ function FileCard({
       disabled={busy}
       className="mt-1 self-start overflow-hidden rounded-md border border-border bg-card active:opacity-80"
     >
-      {preview ? (
-        <Image
-          source={{ uri: preview }}
-          resizeMode="cover"
-          style={{ width: 240, height: 180 }}
-        />
+      {photo ? (
+        preview ? (
+          <Image source={{ uri: preview }} resizeMode="cover" style={PHOTO} />
+        ) : (
+          <View style={PHOTO} className="items-center justify-center bg-muted">
+            <ActivityIndicator size="small" color={muted} />
+          </View>
+        )
       ) : (
         <View className="max-w-[260px] flex-row items-center gap-2.5 px-3 py-2.5">
           <FileGlyph
