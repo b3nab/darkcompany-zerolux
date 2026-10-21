@@ -1,19 +1,10 @@
-import {
-  chmod,
-  cp,
-  mkdir,
-  readdir,
-  readFile,
-  realpath,
-  rm,
-} from "node:fs/promises";
-import { dirname, join, sep } from "node:path";
+import { chmod, cp, mkdir, readFile, realpath, rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "../..");
 const dist = join(here, "dist");
-const MANIFEST = "zerolux-extension.toml";
 
 async function run(
   args: string[],
@@ -131,21 +122,6 @@ for (const [name, path] of [
   await rm(target, { force: true });
   await cp(await realpath(path), target);
   await chmod(target, 0o755);
-}
-
-// The official extensions a release brings, as the kernel finds them: each folder of
-// `extensions/` with its manifest, without what Python leaves behind.
-await rm(join(dist, "extensions"), { recursive: true, force: true });
-for (const entry of await readdir(join(root, "extensions"), {
-  withFileTypes: true,
-})) {
-  const from = join(root, "extensions", entry.name);
-  if (!entry.isDirectory() || !(await Bun.file(join(from, MANIFEST)).exists()))
-    continue;
-  await cp(from, join(dist, "extensions", entry.name), {
-    recursive: true,
-    filter: (path) => !path.split(sep).includes("__pycache__"),
-  });
 }
 
 // Generate platform icons from the existing web favicon; no independent desktop branding.
