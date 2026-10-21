@@ -322,6 +322,8 @@ export class ClaudeAgent {
     return true;
   }
 
+  private compacting = false;
+
   /** What the session has cost so far, as its last result said. */
   private cost?: number;
 
@@ -387,6 +389,15 @@ export class ClaudeAgent {
     this.settings.observe(message);
     this.stream(message);
     if (message.type === "result") this.cost = message.total_cost_usd;
+    // Compacting, by itself or as asked, until Claude Code reports another status.
+    if (message.type === "system" && message.subtype === "status") {
+      const compacting = message.status === "compacting";
+      if (compacting !== this.compacting) {
+        this.compacting = compacting;
+        this.bridge.live({ type: "compacting", active: compacting });
+      }
+      return;
+    }
     if (
       message.type === "system" &&
       message.subtype === "session_state_changed"

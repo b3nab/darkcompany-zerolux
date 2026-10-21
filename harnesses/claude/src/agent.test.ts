@@ -857,6 +857,27 @@ test("how full the context is, and the cost so far, reach ZeroLux when a turn en
   });
 });
 
+test("a compaction is reported while it runs, inside a turn or between turns", async () => {
+  const f = fixture();
+  await f.start();
+  const status = (status: string | null) =>
+    f.emitRaw({ type: "system", subtype: "status", status });
+  status("compacting");
+  status("compacting");
+  status(null);
+  status("requesting");
+  await tick();
+  await tick();
+  const compacting = f.calls
+    .filter((c) => c.path === "/chat/sessions/link/live")
+    .flatMap((c) => c.body.changes)
+    .filter((change: { type: string }) => change.type === "compacting");
+  expect(compacting).toEqual([
+    { type: "compacting", active: true },
+    { type: "compacting", active: false },
+  ]);
+});
+
 test("the files go back to how they were before one of the session's messages", async () => {
   const f = fixture();
   await f.start();
