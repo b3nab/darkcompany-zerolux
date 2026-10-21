@@ -1083,6 +1083,31 @@ impl Store {
         Ok(false)
     }
 
+    /// The session goes on in another native session of its harness, one that replaces a
+    /// native session that never had a message. Not for a session the owner stopped.
+    pub async fn replace_native_session(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+        native_session_id: &str,
+    ) -> Result<()> {
+        let native_session_id = text(native_session_id, "Native session ID", 500, true)?;
+        let tx = self.write().await?;
+        own_in(&tx, who, id).await?;
+        if session_in(&tx, id).await?.stopped_at.is_some() {
+            return Err(Error::StoppedByOwner);
+        }
+        sessions::ActiveModel {
+            id: Set(id.to_owned()),
+            native_session_id: Set(native_session_id),
+            ..Default::default()
+        }
+        .update(&tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Whether the native context may still be relinked: a session of it the owner has
     /// not stopped. Checked before any native call that would start work, as
     /// `hire_chat_session` checks it again when it issues the new token.

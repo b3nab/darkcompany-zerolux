@@ -37,6 +37,11 @@ pub(crate) struct NativeState {
     pub(crate) started: bool,
     /// After thread/fork the runtime also holds the fork.
     pub(crate) forked: bool,
+    /// Threads no message has reached yet: Codex lists none of their turns and cannot
+    /// resume them.
+    pub(crate) fresh: Vec<String>,
+    /// The ID of the thread the next `thread/start` creates, instead of `STARTED`.
+    pub(crate) next_start: Option<&'static str>,
     cwd: Option<String>,
     thread_settings: HashMap<String, Value>,
 }
@@ -180,6 +185,7 @@ fn native_response(state: &mut NativeState, request: &Value) -> Option<Value> {
         current["thread"]["id"] = json!(STARTED);
         current["thread"]["sessionId"] = json!(STARTED);
     }
+    let fresh = asked.is_some_and(|asked| state.fresh.iter().any(|thread| thread == asked));
     if let Some(cwd) = &state.cwd {
         current["cwd"] = json!(cwd);
         current["thread"]["cwd"] = json!(cwd);
@@ -194,8 +200,17 @@ fn native_response(state: &mut NativeState, request: &Value) -> Option<Value> {
         "model/list" => {
             json!({"data":[{"model":"fixture-alternate","displayName":"Fixture alternate","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]}],"nextCursor":null})
         }
+        "thread/read" if fresh && request["params"]["includeTurns"] == true => {
+            json!({"refused":-32601})
+        }
+        "thread/resume" if fresh => json!({"refused":-32601}),
         "thread/read" => {
             let mut thread = current["thread"].clone();
+            thread["model"] = current["model"].clone();
+            thread["reasoningEffort"] = current["reasoningEffort"].clone();
+            if fresh {
+                thread["preview"] = json!("");
+            }
             if state.unloaded {
                 thread["status"] = json!({"type":"notLoaded"});
                 thread["canAcceptDirectInput"] = Value::Null;
@@ -242,9 +257,10 @@ fn native_response(state: &mut NativeState, request: &Value) -> Option<Value> {
             if state.drop_start_ack {
                 return None;
             }
+            let id = state.next_start.take().unwrap_or(STARTED);
             let mut value = current;
-            value["thread"]["id"] = json!(STARTED);
-            value["thread"]["sessionId"] = json!(STARTED);
+            value["thread"]["id"] = json!(id);
+            value["thread"]["sessionId"] = json!(id);
             for field in ["model", "approvalPolicy"] {
                 if let Some(choice) = request["params"].get(field) {
                     value[field] = choice.clone();
@@ -258,7 +274,7 @@ fn native_response(state: &mut NativeState, request: &Value) -> Option<Value> {
                     "read-only" => "readOnly", "workspace-write" => "workspaceWrite", "danger-full-access" => "dangerFullAccess", _ => panic!("Unexpected fixture sandbox"),
                 }});
             }
-            state.thread_settings.insert(STARTED.into(), value.clone());
+            state.thread_settings.insert(id.into(), value.clone());
             value
         }
         "thread/queue/list" => json!({"data":state.queue,"nextCursor":null}),

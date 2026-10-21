@@ -1340,6 +1340,23 @@ impl ChatRuntime {
                 }
                 Ok(_) => self.retried(&session.id, true),
                 Err(error) => {
+                    // An empty Codex session goes on in a new thread, as it was.
+                    if session.harness == "codex"
+                        && error.downcast_ref::<crate::codex::Rejected>().is_some()
+                    {
+                        match self.restart_unstarted_codex(&owner, &session).await {
+                            Ok(true) => {
+                                self.retried(&session.id, true);
+                                continue;
+                            }
+                            Ok(false) => {}
+                            Err(restart) => tracing::warn!(
+                                session_id = session.id,
+                                error = format!("{restart:#}"),
+                                "Empty Codex session was not started again"
+                            ),
+                        }
+                    }
                     self.retried(&session.id, false);
                     if error.downcast_ref::<StoppedByOwner>().is_some() {
                         tracing::info!(
@@ -1367,6 +1384,71 @@ impl ChatRuntime {
             }
         }
         Ok(())
+    }
+
+    /// A Codex session that never had a message, whose thread Codex cannot resume: it holds
+    /// nothing, so the session goes on in a new thread, in the same folder and with the same
+    /// model, effort, approvals and sandbox. False when the thread has had a message.
+    async fn restart_unstarted_codex(
+        &self,
+        owner: &ChatIdentity,
+        session: &ChatSession,
+    ) -> Result<bool> {
+        let locator = self.store.chat_session_locator(owner, &session.id).await?;
+        let homes = crate::homes::Homes::of_locator(&locator);
+        let endpoint = sessions::ensure_codex_daemon_in(&homes).await?;
+        let Some(thread) = CodexDriver::unstarted(&endpoint, &session.native_session_id).await?
+        else {
+            return Ok(false);
+        };
+        ensure!(
+            self.store
+                .relink_wanted("codex", &session.native_session_id)
+                .await?,
+            "The session was stopped before it was started again"
+        );
+        // As last recorded; model and effort as Codex keeps them, if not recorded.
+        let settings = &locator["settings"];
+        let text = |key: &str| settings[key].as_str().map(str::to_owned);
+        let initial = AgentSettings {
+            model: text("model").or_else(|| thread["model"].as_str().map(str::to_owned)),
+            effort: text("effort")
+                .or_else(|| thread["reasoningEffort"].as_str().map(str::to_owned)),
+            ..AgentSettings::default()
+        };
+        let policy = serde_json::from_value(settings["approval_policy"].clone()).unwrap_or(None);
+        let sandbox = serde_json::from_value(settings["sandbox"].clone()).unwrap_or(None);
+        let driver =
+            CodexDriver::start(&endpoint, &session.workspace, policy, sandbox, &initial).await?;
+        let thread_id = driver.thread_id().to_owned();
+        self.store
+            .replace_native_session(owner, &session.id, &thread_id)
+            .await?;
+        tracing::info!(
+            session_id = session.id,
+            previous = session.native_session_id,
+            thread_id,
+            "Empty Codex session continues in a new thread"
+        );
+        let mut native_locator = serde_json::json!({"endpoint": endpoint});
+        homes.record(&mut native_locator);
+        let target = sessions::NativeSessionTarget {
+            harness: Harness::Codex,
+            native_session_id: thread_id,
+            title: session.title.clone(),
+            workspace: session.workspace.clone(),
+            native_locator,
+        };
+        self.bind(
+            owner,
+            target,
+            "",
+            session.actor_id.clone(),
+            true,
+            Some(NativeDriver::Codex(Box::new(driver))),
+        )
+        .await?;
+        Ok(true)
     }
 
     /// Whether the session's link is still up: its kernel-side adapter runs and, for pi, the

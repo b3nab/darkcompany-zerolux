@@ -632,6 +632,38 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
             .any(|s| s.id == forked.id && s.status == "connected")
     })
     .await;
+    // A session whose thread never had a message: Codex cannot resume that thread, which
+    // holds nothing. After a restart the session goes on in a new thread, as it was.
+    chat_runtime.shutdown().await.unwrap();
+    server.abort();
+    let _ = server.await;
+    {
+        let mut state = runtime.state.lock().unwrap();
+        state.fresh.push(STARTED.into());
+        state.next_start = Some("restarted-context");
+    }
+    let (chat_runtime, server, _) = kernel(&store, &livekit, dir.path().join("links"), port).await;
+    chat_runtime.reconnect().await.unwrap();
+    wait_for(&store, |sessions| {
+        sessions.iter().any(|s| {
+            s.id == created.id
+                && s.status == "connected"
+                && s.native_session_id == "restarted-context"
+        })
+    })
+    .await;
+    assert_eq!(runtime.count("thread/start"), 4);
+    let restarted = runtime
+        .state
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .rfind(|r| r["method"] == "thread/start")
+        .cloned()
+        .unwrap();
+    assert_eq!(restarted["params"]["model"], "fixture-model");
+    assert_eq!(restarted["params"]["cwd"], workspace.to_str().unwrap());
     chat_runtime.shutdown().await.unwrap();
     server.abort();
     livekit.shutdown().await.unwrap();

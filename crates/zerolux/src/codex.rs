@@ -258,7 +258,10 @@ impl CodexRpc {
                             if let Some(id) = value["id"].as_u64()
                                 && let Some(reply) = state.pending.lock().unwrap().remove(&id) {
                                 let result = if value.get("error").is_some() {
-                                    Err(anyhow!(Rejected(value["error"]["code"].clone())))
+                                    Err(anyhow!(Rejected(
+                                        value["error"]["code"].clone(),
+                                        value["error"]["message"].as_str().unwrap_or_default().to_owned(),
+                                    )))
                                 } else { Ok(value["result"].clone()) };
                                 let _ = reply.send(result);
                             }
@@ -385,12 +388,43 @@ where
 
 /// Codex answered and refused: the request had no effect. Anything else is uncertain.
 #[derive(Debug)]
-pub(crate) struct Rejected(pub(crate) Value);
+pub(crate) struct Rejected(pub(crate) Value, pub(crate) String);
 
 impl std::fmt::Display for Rejected {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Codex request rejected (code {})", self.0)
+        write!(f, "Codex request rejected (code {})", self.0)?;
+        if !self.1.is_empty() {
+            write!(f, ": {}", self.1)?;
+        }
+        Ok(())
     }
+}
+
+/// A thread with its turns. Codex lists none before the thread's first message, and says so
+/// by refusing: such a thread, with nothing in its preview yet, has no turns.
+async fn thread_history(rpc: &CodexRpc, thread_id: &str) -> Result<Value> {
+    let refused = match rpc
+        .request(
+            "thread/read",
+            json!({"threadId":thread_id,"includeTurns":true}),
+        )
+        .await
+    {
+        Ok(history) => return Ok(history),
+        Err(error) if error.downcast_ref::<Rejected>().is_some() => error,
+        Err(error) => return Err(error),
+    };
+    let mut thread = rpc
+        .request(
+            "thread/read",
+            json!({"threadId":thread_id,"includeTurns":false}),
+        )
+        .await?;
+    if thread["thread"]["preview"] != "" {
+        return Err(refused);
+    }
+    thread["thread"]["turns"] = json!([]);
+    Ok(thread)
 }
 
 impl std::error::Error for Rejected {}
@@ -644,6 +678,20 @@ impl CodexDriver {
             Self::attached(rpc, events, created, None)
         })()
         .context(CodexStartFailure::Unlinked { thread_id })
+    }
+
+    /// The thread, if it never had a message: Codex cannot resume such a thread, and it holds
+    /// nothing to continue.
+    pub async fn unstarted(endpoint: &str, thread_id: &str) -> Result<Option<Value>> {
+        let rpc = CodexRpc::connect(endpoint).await?;
+        let read = rpc
+            .request(
+                "thread/read",
+                json!({"threadId":thread_id,"includeTurns":false}),
+            )
+            .await?;
+        let thread = &read["thread"];
+        Ok((thread["id"] == thread_id && thread["preview"] == "").then(|| thread.clone()))
     }
 
     /// Continues a session ZeroLux already held, live or not (see `resume_with_rpc`).
@@ -1196,13 +1244,7 @@ impl CodexDriver {
             ensure!(next != cursor, "Codex queue cursor did not advance");
             cursor = next;
         }
-        let history = self
-            .rpc
-            .request(
-                "thread/read",
-                json!({"threadId":self.thread_id,"includeTurns":true}),
-            )
-            .await?;
+        let history = thread_history(&self.rpc, &self.thread_id).await?;
         ensure!(
             history["thread"]["id"] == self.thread_id,
             "Codex returned a different thread"
@@ -1338,13 +1380,7 @@ impl CodexDriver {
                 {
                     self.consume_turn(kernel, &params["turn"]).await?;
                 } else {
-                    let history = self
-                        .rpc
-                        .request(
-                            "thread/read",
-                            json!({"threadId":self.thread_id,"includeTurns":true}),
-                        )
-                        .await?;
+                    let history = thread_history(&self.rpc, &self.thread_id).await?;
                     if let Some(turn) = history["thread"]["turns"]
                         .as_array()
                         .into_iter()
@@ -1617,14 +1653,7 @@ impl CodexDriver {
         let mut failed = false;
         // A queued item can become a turn just before Stop. Read native state once so deleting
         // an already-consumed queue entry cannot be mistaken for stopping its running turn.
-        match self
-            .rpc
-            .request(
-                "thread/read",
-                json!({"threadId":self.thread_id,"includeTurns":true}),
-            )
-            .await
-        {
+        match thread_history(&self.rpc, &self.thread_id).await {
             Ok(history) if history["thread"]["id"] == self.thread_id => {
                 for turn in history["thread"]["turns"].as_array().into_iter().flatten() {
                     let items: Vec<_> = turn["items"]

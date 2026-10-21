@@ -1703,6 +1703,36 @@ async fn native_model_and_effort_are_validated_and_applied_before_a_thread_can_r
 }
 
 #[tokio::test]
+async fn a_new_thread_takes_its_first_message_though_codex_lists_no_turns_before_it() {
+    let runtime = Runtime::new_in(std::path::Path::new("/fixture")).await;
+    runtime.state.lock().unwrap().fresh.push(STARTED.into());
+    let kernel = KernelFixture::new("read").await;
+    let rpc = CodexRpc::connect(&runtime.endpoint).await.unwrap();
+    let driver = CodexDriver::start_with_rpc(rpc, "/fixture", None, None)
+        .await
+        .unwrap();
+    let (_changed, rx) = mpsc::channel(1);
+    let (stop, stop_rx) = watch::channel(false);
+    let task = tokio::spawn(driver.run(
+        kernel.url.clone(),
+        SESSION.into(),
+        "fixture-secret".into(),
+        rx,
+        stop_rx,
+    ));
+    kernel.wait(|s| s.activity.as_deref() == Some("idle")).await;
+    runtime
+        .wait(|s| {
+            s.requests
+                .iter()
+                .any(|r| r["method"] == "thread/read" && r["params"]["includeTurns"] == true)
+        })
+        .await;
+    assert!(!task.is_finished(), "the session stays linked");
+    finish(stop, task).await;
+}
+
+#[tokio::test]
 async fn a_started_thread_that_cannot_be_linked_is_reported_by_its_id() {
     let runtime = Runtime::new_in(std::path::Path::new("/fixture")).await;
     let rpc = CodexRpc::connect(&runtime.endpoint).await.unwrap();
