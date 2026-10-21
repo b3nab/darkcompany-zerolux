@@ -476,6 +476,13 @@ impl Extensions {
     }
 
     async fn install_from(&self, folder: &str, dev: bool) -> Result<Installed> {
+        // A folder being worked on has its interface built from its sources each time.
+        if dev {
+            let sources = PathBuf::from(folder);
+            tokio::task::spawn_blocking(move || package::build_interface(&sources))
+                .await?
+                .map_err(|error| Error::Invalid(format!("{error:#}")))?;
+        }
         let folder = dunce::canonicalize(folder)
             .ok()
             .filter(|folder| folder.is_dir())

@@ -329,7 +329,7 @@ fn build_module(folder: &Path, library: &str) -> Result<PathBuf> {
 /// Each `ui/src/<piece>.tsx` as one script, `globalThis.__zeroluxModule(entry, function (module,
 /// exports, require) {…})`, which the apps load as a script and run with their own React and
 /// `@zerolux/ui`; `module.exports.default` is its component.
-fn build_interface(folder: &Path) -> Result<Vec<PathBuf>> {
+pub fn build_interface(folder: &Path) -> Result<Vec<PathBuf>> {
     let Ok(sources) = std::fs::read_dir(folder.join("ui/src")) else {
         return Ok(Vec::new());
     };
@@ -345,6 +345,10 @@ fn build_interface(folder: &Path) -> Result<Vec<PathBuf>> {
             .to_string_lossy()
             .into_owned();
         let out = folder.join("ui/native").join(format!("{name}.js"));
+        built.push(out.clone());
+        if !stale(folder, &out) {
+            continue;
+        }
         let status = std::process::Command::new(crate::platform::executable("bun"))
             .args(["build", "--production", "--format=cjs", "--target=browser"])
             .args([
@@ -371,9 +375,27 @@ fn build_interface(folder: &Path) -> Result<Vec<PathBuf>> {
                 "globalThis.__zeroluxModule({entry:?}, function (module, exports, require) {{\n{code}\n}});\n"
             ),
         )?;
-        built.push(out);
     }
     Ok(built)
+}
+
+/// Whether a built interface is older than any of the sources in `ui/src`, or missing.
+fn stale(folder: &Path, out: &Path) -> bool {
+    let Ok(built) = std::fs::metadata(out).and_then(|meta| meta.modified()) else {
+        return true;
+    };
+    let mut pending = vec![folder.join("ui/src")];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                pending.push(entry.path());
+            } else if meta.modified().is_ok_and(|changed| changed > built) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]

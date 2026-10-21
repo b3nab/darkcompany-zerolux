@@ -14,3 +14,7 @@ __pycache__/
 
 # LiveKit's source, as the CI builds it
 .livekit/
+
+# What `zerolux ext build` makes in the extensions ZeroLux publishes
+marketplace/*/kernel/
+marketplace/*/ui/native/
