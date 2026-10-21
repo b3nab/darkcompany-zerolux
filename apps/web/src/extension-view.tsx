@@ -36,7 +36,7 @@ import { Separator } from "@/components/ui/separator";
 /** A piece's icon by its Lucide name. */
 export const pieceIcon = (piece: UiPiece) => lucideIcon(piece.icon);
 
-/** The app's own components for official extensions' native pieces, by `<extension>/<name>`. */
+/** The app's own components for native pieces with no entry of their own, by `<extension>/<name>`. */
 export const nativeViews: Record<
   string,
   ComponentType<{ context: UiContext }>

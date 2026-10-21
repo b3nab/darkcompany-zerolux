@@ -219,39 +219,6 @@ test("a choice setting offers its values by their labels", () => {
   expect(field?.options).toEqual(["Fast and small", "Slow and accurate"]);
 });
 
-test("the official extensions not yet installed are offered, installed by the owner", () => {
-  const official = [
-    {
-      id: "zerolux.voice",
-      name: "Voice",
-      version: "0.1.0",
-      publisher: "zerolux",
-      description: "Speech to text, and each agent's own voice",
-      installed: false,
-    },
-    {
-      id: "zerolux.notes",
-      name: "Notes",
-      version: "1.2.0",
-      publisher: "zerolux",
-      description: "Notes",
-      installed: true,
-    },
-  ];
-  const html = (owns: boolean) =>
-    renderToStaticMarkup(
-      <ExtensionList
-        extensions={[]}
-        official={official}
-        error=""
-        owns={owns}
-        busy={false}
-        perform={async () => true}
-      />,
-    );
-  expect(html(true).match(/>Install</g)).toHaveLength(1);
-});
-
 test("a described view draws its parts; only items with an action run one, none while busy", () => {
   const view = (busy: boolean) =>
     renderToStaticMarkup(

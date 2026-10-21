@@ -3,7 +3,6 @@ import {
   disableExtension,
   enableExtension,
   errorMessage,
-  installExtension,
   installOffer,
   loadExtensionFolder,
   offerAction,
@@ -15,7 +14,6 @@ import {
   setExtensionSettings,
   useExtensions,
   useMarketplace,
-  useOfficialExtensions,
 } from "@zerolux/chat";
 import type {
   ChatSession,
@@ -24,7 +22,6 @@ import type {
   ExtensionSetting,
   JsonSchema,
   Marketplace,
-  OfficialExtension,
   Perform,
 } from "@zerolux/chat";
 import { Section, Settings } from "./Account";
@@ -467,69 +464,6 @@ function ExtensionItem({
 }
 
 /**
- * The official extensions ZeroLux brings that are not installed yet, installed in one press.
- * The first start of one can take a while: the press waits on its own, the page does not.
- */
-function Available({
-  official,
-  owns,
-  installed,
-}: {
-  official: OfficialExtension[];
-  owns: boolean;
-  installed: () => void;
-}) {
-  const [installing, setInstalling] = useState<string>();
-  const [error, setError] = useState("");
-  const offered = official.filter((extension) => !extension.installed);
-  if (!offered.length) return null;
-  return (
-    <Section title="Available">
-      <ul className="flex flex-col divide-y">
-        {offered.map((extension) => (
-          <li key={extension.id} className="flex items-center gap-3 py-2.5">
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium">
-                {extension.name}{" "}
-                <span className="font-mono text-[11px] font-normal text-faint">
-                  {extension.version}
-                </span>
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {extension.description}
-              </p>
-            </div>
-            {owns && (
-              <Button
-                size="sm"
-                disabled={installing !== undefined}
-                onClick={() => {
-                  setInstalling(extension.id);
-                  setError("");
-                  installExtension(extension.id)
-                    .catch((failed: unknown) => setError(errorMessage(failed)))
-                    .finally(() => {
-                      setInstalling(undefined);
-                      installed();
-                    });
-                }}
-              >
-                {installing === extension.id ? "Installing…" : "Install"}
-              </Button>
-            )}
-          </li>
-        ))}
-      </ul>
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-    </Section>
-  );
-}
-
-/**
  * What the indexes offer, installed or updated by the owner in one press, and the indexes that
  * could not be read. Code that runs inside the kernel says so, and who signed it, before it
  * installs.
@@ -663,7 +597,6 @@ function LoadFolder({ busy, perform }: { busy: boolean; perform: Perform }) {
 /** The workspace's extensions: what each brings and whether it runs, its actions to run by hand, and for the owner enabling, settings and loading one being written. */
 export function ExtensionList({
   extensions,
-  official = [],
   marketplace,
   marketplaceError = "",
   proposerOf = () => "an agent",
@@ -674,14 +607,12 @@ export function ExtensionList({
   perform,
 }: {
   extensions: Extension[] | undefined;
-  /** The official extensions this kernel brings. */
-  official?: OfficialExtension[];
   /** What the indexes offer. */
   marketplace?: Marketplace;
   marketplaceError?: string;
   /** Who proposed an extension, by name. */
   proposerOf?: (extension: Extension) => string;
-  /** One of them was installed, or failed to be. */
+  /** An offer was installed or updated, or failed to be. */
   installed?: () => void;
   error: string;
   owns: boolean;
@@ -715,7 +646,6 @@ export function ExtensionList({
           ))}
         </ul>
       )}
-      <Available official={official} owns={owns} installed={installed} />
       <MarketplaceSection
         marketplace={marketplace}
         error={marketplaceError}
@@ -760,7 +690,6 @@ export function ExtensionsPage({
 }) {
   const actors = useContext(UiActors);
   const { extensions, error, reload } = useExtensions();
-  const { official, reload: reloadOfficial } = useOfficialExtensions();
   const {
     marketplace,
     error: marketplaceError,
@@ -773,13 +702,11 @@ export function ExtensionsPage({
   return (
     <ExtensionList
       extensions={extensions}
-      official={official}
       marketplace={marketplace}
       marketplaceError={marketplaceError}
       proposerOf={(extension) => proposer(extension, actors, sessions)}
       installed={() => {
         void reload();
-        void reloadOfficial();
         void reloadMarketplace();
       }}
       error={error}
