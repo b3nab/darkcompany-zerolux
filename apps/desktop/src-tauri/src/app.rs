@@ -507,6 +507,8 @@ impl Host {
                 .initialization_script(script)
                 // A file the page saves goes to Downloads, by the name it gives.
                 .on_download(|_, _| true)
+                // Files dropped on the page reach it, as in a browser.
+                .disable_drag_drop_handler()
                 .on_page_load(move |_, page| {
                     if page.event() == tauri::webview::PageLoadEvent::Finished
                         && local::app_page(page.url())
