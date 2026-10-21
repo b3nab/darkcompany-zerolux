@@ -1,5 +1,5 @@
 //! A release's kernel carries what it runs: with `ZEROLUX_CARRY` naming a folder, its web
-//! app, sign-in, runners, official extensions, `bun`, `uv` and `livekit-server` are packed into
+//! app, sign-in, runners, `bun`, `uv` and `livekit-server` are packed into
 //! the kernel. Without it, nothing is: a checkout's kernel uses the checkout and the PATH.
 
 use std::{
@@ -10,9 +10,8 @@ use std::{
 use sha2::{Digest, Sha256};
 
 /// What is carried, at the top of the folder; anything else there is not.
-const CARRIED: [&str; 11] = [
+const CARRIED: [&str; 10] = [
     "web",
-    "extensions",
     "auth",
     "claude",
     "pi",

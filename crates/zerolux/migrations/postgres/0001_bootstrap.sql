@@ -31,7 +31,7 @@ CREATE INDEX "extension_calls_by_extension" ON "extension_calls" ("extension_id"
 -- Create "extension_values" table
 CREATE TABLE "extension_values" ("extension_id" text NOT NULL, "kind" text NOT NULL, "key" text NOT NULL, "value_json" text NOT NULL, "updated_at" bigint NOT NULL, PRIMARY KEY ("extension_id", "kind", "key"), CONSTRAINT "extension_values_kind_check" CHECK (kind = ANY (ARRAY['setting'::text, 'secret'::text, 'value'::text])));
 -- Create "extensions" table
-CREATE TABLE "extensions" ("id" text NOT NULL, "version" text NOT NULL, "source" text NOT NULL, "dev" boolean NOT NULL, "enabled" boolean NOT NULL, "error" text NULL, "manifest_json" text NOT NULL, "contributes_json" text NULL, "installed_at" bigint NOT NULL, "updated_at" bigint NOT NULL, PRIMARY KEY ("id"));
+CREATE TABLE "extensions" ("id" text NOT NULL, "version" text NOT NULL, "source" text NOT NULL, "dev" boolean NOT NULL, "enabled" boolean NOT NULL, "error" text NULL, "manifest_json" text NOT NULL, "contributes_json" text NULL, "installed_at" bigint NOT NULL, "updated_at" bigint NOT NULL, "proposed_by" text NULL, PRIMARY KEY ("id"));
 -- Create "hosts" table
 CREATE TABLE "hosts" ("id" text NOT NULL, "name" text NOT NULL, "person_id" text NOT NULL, "open" boolean NOT NULL, "created_at" bigint NOT NULL, "seen_at" bigint NOT NULL, "secret_hash" text NULL, "link_hash" text NULL, "link_expires_at" bigint NULL, PRIMARY KEY ("id"), CONSTRAINT "hosts_link_hash_key" UNIQUE ("link_hash"), CONSTRAINT "hosts_secret_hash_key" UNIQUE ("secret_hash"));
 -- Create "invites" table

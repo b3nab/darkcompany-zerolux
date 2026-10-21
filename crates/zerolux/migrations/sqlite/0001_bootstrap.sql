@@ -59,7 +59,7 @@ CREATE UNIQUE INDEX `hosts_secret_hash` ON `hosts` (`secret_hash`);
 -- Create index "hosts_link_hash" to table: "hosts"
 CREATE UNIQUE INDEX `hosts_link_hash` ON `hosts` (`link_hash`);
 -- Create "extensions" table
-CREATE TABLE `extensions` (`id` text NOT NULL, `version` text NOT NULL, `source` text NOT NULL, `dev` boolean NOT NULL, `enabled` boolean NOT NULL, `error` text NULL, `manifest_json` text NOT NULL, `contributes_json` text NULL, `installed_at` integer NOT NULL, `updated_at` integer NOT NULL, PRIMARY KEY (`id`));
+CREATE TABLE `extensions` (`id` text NOT NULL, `version` text NOT NULL, `source` text NOT NULL, `dev` boolean NOT NULL, `enabled` boolean NOT NULL, `error` text NULL, `manifest_json` text NOT NULL, `contributes_json` text NULL, `installed_at` integer NOT NULL, `updated_at` integer NOT NULL, `proposed_by` text NULL, PRIMARY KEY (`id`));
 -- Create "extension_values" table
 CREATE TABLE `extension_values` (`extension_id` text NOT NULL, `kind` text NOT NULL, `key` text NOT NULL, `value_json` text NOT NULL, `updated_at` integer NOT NULL, PRIMARY KEY (`extension_id`, `kind`, `key`), CONSTRAINT `0` FOREIGN KEY (`extension_id`) REFERENCES `extensions` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE, CHECK ("kind" IN ('setting', 'secret', 'value')));
 -- Create "extension_calls" table

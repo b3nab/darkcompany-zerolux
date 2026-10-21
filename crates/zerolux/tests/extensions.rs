@@ -93,23 +93,6 @@ async fn extensions_bring_actions_points_events_triggers_and_settings() {
         client: Client::builder().no_proxy().build().unwrap(),
     };
 
-    // The official extensions ZeroLux brings, here the checkout's: none installed yet.
-    let (status, available) = kernel
-        .call(Method::GET, "/extensions/available", None)
-        .await;
-    assert_eq!(status, StatusCode::OK, "{available}");
-    let voice = available["extensions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|extension| extension["id"] == "zerolux.voice")
-        .expect("the voice extension");
-    assert_eq!(voice["installed"], false);
-    let (status, _) = kernel
-        .call(Method::POST, "/extensions/available/acme.none", None)
-        .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-
     // An extension that depends on another is not enabled before it.
     let (status, body) = kernel
         .call(
@@ -1252,6 +1235,113 @@ async fn projects_keep_tasks_here_or_in_a_tracker() {
     let remote = &seen["result"]["tasks"][1];
     assert_eq!(remote["status"], "done", "{seen}");
     assert_eq!(remote["comments"], json!(["Shipped"]));
+    runtime.shutdown().await.unwrap();
+    server.abort();
+    livekit.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_proposes_an_extension_and_the_owner_enables_it() {
+    use zerolux::extensions::scaffold::{Language, create};
+    for program in ["livekit-server", "bun"] {
+        if std::process::Command::new(program)
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("{program} not installed: skipped");
+            return;
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (kernel, runtime, livekit, server, database) = kernel_for(dir.path()).await;
+    let store = database.open().await;
+    let owner = store.chat_identity(None).await.unwrap();
+    let issued = store
+        .hire_chat_session(
+            &owner,
+            zerolux::model::HireChatSession {
+                name: "Builder".into(),
+                actor_id: None,
+                harness: zerolux::harness::Harness::Pi,
+                native_session_id: uuid::Uuid::new_v4().to_string(),
+                title: "Builder".into(),
+                workspace: dir.path().to_string_lossy().into_owned(),
+                native_locator: json!({}),
+                resume: false,
+            },
+        )
+        .await
+        .unwrap();
+    let as_agent = |method: Method, path: &str, body: Option<Value>| {
+        let request = kernel
+            .client
+            .request(method, format!("{}/api{path}", kernel.url))
+            .bearer_auth(&issued.token);
+        async move {
+            let request = match body {
+                Some(body) => request.json(&body),
+                None => request,
+            };
+            let response = request.send().await.unwrap();
+            let status = response.status();
+            (
+                status,
+                response.json::<Value>().await.unwrap_or(Value::Null),
+            )
+        }
+    };
+    // The agent writes an extension and proposes it: kept, not run.
+    let folder = create(
+        "acme.helper",
+        "Helper",
+        Language::Typescript,
+        &dir.path().join("helper"),
+    )
+    .unwrap();
+    let (status, proposed) = as_agent(
+        Method::POST,
+        "/extensions/folder",
+        Some(json!({"folder": folder})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{proposed}");
+    assert_eq!(proposed["extension"]["enabled"], false);
+    assert_eq!(proposed["extension"]["running"], false);
+    assert!(
+        proposed["extension"]["proposed_by"].is_string(),
+        "{proposed}"
+    );
+    // It cannot enable it itself, nor run what it has not.
+    let (status, _) = as_agent(Method::POST, "/extensions/acme.helper/enable", None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = kernel
+        .call(Method::POST, "/ext/acme.helper/hello", Some(json!({})))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // The owner enables it: it runs, and is the owner's.
+    let (status, enabled) = kernel
+        .call(Method::POST, "/extensions/acme.helper/enable", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{enabled}");
+    assert_eq!(enabled["extension"]["running"], true);
+    assert!(enabled["extension"]["proposed_by"].is_null());
+    let (_, said) = kernel
+        .call(
+            Method::POST,
+            "/ext/acme.helper/hello",
+            Some(json!({"name": "Ada"})),
+        )
+        .await;
+    assert_eq!(said["result"]["text"], "Hello, Ada");
+    // Now the owner's, the agent cannot replace it.
+    let (status, _) = as_agent(
+        Method::POST,
+        "/extensions/folder",
+        Some(json!({"folder": folder})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     runtime.shutdown().await.unwrap();
     server.abort();
     livekit.shutdown().await.unwrap();

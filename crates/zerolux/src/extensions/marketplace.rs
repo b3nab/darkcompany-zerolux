@@ -1,15 +1,12 @@
 //! Where extensions are found: indexes on HTTPS, each listing its publishers' keys and their
 //! extensions' versions with a package for each computer (`macos-aarch64`, …) or for any. Anyone
-//! may host one; a kernel reads ZeroLux's own, or those `ZEROLUX_EXTENSION_INDEXES` names.
+//! may host one; a kernel reads those `ZEROLUX_EXTENSION_INDEXES` names, and none otherwise.
 
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-/// ZeroLux's own index.
-pub const OFFICIAL: &str =
-    "https://raw.githubusercontent.com/b3nab/darkcompany-zerolux/main/marketplace/index.json";
 /// The largest package a kernel downloads.
 const LARGEST: usize = 512 * 1024 * 1024;
 
@@ -63,7 +60,7 @@ pub fn indexes() -> Vec<String> {
             .map(|url| url.trim().to_owned())
             .filter(|url| !url.is_empty())
             .collect(),
-        _ => vec![OFFICIAL.to_owned()],
+        _ => Vec::new(),
     }
 }
 

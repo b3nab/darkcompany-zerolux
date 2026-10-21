@@ -25,6 +25,9 @@ pub struct Model {
     pub contributes_json: Option<String>,
     pub installed_at: i64,
     pub updated_at: i64,
+    /// The agent that proposed it, from a folder it wrote, until the owner enables it.
+    #[sea_orm(column_type = "Text")]
+    pub proposed_by: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

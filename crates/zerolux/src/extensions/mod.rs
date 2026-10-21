@@ -10,7 +10,6 @@ pub mod package;
 pub mod process;
 pub mod scaffold;
 
-use crate::platform::Canonical;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -72,6 +71,8 @@ pub struct Installed {
     pub contributes: Option<Contributes>,
     pub installed_at: i64,
     pub updated_at: i64,
+    /// The agent that proposed it, until the owner enables it.
+    pub proposed_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -88,47 +89,6 @@ pub struct SettingView {
     /// A choice's values, each with its label.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<manifest::SettingOption>,
-}
-
-/// An official extension ZeroLux brings.
-#[derive(Debug, Clone, Serialize)]
-pub struct Available {
-    pub id: String,
-    pub name: String,
-    pub version: String,
-    pub publisher: String,
-    pub description: String,
-    pub installed: bool,
-}
-
-/// Where the official extensions are: in what a release carries, or in a checkout.
-fn official_root() -> Option<PathBuf> {
-    crate::platform::carried()
-        .map(|carried| carried.join("extensions"))
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions"))
-        .canonical()
-        .ok()
-        .filter(|root| root.is_dir())
-}
-
-/// The official extensions, with their folders, in the order of their IDs.
-fn official() -> Vec<(Manifest, PathBuf)> {
-    let Some(root) = official_root() else {
-        return Vec::new();
-    };
-    let mut found: Vec<(Manifest, PathBuf)> = std::fs::read_dir(&root)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|entry| {
-            let folder = entry.path().canonical().ok()?;
-            let text = std::fs::read_to_string(folder.join(manifest::FILE)).ok()?;
-            Some((Manifest::parse(&text).ok()?, folder))
-        })
-        .filter(|(manifest, _)| manifest.extension.publisher == "zerolux")
-        .collect();
-    found.sort_by(|a, b| a.0.extension.id.cmp(&b.0.extension.id));
-    found
 }
 
 /// An enabled extension's action, for clients and agents.
@@ -329,6 +289,7 @@ impl Extensions {
                     .and_then(|json| serde_json::from_str(json).ok()),
                 installed_at: row.installed_at,
                 updated_at: row.updated_at,
+                proposed_by: row.proposed_by.clone(),
             });
         }
         Ok(result)
@@ -337,28 +298,59 @@ impl Extensions {
     /// Installs, or installs again, the extension in `folder` on the kernel's computer, as one
     /// being worked on, and enables it.
     pub async fn install_folder(&self, who: &ChatIdentity, folder: &str) -> Result<Installed> {
-        self.install(who, folder, true).await
+        if who.is_person() {
+            return self.install(who, folder, true).await;
+        }
+        self.propose(who, folder).await
     }
 
-    /// The official extensions ZeroLux brings, each with whether it is installed.
-    pub async fn available(&self) -> Result<Vec<Available>> {
-        let installed: std::collections::HashSet<String> = extensions::Entity::find()
-            .all(self.store.db())
-            .await?
-            .into_iter()
-            .map(|row| row.id)
-            .collect();
-        Ok(official()
-            .into_iter()
-            .map(|(manifest, _)| Available {
-                installed: installed.contains(&manifest.extension.id),
-                id: manifest.extension.id,
-                name: manifest.extension.name,
-                version: manifest.extension.version,
-                publisher: manifest.extension.publisher,
-                description: manifest.extension.description,
-            })
-            .collect())
+    /// An agent's extension, from a folder it wrote on the kernel's computer: kept as proposed,
+    /// and run only once the owner enables it. It never replaces one the owner installed.
+    async fn propose(&self, who: &ChatIdentity, folder: &str) -> Result<Installed> {
+        // The agent, or the session for one without an agent.
+        let agent = who
+            .actor_id
+            .clone()
+            .or_else(|| who.session_id.clone())
+            .ok_or(Error::Forbidden)?;
+        let folder = dunce::canonicalize(folder)
+            .ok()
+            .filter(|folder| folder.is_dir())
+            .ok_or_else(|| Error::Invalid("This folder is not on the kernel's computer".into()))?;
+        let text = std::fs::read_to_string(folder.join(manifest::FILE))
+            .map_err(|_| Error::Invalid(format!("The folder has no {}", manifest::FILE)))?;
+        let manifest = Manifest::parse(&text)?;
+        let id = manifest.extension.id.clone();
+        let existing = extensions::Entity::find_by_id(&id)
+            .one(self.store.db())
+            .await?;
+        if let Some(existing) = &existing {
+            ensure!(
+                existing.proposed_by.is_some() && !existing.enabled,
+                Error::Invalid(format!("{id} is installed; the owner installs it again"))
+            );
+        }
+        let now = now_ms();
+        let row = extensions::ActiveModel {
+            id: Set(id.clone()),
+            version: Set(manifest.extension.version.clone()),
+            source: Set(folder.to_string_lossy().into_owned()),
+            dev: Set(true),
+            enabled: Set(false),
+            error: Set(None),
+            manifest_json: Set(serde_json::to_string(&manifest)?),
+            contributes_json: Set(None),
+            installed_at: Set(existing.as_ref().map_or(now, |row| row.installed_at)),
+            updated_at: Set(now),
+            proposed_by: Set(Some(agent)),
+        };
+        if existing.is_some() {
+            row.update(self.store.db()).await?;
+        } else {
+            row.insert(self.store.db()).await?;
+        }
+        self.changed();
+        self.installed(&id).await
     }
 
     /// What the indexes offer: each extension's newest version that runs here, with what is
@@ -478,15 +470,6 @@ impl Extensions {
         Ok(installed)
     }
 
-    /// Installs one of the official extensions, and enables it.
-    pub async fn install_official(&self, who: &ChatIdentity, id: &str) -> Result<Installed> {
-        let (_, folder) = official()
-            .into_iter()
-            .find(|(manifest, _)| manifest.extension.id == id)
-            .ok_or(Error::NotFound)?;
-        self.install(who, &folder.to_string_lossy(), false).await
-    }
-
     async fn install(&self, who: &ChatIdentity, folder: &str, dev: bool) -> Result<Installed> {
         self.owner_only(who).await?;
         self.install_from(folder, dev).await
@@ -521,6 +504,7 @@ impl Extensions {
                 .and_then(|row| row.contributes_json.clone())),
             installed_at: Set(existing.as_ref().map_or(now, |row| row.installed_at)),
             updated_at: Set(now),
+            proposed_by: Set(None),
         };
         if existing.is_some() {
             row.update(self.store.db()).await?;
@@ -559,6 +543,8 @@ impl Extensions {
             Ok(contributes) => {
                 update.enabled = Set(true);
                 update.error = Set(None);
+                // Enabled by the owner, an agent's proposal is the owner's.
+                update.proposed_by = Set(None);
                 update.contributes_json = Set(Some(serde_json::to_string(contributes)?));
             }
             Err(error) => {
@@ -731,8 +717,6 @@ impl Extensions {
         Ok(())
     }
 
-    /// Enables, when the kernel starts, the extensions that were enabled; dependencies first.
-    /// An official extension, not one being worked on, runs as this kernel brings it.
     /// Extensions being worked on start again from their folder once it changed and then held
     /// still for a check: enabled ones, and those whose last start failed. One the owner
     /// disabled is left alone.
@@ -806,31 +790,6 @@ impl Extensions {
     }
 
     pub async fn start_enabled(&self) {
-        for (manifest, folder) in official() {
-            let Ok(Some(row)) = extensions::Entity::find_by_id(&manifest.extension.id)
-                .one(self.store.db())
-                .await
-            else {
-                continue;
-            };
-            let source = folder.to_string_lossy().into_owned();
-            if row.dev || row.source == source {
-                continue;
-            }
-            let Ok(json) = serde_json::to_string(&manifest) else {
-                continue;
-            };
-            let _ = extensions::ActiveModel {
-                id: Set(row.id),
-                version: Set(manifest.extension.version.clone()),
-                source: Set(source),
-                manifest_json: Set(json),
-                updated_at: Set(now_ms()),
-                ..Default::default()
-            }
-            .update(self.store.db())
-            .await;
-        }
         let Ok(rows) = extensions::Entity::find()
             .filter(extensions::Column::Enabled.eq(true))
             .all(self.store.db())
