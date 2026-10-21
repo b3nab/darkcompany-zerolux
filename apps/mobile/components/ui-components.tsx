@@ -1,19 +1,22 @@
 import * as Haptics from "expo-haptics";
-import * as Lucide from "lucide-react-native";
-import { ChevronRightIcon, PuzzleIcon } from "lucide-react-native";
-import type { LucideIcon } from "lucide-react-native";
+import { ChevronRightIcon } from "lucide-react-native";
 import { Children } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Image as NativeImage,
   Modal,
   Pressable,
   ScrollView,
   Switch as NativeSwitch,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { useCSSVariable } from "uniwind";
+import { errorMessage } from "@zerolux/chat";
 import type { Tone, UiComponents } from "@zerolux/ui";
+import { Menu, useActionSheet } from "@/components/action-menu";
+import { DateInput } from "@/components/date-input";
 import { ActorMark } from "@/components/member";
 import { MessageBody } from "@/components/message-body";
 import { Segmented } from "@/components/segmented";
@@ -21,21 +24,10 @@ import { SettingSelect } from "@/components/setting-select";
 import { Button as AppButton } from "@/components/ui/button";
 import { Input as AppInput } from "@/components/ui/input";
 import { Text as AppText } from "@/components/ui/text";
+import { Icon, IconButton } from "@/components/ui-icon";
+import { pickFiles } from "@/components/pick-files";
 import { cn } from "@/lib/utils";
 import { useSession } from "../src/kernel";
-
-/** A Lucide icon by its name, as `kanban` or `file-text`; a puzzle when the app has none. */
-export function lucideIcon(name?: string): LucideIcon {
-  if (!name) return PuzzleIcon;
-  const named = name
-    .split(/[-_\s]/)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join("");
-  const icon = (Lucide as unknown as Record<string, unknown>)[`${named}Icon`];
-  return typeof icon === "object" || typeof icon === "function"
-    ? (icon as LucideIcon)
-    : PuzzleIcon;
-}
 
 const textTone: Record<Tone, string> = {
   default: "text-foreground",
@@ -51,27 +43,34 @@ const badgeTone: Record<Tone, string> = {
   warning: "bg-warning/15",
   danger: "bg-destructive/15",
 };
-const toneColor: Record<Tone, string> = {
-  default: "--color-foreground",
-  muted: "--color-muted-foreground",
-  success: "--color-success",
-  warning: "--color-warning",
-  danger: "--color-destructive",
-};
+/** Columns as wide as most of the screen, so the next one shows at its edge. */
+const COLUMN = 0.8;
 
-function Icon({
-  name,
-  size = 20,
-  tone = "muted",
-}: {
-  name: string;
-  size?: number;
-  tone?: Tone;
-}) {
-  const color = String(useCSSVariable(toneColor[tone]));
-  const Drawn = lucideIcon(name);
-  return <Drawn color={color} size={size} strokeWidth={1.5} />;
-}
+const Button: UiComponents["Button"] = ({
+  title,
+  onPress,
+  variant = "primary",
+  disabled,
+  busy,
+}) => (
+  <AppButton
+    variant={
+      variant === "danger"
+        ? "destructive"
+        : variant === "secondary"
+          ? "outline"
+          : variant === "ghost"
+            ? "ghost"
+            : "default"
+    }
+    disabled={disabled || busy}
+    onPress={onPress}
+    className="self-start"
+  >
+    {busy ? <ActivityIndicator size="small" /> : null}
+    <AppText>{title}</AppText>
+  </AppButton>
+);
 
 /**
  * `@zerolux/ui`'s components on the phone, in the app's own design: what an extension's
@@ -123,41 +122,8 @@ export const uiComponents: UiComponents = {
     </AppText>
   ),
   Markdown: ({ children }) => <MessageBody text={children} />,
-  Button: ({ title, onPress, variant = "primary", disabled, busy }) => (
-    <AppButton
-      variant={
-        variant === "danger"
-          ? "destructive"
-          : variant === "secondary"
-            ? "outline"
-            : variant === "ghost"
-              ? "ghost"
-              : "default"
-      }
-      disabled={disabled || busy}
-      onPress={onPress}
-      className="self-start"
-    >
-      {busy ? <ActivityIndicator size="small" /> : null}
-      <AppText>{title}</AppText>
-    </AppButton>
-  ),
-  IconButton: ({ icon, label, onPress, disabled }) => (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityState={{ disabled }}
-      disabled={disabled}
-      onPress={onPress}
-      hitSlop={4}
-      className={cn(
-        "size-10 items-center justify-center rounded-lg active:bg-accent",
-        disabled && "opacity-40",
-      )}
-    >
-      <Icon name={icon} />
-    </Pressable>
-  ),
+  Button,
+  IconButton,
   Icon,
   Input: ({
     value,
@@ -324,14 +290,86 @@ export const uiComponents: UiComponents = {
         className="w-full rounded-md bg-muted"
       />
     ) : null,
-  Card: ({ title, children }) => (
-    <View className="gap-3 rounded-md border border-border bg-card p-4">
-      {title ? (
-        <AppText className="text-[15px] font-semibold">{title}</AppText>
-      ) : null}
-      {children}
-    </View>
-  ),
+  Card: ({ title, onPress, children }) => {
+    const body = (
+      <>
+        {title ? (
+          <AppText className="text-[15px] font-semibold">{title}</AppText>
+        ) : null}
+        {children}
+      </>
+    );
+    const card = "gap-3 rounded-md border border-border bg-card p-4";
+    return onPress ? (
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => {
+          void Haptics.selectionAsync();
+          onPress();
+        }}
+        className={cn(card, "active:bg-accent")}
+      >
+        {body}
+      </Pressable>
+    ) : (
+      <View className={card}>{body}</View>
+    );
+  },
+  Columns: function Columns({ children }) {
+    const width = Math.min(useWindowDimensions().width * COLUMN, 340);
+    return (
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        snapToInterval={width + 12}
+        decelerationRate="fast"
+        contentContainerClassName="items-start gap-3"
+      >
+        {Children.toArray(children).map((column, i) => (
+          <View key={i} style={{ width }}>
+            {column}
+          </View>
+        ))}
+      </ScrollView>
+    );
+  },
+  DateInput,
+  Menu,
+  FileButton: function FileButton({
+    title,
+    onFiles,
+    multiple = false,
+    variant = "secondary",
+    busy,
+    disabled,
+  }) {
+    const { show, sheet } = useActionSheet();
+    const pick = (from: "library" | "camera" | "files") =>
+      pickFiles(from, multiple).then(
+        (files) => files.length && onFiles(files),
+        (e: unknown) => Alert.alert(errorMessage(e)),
+      );
+    return (
+      <>
+        <Button
+          title={title}
+          variant={variant}
+          busy={busy}
+          disabled={disabled}
+          onPress={() =>
+            show([
+              { title: "Photo library", onPress: () => void pick("library") },
+              { title: "Take photo", onPress: () => void pick("camera") },
+              { title: "Files", onPress: () => void pick("files") },
+            ])
+          }
+        />
+        {sheet}
+      </>
+    );
+  },
+  // Nothing is dragged onto a phone's view.
+  DropZone: ({ children }) => <>{children}</>,
   Tabs: ({ items, value, onChange }) => (
     <Segmented
       options={items.map((item) => [item.value, item.label])}
@@ -355,7 +393,10 @@ export const uiComponents: UiComponents = {
             </AppText>
           </Pressable>
         </View>
-        <ScrollView contentContainerClassName="gap-4 px-5 py-5">
+        <ScrollView
+          contentContainerClassName="gap-4 px-5 py-5"
+          keyboardShouldPersistTaps="handled"
+        >
           {children}
         </ScrollView>
       </View>

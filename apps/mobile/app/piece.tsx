@@ -17,7 +17,7 @@ export default function PiecePage() {
     space: UiSpace;
     session?: string;
   }>();
-  const { url } = useSession();
+  const { url, chat } = useSession();
   const { extensions, error } = useExtensions(url);
   const muted = String(useCSSVariable("--color-muted-foreground"));
   const piece = extensions
@@ -25,9 +25,11 @@ export default function PiecePage() {
         (p) => p.extension === extension && p.name === name,
       )
     : undefined;
+  const actor =
+    chat.sessions.find((s) => s.id === session)?.actor_id ?? undefined;
   const context = useMemo<UiContext>(
-    () => (session ? { session_id: session } : {}),
-    [session],
+    () => (session ? { session_id: session, actor_id: actor } : {}),
+    [session, actor],
   );
   return (
     <Screen back title={piece?.title ?? "Extension"}>

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Component, useEffect, useRef, useState } from "react";
+import { Component, useContext, useEffect, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import * as jsxRuntime from "react/jsx-runtime";
 import { EllipsisIcon } from "lucide-react";
@@ -21,7 +21,7 @@ import { moduleHost, UiSpace, uiModule } from "@zerolux/ui/host";
 import { cn } from "cn";
 import { ActionForm } from "./ActionForm";
 import { extensionUiAddress } from "./desktop";
-import { lucideIcon, uiComponents } from "./native-ui";
+import { lucideIcon, UiActors, uiComponents } from "./native-ui";
 import { MessageText } from "@/components/message-text";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -439,6 +439,7 @@ function NativeView({
   context: UiContext;
 }) {
   const opened = usePieceAddress(piece);
+  const actors = useContext(UiActors);
   const [loaded, setLoaded] = useState<{
     View?: ComponentType;
     error?: string;
@@ -465,7 +466,13 @@ function NativeView({
     return <p className="text-sm text-muted-foreground">Loading…</p>;
   const View = loaded.View;
   return (
-    <UiSpace piece={piece} context={context} kernel={kernelUrl()} save={save}>
+    <UiSpace
+      piece={piece}
+      context={context}
+      kernel={kernelUrl()}
+      save={save}
+      actors={actors}
+    >
       <ViewBoundary>
         <View />
       </ViewBoundary>

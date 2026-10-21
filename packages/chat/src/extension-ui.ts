@@ -42,6 +42,8 @@ export interface UiPiece {
 /** Where a piece shows, as its actions read it. */
 export interface UiContext {
   session_id?: string;
+  /** With `session_id`: the agent the session belongs to. */
+  actor_id?: string;
   conversation_id?: string;
   message_id?: string;
 }

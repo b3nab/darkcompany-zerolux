@@ -21,6 +21,13 @@ import type {
   UiPiece,
 } from "@zerolux/chat";
 
+/** A person or an agent of the workspace. */
+export interface UiActor {
+  id: string;
+  name: string;
+  kind: "human" | "agent";
+}
+
 /** Where a view shows, as the app that shows it tells. */
 export interface Here {
   piece: UiPiece;
@@ -28,6 +35,8 @@ export interface Here {
   kernel: string;
   /** Keeps a file the view gives, as the app keeps files: saved or shared. */
   save: (file: Blob, name: string) => Promise<void>;
+  /** The workspace's people and agents. */
+  actors: UiActor[];
 }
 
 /** Where a view shows, with its extension's actions once read: their inputs say what to give. */
@@ -130,6 +139,11 @@ function useRunning<A extends unknown[], R>(work: (...args: A) => Promise<R>) {
 export function useSpace() {
   const { piece, context } = useHere();
   return { space: piece.space, context };
+}
+
+/** The workspace's people and agents, by id, name and whether each is a person or an agent. */
+export function useActors() {
+  return useHere().actors;
 }
 
 /**

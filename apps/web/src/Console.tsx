@@ -761,7 +761,13 @@ export function SessionView({
     ) : panel ? (
       <Pane title={panel.title} close={() => setPane(undefined)}>
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
-          <ExtensionView piece={panel} context={{ session_id: session.id }} />
+          <ExtensionView
+            piece={panel}
+            context={{
+              session_id: session.id,
+              actor_id: session.actor_id ?? undefined,
+            }}
+          />
         </div>
       </Pane>
     ) : pane === "terminal" && access.write ? (

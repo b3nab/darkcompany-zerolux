@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useRef, useState } from "react";
 import { icons, PuzzleIcon } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { Actor } from "@zerolux/chat";
@@ -15,6 +15,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -231,22 +237,28 @@ export const uiComponents: UiComponents = {
             </span>
           )}
         </span>
-        {accessory}
       </>
     );
+    // What it holds after its title keeps its own press: a menu in it opens the menu only.
     return (
-      <li>
+      <li
+        className={cn(
+          "flex items-center gap-3 px-3 py-2",
+          onPress && "transition-colors hover:bg-accent",
+        )}
+      >
         {onPress ? (
           <button
             type="button"
             onClick={onPress}
-            className="flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-accent"
+            className="flex min-w-0 flex-1 items-center gap-3 text-left outline-none focus-visible:underline"
           >
             {body}
           </button>
         ) : (
-          <div className="flex items-center gap-3 px-3 py-2">{body}</div>
+          body
         )}
+        {accessory}
       </li>
     );
   },
@@ -295,8 +307,32 @@ export const uiComponents: UiComponents = {
         className="max-h-80 max-w-full rounded-md border object-contain"
       />
     ) : null,
-  Card: ({ title, children }) => (
-    <Card size="sm">
+  Card: ({ title, onPress, children }) => (
+    <Card
+      size="sm"
+      {...(onPress && {
+        role: "button",
+        tabIndex: 0,
+        // Its own buttons and fields keep their press, and so does a menu it opened elsewhere.
+        onClick: (event: React.MouseEvent) => {
+          const target = event.target as Element;
+          if (
+            event.currentTarget.contains(target) &&
+            !target.closest("button, a, input, select, textarea, label")
+          )
+            onPress();
+        },
+        onKeyDown: (event: React.KeyboardEvent) => {
+          if (event.target !== event.currentTarget) return;
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onPress();
+          }
+        },
+        className:
+          "cursor-pointer transition-colors outline-none hover:bg-accent/50 focus-visible:ring-3 focus-visible:ring-ring/50",
+      })}
+    >
       {title && (
         <CardHeader>
           <CardTitle>{title}</CardTitle>
@@ -340,4 +376,136 @@ export const uiComponents: UiComponents = {
       />
     );
   },
+  Columns: ({ children }) => (
+    <div className="grid auto-cols-[minmax(16rem,1fr)] grid-flow-col gap-3 overflow-x-auto pb-2">
+      {children}
+    </div>
+  ),
+  DateInput: ({ value, onChange, label, placeholder, disabled }) => (
+    <Labelled label={label}>
+      <Input
+        type="date"
+        value={value ?? ""}
+        placeholder={placeholder}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value || null)}
+        className="w-fit"
+      />
+    </Labelled>
+  ),
+  Menu: ({ label, icon = "ellipsis", items }) => {
+    const Drawn = lucideIcon(icon);
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={label}
+              title={label}
+            />
+          }
+        >
+          <Drawn />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-48">
+          {items.map((item) => {
+            const Icon = item.icon ? lucideIcon(item.icon) : undefined;
+            return (
+              <DropdownMenuItem
+                key={item.title}
+                variant={item.tone === "danger" ? "destructive" : "default"}
+                disabled={item.disabled}
+                onClick={item.onPress}
+              >
+                {Icon && <Icon />}
+                {item.title}
+              </DropdownMenuItem>
+            );
+          })}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  },
+  FileButton: function FileButton({
+    title,
+    onFiles,
+    multiple,
+    variant = "secondary",
+    busy,
+    disabled,
+  }) {
+    const picker = useRef<HTMLInputElement>(null);
+    const Button = uiComponents.Button;
+    return (
+      <>
+        <input
+          ref={picker}
+          type="file"
+          hidden
+          multiple={multiple}
+          onChange={(event) => {
+            const files = picked(event.target.files);
+            // The same file can be picked again.
+            event.target.value = "";
+            if (files.length) onFiles(files);
+          }}
+        />
+        <Button
+          title={title}
+          variant={variant}
+          busy={busy}
+          disabled={disabled}
+          onPress={() => picker.current?.click()}
+        />
+      </>
+    );
+  },
+  DropZone: function DropZone({ onFiles, label, disabled, children }) {
+    const [over, setOver] = useState(false);
+    // Entering a child leaves the parent: what is held is counted, not each crossing.
+    const depth = useRef(0);
+    const held = (event: React.DragEvent) =>
+      !disabled && event.dataTransfer.types.includes("Files");
+    return (
+      <div
+        className="relative flex min-h-0 flex-1 flex-col"
+        onDragEnter={(event) => {
+          if (!held(event)) return;
+          event.preventDefault();
+          depth.current += 1;
+          setOver(true);
+        }}
+        onDragOver={(event) => {
+          if (held(event)) event.preventDefault();
+        }}
+        onDragLeave={(event) => {
+          if (!held(event)) return;
+          depth.current -= 1;
+          if (depth.current <= 0) setOver(false);
+        }}
+        onDrop={(event) => {
+          if (!held(event)) return;
+          event.preventDefault();
+          depth.current = 0;
+          setOver(false);
+          const files = picked(event.dataTransfer.files);
+          if (files.length) onFiles(files);
+        }}
+      >
+        {children}
+        {over && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-background/80 text-sm font-medium">
+            {label}
+          </div>
+        )}
+      </div>
+    );
+  },
 };
+
+/** Files as a view gets them: each with its name. */
+const picked = (list: FileList | null) =>
+  [...(list ?? [])].map((file) => ({ file, name: file.name }));

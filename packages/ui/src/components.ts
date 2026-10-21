@@ -128,6 +128,65 @@ export interface ImageProps {
 
 export interface CardProps {
   title?: string;
+  /** A card that opens something shows that it does. */
+  onPress?: () => void;
+  children?: ReactNode;
+}
+
+/** Cards side by side, each as wide as the others, scrolled sideways when they do not fit. */
+export interface ColumnsProps {
+  children?: ReactNode;
+}
+
+/** A day, as `YYYY-MM-DD`, picked with the system's calendar; `null` is none. */
+export interface DateInputProps {
+  value: string | null;
+  onChange: (value: string | null) => void;
+  label?: string;
+  placeholder?: string;
+  disabled?: boolean;
+}
+
+/** Something to do with what a row shows. */
+export interface MenuItem {
+  title: string;
+  icon?: string;
+  tone?: "danger";
+  disabled?: boolean;
+  onPress: () => void;
+}
+
+/** What can be done with something, behind one button: a menu here, an action sheet on a phone. */
+export interface MenuProps {
+  /** What the button opens, for those who hear the screen. */
+  label: string;
+  /** Its icon, by Lucide name; `ellipsis` by default. */
+  icon?: string;
+  items: MenuItem[];
+}
+
+/** A file a person picked or dropped, with its name. */
+export interface PickedFile {
+  file: Blob;
+  name: string;
+}
+
+/** A button that opens the system's choice of files. */
+export interface FileButtonProps {
+  title: string;
+  onFiles: (files: PickedFile[]) => void;
+  multiple?: boolean;
+  variant?: ButtonProps["variant"];
+  busy?: boolean;
+  disabled?: boolean;
+}
+
+/** Where files dragged onto the view land; on a phone, only what it holds. */
+export interface DropZoneProps {
+  onFiles: (files: PickedFile[]) => void;
+  /** Said while files are held over it. */
+  label: string;
+  disabled?: boolean;
   children?: ReactNode;
 }
 
@@ -183,6 +242,11 @@ export interface UiComponents {
   Sheet: ComponentType<SheetProps>;
   Spinner: ComponentType<SpinnerProps>;
   Avatar: ComponentType<AvatarProps>;
+  Columns: ComponentType<ColumnsProps>;
+  DateInput: ComponentType<DateInputProps>;
+  Menu: ComponentType<MenuProps>;
+  FileButton: ComponentType<FileButtonProps>;
+  DropZone: ComponentType<DropZoneProps>;
 }
 
 /** The components' names, as the apps must give them all. */
@@ -209,4 +273,9 @@ export const componentNames = [
   "Sheet",
   "Spinner",
   "Avatar",
+  "Columns",
+  "DateInput",
+  "Menu",
+  "FileButton",
+  "DropZone",
 ] as const satisfies readonly (keyof UiComponents)[];

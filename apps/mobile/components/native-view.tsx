@@ -6,7 +6,12 @@ import type { ComponentType, ReactNode } from "react";
 import * as JsxRuntime from "react/jsx-runtime";
 import { ActivityIndicator } from "react-native";
 import { useCSSVariable } from "uniwind";
-import { errorMessage, pieceUrl, useExtensions } from "@zerolux/chat";
+import {
+  activeActors,
+  errorMessage,
+  pieceUrl,
+  useExtensions,
+} from "@zerolux/chat";
 import type { UiContext, UiPiece } from "@zerolux/chat";
 import { moduleHost, uiModule, UiSpace } from "@zerolux/ui/host";
 import { Text } from "@/components/ui/text";
@@ -85,7 +90,7 @@ export function NativeView({
   piece: UiPiece;
   context: UiContext;
 }) {
-  const { url } = useSession();
+  const { url, workspace } = useSession();
   const muted = String(useCSSVariable("--color-muted-foreground"));
   // Loaded again when its extension changes, not each time the list is read again: a view
   // loaded anew starts over, and what was typed in it would go.
@@ -122,7 +127,13 @@ export function NativeView({
   const View = loaded.view;
   return (
     <Contained>
-      <UiSpace piece={piece} context={context} kernel={url} save={save}>
+      <UiSpace
+        piece={piece}
+        context={context}
+        kernel={url}
+        save={save}
+        actors={activeActors(workspace?.actors ?? [])}
+      >
         <View />
       </UiSpace>
     </Contained>

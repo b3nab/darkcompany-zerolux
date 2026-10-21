@@ -33,7 +33,7 @@ import { MessageBody } from "@/components/message-body";
 import { NativeView } from "@/components/native-view";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
-import { lucideIcon } from "@/components/ui-components";
+import { lucideIcon } from "@/components/ui-icon";
 import WebPiece from "@/components/web-piece";
 import { cn } from "@/lib/utils";
 import { useSession } from "../src/kernel";

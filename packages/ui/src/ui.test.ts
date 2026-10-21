@@ -28,6 +28,7 @@ const here: Here = {
   context: { session_id: "s1" },
   kernel,
   save: async () => {},
+  actors: [],
 };
 const schema = {
   type: "object",

@@ -12,7 +12,7 @@ import * as hooks from "./hooks";
 import { HereContext } from "./hooks";
 import type { Here } from "./hooks";
 
-export type { Here } from "./hooks";
+export type { Here, UiActor } from "./hooks";
 export { componentNames } from "./components";
 export type { UiComponents } from "./components";
 export { callAction, eventName, receiveFile, sendFile } from "./hooks";
@@ -28,10 +28,15 @@ export function UiSpace({
   context,
   kernel,
   save,
+  actors,
   children,
 }: Here & { children: ReactNode }) {
   const { actions, error } = useActions(kernel);
   const place = JSON.stringify(context);
+  // By what they are, as the place: a new list of the same people reads nothing again.
+  const people = JSON.stringify(
+    actors.map(({ id, name, kind }) => ({ id, name, kind })),
+  );
   // Unreadable actions leave the inputs as the view writes them.
   const known = actions ?? (error ? NONE : undefined);
   const value = useMemo(
@@ -40,9 +45,10 @@ export function UiSpace({
       context: JSON.parse(place) as Here["context"],
       kernel,
       save,
+      actors: JSON.parse(people) as Here["actors"],
       actions: known,
     }),
-    [piece, place, kernel, save, known],
+    [piece, place, kernel, save, people, known],
   );
   return createElement(HereContext.Provider, { value }, children);
 }
@@ -59,6 +65,7 @@ export function uiModule(components: UiComponents) {
     useSpace: hooks.useSpace,
     useAction: hooks.useAction,
     useActionResult: hooks.useActionResult,
+    useActors: hooks.useActors,
     useEvent: hooks.useEvent,
     useUpload: hooks.useUpload,
     useDownload: hooks.useDownload,
