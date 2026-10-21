@@ -1,6 +1,6 @@
 # Voice
 
-ZeroLux's voice is an official [extension](extensions.md), `zerolux.voice`, in `extensions/voice`. It turns speech into text with the model the workspace chooses, and gives each agent a voice of its own.
+ZeroLux's voice is an [extension](extensions.md), `zerolux.voice`, in `marketplace/voice`, installed from the marketplace like any other. It turns speech into text with the model the workspace chooses, and gives each agent a voice of its own.
 
 ## Speech to text
 
@@ -42,4 +42,4 @@ Clients read a message with `sentences`, then `speak` for each sentence, fetchin
 
 Its process part runs `uv run --script main.py`: the first start prepares a Python environment with its packages, and each model downloads the first time it is used, into the Hugging Face cache. Voices are kept in the extension's folder.
 
-`uv run --no-project --with numpy python -m unittest discover -s extensions/voice` tests what it does without its models; `bun run test` runs it.
+`uv run --no-project --with numpy python -m unittest discover -s marketplace/voice` tests what it does without its models; `bun run test` runs it.
