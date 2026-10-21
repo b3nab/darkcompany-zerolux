@@ -221,6 +221,12 @@ impl Extension for Projects {
                 {"name": "task.assigned", "description": "A task was given to a person or an agent"},
                 {"name": "changed", "description": "Projects or tasks changed"},
             ],
+            "ui": [
+                {"space": "page", "name": "projects", "title": "Projects", "icon": "kanban",
+                    "view": {"kind": "native", "entry": "ui/native/projects.js"}},
+                {"space": "session", "name": "tasks", "title": "Tasks", "icon": "list-checks",
+                    "view": {"kind": "native", "entry": "ui/native/tasks.js"}},
+            ],
         }))
     }
 

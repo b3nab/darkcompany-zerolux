@@ -283,6 +283,12 @@ impl Extension for Storage {
                 ]}],
             "implements": [{"point": PROVIDERS, "name": "local", "title": "This computer"}],
             "events": [{"name": "changed", "description": "Files were added, changed or deleted"}],
+            "ui": [
+                {"space": "page", "name": "files", "title": "Files", "icon": "folder",
+                    "view": {"kind": "native", "entry": "ui/native/files.js"}},
+                {"space": "chat", "name": "shared", "title": "Files",
+                    "view": {"kind": "native", "entry": "ui/native/shared.js"}},
+            ],
         }))
     }
 
