@@ -6,6 +6,7 @@ import {
   chatTurns,
   currentStep,
   sessionBlocks,
+  recordsResync,
   sessionReader,
   spanLabel,
   toolName,
@@ -263,6 +264,29 @@ test("a session is read back from the end to a time, then forward as it grows", 
   expect(shown?.events.map((e) => e.at)).toEqual([0, 10, 20, 30, 40]);
   expect(shown?.next).toBe(50);
   reader.close();
+});
+
+test("after a reconnection a record on screen is read to its end, though its notice was missed", async () => {
+  const events = [0, 1, 2].map((n) =>
+    at({ type: "text", text: `e${n}` }, n * 10),
+  );
+  fakeRecord(events.slice(0, 1), 10);
+  let shown: SessionRecord | undefined;
+  const reader = sessionReader("s-missed", undefined, (r) => (shown = r));
+  await reader.earlier();
+  expect(shown?.events.map((e) => e.at)).toEqual([0]);
+  // The record grew while its notice was lost.
+  const urls = fakeRecord(events, 30);
+  recordsResync();
+  // Reads go one after another: this one waits for the resync's.
+  await reader.grow(0);
+  expect(shown?.events.map((e) => e.at)).toEqual([0, 10, 20]);
+  // A closed reader reads nothing more.
+  reader.close();
+  urls.length = 0;
+  recordsResync();
+  await reader.grow(0);
+  expect(urls.filter((url) => url.includes("s-missed"))).toEqual([]);
 });
 
 test("the reader's first read starts at the end, scoped to the chat", async () => {

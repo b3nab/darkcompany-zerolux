@@ -451,6 +451,14 @@ export interface SessionRecord {
  * Reads a session's events back from the end, and forward as the record grows: all its
  * work, or with `chat` only the turns that chat's messages opened. One read at a time.
  */
+// Every record read on screen, read to its end when notices may have been missed.
+const reading = new Set<{ grow: (end: number) => Promise<void> }>();
+
+/** After a reconnection, every record on screen is read to its end: notices may have been missed. */
+export function recordsResync() {
+  reading.forEach((reader) => void reader.grow(Number.MAX_SAFE_INTEGER));
+}
+
 export function sessionReader(
   sessionId: string,
   chat: string | undefined,
@@ -488,7 +496,7 @@ export function sessionReader(
       }
       show();
     }));
-  return {
+  const reader = {
     /** Earlier events: one page, or with `since` (ms) back to an event at or before it. */
     earlier: (since?: number) =>
       run(async () => {
@@ -518,8 +526,11 @@ export function sessionReader(
       }),
     close: () => {
       closed = true;
+      reading.delete(reader);
     },
   };
+  reading.add(reader);
+  return reader;
 }
 type SessionReader = ReturnType<typeof sessionReader>;
 

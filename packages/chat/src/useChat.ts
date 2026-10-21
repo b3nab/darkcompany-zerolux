@@ -43,6 +43,7 @@ import type { SessionBlock } from "./session-events";
 import { backgroundNotice, backgroundResync } from "./background";
 import { uiNotice, uiResync } from "./extension-ui";
 import { terminalNotice, terminalResync } from "./terminals";
+import { recordsResync } from "./session-events";
 
 /** Chat state for the owner: LiveKit events say what to refetch from the kernel. */
 export function useChat(enabled: boolean, kernel = kernelUrl()) {
@@ -278,9 +279,10 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       kernel: server,
       event: onEvent,
       sync: () => {
-        // Notices may have been missed meanwhile: live state, terminals, extensions and
-        // background commands are read again too.
+        // Notices may have been missed meanwhile: live state, records on screen, terminals,
+        // extensions and background commands are read again too.
         liveResync();
+        recordsResync();
         terminalResync();
         extensionsNotice();
         uiResync();
