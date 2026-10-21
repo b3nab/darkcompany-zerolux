@@ -322,7 +322,10 @@ fn build_module(folder: &Path, library: &str) -> Result<PathBuf> {
         .with_context(|| format!("The build made no {file}"))?;
     let into = folder.join("kernel").join(super::library::platform());
     std::fs::create_dir_all(&into)?;
-    std::fs::copy(&built, into.join(&file))?;
+    // Put in place whole, never rewritten where it lies: a library in use is never changed.
+    let staged = into.join(format!(".{file}.{}", uuid::Uuid::new_v4().simple()));
+    std::fs::copy(&built, &staged)?;
+    std::fs::rename(&staged, into.join(&file))?;
     Ok(into.join(file))
 }
 
