@@ -4,6 +4,10 @@ name = "Voice"
 version = "0.0.1"
 publisher = "zerolux"
 description = "Speech to text and agents' voices"
+icon = "icon.png"
+categories = ["meetings-voice", "agents-ai"]
+keywords = ["speech", "transcription", "voices", "whisper"]
+license = "MIT"
 
 [process]
 command = ["uv", "run", "--quiet", "--script", "main.py"]

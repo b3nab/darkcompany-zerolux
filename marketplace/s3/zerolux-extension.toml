@@ -5,6 +5,10 @@ version = "0.0.1"
 publisher = "zerolux"
 description = "Storage locations in S3 buckets, live: Amazon S3, Cloudflare R2, MinIO and the like"
 kernel = ">=0.0.1"
+icon = "icon.png"
+categories = ["files-storage"]
+keywords = ["s3", "r2", "minio", "buckets"]
+license = "MIT"
 
 [dependencies]
 "zerolux.storage" = ">=0.0.1"

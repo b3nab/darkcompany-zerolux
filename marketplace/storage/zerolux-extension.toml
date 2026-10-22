@@ -5,6 +5,10 @@ version = "0.0.1"
 publisher = "zerolux"
 description = "The workspace's files where they are, live: folders on this computer, Google Drive, S3 and any other provider, as many locations as wanted"
 kernel = ">=0.0.1"
+icon = "icon.png"
+categories = ["files-storage"]
+keywords = ["files", "folders", "locations", "sharing"]
+license = "MIT"
 
 [kernel]
 library = "zerolux_storage"

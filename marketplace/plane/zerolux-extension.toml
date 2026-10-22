@@ -5,6 +5,10 @@ version = "0.0.1"
 publisher = "zerolux"
 description = "Projects in Plane workspaces, cloud or self-hosted, live: their projects and work items"
 kernel = ">=0.0.1"
+icon = "icon.png"
+categories = ["projects-tasks"]
+keywords = ["plane", "work items", "self-hosted", "tracker"]
+license = "MIT"
 
 [dependencies]
 "zerolux.projects" = ">=0.0.1"

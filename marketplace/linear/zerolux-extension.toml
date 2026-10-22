@@ -5,6 +5,10 @@ version = "0.0.1"
 publisher = "zerolux"
 description = "Projects in Linear workspaces, live: their teams and issues"
 kernel = ">=0.0.1"
+icon = "icon.png"
+categories = ["projects-tasks"]
+keywords = ["linear", "issues", "teams", "tracker"]
+license = "MIT"
 
 [dependencies]
 "zerolux.projects" = ">=0.0.1"

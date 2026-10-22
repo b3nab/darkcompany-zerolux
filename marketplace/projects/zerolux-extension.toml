@@ -5,6 +5,10 @@ version = "0.0.1"
 publisher = "zerolux"
 description = "Projects and their tasks, for people and agents, kept here or in a tracker"
 kernel = ">=0.0.1"
+icon = "icon.png"
+categories = ["projects-tasks"]
+keywords = ["projects", "tasks", "trackers", "agents"]
+license = "MIT"
 
 [kernel]
 library = "zerolux_projects"

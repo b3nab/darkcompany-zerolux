@@ -5,6 +5,10 @@ version = "0.0.1"
 publisher = "zerolux"
 description = "Storage locations in Google Drive, live: My Drive, its folders and shared drives"
 kernel = ">=0.0.1"
+icon = "icon.png"
+categories = ["files-storage"]
+keywords = ["google", "drive", "files", "cloud"]
+license = "MIT"
 
 [dependencies]
 "zerolux.storage" = ">=0.0.1"

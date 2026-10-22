@@ -5,6 +5,10 @@ version = "0.0.1"
 publisher = "zerolux"
 description = "Projects in ClickUp, live: the lists of its spaces and folders, and their tasks"
 kernel = ">=0.0.1"
+icon = "icon.png"
+categories = ["projects-tasks"]
+keywords = ["clickup", "tasks", "lists", "tracker"]
+license = "MIT"
 
 [dependencies]
 "zerolux.projects" = ">=0.0.1"
