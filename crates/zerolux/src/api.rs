@@ -457,12 +457,15 @@ async fn web_cache(request: Request, next: Next) -> Response {
 
 /// Nothing of the API is cached by a browser or a device: discovery, identity and
 /// revocation take effect on the next request.
+/// Nothing the API gives is kept, unless what it gives says otherwise: a file named by its digest.
 async fn no_store(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        axum::http::HeaderValue::from_static("no-store"),
-    );
+    if !response.headers().contains_key(header::CACHE_CONTROL) {
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        );
+    }
     response
 }
 
@@ -2981,27 +2984,30 @@ async fn extension_ui_address(
 async fn extension_asset(
     State(state): State<AppState>,
     Path(sha256): Path<String>,
+    request: Request,
 ) -> Result<Response, ApiFailure> {
     let (path, kind) = runtime(&state)?
         .extensions
         .asset(&sha256)
         .await
         .map_err(said)?;
-    let bytes = tokio::fs::read(&path)
+    let mime: mime::Mime = kind.parse().unwrap_or(mime::APPLICATION_OCTET_STREAM);
+    // Served in ranges too, as players ask for a video.
+    let mut response = ServeFile::new_with_mime(&path, &mime)
+        .try_call(request)
         .await
-        .map_err(|_| ApiFailure::from(Error::NotFound))?;
-    Ok((
-        [
-            (axum::http::header::CONTENT_TYPE, kind),
-            (
-                axum::http::header::CACHE_CONTROL,
-                "private, max-age=31536000, immutable",
-            ),
-            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-        ],
-        bytes,
-    )
-        .into_response())
+        .map_err(|error| said(error.into()))?
+        .map(axum::body::Body::new);
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, max-age=31536000, immutable"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        axum::http::HeaderValue::from_static("nosniff"),
+    );
+    Ok(response)
 }
 
 #[derive(Deserialize)]

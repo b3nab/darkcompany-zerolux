@@ -903,7 +903,27 @@ async fn extensions_are_installed_from_an_index_only_as_their_publisher_signed_t
     let got = fetch(shown["icon"]["url"].as_str().unwrap().to_owned()).await;
     assert_eq!(got.status(), StatusCode::OK);
     assert_eq!(got.headers()["content-type"], "image/png");
+    assert!(
+        got.headers()["cache-control"]
+            .to_str()
+            .unwrap()
+            .contains("immutable")
+    );
     assert_eq!(got.bytes().await.unwrap().to_vec(), icon);
+    // In ranges too, as players ask for a video.
+    let part = kernel
+        .client
+        .get(format!(
+            "{}{}",
+            kernel.url,
+            shown["icon"]["url"].as_str().unwrap()
+        ))
+        .header("range", "bytes=0-7")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(part.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(part.bytes().await.unwrap().to_vec(), icon[..8]);
     // Changed at the index, it is not given.
     std::fs::write(
         dir.path()
