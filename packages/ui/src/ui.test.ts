@@ -7,6 +7,7 @@ import {
   callAction,
   eventName,
   moduleHost,
+  openAddress,
   receiveFile,
   sendFile,
   uiModule,
@@ -28,6 +29,7 @@ const here: Here = {
   context: { session_id: "s1" },
   kernel,
   save: async () => {},
+  open: async () => {},
   actors: [],
 };
 const schema = {
@@ -146,6 +148,30 @@ test("an app gives every component a view may draw with", () => {
   ) as unknown as UiComponents;
   const ui = uiModule(all);
   expect(Object.keys(ui)).toEqual(
-    expect.arrayContaining([...componentNames, "useAction", "useActionResult"]),
+    expect.arrayContaining([
+      ...componentNames,
+      "useAction",
+      "useActionResult",
+      "useOpen",
+    ]),
   );
+});
+
+test("a view opens web addresses in the device's browser, and nothing else", async () => {
+  const opened: string[] = [];
+  const browsing: Here = {
+    ...here,
+    open: async (url) => void opened.push(url),
+  };
+  await openAddress(browsing, "https://accounts.example.com/sign-in?x=1");
+  await openAddress(browsing, "http://192.0.2.4:4400/api/extensions/oauth");
+  for (const url of ["javascript:alert(1)", "zerolux://chat/1", "file:///etc"])
+    await expect(openAddress(browsing, url)).rejects.toThrow(
+      "A view opens only web addresses",
+    );
+  await expect(openAddress(browsing, "not an address")).rejects.toThrow();
+  expect(opened).toEqual([
+    "https://accounts.example.com/sign-in?x=1",
+    "http://192.0.2.4:4400/api/extensions/oauth",
+  ]);
 });

@@ -12,6 +12,7 @@ export {
   useActors,
   useDownload,
   useEvent,
+  useOpen,
   useSpace,
   useUpload,
 } from "./hooks";

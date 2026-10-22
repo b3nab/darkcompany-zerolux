@@ -35,6 +35,8 @@ export interface Here {
   kernel: string;
   /** Keeps a file the view gives, as the app keeps files: saved or shared. */
   save: (file: Blob, name: string) => Promise<void>;
+  /** Opens a web address in the device's browser, outside the app. */
+  open: (url: string) => Promise<void>;
   /** The workspace's people and agents. */
   actors: UiActor[];
 }
@@ -106,6 +108,14 @@ export const receiveFile = (
     here.kernel,
     `${actionPath(here, action)}?input=${inAddress(here, input, schema)}`,
   );
+
+/** A web address opened in the device's browser; any other kind is refused. */
+export async function openAddress(here: Here, url: string) {
+  const { protocol } = new URL(url);
+  if (protocol !== "https:" && protocol !== "http:")
+    throw new Error(`A view opens only web addresses, not ${protocol}`);
+  await here.open(url);
+}
 
 /** An action's input schema, so the place is given only where it is asked. */
 const schemaOf = (here: Shown, name: string) =>
@@ -241,6 +251,12 @@ export function useUpload(action: string) {
   );
   const { run, ...rest } = useRunning(work);
   return { upload: run, ...rest };
+}
+
+/** Opens a web address in the device's browser, outside the app: a sign-in page, say. */
+export function useOpen() {
+  const here = useHere();
+  return useCallback((url: string) => openAddress(here, url), [here]);
 }
 
 /** The file an action gives, kept as the app keeps files. */

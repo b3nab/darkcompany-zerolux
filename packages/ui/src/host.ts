@@ -15,7 +15,13 @@ import type { Here } from "./hooks";
 export type { Here, UiActor } from "./hooks";
 export { componentNames } from "./components";
 export type { UiComponents } from "./components";
-export { callAction, eventName, receiveFile, sendFile } from "./hooks";
+export {
+  callAction,
+  eventName,
+  openAddress,
+  receiveFile,
+  sendFile,
+} from "./hooks";
 
 const NONE: ExtensionAction[] = [];
 
@@ -28,6 +34,7 @@ export function UiSpace({
   context,
   kernel,
   save,
+  open,
   actors,
   children,
 }: Here & { children: ReactNode }) {
@@ -45,10 +52,11 @@ export function UiSpace({
       context: JSON.parse(place) as Here["context"],
       kernel,
       save,
+      open,
       actors: JSON.parse(people) as Here["actors"],
       actions: known,
     }),
-    [piece, place, kernel, save, people, known],
+    [piece, place, kernel, save, open, people, known],
   );
   return createElement(HereContext.Provider, { value }, children);
 }
@@ -69,6 +77,7 @@ export function uiModule(components: UiComponents) {
     useEvent: hooks.useEvent,
     useUpload: hooks.useUpload,
     useDownload: hooks.useDownload,
+    useOpen: hooks.useOpen,
   };
 }
 

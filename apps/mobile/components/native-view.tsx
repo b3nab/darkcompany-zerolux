@@ -2,7 +2,7 @@ import * as React from "react";
 import { Component, useEffect, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import * as JsxRuntime from "react/jsx-runtime";
-import { ActivityIndicator } from "react-native";
+import { ActivityIndicator, Linking } from "react-native";
 import { useCSSVariable } from "uniwind";
 import {
   activeActors,
@@ -16,6 +16,11 @@ import { saveFile } from "@/components/save-file";
 import { Text } from "@/components/ui/text";
 import { uiComponents } from "@/components/ui-components";
 import { useSession } from "../src/kernel";
+
+// A view opens web addresses in the system browser, as every link in the app.
+const openInBrowser = async (url: string) => {
+  await Linking.openURL(url);
+};
 
 // The bundle running now, by its address: its view is kept by that name.
 let running: string | undefined;
@@ -111,6 +116,7 @@ export function NativeView({
         context={context}
         kernel={url}
         save={saveFile}
+        open={openInBrowser}
         actors={activeActors(workspace?.actors ?? [])}
       >
         <View />
