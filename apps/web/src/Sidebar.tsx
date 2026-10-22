@@ -72,7 +72,7 @@ export function Sidebar({
   kernel: Kernel;
   toggle: () => boolean;
 }) {
-  // Pages the workspace's extensions bring, after Storage.
+  // Pages the workspace's extensions bring, after ZeroLux's own sections.
   const pages = useUiPieces("page");
   const unread = chat.conversations.filter(
     (c) => !isThread(c) && c.last_seq > (chat.seen[c.id] ?? 0),
@@ -94,15 +94,22 @@ export function Sidebar({
       <Item to="/" end icon={LayoutDashboardIcon} label={homeLabel()} />
       <Item to="/console" icon={SquareTerminalIcon} label="Console" />
       <Item
+        to="/approvals"
+        icon={StampIcon}
+        label="Approvals"
+        count={pending}
+        attention
+      />
+      <Item
         to="/chats"
         icon={MessagesSquareIcon}
         label="Chat"
         count={unread}
         toggle={toggle}
       />
+      <Item to="/meetings" icon={PhoneIcon} label="Meetings" />
       <Item to="/team" icon={UsersIcon} label="Team" toggle={toggle} />
       <Item to="/org" icon={NetworkIcon} label="Org" />
-      <Item to="/meetings" icon={PhoneIcon} label="Meetings" />
       {pages.map((piece) => (
         <Item
           key={`${piece.extension}/${piece.name}`}
@@ -112,13 +119,6 @@ export function Sidebar({
         />
       ))}
       <Item to="/extensions" icon={BlocksIcon} label="Extensions" />
-      <Item
-        to="/approvals"
-        icon={StampIcon}
-        label="Approvals"
-        count={pending}
-        attention
-      />
       <div className="mt-auto flex flex-col items-center gap-1 pt-4">
         <ThemeSwitch />
         <KernelStatus kernel={kernel} />
