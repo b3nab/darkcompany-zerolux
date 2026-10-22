@@ -11,6 +11,7 @@ import { PageSheet } from "@/components/page-sheet";
 import { Menu } from "@/components/action-menu";
 import { SearchField } from "@/components/search-field";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Text } from "@/components/ui/text";
 import { Icon } from "@/components/ui-icon";
 import { cn } from "@/lib/utils";
@@ -117,13 +118,20 @@ function FolderSheet({
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [hidden, setHidden] = useState(false);
+  // Where its folders cannot be walked (only its own person may), the path is written.
+  const [written, setWritten] = useState(from ?? "");
   useEffect(() => {
     let shown = true;
     setError("");
     setQuery("");
     readFolders(path, url).then(
       (read) => shown && setListing(read),
-      (e: unknown) => shown && setError(errorMessage(e)),
+      (e: unknown) => {
+        if (!shown) return;
+        setError(errorMessage(e));
+        // The folder that could not be read is the one to write, or to correct.
+        if (path) setWritten(path);
+      },
     );
     return () => {
       shown = false;
@@ -131,6 +139,7 @@ function FolderSheet({
   }, [path, url]);
   const here =
     listing && (!path || listing.path === path) ? listing : undefined;
+  const chosen = error ? written.trim() : here?.path;
   const folders = (here?.folders ?? []).filter(
     (folder) =>
       (hidden || !folder.hidden) &&
@@ -224,6 +233,15 @@ function FolderSheet({
         {error ? (
           <View className="gap-2">
             <Text className="text-sm text-destructive">{error}</Text>
+            <Input
+              value={written}
+              onChangeText={setWritten}
+              placeholder="Folder's full path"
+              accessibilityLabel="Folder's full path"
+              autoCapitalize="none"
+              autoCorrect={false}
+              className="font-mono text-[13px]"
+            />
             {path ? (
               <Pressable
                 accessibilityRole="button"
@@ -279,16 +297,16 @@ function FolderSheet({
         className="gap-1.5 border-t border-border px-4 pt-3"
         style={{ paddingBottom: bottom + 12 }}
       >
-        <Button disabled={!here} onPress={() => here && onChoose(here.path)}>
+        <Button disabled={!chosen} onPress={() => chosen && onChoose(chosen)}>
           <Text>Use this folder</Text>
         </Button>
-        {here ? (
+        {chosen ? (
           <Text
             numberOfLines={1}
             ellipsizeMode="middle"
             className="text-center text-[12.5px] text-muted-foreground"
           >
-            {here.path}
+            {chosen}
           </Text>
         ) : null}
       </View>
