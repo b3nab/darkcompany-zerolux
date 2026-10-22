@@ -94,7 +94,7 @@ export default function Chats() {
         renderItem={({ item: c }) => {
           const agent =
             c.kind === "dm" ? agentMembers(c, actors)[0] : undefined;
-          const unread = unreadIn(c, chat.seen);
+          const unread = unreadIn(c);
           const asks = waiting.has(c.id);
           const last = c.last_message;
           const preview = chatPreview(

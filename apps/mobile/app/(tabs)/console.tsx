@@ -15,7 +15,6 @@ import {
   sessionOutputAt,
   startsAnywhere,
   useHistorySearch,
-  useSeen,
 } from "@zerolux/chat";
 import type { Attention } from "@zerolux/chat";
 import { Screen } from "@/components/screen";
@@ -62,7 +61,6 @@ export default function Console() {
   const ink = String(useCSSVariable("--color-foreground"));
   const [shown, setShown] = useState<Shown>("live");
   const [query, setQuery] = useState("");
-  const seen = useSeen();
   const actors = workspace?.actors ?? [];
   // What is typed narrows each list, and its count.
   const sessions = Object.fromEntries(
@@ -77,7 +75,6 @@ export default function Console() {
       output_at: sessionOutputAt(chat, session) ?? null,
     })),
     chat.approvals,
-    seen,
   );
   // The live inbox in sections; the other lists are plain.
   const section = (row: (typeof rows)[number]) =>

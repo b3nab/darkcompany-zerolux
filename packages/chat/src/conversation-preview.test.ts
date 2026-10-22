@@ -9,6 +9,7 @@ const empty: Conversation = {
   paused: false,
   members: [],
   last_seq: 0,
+  read_seq: 0,
   last_message: null,
 };
 const current: Conversation = {
@@ -88,4 +89,10 @@ test("the chat list orders by the last message time and excludes threads", () =>
     "quiet",
   ]);
   expect(chats[0]).toBe(quiet);
+});
+
+test("a delayed list cannot move back how far the person has read", () => {
+  const read = { ...current, read_seq: 2 };
+  expect(mergeConversation(read, current).read_seq).toBe(2);
+  expect(mergeConversation(current, read).read_seq).toBe(2);
 });

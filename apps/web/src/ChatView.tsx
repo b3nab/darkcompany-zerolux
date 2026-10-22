@@ -143,7 +143,7 @@ export function ChatList({ chat, actors }: { chat: Chat; actors: Actor[] }) {
         {shown.map((c) => {
           const agent =
             c.kind === "dm" ? agentMembers(c, actors)[0] : undefined;
-          const unread = unreadIn(c, chat.seen);
+          const unread = unreadIn(c);
           const last = c.last_message;
           const preview = chatPreview(
             c,

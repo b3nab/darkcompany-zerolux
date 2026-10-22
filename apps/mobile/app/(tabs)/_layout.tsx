@@ -25,7 +25,7 @@ function Connected() {
   // The requests waiting for you: those of your sessions.
   const pending = requestsFor(chat, me?.id).length;
   const unread = chat.conversations.filter(
-    (c) => c.kind !== "thread" && unreadIn(c, chat.seen) > 0,
+    (c) => c.kind !== "thread" && unreadIn(c) > 0,
   ).length;
   const waiting = waitingChats(
     chat.conversations,

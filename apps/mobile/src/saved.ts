@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { File, Paths } from "expo-file-system";
-import { keepDraftsIn, keepSeenIn } from "@zerolux/chat";
+import { keepDraftsIn } from "@zerolux/chat";
 
 /**
  * What this phone keeps for you between launches, as small JSON files in the app's own
@@ -60,17 +60,6 @@ export function preference<T>(
       if (valid(saved)) change(saved);
     },
   };
-}
-
-/** The sessions you have seen, as this phone remembers them. */
-export async function restoreSeen() {
-  const saved = await readSaved("seen");
-  keepSeenIn(
-    saved && typeof saved === "object"
-      ? (saved as Record<string, unknown>)
-      : {},
-    (all) => writeSaved("seen", all),
-  );
 }
 
 /**

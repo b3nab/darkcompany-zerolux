@@ -37,6 +37,7 @@ import { connectRealtime } from "./realtime";
 import type { RealtimeStatus } from "./realtime";
 import { extensionsNotice } from "./extensions";
 import { unseenInputs } from "./inputs";
+import { isLooking, readPositions, whenLooking } from "./reading";
 import type { SentInput } from "./inputs";
 import type { QueuedInput } from "./live";
 import type { SessionBlock } from "./session-events";
@@ -60,7 +61,6 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [openId, setOpenId] = useState<string>();
   const [messages, setMessages] = useState<Message[]>([]);
-  const [seen, setSeen] = useState<Record<string, number>>({});
   const [realtime, setRealtime] = useState<RealtimeStatus>("connecting");
   // When each session's native output last grew, as the kernel noticed it.
   const [outputs, setOutputs] = useState<
@@ -69,7 +69,6 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
   const [error, setError] = useState("");
   const open = useRef<string>(undefined);
   const loaded = useRef<Message[]>([]);
-  const listed = useRef(false);
   // An older response never overwrites a newer one (e.g. Working after Idle).
   const [order] = useState(freshness);
   const [unsent, setUnsent] = useState<Outgoing[]>([]);
@@ -78,6 +77,36 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
   const [outgoing] = useState(() =>
     outbox(post, setUnsent, (e) => setError(errorMessage(e))),
   );
+  // How far the person has read each chat and seen each session, kept by the kernel for all
+  // their clients.
+  const [positions] = useState(() =>
+    readPositions((path, position) =>
+      api(path, path.endsWith("/read") ? { seq: position } : { at: position }),
+    ),
+  );
+  const readPath = (id: string) => `/conversations/${id}/read`;
+  const seenPath = (id: string) => `/sessions/${id}/seen`;
+  function readTo(id: string, seq: number) {
+    setConversations((cs) =>
+      cs.map((c) =>
+        c.id === id && (c.read_seq ?? 0) < seq ? { ...c, read_seq: seq } : c,
+      ),
+    );
+  }
+  function seenTo(id: string, at: number) {
+    setSessions((ss) =>
+      ss.map((s) =>
+        s.id === id && (s.seen_at ?? 0) < at ? { ...s, seen_at: at } : s,
+      ),
+    );
+  }
+  /** The person read the open chat as far as it is loaded, if they are looking. */
+  function readOpen() {
+    const id = open.current;
+    const last = loaded.current.at(-1)?.seq;
+    if (id && last && isLooking() && positions.move(readPath(id), last))
+      readTo(id, last);
+  }
 
   async function sendInput(input: SentInput) {
     // In place, in the order they were sent.
@@ -108,8 +137,7 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     if (open.current !== id) return;
     loaded.current = mergeMessages(loaded.current, incoming);
     setMessages(loaded.current);
-    const last = loaded.current.at(-1)?.seq ?? 0;
-    setSeen((s) => ({ ...s, [id]: Math.max(s[id] ?? 0, last) }));
+    readOpen();
   }
   async function page(id: string, after: number, limit = PAGE) {
     const request = order.start();
@@ -163,14 +191,8 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       "conversations",
       () => api<{ conversations: Conversation[] }>("/conversations"),
       ({ conversations }) => {
-        // Conversations present at first load start as read; later ones as unread.
-        const first = !listed.current;
-        listed.current = true;
-        setSeen((s) => {
-          const next = { ...s };
-          for (const c of conversations) next[c.id] ??= first ? c.last_seq : 0;
-          return next;
-        });
+        for (const c of conversations)
+          positions.heard(readPath(c.id), c.read_seq ?? 0);
         setConversations((cs) => {
           const current = new Map(cs.map((c) => [c.id, c]));
           return conversations.map((c) =>
@@ -185,7 +207,17 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     order.run(
       "sessions",
       () => api<{ sessions: ChatSession[] }>("/sessions"),
-      ({ sessions }) => setSessions(sessions),
+      ({ sessions }) => {
+        for (const s of sessions)
+          positions.heard(seenPath(s.id), s.seen_at ?? 0);
+        // What was seen here meanwhile is not taken back.
+        setSessions((current) =>
+          sessions.map((s) => {
+            const here = current.find((c) => c.id === s.id)?.seen_at ?? 0;
+            return here > (s.seen_at ?? 0) ? { ...s, seen_at: here } : s;
+          }),
+        );
+      },
     );
   const listApprovals = () =>
     order.run(
@@ -244,6 +276,13 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
         return void background(listConversations());
       case "approval.changed":
         return void background(listApprovals());
+      case "read.changed":
+        if (event.kind === "conversation") {
+          positions.heard(readPath(event.id), event.position);
+          return readTo(event.id, event.position);
+        }
+        positions.heard(seenPath(event.id), event.position);
+        return seenTo(event.id, event.position);
       case "session.live":
         return liveNotice(event);
       case "terminal.output":
@@ -299,6 +338,9 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     outgoing.open();
     return () => outgoing.close();
   }, [outgoing]);
+  // What arrived while the person looked away is read when they look again.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => whenLooking(readOpen), []);
   useEffect(() => {
     // Also retried on a timer: the kernel can return without a realtime reconnect.
     if (!enabled || !unsent.length) return;
@@ -341,10 +383,13 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     approvals,
     openId,
     messages,
-    seen,
     realtime,
     error,
     select,
+    /** The person saw a session's work up to `at`, in ms, here: their other clients follow. */
+    markSeen(sessionId: string, at: number) {
+      if (positions.move(seenPath(sessionId), at)) seenTo(sessionId, at);
+    },
     async loadEarlier() {
       const id = open.current;
       const first = loaded.current[0]?.seq ?? 1;
@@ -389,7 +434,6 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
           }),
         applyConversation,
       );
-      setSeen((s) => ({ ...s, [conversation.id]: conversation.last_seq }));
       // A new chat cannot be stale: it is listed even if a newer list came first.
       setConversations((cs) =>
         cs.some((c) => c.id === conversation.id) ? cs : [...cs, conversation],

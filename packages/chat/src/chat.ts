@@ -70,6 +70,8 @@ export interface ChatSession {
   parent_session_id: string | null;
   /** When its native record last grew, in ms. */
   output_at?: number | null;
+  /** How far the person asking has seen its work, on any of their clients, in ms. */
+  seen_at?: number | null;
   /** How its last turn ended; null while one runs or before the first. */
   last_turn?: "completed" | "interrupted" | "error" | null;
   /** Its latest text or step, in one line. */
@@ -87,6 +89,8 @@ export interface Conversation {
   /** In a thread, only its participants: they write and receive its deliveries. */
   members: Member[];
   last_seq: number;
+  /** How far the person asking has read it, on any of their clients. */
+  read_seq?: number;
   /** A thread's chat: everyone in it can read the thread. */
   parent_id?: string | null;
   /** The message of the parent chat the thread is about: one thread per message. */
@@ -203,6 +207,7 @@ export type ChatEvent = { event_id: string } & (
   | { type: "session.changed"; session_id: string }
   | { type: "delivery.changed"; conversation_id: string; message_id: string }
   | { type: "approval.changed"; approval_id: string }
+  | ReadNotice
   | ({
       type: "session.output";
       session_id: string;
@@ -214,6 +219,16 @@ export type ChatEvent = { event_id: string } & (
   | BackgroundNotice
   | (UiNotice & { event_id: string })
 );
+/**
+ * The person read a chat up to a message, or saw a session's work up to a time, on one of
+ * their clients: the others follow.
+ */
+export type ReadNotice = {
+  type: "read.changed";
+  kind: "conversation" | "session";
+  id: string;
+  position: number;
+};
 /** How a session's native record ends, as the kernel's watcher last read it. */
 export type SessionTail = Partial<
   Pick<ChatSession, "output_at" | "last_turn" | "summary">
@@ -475,11 +490,9 @@ export function listChats(
         (b.last_message?.created_at ?? 0) - (a.last_message?.created_at ?? 0),
     );
 }
-/** Messages not yet seen in a chat, as far as this device knows. */
-export const unreadIn = (
-  conversation: Conversation,
-  seen: Record<string, number>,
-) => Math.max(0, conversation.last_seq - (seen[conversation.id] ?? 0));
+/** Messages of a chat the person has not read on any of their clients. */
+export const unreadIn = (conversation: Conversation) =>
+  Math.max(0, conversation.last_seq - (conversation.read_seq ?? 0));
 /** A chat's threads, open ones first, then the most recent. */
 export const threadsOf = (
   conversation: Conversation,
@@ -525,6 +538,7 @@ const eventTypes = new Set<string>([
   "session.changed",
   "delivery.changed",
   "approval.changed",
+  "read.changed",
   "session.output",
   "session.live",
   "terminal.output",
@@ -560,6 +574,9 @@ export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
       typeof event.event_id !== "string"
     )
       event.event_id = `background_command.changed:${event.background_command_id}:${event.status}`;
+    // A read position only moves forward: where it is names the notice.
+    if (event.type === "read.changed" && typeof event.event_id !== "string")
+      event.event_id = `read.changed:${event.kind}:${event.id}:${event.position}`;
     // An extension's event or a new tree for a view: each one is its own.
     if (event.type === "extension.event" && typeof event.event_id !== "string")
       event.event_id = `extension.event:${event.event}:${++uiNotices}`;
@@ -572,18 +589,24 @@ export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
   }
 }
 
-/** Keep a newer message preview when a list or action response arrives late. */
+/**
+ * Keep a newer message preview, and a further read position, when a list or action response
+ * arrives late.
+ */
 export function mergeConversation(
   current: Conversation | undefined,
   incoming: Conversation,
 ): Conversation {
-  return current?.id === incoming.id && current.last_seq > incoming.last_seq
+  if (current?.id !== incoming.id) return incoming;
+  const read = Math.max(current.read_seq ?? 0, incoming.read_seq ?? 0);
+  return current.last_seq > incoming.last_seq
     ? {
         ...incoming,
         last_seq: current.last_seq,
         last_message: current.last_message,
+        read_seq: read,
       }
-    : incoming;
+    : { ...incoming, read_seq: read };
 }
 
 /** Merges pages by `seq`, newer copies replacing older ones (e.g. delivery states). */

@@ -192,11 +192,10 @@ export const attentionOrder: Attention[] = [
   "idle",
 ];
 
-/** A session's state for you; `seenAt` is when you last looked at it, in ms. */
+/** A session's state for you: what it asks, its work, and whether you have seen its latest. */
 export function sessionAttention(
   session: ChatSession,
   approvals: Approval[],
-  seenAt?: number,
 ): Attention {
   const pending = approvals.filter(
     (a) => a.session_id === session.id && a.status === "pending",
@@ -207,20 +206,17 @@ export function sessionAttention(
     return "working";
   if (session.status === "attention" || session.last_turn === "error")
     return "failed";
-  if (session.output_at && session.output_at > (seenAt ?? 0)) return "unseen";
+  if (session.output_at && session.output_at > (session.seen_at ?? 0))
+    return "unseen";
   return "idle";
 }
 
 /** Sessions as an inbox: pinned ones first, then what needs you, the most recent within each. */
-export function attentionInbox(
-  sessions: ChatSession[],
-  approvals: Approval[],
-  seen: Record<string, number>,
-) {
+export function attentionInbox(sessions: ChatSession[], approvals: Approval[]) {
   return sessions
     .map((session) => ({
       session,
-      attention: sessionAttention(session, approvals, seen[session.id]),
+      attention: sessionAttention(session, approvals),
     }))
     .sort(
       (a, b) =>
@@ -240,7 +236,7 @@ export const sessionOutputAt = (
 /** What a session tells you without being asked: it needs you, it failed, or it finished. */
 export type SessionNotice = "approval" | "input" | "failed" | "finished";
 
-/** Each running session's state, whatever you have seen of it: what notices compare. */
+/** Each running session's state: what notices compare. */
 export const sessionAttentions = (
   sessions: ChatSession[],
   approvals: Approval[],

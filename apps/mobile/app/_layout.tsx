@@ -11,7 +11,7 @@ import { requiresSignIn } from "@zerolux/chat";
 import { useAuthentication } from "../src/auth";
 import { restoreDensity } from "../src/density";
 import { noticeChoice } from "../src/notices";
-import { restoreDrafts, restoreSeen } from "../src/saved";
+import { restoreDrafts } from "../src/saved";
 import { restoreTheme, useTheme } from "../src/theme";
 
 // Before any box is drawn, so none starts empty over a kept draft.
@@ -21,7 +21,6 @@ export default function Layout() {
   const { resolved } = useTheme();
   useEffect(() => {
     void restoreTheme();
-    void restoreSeen();
     void restoreDensity();
     void noticeChoice.restore();
   }, []);

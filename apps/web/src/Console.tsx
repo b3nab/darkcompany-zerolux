@@ -40,7 +40,6 @@ import {
   inputImageTypes,
   inputImagesError,
   latestPlan,
-  markSeen,
   placeApprovals,
   plainLine,
   recentFolders,
@@ -65,7 +64,8 @@ import {
   delegatedTo,
   sessionOutputAt,
   sessionState,
-  useSeen,
+  isLooking,
+  whenLooking,
   mentionAt,
   useSessionCommands,
   useSessionEvents,
@@ -274,7 +274,6 @@ export function ConsoleList({
   // Every word typed is in the session's title, agent, folder, harness or latest line.
   const [query, setQuery] = useState("");
   const navigate = useNavigate();
-  const seen = useSeen();
   const sessions = consoleSessions(
     query.trim()
       ? chat.sessions.filter((session) =>
@@ -288,7 +287,6 @@ export function ConsoleList({
       output_at: sessionOutputAt(chat, session) ?? null,
     })),
     chat.approvals,
-    seen,
   );
   // Grouped only while live: pinned first, then by state.
   const group = (row: (typeof shown)[number]) =>
@@ -787,13 +785,15 @@ export function SessionView({
     ) : undefined);
   useEffect(() => {
     if (!at) return;
-    // What it wrote while you look at it is seen; while the window is hidden, it waits.
+    // What it wrote while you look at it is seen, on all your clients; while you look away,
+    // it waits.
     const look = () => {
-      if (document.visibilityState === "visible") markSeen(session.id, at);
+      if (isLooking()) chat.markSeen(session.id, at);
     };
     look();
-    document.addEventListener("visibilitychange", look);
-    return () => document.removeEventListener("visibilitychange", look);
+    return whenLooking(look);
+    // The chat's own functions read only its state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, at]);
   // A link to a point of its work (`?at=`, from a search) opens there, not at the bottom.
   const [params] = useSearchParams();

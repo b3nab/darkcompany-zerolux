@@ -47,7 +47,6 @@ import {
   commandsFor,
   densityLabels,
   latestPlan,
-  markSeen,
   placeApprovals,
   sessionBlocks,
   sessionCommand,
@@ -298,7 +297,7 @@ export default function SessionPage() {
       if (!at) return;
       const look = () => {
         if (AppState.currentState !== "active") return;
-        markSeen(id, at);
+        chat.markSeen(id, at);
         dismissNotice(id);
       };
       look();

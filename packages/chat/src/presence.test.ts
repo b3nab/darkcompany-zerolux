@@ -92,25 +92,30 @@ test("a session's state for you: what it asks first, then work, failure, news, q
   expect(sessionAttention(idle, [request("a", "question")])).toBe("input");
   // An answered request asks nothing.
   expect(
-    sessionAttention(idle, [request("a", "permission", "resolved")], 200),
+    sessionAttention({ ...idle, seen_at: 200 }, [
+      request("a", "permission", "resolved"),
+    ]),
   ).toBe("idle");
   expect(sessionAttention(session("a", "connected", "working"), [])).toBe(
     "working",
   );
-  expect(sessionAttention({ ...idle, last_turn: "error" }, [], 200)).toBe(
-    "failed",
-  );
-  expect(sessionAttention(idle, [], 50)).toBe("unseen");
-  expect(sessionAttention(idle, [], 150)).toBe("idle");
+  expect(
+    sessionAttention({ ...idle, last_turn: "error", seen_at: 200 }, []),
+  ).toBe("failed");
+  expect(sessionAttention({ ...idle, seen_at: 50 }, [])).toBe("unseen");
+  expect(sessionAttention({ ...idle, seen_at: 150 }, [])).toBe("idle");
   const inbox = attentionInbox(
     [
-      { ...session("quiet", "connected", "idle"), output_at: 10 },
-      { ...session("new", "connected", "idle"), output_at: 300 },
+      {
+        ...session("quiet", "connected", "idle"),
+        output_at: 10,
+        seen_at: 20,
+      },
+      { ...session("new", "connected", "idle"), output_at: 300, seen_at: 100 },
       session("busy", "connected", "working"),
       { ...session("asks", "connected", "idle"), output_at: 5 },
     ],
     [request("asks", "permission")],
-    { quiet: 20, new: 100 },
   );
   expect(inbox.map((row) => [row.session.id, row.attention])).toEqual([
     ["asks", "approval"],
@@ -125,7 +130,6 @@ test("a session's state for you: what it asks first, then work, failure, news, q
       { ...session("kept", "connected", "idle"), pinned_at: 5 },
     ],
     [],
-    {},
   );
   expect(pinned.map((row) => row.session.id)).toEqual(["kept", "busy"]);
   const lists = consoleSessions([

@@ -41,6 +41,7 @@ import {
   creationDateLabel,
   homeLabel,
   isThread,
+  unreadIn,
   workspaceAge,
   useUiPieces,
 } from "@zerolux/chat";
@@ -93,7 +94,7 @@ export function Sidebar({
   // Pages the workspace's extensions bring, after ZeroLux's own sections.
   const pages = useUiPieces("page");
   const unread = chat.conversations.filter(
-    (c) => !isThread(c) && c.last_seq > (chat.seen[c.id] ?? 0),
+    (c) => !isThread(c) && unreadIn(c) > 0,
   ).length;
   const pending = chat.approvals.filter((a) => a.status === "pending").length;
   return (
