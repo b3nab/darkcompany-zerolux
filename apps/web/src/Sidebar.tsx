@@ -1,4 +1,21 @@
+import { useRef } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router";
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import type { Announcements, Modifier, UniqueIdentifier } from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 import { cn } from "cn";
 import {
   BlocksIcon,
@@ -33,6 +50,7 @@ import type { Actor, Workspace } from "./api";
 import { agentPresence } from "./presence";
 import { useAuthentication } from "./AuthGate";
 import { pieceIcon } from "./extension-view";
+import { stored } from "./stored";
 import { useTheme } from "./theme";
 import { Mark } from "@/components/brand";
 import { Lamp } from "@/components/lamp";
@@ -91,40 +109,148 @@ export function Sidebar({
       >
         <Mark className="size-6" />
       </Link>
-      <Item to="/" end icon={LayoutDashboardIcon} label={homeLabel()} />
-      <Item to="/console" icon={SquareTerminalIcon} label="Console" />
-      <Item
-        to="/approvals"
-        icon={StampIcon}
-        label="Approvals"
-        count={pending}
-        attention
+      <Sections
+        sections={[
+          { to: "/", end: true, icon: LayoutDashboardIcon, label: homeLabel() },
+          { to: "/console", icon: SquareTerminalIcon, label: "Console" },
+          {
+            to: "/approvals",
+            icon: StampIcon,
+            label: "Approvals",
+            count: pending,
+            attention: true,
+          },
+          {
+            to: "/chats",
+            icon: MessagesSquareIcon,
+            label: "Chat",
+            count: unread,
+            toggle,
+          },
+          { to: "/meetings", icon: PhoneIcon, label: "Meetings" },
+          { to: "/team", icon: UsersIcon, label: "Team", toggle },
+          { to: "/org", icon: NetworkIcon, label: "Org" },
+          ...pages.map((piece) => ({
+            to: `/x/${encodeURIComponent(piece.extension)}/${encodeURIComponent(piece.name)}`,
+            icon: pieceIcon(piece),
+            label: piece.title,
+          })),
+          { to: "/extensions", icon: BlocksIcon, label: "Extensions" },
+        ]}
       />
-      <Item
-        to="/chats"
-        icon={MessagesSquareIcon}
-        label="Chat"
-        count={unread}
-        toggle={toggle}
-      />
-      <Item to="/meetings" icon={PhoneIcon} label="Meetings" />
-      <Item to="/team" icon={UsersIcon} label="Team" toggle={toggle} />
-      <Item to="/org" icon={NetworkIcon} label="Org" />
-      {pages.map((piece) => (
-        <Item
-          key={`${piece.extension}/${piece.name}`}
-          to={`/x/${encodeURIComponent(piece.extension)}/${encodeURIComponent(piece.name)}`}
-          icon={pieceIcon(piece)}
-          label={piece.title}
-        />
-      ))}
-      <Item to="/extensions" icon={BlocksIcon} label="Extensions" />
       <div className="mt-auto flex flex-col items-center gap-1 pt-4">
         <ThemeSwitch />
         <KernelStatus kernel={kernel} />
         <UserMenu owner={owner} />
       </div>
     </nav>
+  );
+}
+
+type Section = {
+  /** Where it goes, which names it in the order kept. */
+  to: string;
+  end?: boolean;
+  icon: LucideIcon;
+  label: string;
+  count?: number;
+  attention?: boolean;
+  /** For a section with a panel: opens or closes it, and says whether it did. */
+  toggle?: () => boolean;
+};
+
+const order = stored<string[]>(
+  "zerolux-bar-order",
+  [],
+  (value): value is string[] =>
+    Array.isArray(value) && value.every((to) => typeof to === "string"),
+);
+
+/**
+ * The sections in the order the person put them; one never placed, as a page of an extension
+ * just installed, stays after the section it follows in `sections`.
+ */
+export function arranged(sections: string[], kept: string[]) {
+  const placed = kept.filter((to) => sections.includes(to));
+  sections.forEach((to, at) => {
+    if (!placed.includes(to))
+      placed.splice(at && placed.indexOf(sections[at - 1]!) + 1, 0, to);
+  });
+  return placed;
+}
+
+// Along the bar only.
+const alongTheBar: Modifier = ({ transform }) => ({ ...transform, x: 0 });
+
+/**
+ * The sections, each moved where the person wants it, as icons in the Dock: dragged, or
+ * picked up with Space and moved with the arrows. Enter and a click still open them.
+ */
+function Sections({ sections }: { sections: Section[] }) {
+  const placed = arranged(
+    sections.map((section) => section.to),
+    order.use(),
+  );
+  const named = (id: UniqueIdentifier) =>
+    sections.find((section) => section.to === id)?.label ?? "";
+  const at = (id: UniqueIdentifier) =>
+    `${placed.indexOf(String(id)) + 1} of ${placed.length}`;
+  const announcements: Announcements = {
+    onDragStart: ({ active }) => `Picked up ${named(active.id)}.`,
+    onDragOver: ({ active, over }) =>
+      over ? `${named(active.id)} is at ${at(over.id)}.` : undefined,
+    onDragEnd: ({ active, over }) =>
+      `${named(active.id)} dropped${over ? ` at ${at(over.id)}` : ""}.`,
+    onDragCancel: ({ active }) => `${named(active.id)} put back.`,
+  };
+  const sensors = useSensors(
+    // A few pixels first: a click opens the section.
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+      // Enter follows the link.
+      keyboardCodes: { start: ["Space"], end: ["Space"], cancel: ["Escape"] },
+    }),
+  );
+  // The click that ends a drag by the pointer does not open the section.
+  const dragged = useRef(false);
+  return (
+    <div
+      className="flex flex-col items-center gap-1"
+      onPointerDownCapture={() => {
+        dragged.current = false;
+      }}
+      onClickCapture={(event) => {
+        if (dragged.current) event.preventDefault();
+        dragged.current = false;
+      }}
+    >
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        modifiers={[alongTheBar]}
+        accessibility={{ announcements }}
+        onDragStart={({ activatorEvent }) => {
+          dragged.current = activatorEvent instanceof PointerEvent;
+        }}
+        onDragEnd={({ active, over }) => {
+          if (over && active.id !== over.id)
+            order.set(
+              arrayMove(
+                placed,
+                placed.indexOf(String(active.id)),
+                placed.indexOf(String(over.id)),
+              ),
+            );
+        }}
+      >
+        <SortableContext items={placed} strategy={verticalListSortingStrategy}>
+          {placed.map((to) => (
+            <Item key={to} {...sections.find((s) => s.to === to)!} />
+          ))}
+        </SortableContext>
+      </DndContext>
+    </div>
   );
 }
 
@@ -136,25 +262,36 @@ function Item({
   count,
   attention,
   toggle,
-}: {
-  to: string;
-  end?: boolean;
-  icon: LucideIcon;
-  label: string;
-  count?: number;
-  attention?: boolean;
-  /** For a section with a panel: opens or closes it, and says whether it did. */
-  toggle?: () => boolean;
-}) {
+}: Section) {
   const open = useMatch({ path: to, end: !!end }) !== null;
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: to });
   return (
     <NavLink
+      ref={setNodeRef}
       to={to}
       end={end}
+      {...listeners}
+      // A link stays one: only how to move it is added.
+      aria-describedby={attributes["aria-describedby"]}
+      draggable={false}
+      data-dragging={isDragging || undefined}
+      style={{
+        transform: transform
+          ? `translate3d(0, ${transform.y}px, 0)`
+          : undefined,
+        transition,
+      }}
       onClick={(event) => {
         if (open && toggle?.()) event.preventDefault();
       }}
-      className="relative flex w-14 shrink-0 flex-col items-center gap-1 rounded-md pt-2 pb-1.5 text-[10.5px] leading-none text-muted-foreground outline-none transition-colors before:absolute before:inset-y-2.5 before:-left-1.5 before:w-0.75 before:rounded-full hover:bg-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 aria-[current=page]:text-foreground aria-[current=page]:before:bg-primary [&>svg]:size-5 [&>svg]:text-faint aria-[current=page]:[&>svg]:text-primary"
+      className="relative flex w-14 shrink-0 flex-col items-center gap-1 rounded-md pt-2 pb-1.5 text-[10.5px] leading-none text-muted-foreground outline-none transition-[color,background-color,scale,box-shadow] before:absolute before:inset-y-2.5 before:-left-1.5 before:w-0.75 before:rounded-full hover:bg-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 aria-[current=page]:text-foreground aria-[current=page]:before:bg-primary data-dragging:z-10 data-dragging:scale-110 data-dragging:bg-accent data-dragging:shadow-lg [&>svg]:size-5 [&>svg]:text-faint aria-[current=page]:[&>svg]:text-primary"
     >
       <Icon aria-hidden />
       <span className="max-w-full truncate">{label}</span>
