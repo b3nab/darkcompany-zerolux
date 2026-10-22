@@ -222,9 +222,10 @@ export default function SessionPage() {
   const runs = useMemo(() => blockRuns(items), [items]);
   // What it is producing right now follows its record, until the record has it.
   const live = useSessionLive(id, chat.live, events.length);
-  // What the owner sent shows at once, until the record or the queue has it.
+  // What the owner sent shows at once, until the record or the queue has it; one sent before
+  // the work shown is in the record above it.
   const queue = useSessionQueue(id, chat.live);
-  const sent = chat.sentInputs(id, blocks, queue);
+  const sent = chat.sentInputs(id, blocks, queue, events[0]?.at);
   const rows: Row[] = [
     ...runs,
     ...live.map((item) => ({
