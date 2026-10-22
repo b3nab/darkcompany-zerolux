@@ -328,6 +328,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/chat/deliveries/{id}/dispatch", post(dispatch_delivery))
         .route("/chat/deliveries/{id}/receipt", post(delivery_receipt))
         .route("/hosts", get(list_hosts))
+        .route("/folders", get(list_folders))
         .route("/hosts/link", post(link_host))
         .route(
             "/hosts/{id}",
@@ -596,6 +597,29 @@ async fn host_person(state: &AppState, who: &ChatIdentity) -> Result<(), ApiFail
             "The sessions on this computer are its person's",
         )),
     }
+}
+
+#[derive(Deserialize)]
+struct FoldersQuery {
+    #[serde(default)]
+    path: Option<String>,
+}
+
+/// The folders of this kernel's computer, for its person to choose one: inside `path`, or the
+/// home.
+async fn list_folders(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Query(query): Query<FoldersQuery>,
+) -> Result<Json<Value>, ApiFailure> {
+    if !who.is_person() {
+        return Err(Error::Forbidden.into());
+    }
+    host_person(&state, &who).await?;
+    let listed = tokio::task::spawn_blocking(move || crate::folders::list(query.path.as_deref()))
+        .await
+        .map_err(|error| said(error.into()))??;
+    Ok(Json(listed))
 }
 
 /// New sessions on this kernel's computer: its person's, and those of the people it is open

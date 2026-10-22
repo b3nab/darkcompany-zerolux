@@ -17,6 +17,7 @@ mod codex_settings;
 pub mod db;
 pub mod entity;
 pub mod extensions;
+pub mod folders;
 pub mod harness;
 pub mod history;
 pub mod homes;
