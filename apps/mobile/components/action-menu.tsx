@@ -20,13 +20,14 @@ import {
 } from "@expo/ui/swift-ui/modifiers";
 import * as Haptics from "expo-haptics";
 import { Link } from "expo-router";
+import type { Href } from "expo-router";
 import {
   CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
 } from "lucide-react-native";
-import { useState } from "react";
-import type { ComponentProps, ReactElement } from "react";
+import { cloneElement, useState } from "react";
+import type { ComponentProps, ReactElement, ReactNode } from "react";
 import { ActionSheetIOS, Modal, Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCSSVariable } from "uniwind";
@@ -316,8 +317,47 @@ export const linkEntries = (entries: MenuEntry[]): ReactElement[] =>
     </Link.Menu>
   ));
 
+/**
+ * A row that opens a screen, its menu a long press away: on iOS the system's menu over a
+ * preview of that screen, on Android the app's sheet.
+ */
+export function MenuLink({
+  href,
+  menu,
+  className,
+  children,
+}: {
+  href: Href;
+  menu: MenuEntry[];
+  className?: string;
+  children: ReactNode;
+}) {
+  const { open, sheet } = useSheet();
+  return (
+    <>
+      <Link href={href} asChild>
+        <Link.Trigger>
+          <Pressable
+            accessibilityRole="button"
+            onLongPress={
+              Platform.OS === "ios" || !menu.length
+                ? undefined
+                : () => open(menu)
+            }
+            className={className}
+          >
+            {children}
+          </Pressable>
+        </Link.Trigger>
+        {menu.length ? <Link.Menu>{linkEntries(menu)}</Link.Menu> : null}
+      </Link>
+      {sheet}
+    </>
+  );
+}
+
 /** The app's sheet of a menu: `sheet` goes in the tree. */
-export function useSheet() {
+function useSheet() {
   const [shown, setShown] = useState<MenuEntry[]>();
   return {
     open: (entries: MenuEntry[]) => {
@@ -384,14 +424,15 @@ export function Menu({ label, icon = "ellipsis", items }: MenuProps) {
 
 /**
  * Something with its actions a long press away: iOS's own context menu, lifting it over the
- * rest; on Android, the app's sheet. A tap stays its own.
+ * rest; on Android, the app's sheet, opened by the child's own `onLongPress`, as a
+ * Pressable takes it. A tap stays its own.
  */
 export function RowMenu({
   items,
   children,
 }: {
   items?: MenuEntry[];
-  children: ReactElement;
+  children: ReactElement<{ onLongPress?: () => void }>;
 }) {
   const { resolved } = useTheme();
   const { open, sheet } = useSheet();
@@ -399,9 +440,7 @@ export function RowMenu({
   if (Platform.OS !== "ios")
     return (
       <>
-        <Pressable onLongPress={() => open(items)} delayLongPress={350}>
-          {children}
-        </Pressable>
+        {cloneElement(children, { onLongPress: () => open(items) })}
         {sheet}
       </>
     );

@@ -158,12 +158,18 @@ const rowAt = (row: Row) =>
  */
 export default function SessionPage() {
   // `at`: a place in its history to open at, as a search found it.
-  const { id, at: place } = useLocalSearchParams<{
+  const {
+    id,
+    at: place,
+    about: opened,
+  } = useLocalSearchParams<{
     id: string;
     at?: string;
+    /** Opened to be renamed from a list: its About, where the title is, comes up. */
+    about?: string;
   }>();
   const { workspace, chat, url } = useSession();
-  const [about, setAbout] = useState(false);
+  const [about, setAbout] = useState(opened === "1");
   const router = useRouter();
   const muted = String(useCSSVariable("--color-muted-foreground"));
   const insets = useSafeAreaInsets();

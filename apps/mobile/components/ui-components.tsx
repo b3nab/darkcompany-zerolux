@@ -364,15 +364,18 @@ export const uiComponents: UiComponents = {
     );
     return (
       <RowMenu items={menu}>
-        {onPress ? (
+        {onPress || menu?.length ? (
           <Pressable
-            accessibilityRole="button"
+            accessibilityRole={onPress ? "button" : undefined}
             accessibilityState={{ selected }}
-            onPress={() => {
-              void Haptics.selectionAsync();
-              onPress();
-            }}
-            className={cn(row, "bg-card active:bg-accent")}
+            onPress={
+              onPress &&
+              (() => {
+                void Haptics.selectionAsync();
+                onPress();
+              })
+            }
+            className={cn(row, "bg-card", onPress && "active:bg-accent")}
           >
             {body}
           </Pressable>
@@ -439,15 +442,18 @@ export const uiComponents: UiComponents = {
     );
     return (
       <RowMenu items={menu}>
-        {onPress ? (
+        {onPress || menu?.length ? (
           <Pressable
-            accessibilityRole="button"
+            accessibilityRole={onPress ? "button" : undefined}
             accessibilityState={{ selected }}
-            onPress={() => {
-              void Haptics.selectionAsync();
-              onPress();
-            }}
-            className={cn(card, "active:bg-accent")}
+            onPress={
+              onPress &&
+              (() => {
+                void Haptics.selectionAsync();
+                onPress();
+              })
+            }
+            className={cn(card, onPress && "active:bg-accent")}
           >
             {body}
           </Pressable>

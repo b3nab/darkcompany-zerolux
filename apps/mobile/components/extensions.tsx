@@ -194,6 +194,7 @@ export function ExtensionRow({
   description,
   first,
   onPress,
+  onLongPress,
   children,
 }: {
   id: string;
@@ -204,6 +205,8 @@ export function ExtensionRow({
   description: string;
   first: boolean;
   onPress: () => void;
+  /** Its menu, on Android. */
+  onLongPress?: () => void;
   children?: ReactNode;
 }) {
   const faint = String(useCSSVariable("--color-faint"));
@@ -213,6 +216,7 @@ export function ExtensionRow({
     <Pressable
       accessible={false}
       onPress={onPress}
+      onLongPress={onLongPress}
       className={cn(
         "flex-row items-start gap-3 px-3.5 py-3 active:bg-accent",
         !first && "border-t border-border",

@@ -237,8 +237,9 @@ export function Table({
                 <Pressable
                   accessibilityRole="button"
                   accessibilityState={{ selected: on }}
-                  disabled={!selecting && !row.onOpen}
-                  onPress={() => press(row)}
+                  onPress={
+                    selecting || row.onOpen ? () => press(row) : undefined
+                  }
                   className={cn(
                     "min-h-12 flex-row items-center gap-3 bg-card px-3.5 py-2.5 active:bg-accent",
                     i > 0 && "border-t border-border",

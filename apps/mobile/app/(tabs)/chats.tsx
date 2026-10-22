@@ -1,11 +1,12 @@
 import { useRouter } from "expo-router";
 import { SquarePenIcon } from "lucide-react-native";
 import { useState } from "react";
-import { FlatList, Pressable, View } from "react-native";
+import { Alert, FlatList, Pressable, View } from "react-native";
 import {
   agentMembers,
   chatFilters,
   chatPreview,
+  errorMessage,
   harnessLabels,
   listChats,
   listTime,
@@ -14,6 +15,7 @@ import {
 } from "@zerolux/chat";
 import type { ChatFilter } from "@zerolux/chat";
 import { useCSSVariable } from "uniwind";
+import { MenuLink } from "@/components/action-menu";
 import { ChatMark } from "@/components/chat-mark";
 import { Screen } from "@/components/screen";
 import { Text } from "@/components/ui/text";
@@ -104,9 +106,36 @@ export default function Chats() {
             name,
           );
           return (
-            <Pressable
+            <MenuLink
+              href={`/chat/${c.id}`}
+              menu={[
+                {
+                  title: "Open",
+                  icon: "message-square",
+                  onPress: () => router.push(`/chat/${c.id}`),
+                },
+                {
+                  title: "Meet",
+                  icon: "phone",
+                  onPress: () =>
+                    router.push({
+                      pathname: "/meetings",
+                      params: { chat: c.id },
+                    }),
+                },
+                { divider: true },
+                {
+                  title: c.paused ? "Resume" : "Pause",
+                  icon: c.paused ? "play" : "pause",
+                  onPress: () =>
+                    void chat
+                      .pause(c, !c.paused)
+                      .catch((e) =>
+                        Alert.alert("Not changed", errorMessage(e)),
+                      ),
+                },
+              ]}
               className="flex-row items-center gap-3 px-5 py-2.5 active:bg-accent"
-              onPress={() => router.push(`/chat/${c.id}`)}
             >
               <ChatMark conversation={c} agent={agent} />
               <View className="min-w-0 flex-1 gap-0.5">
@@ -164,7 +193,7 @@ export default function Chats() {
                   ) : null}
                 </View>
               </View>
-            </Pressable>
+            </MenuLink>
           );
         }}
       />

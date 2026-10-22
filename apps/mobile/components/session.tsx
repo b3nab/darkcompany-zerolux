@@ -25,6 +25,8 @@ import type {
   ChatSession,
   ShareChoice,
 } from "@zerolux/chat";
+import type { MenuEntry } from "@zerolux/ui";
+import { MenuLink } from "@/components/action-menu";
 import { ActorMark, Fact, Lamp } from "@/components/member";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
@@ -55,7 +57,8 @@ export function useOrganize(session: ChatSession) {
  * One session as the Console's inbox lists it, like a chat in the list of chats: its agent
  * (or its title, without one) and harness, when it last wrote, then what it asks of you,
  * what it does while it works, why it stopped, else its latest in a line; a dot while it has
- * written what you have not seen. Held, it is pinned, archived or renamed: the system's menu on iOS.
+ * written what you have not seen. Held, one's own is renamed, pinned, archived or forked: the
+ * system's menu over its preview on iOS, the app's sheet on Android.
  */
 export function SessionRow({
   session,
@@ -90,127 +93,124 @@ export function SessionRow({
       ? session.attention_reason
       : undefined;
   const title = session.title || "Untitled session";
+  const router = useRouter();
+  // Android has no prompt: its About, where the title is, opens instead.
   const rename = () =>
-    Alert.prompt(
-      "Rename session",
-      undefined,
-      organize.rename,
-      "plain-text",
-      title,
+    Platform.OS === "ios"
+      ? Alert.prompt(
+          "Rename session",
+          undefined,
+          organize.rename,
+          "plain-text",
+          title,
+        )
+      : router.push({
+          pathname: "/session/[id]",
+          params: { id: session.id, about: "1" },
+        });
+  const fork = () =>
+    void chat.forkSession(session.id).then(
+      ({ session: forked }) => router.push(`/session/${forked.id}`),
+      (e: unknown) => Alert.alert("Not forked", errorMessage(e)),
     );
-  // Android has no menu on a link: holding the row asks instead.
-  const ask = () =>
-    Alert.alert(agent?.name ?? title, undefined, [
-      { text: organize.pinned ? "Unpin" : "Pin", onPress: organize.pin },
-      {
-        text: organize.archived ? "Unarchive" : "Archive",
-        onPress: organize.archive,
-      },
-      { text: "Cancel", style: "cancel" },
-    ]);
+  const menu: MenuEntry[] = person
+    ? []
+    : [
+        { title: "Rename", icon: "pencil", onPress: rename },
+        {
+          title: organize.pinned ? "Unpin" : "Pin",
+          icon: organize.pinned ? "pin-off" : "pin",
+          onPress: organize.pin,
+        },
+        {
+          title: organize.archived ? "Unarchive" : "Archive",
+          icon: organize.archived ? "archive-restore" : "archive",
+          onPress: organize.archive,
+        },
+        { divider: true },
+        { title: "Fork", icon: "git-fork", onPress: fork },
+      ];
   return (
-    <Link href={`/session/${session.id}`} asChild>
-      <Link.Trigger>
-        <Pressable
-          onLongPress={Platform.OS === "ios" ? undefined : ask}
-          accessibilityRole="button"
-          className="flex-row items-center gap-3 px-5 py-2.5 active:bg-accent"
-        >
-          <ActorMark
-            kind="agent"
-            name={agent?.name ?? title}
-            tone={sessionTone(session)}
-          />
-          <View className="min-w-0 flex-1 gap-0.5">
-            <View className="flex-row items-baseline gap-2">
-              <Text
-                numberOfLines={1}
-                className={cn(
-                  "shrink text-sm",
-                  agent ? "font-mono text-agent-foreground" : "font-medium",
-                )}
-              >
-                {agent?.name ?? title}
-              </Text>
-              <Text
-                numberOfLines={1}
-                className="shrink font-mono text-[11px] text-faint"
-              >
-                {harnessLabels[session.harness] ?? session.harness}
-                {computer ? ` · on ${computer.name}` : ""}
-                {person ? ` · by ${person}` : ""}
-              </Text>
-              <View className="ml-auto flex-row items-center gap-1">
-                {session.shared ? (
-                  <UsersIcon
-                    accessibilityLabel={`Shared to ${session.shared}`}
-                    color={faint}
-                    size={11}
-                    strokeWidth={2}
-                  />
-                ) : null}
-                {organize.pinned ? (
-                  <PinIcon color={faint} size={11} strokeWidth={2} />
-                ) : null}
-                {session.output_at ? (
-                  <Text className="font-mono text-[11px] text-faint">
-                    {ago(session.output_at)}
-                  </Text>
-                ) : null}
-              </View>
-            </View>
-            <View className="flex-row items-center gap-1.5">
-              {unseen ? (
-                <View
-                  accessibilityLabel="New"
-                  className="size-1.5 rounded-full bg-agent"
-                />
-              ) : null}
-              <Text
-                numberOfLines={1}
-                className={cn(
-                  "flex-1 text-[13px] text-muted-foreground",
-                  attention === "working" && "text-agent-foreground",
-                  (asks || stopped) && "text-attention",
-                  unseen && "font-medium text-foreground",
-                )}
-              >
-                {attention === "working"
-                  ? sessionState(session)
-                  : asks
-                    ? `Asks: ${asks.summary}`
-                    : stopped
-                      ? session.attention_reason
-                      : session.summary ||
-                        (agent ? title : sessionState(session))}
-              </Text>
-            </View>
-            {parent ? (
-              <Text numberOfLines={1} className="text-xs text-faint">
-                Started by {sessionName(parent, workspace?.actors ?? [])}
+    <MenuLink
+      href={`/session/${session.id}`}
+      menu={menu}
+      className="flex-row items-center gap-3 px-5 py-2.5 active:bg-accent"
+    >
+      <ActorMark
+        kind="agent"
+        name={agent?.name ?? title}
+        tone={sessionTone(session)}
+      />
+      <View className="min-w-0 flex-1 gap-0.5">
+        <View className="flex-row items-baseline gap-2">
+          <Text
+            numberOfLines={1}
+            className={cn(
+              "shrink text-sm",
+              agent ? "font-mono text-agent-foreground" : "font-medium",
+            )}
+          >
+            {agent?.name ?? title}
+          </Text>
+          <Text
+            numberOfLines={1}
+            className="shrink font-mono text-[11px] text-faint"
+          >
+            {harnessLabels[session.harness] ?? session.harness}
+            {computer ? ` · on ${computer.name}` : ""}
+            {person ? ` · by ${person}` : ""}
+          </Text>
+          <View className="ml-auto flex-row items-center gap-1">
+            {session.shared ? (
+              <UsersIcon
+                accessibilityLabel={`Shared to ${session.shared}`}
+                color={faint}
+                size={11}
+                strokeWidth={2}
+              />
+            ) : null}
+            {organize.pinned ? (
+              <PinIcon color={faint} size={11} strokeWidth={2} />
+            ) : null}
+            {session.output_at ? (
+              <Text className="font-mono text-[11px] text-faint">
+                {ago(session.output_at)}
               </Text>
             ) : null}
           </View>
-        </Pressable>
-      </Link.Trigger>
-      <Link.Menu>
-        <Link.MenuAction
-          icon={organize.pinned ? "pin.slash" : "pin"}
-          onPress={organize.pin}
-        >
-          {organize.pinned ? "Unpin" : "Pin"}
-        </Link.MenuAction>
-        <Link.MenuAction icon="pencil" onPress={rename}>
-          Rename
-        </Link.MenuAction>
-        <Link.MenuAction
-          icon={organize.archived ? "tray.and.arrow.up" : "archivebox"}
-          onPress={organize.archive}
-        >
-          {organize.archived ? "Unarchive" : "Archive"}
-        </Link.MenuAction>
-      </Link.Menu>
-    </Link>
+        </View>
+        <View className="flex-row items-center gap-1.5">
+          {unseen ? (
+            <View
+              accessibilityLabel="New"
+              className="size-1.5 rounded-full bg-agent"
+            />
+          ) : null}
+          <Text
+            numberOfLines={1}
+            className={cn(
+              "flex-1 text-[13px] text-muted-foreground",
+              attention === "working" && "text-agent-foreground",
+              (asks || stopped) && "text-attention",
+              unseen && "font-medium text-foreground",
+            )}
+          >
+            {attention === "working"
+              ? sessionState(session)
+              : asks
+                ? `Asks: ${asks.summary}`
+                : stopped
+                  ? session.attention_reason
+                  : session.summary || (agent ? title : sessionState(session))}
+          </Text>
+        </View>
+        {parent ? (
+          <Text numberOfLines={1} className="text-xs text-faint">
+            Started by {sessionName(parent, workspace?.actors ?? [])}
+          </Text>
+        ) : null}
+      </View>
+    </MenuLink>
   );
 }
 
