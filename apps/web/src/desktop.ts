@@ -53,6 +53,16 @@ export function desktopSignIn() {
   };
 }
 
+/** A web address opened outside the app: by the system browser in the desktop, else a new tab. */
+export async function openLink(url: string) {
+  if (!desktopConnection()) {
+    window.open(url, "_blank", "noopener");
+    return;
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("open_link", { url });
+}
+
 /** Where this page's kernel is: the desktop names it, a browser uses the page's own origin. */
 export const kernelAddress = () => desktopConnection()?.kernelUrl ?? "";
 

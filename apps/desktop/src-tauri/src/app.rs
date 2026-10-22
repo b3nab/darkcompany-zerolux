@@ -161,6 +161,18 @@ fn open_external(handle: &tauri::AppHandle, url: &tauri::Url) {
     }
 }
 
+// A web address a workspace's view asks for opens in the system browser, never in the app.
+#[tauri::command]
+fn open_link(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    let url = tauri::Url::parse(&url).map_err(|error| error.to_string())?;
+    if !local::external_link(&url) {
+        return Err("Only web addresses open outside the app".into());
+    }
+    app.opener()
+        .open_url(url.as_str(), None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
 fn manager_request(url: &tauri::Url) -> bool {
     url.scheme() == "zerolux"
         && url.host_str() == Some("workspaces")
@@ -834,6 +846,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
         )
         .invoke_handler(tauri::generate_handler![
             workspace_action,
+            open_link,
             crate::chrome::window_control,
             crate::credentials::read_workspace_credential,
             crate::credentials::write_workspace_credential

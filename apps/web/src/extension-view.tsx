@@ -20,7 +20,7 @@ import type { UiContext, UiNode, UiPiece } from "@zerolux/chat";
 import { moduleHost, UiSpace, uiModule } from "@zerolux/ui/host";
 import { cn } from "cn";
 import { ActionForm } from "./ActionForm";
-import { extensionUiAddress } from "./desktop";
+import { extensionUiAddress, openLink } from "./desktop";
 import { lucideIcon, UiActors, uiComponents } from "./native-ui";
 import { saveFile } from "@/components/file";
 import { MessageText } from "@/components/message-text";
@@ -462,6 +462,7 @@ function NativeView({
       context={context}
       kernel={kernelUrl()}
       save={saveFile}
+      open={openLink}
       actors={actors}
     >
       <ViewBoundary>

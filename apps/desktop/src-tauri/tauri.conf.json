@@ -21,11 +21,12 @@
         },
         {
           "identifier": "workspace-window",
-          "description": "Packaged workspace controls, its own credentials and system notifications; no registry or process access",
+          "description": "Packaged workspace controls, its own credentials, system notifications and web links opened in the system browser; no registry or process access",
           "local": true,
           "windows": ["workspace-*"],
           "permissions": [
             "allow-window-control",
+            "allow-open-link",
             "allow-read-workspace-credential",
             "allow-write-workspace-credential",
             "core:window:allow-start-dragging",
