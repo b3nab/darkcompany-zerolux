@@ -11,6 +11,7 @@ import {
   marketplaceName,
   offerAction,
   offerFor,
+  offerVersions,
   useExtensions,
   useMarketplace,
 } from "@zerolux/chat";
@@ -133,9 +134,7 @@ export default function Consent() {
             {update ? ` to ${offer!.version}` : ""}?
           </Text>
           <Text className="font-mono text-xs text-muted-foreground">
-            {update
-              ? `${installed!.version} → ${offer!.version}`
-              : subject.version}
+            {update ? offerVersions(offer!) : subject.version}
           </Text>
         </View>
       </View>

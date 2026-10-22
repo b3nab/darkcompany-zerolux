@@ -89,6 +89,14 @@ function Navigator() {
             sheetGrabberVisible: true,
           }}
         />
+        <Stack.Screen
+          name="update-all"
+          options={{
+            presentation: "formSheet",
+            sheetAllowedDetents: "fitToContents",
+            sheetGrabberVisible: true,
+          }}
+        />
         <Stack.Screen name="piece" />
         <Stack.Screen name="action" options={{ presentation: "modal" }} />
       </Stack.Protected>

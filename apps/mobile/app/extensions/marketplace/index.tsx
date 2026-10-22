@@ -3,9 +3,11 @@ import { useState } from "react";
 import { Pressable, RefreshControl, ScrollView } from "react-native";
 import {
   extensionCategories,
+  extensionGroups,
   marketplaceIndexes,
   marketplaceName,
   offerAction,
+  useExtensions,
   useMarketplace,
 } from "@zerolux/chat";
 import type { MarketplaceOffer } from "@zerolux/chat";
@@ -17,6 +19,7 @@ import {
   matches,
   partOf,
   RowButton,
+  UpdatesBanner,
 } from "@/components/extensions";
 import { Screen } from "@/components/screen";
 import { SearchField } from "@/components/search-field";
@@ -34,6 +37,7 @@ export default function Marketplace() {
   const { owner } = useMe();
   const router = useRouter();
   const { marketplace, error, reload } = useMarketplace(url, owner);
+  const { extensions } = useExtensions(url);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<string>();
   const [refreshing, setRefreshing] = useState(false);
@@ -116,6 +120,11 @@ export default function Marketplace() {
           onChange={setQuery}
           label="Search extensions and publishers"
         />
+        {extensions && marketplace && !category ? (
+          <UpdatesBanner
+            updates={extensionGroups(extensions, marketplace.offers).updates}
+          />
+        ) : null}
         {categories.length ? (
           <ScrollView
             horizontal

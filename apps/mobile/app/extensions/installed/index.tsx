@@ -22,6 +22,7 @@ import {
   matches,
   RowButton,
   StateChip,
+  UpdatesBanner,
 } from "@/components/extensions";
 import { Screen } from "@/components/screen";
 import { SearchField } from "@/components/search-field";
@@ -171,7 +172,6 @@ export default function Installed() {
         ))}
       </Group>
     ) : null;
-  const single = groups?.updates.length === 1 ? groups.updates[0] : undefined;
   return (
     <Screen back large title="Extensions" action={<ExtensionsMenu />}>
       <ScrollView
@@ -197,33 +197,10 @@ export default function Installed() {
         {error || failure ? (
           <Text className="text-sm text-destructive">{failure || error}</Text>
         ) : null}
-        {groups?.updates.length ? (
-          <View className="flex-row items-center gap-3 rounded-xl border border-attention/40 bg-attention/10 px-3.5 py-3">
-            <View className="min-w-0 flex-1">
-              <Text className="text-[15px] font-semibold">
-                {groups.updates.length === 1
-                  ? "1 update available"
-                  : `${groups.updates.length} updates available`}
-              </Text>
-              <Text
-                numberOfLines={2}
-                className="text-[13px] text-muted-foreground"
-              >
-                {groups.updates
-                  .map(
-                    ({ extension, offer }) =>
-                      `${extension.name} ${offer.version}`,
-                  )
-                  .join(", ")}
-              </Text>
-            </View>
-            {single && owner ? (
-              <RowButton
-                label="Update"
-                onPress={() => consent(single.extension.id)}
-              />
-            ) : null}
-          </View>
+        {extensions && marketplace ? (
+          <UpdatesBanner
+            updates={extensionGroups(extensions, marketplace.offers).updates}
+          />
         ) : null}
         {!groups ? (
           <Text className="text-sm text-faint">Reading the extensions…</Text>

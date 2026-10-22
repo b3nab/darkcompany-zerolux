@@ -1,3 +1,4 @@
+import { useRouter } from "expo-router";
 import { ChevronRightIcon } from "lucide-react-native";
 import type { ReactNode } from "react";
 import { useState } from "react";
@@ -26,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "../src/kernel";
+import { useMe } from "../src/me";
 import { useTheme } from "../src/theme";
 
 /** How an extension stands: running, enabled but stopped, off, or failed with its reason. */
@@ -468,6 +470,50 @@ export function ExtensionSettings({
       >
         <Text>{busy ? "Saving…" : "Save"}</Text>
       </Button>
+    </View>
+  );
+}
+
+/**
+ * The updates waiting, said once above a list: the owner updates one from its consent, more
+ * all at once from a sheet that shows them first.
+ */
+export function UpdatesBanner({
+  updates,
+}: {
+  updates: { extension: Extension; offer: MarketplaceOffer }[];
+}) {
+  const { owner } = useMe();
+  const router = useRouter();
+  if (!updates.length) return null;
+  const [single] = updates.length === 1 ? updates : [];
+  return (
+    <View className="flex-row items-center gap-3 rounded-xl border border-attention/40 bg-attention/10 px-3.5 py-3">
+      <View className="min-w-0 flex-1">
+        <Text className="text-[15px] font-semibold">
+          {updates.length === 1
+            ? "1 update available"
+            : `${updates.length} updates available`}
+        </Text>
+        <Text numberOfLines={2} className="text-[13px] text-muted-foreground">
+          {updates
+            .map(({ extension, offer }) => `${extension.name} ${offer.version}`)
+            .join(", ")}
+        </Text>
+      </View>
+      {owner ? (
+        <RowButton
+          label={single ? "Update" : "Update all"}
+          onPress={() =>
+            single
+              ? router.push({
+                  pathname: "/consent",
+                  params: { id: single.extension.id },
+                })
+              : router.push("/update-all")
+          }
+        />
+      ) : null}
     </View>
   );
 }
