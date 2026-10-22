@@ -7,13 +7,11 @@ import {
   authorColor,
   cardFileUrl,
   cardIcon,
-  disableExtension,
   errorMessage,
   extensionCategories,
   extensionsNotice,
   offerVersions,
   proposer,
-  removeExtension,
   setExtensionSettings,
 } from "@zerolux/chat";
 import type {
@@ -62,12 +60,6 @@ const parts: Record<string, { title: string; text: string }> = {
 };
 export const partOf = (part: string) =>
   parts[part] ?? { title: part, text: "" };
-
-/** Removes an extension: the kernel removes only a disabled one, so it is disabled first. */
-export async function removeInstalled(extension: Extension, kernel: string) {
-  if (extension.enabled) await disableExtension(extension.id, kernel);
-  await removeExtension(extension.id, kernel);
-}
 
 /** A category's name; one this app does not know yet is Other. */
 export const categoryName = (id: string) =>

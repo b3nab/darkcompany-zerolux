@@ -5,12 +5,12 @@ import {
   errorMessage,
   extensionsNotice,
   loadExtensionFolder,
+  removeInstalled,
   useExtensions,
 } from "@zerolux/chat";
 import {
   ExtensionRow,
   Group,
-  removeInstalled,
   RowButton,
   StateChip,
 } from "@/components/extensions";

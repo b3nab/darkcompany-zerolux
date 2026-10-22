@@ -13,6 +13,7 @@ import {
   marketplaceName,
   offerAction,
   offerFor,
+  removeInstalled,
   useActions,
   useExtensions,
   useMarketplace,
@@ -27,7 +28,6 @@ import {
   Group,
   categoryName,
   partOf,
-  removeInstalled,
   StateChip,
   useProposer,
 } from "@/components/extensions";
