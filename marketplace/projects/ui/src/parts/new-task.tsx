@@ -9,7 +9,7 @@ import {
   Text,
   useAction,
 } from "@zerolux/ui";
-import { useAssignees } from "./task-sheet";
+import { useAssignees, useTracked } from "./task-sheet";
 import { priorities, statuses, tap } from "./model";
 import type { Priority, Project, Status } from "./model";
 
@@ -71,8 +71,10 @@ function Form({
   onDone: () => void;
 }) {
   const create = useAction("create_task");
-  const assignees = useAssignees();
   const [task, setTask] = useState(() => blank(start, projects));
+  const chosen = projects.find((p) => p.id === task.project_id);
+  const { tracked } = useTracked(chosen?.source);
+  const assignees = useAssignees(tracked);
   const set = (fields: Partial<typeof task>) =>
     setTask((was) => ({ ...was, ...fields }));
   const save = () =>
@@ -85,7 +87,7 @@ function Form({
           value={task.project_id}
           options={projects.map((p) => ({
             value: p.id,
-            label: `${p.name} · ${p.key}`,
+            label: p.key ? `${p.name} · ${p.key}` : p.name,
           }))}
           onChange={(project_id) => set({ project_id })}
         />
@@ -115,7 +117,7 @@ function Form({
         onChange={(priority) => set({ priority: priority as Priority })}
       />
       <Select
-        label="Assignee"
+        label={tracked ? "Agent" : "Assignee"}
         value={task.assignee}
         options={assignees}
         onChange={(assignee) => set({ assignee })}

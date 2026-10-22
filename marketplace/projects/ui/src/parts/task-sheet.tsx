@@ -23,18 +23,30 @@ import {
   useEvent,
 } from "@zerolux/ui";
 import { priorities, statuses, tap, when } from "./model";
-import type { Task } from "./model";
+import type { Source, Task } from "./model";
 
 /** How long typing rests before what was typed is kept. */
 const REST = 800;
 
-/** Choosing who does a task: nobody, or a person or an agent of the workspace. */
-export function useAssignees() {
+/**
+ * Choosing who does a task: nobody, or a person or an agent of the workspace. In a tracker,
+ * people are given tasks there: here only an agent.
+ */
+export function useAssignees(tracked = false) {
   const actors = useActors();
   return [
     { value: "", label: "No one" },
-    ...actors.map((actor) => ({ value: actor.id, label: actor.name })),
+    ...actors
+      .filter((actor) => !tracked || actor.kind === "agent")
+      .map((actor) => ({ value: actor.id, label: actor.name })),
   ];
+}
+
+/** Whether a source is a tracker's rather than ZeroLux's own. */
+export function useTracked(source: string | undefined) {
+  const sources = useActionResult<{ sources: Source[] }>("sources", {});
+  const found = sources.data?.sources.find((s) => s.id === source);
+  return { tracked: found ? found.tracker !== "local" : false, source: found };
 }
 
 /** The labels a task carries, chosen among those the work uses, or a new one. */
@@ -118,7 +130,8 @@ function Detail({
   const comment = useAction("comment");
   const remove = useAction("delete_task");
   const actors = useActors();
-  const assignees = useAssignees();
+  const { tracked, source } = useTracked(read.data?.source);
+  const assignees = useAssignees(tracked);
   // What is typed, kept once typing rests, and let go once kept as it is.
   const [draft, setDraft] = useState<{ title: string; description: string }>();
   const [writing, setWriting] = useState(false);
@@ -161,8 +174,10 @@ function Detail({
     return read.error ? <Text tone="danger">{read.error}</Text> : <Spinner />;
   const change = (fields: Partial<Task>) =>
     tap(update.run({ id, ...fields }).then(changed));
-  const name = (actor: string | null) =>
-    actors.find((a) => a.id === actor)?.name ?? "Someone";
+  const name = (actor: string | null, author?: string | null) =>
+    actors.find((a) => a.id === actor)?.name ?? author ?? "Someone";
+  const capable = (capability: string) =>
+    !tracked || Boolean(source?.capabilities?.includes(capability));
   const send = () =>
     tap(
       comment.run({ id, text: note }).then(() => {
@@ -203,17 +218,19 @@ function Detail({
             variant="secondary"
             onPress={() => setWriting(!writing)}
           />
-          <Menu
-            label="More"
-            items={[
-              {
-                title: "Delete task",
-                icon: "trash-2",
-                tone: "danger",
-                onPress: () => setDeleting(true),
-              },
-            ]}
-          />
+          {capable("delete") ? (
+            <Menu
+              label="More"
+              items={[
+                {
+                  title: "Delete task",
+                  icon: "trash-2",
+                  tone: "danger",
+                  onPress: () => setDeleting(true),
+                },
+              ]}
+            />
+          ) : null}
         </Stack>
       </Stack>
       {deleting ? (
@@ -257,8 +274,11 @@ function Detail({
             change({ priority: priority as Task["priority"] })
           }
         />
+        {tracked && task.people?.length ? (
+          <Text size="sm">{task.people.join(", ")}</Text>
+        ) : null}
         <Select
-          label="Assignee"
+          label={tracked ? "Agent" : "Assignee"}
           value={task.assignee ?? ""}
           options={assignees}
           onChange={(assignee) => change({ assignee: assignee || null })}
@@ -301,7 +321,7 @@ function Detail({
           <Stack key={c.id} gap={4}>
             <Stack direction="row" gap={8}>
               {c.by ? <Avatar actorId={c.by} size="sm" /> : null}
-              <Text size="sm">{name(c.by)}</Text>
+              <Text size="sm">{name(c.by, c.author)}</Text>
               <Text size="sm" tone="muted">
                 {when(c.at)}
               </Text>

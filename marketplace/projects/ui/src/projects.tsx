@@ -13,6 +13,7 @@ import {
   Menu,
   Sheet,
   Spinner,
+  Split,
   Stack,
   Tabs,
   Text,
@@ -20,8 +21,17 @@ import {
   useActionResult,
   useEvent,
 } from "@zerolux/ui";
-import { byStatus, keyFrom, labelsOf, open, tap } from "./parts/model";
-import type { Project, Task } from "./parts/model";
+import {
+  byStatus,
+  can,
+  keyFrom,
+  labelsOf,
+  open,
+  sourceState,
+  tap,
+} from "./parts/model";
+import type { Project, Source, Task } from "./parts/model";
+import { SourceSheet, type SourceAsk } from "./parts/sources";
 import { NewTask } from "./parts/new-task";
 import type { Start } from "./parts/new-task";
 import { TaskSheet } from "./parts/task-sheet";
@@ -30,9 +40,11 @@ import { StatusHeading, TaskCard, TaskRow } from "./parts/task-views";
 /** A project's name, key and description, new or changed. */
 function ProjectForm({
   project,
+  source,
   onDone,
 }: {
   project?: Project;
+  source?: string;
   onDone: () => void;
 }) {
   const save = useAction(project ? "update_project" : "create_project");
@@ -74,7 +86,7 @@ function ProjectForm({
               .run(
                 project
                   ? { id: project.id, name, description }
-                  : { name, key: shownKey, description },
+                  : { source, name, key: shownKey, description },
               )
               .then(onDone),
           )
@@ -87,21 +99,21 @@ function ProjectForm({
 /** One project: its tasks on a board by state, or in a list by state. */
 function ProjectView({
   project,
+  source,
   tasks,
   known,
   projects,
   onChanged,
-  onBack,
 }: {
   project: Project;
+  source: Source | undefined;
   tasks: Task[];
   known: string[];
   projects: Project[];
   onChanged: () => void;
-  onBack: () => void;
 }) {
   const update = useAction("update_project");
-  const refresh = useAction("refresh");
+  const editable = can(source, "edit_project");
   const [layout, setLayout] = useState("list");
   // Done and dropped tasks stay folded until asked for.
   const [unfolded, setUnfolded] = useState(false);
@@ -119,50 +131,42 @@ function ProjectView({
   return (
     <Stack gap={16}>
       <Stack direction="row" gap={4}>
-        <IconButton icon="chevron-left" label="Projects" onPress={onBack} />
         <Heading level={2}>{project.name}</Heading>
-        <Badge>{project.key}</Badge>
+        {project.key ? <Badge>{project.key}</Badge> : null}
         {project.archived ? <Badge tone="warning">Archived</Badge> : null}
         <IconButton icon="plus" label="New task" onPress={() => add()} />
-        <Menu
-          label="Project"
-          items={[
-            {
-              title: "Edit project",
-              icon: "pencil",
-              onPress: () => setEditing(true),
-            },
-            ...(project.tracker
-              ? [
-                  {
-                    title: `Read again from ${project.tracker}`,
-                    icon: "refresh-cw",
-                    onPress: () =>
-                      tap(
-                        refresh.run({ project_id: project.id }).then(onChanged),
-                      ),
-                  },
-                ]
-              : []),
-            {
-              title: project.archived ? "Restore project" : "Archive project",
-              icon: project.archived ? "archive-restore" : "archive",
-              onPress: () =>
-                tap(
-                  update
-                    .run({ id: project.id, archived: !project.archived })
-                    .then(onChanged),
-                ),
-            },
-          ]}
-        />
+        {editable ? (
+          <Menu
+            label="Project"
+            items={[
+              {
+                title: "Edit project",
+                icon: "pencil",
+                onPress: () => setEditing(true),
+              },
+              {
+                title: project.archived ? "Restore project" : "Archive project",
+                icon: project.archived ? "archive-restore" : "archive",
+                onPress: () =>
+                  tap(
+                    update
+                      .run({ id: project.id, archived: !project.archived })
+                      .then(onChanged),
+                  ),
+              },
+            ]}
+          />
+        ) : null}
       </Stack>
+      {project.url ? (
+        <Text size="sm" mono tone="muted">
+          {project.url}
+        </Text>
+      ) : null}
       {project.description ? (
         <Text tone="muted">{project.description}</Text>
       ) : null}
-      {update.error || refresh.error ? (
-        <Text tone="danger">{update.error || refresh.error}</Text>
-      ) : null}
+      {update.error ? <Text tone="danger">{update.error}</Text> : null}
       <Tabs
         items={[
           { value: "list", label: "List" },
@@ -249,116 +253,171 @@ function ProjectView({
   );
 }
 
-/** A project in the list: its name, key and how much is still to do. */
-function ProjectRow({
-  project,
-  tasks,
-  onPress,
-}: {
-  project: Project;
-  tasks: Task[];
-  onPress: () => void;
-}) {
-  const mine = tasks.filter((task) => task.project_id === project.id);
-  const left = mine.filter(open).length;
-  return (
-    <ListItem
-      title={project.name}
-      subtitle={[project.key, `${left} open`, project.tracker]
-        .filter(Boolean)
-        .join(" · ")}
-      leading={<Icon name="kanban" />}
-      onPress={onPress}
-    />
-  );
-}
-
-/** The workspace's projects; one opened shows its tasks. */
+/**
+ * The workspace's projects, from every source: ZeroLux's own and each tracker's, live. The
+ * sources and their projects are in the list; the open project's tasks beside it.
+ */
 export default function Projects() {
-  const projects = useActionResult<{ projects: Project[] }>("projects");
-  const tasks = useActionResult<{ tasks: Task[] }>("tasks");
+  const sources = useActionResult<{ sources: Source[] }>("sources", {});
+  const projects = useActionResult<{
+    projects: Project[];
+    errors: { source: string; error: string }[];
+  }>("projects", {});
+  const [opened, setOpened] = useState<string>();
+  const [shown, setShown] = useState(false);
+  const tasks = useActionResult<{ tasks: Task[] }>(
+    "tasks",
+    opened ? { project_id: opened } : { project_id: "" },
+  );
   // Read again when Projects says so, and at once after a change made here.
   const reload = () => {
+    void sources.reload();
     void projects.reload();
-    void tasks.reload();
+    if (opened) void tasks.reload();
   };
   useEvent("changed", reload);
-  const [opened, setOpened] = useState<string>();
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState<string>();
+  const [asking, setAsking] = useState<SourceAsk>();
   const all = projects.data?.projects ?? [];
-  const work = tasks.data?.tasks ?? [];
+  const known = sources.data?.sources ?? [];
   const project = all.find((p) => p.id === opened);
-  if (project)
-    return (
-      <ProjectView
-        project={project}
-        tasks={work.filter((task) => task.project_id === project.id)}
-        known={labelsOf(work)}
-        projects={all}
-        onChanged={reload}
-        onBack={() => setOpened(undefined)}
-      />
-    );
-  const error = projects.error || tasks.error;
-  const active = all.filter((p) => !p.archived);
-  const archived = all.filter((p) => p.archived);
-  return (
-    <Stack gap={16}>
-      <Button
-        title="New project"
-        variant="secondary"
-        onPress={() => setCreating(true)}
-      />
-      {error ? <Text tone="danger">{error}</Text> : null}
-      {!projects.data ? (
-        error ? null : (
-          <Spinner />
-        )
-      ) : active.length ? (
-        <List>
-          {active.map((p) => (
-            <ProjectRow
-              key={p.id}
-              project={p}
-              tasks={work}
-              onPress={() => setOpened(p.id)}
-            />
-          ))}
-        </List>
-      ) : (
-        <Empty>No projects</Empty>
-      )}
-      {archived.length ? (
-        <Stack gap={8}>
-          <Text size="sm" tone="muted">
-            Archived
-          </Text>
-          <List>
-            {archived.map((p) => (
-              <ProjectRow
-                key={p.id}
-                project={p}
-                tasks={work}
-                onPress={() => setOpened(p.id)}
-              />
-            ))}
-          </List>
-        </Stack>
+  const source = known.find((s) => s.id === project?.source);
+  const failed = (id: string) =>
+    projects.data?.errors.find((error) => error.source === id)?.error;
+
+  const list = (
+    <Stack gap={12}>
+      {sources.error || projects.error ? (
+        <Text tone="danger">{sources.error || projects.error}</Text>
       ) : null}
+      {!sources.data ? (
+        <Spinner />
+      ) : (
+        known.map((each) => {
+          const mine = all.filter((p) => p.source === each.id);
+          const problem = sourceState(each) || failed(each.id);
+          return (
+            <Stack key={each.id} gap={6}>
+              <Stack direction="row" gap={6} align="center">
+                <Text size="sm" tone="muted">
+                  {each.name}
+                </Text>
+                {can(each, "create_project") ? (
+                  <IconButton
+                    icon="plus"
+                    label={`New project in ${each.name}`}
+                    onPress={() => setCreating(each.id)}
+                  />
+                ) : null}
+                <Menu
+                  label={`${each.name} actions`}
+                  items={[
+                    {
+                      title: "Settings",
+                      icon: "settings",
+                      onPress: () =>
+                        setAsking({ kind: "change", source: each }),
+                    },
+                    ...(each.own
+                      ? []
+                      : [
+                          {
+                            title: "Remove",
+                            icon: "trash-2",
+                            tone: "danger" as const,
+                            onPress: () =>
+                              setAsking({ kind: "remove", source: each }),
+                          },
+                        ]),
+                  ]}
+                />
+              </Stack>
+              {problem ? <Text tone="danger">{problem}</Text> : null}
+              {mine.length ? (
+                <List>
+                  {mine.map((p) => (
+                    <ListItem
+                      key={p.id}
+                      title={p.name}
+                      subtitle={
+                        [p.key, p.archived && "Archived"]
+                          .filter(Boolean)
+                          .join(" · ") || undefined
+                      }
+                      leading={<Icon name="kanban" />}
+                      selected={p.id === opened}
+                      onPress={() => {
+                        setOpened(p.id);
+                        setShown(true);
+                      }}
+                    />
+                  ))}
+                </List>
+              ) : problem ? null : (
+                <Empty>No projects</Empty>
+              )}
+            </Stack>
+          );
+        })
+      )}
+      <Button
+        title="Add source"
+        variant="secondary"
+        onPress={() => setAsking({ kind: "add" })}
+      />
+    </Stack>
+  );
+
+  const work = tasks.data?.tasks ?? [];
+  const detail = project ? (
+    <Stack gap={8}>
+      {tasks.error ? <Text tone="danger">{tasks.error}</Text> : null}
+      {tasks.loading && !tasks.data ? (
+        <Spinner />
+      ) : (
+        <ProjectView
+          project={project}
+          source={source}
+          tasks={work}
+          known={labelsOf(work)}
+          projects={all}
+          onChanged={reload}
+        />
+      )}
+    </Stack>
+  ) : (
+    <Empty>No project open</Empty>
+  );
+
+  return (
+    <>
+      <Split
+        label="Projects"
+        list={list}
+        detail={detail}
+        open={shown && Boolean(project)}
+        onBack={() => setShown(false)}
+      />
       <Sheet
-        open={creating}
-        onClose={() => setCreating(false)}
+        open={creating !== undefined}
+        onClose={() => setCreating(undefined)}
         title="New project"
       >
-        {creating ? (
+        {creating !== undefined ? (
           <ProjectForm
+            source={creating}
             onDone={() => {
-              setCreating(false);
+              setCreating(undefined);
               reload();
             }}
           />
         ) : null}
       </Sheet>
-    </Stack>
+      <SourceSheet
+        ask={asking}
+        close={() => setAsking(undefined)}
+        done={reload}
+      />
+    </>
   );
 }

@@ -1355,7 +1355,8 @@ async fn projects_keep_tasks_here_or_in_a_tracker() {
         given["result"]["told"]["error"], "The agent has no running session",
         "{given}"
     );
-    // A project kept in a tracker: read from it, and changed there first.
+    // A tracker's workspace as a source: its projects and tasks read live from it, and
+    // changed there; only the agent ZeroLux gives a task is kept here.
     let (status, tracker) = kernel
         .call(
             Method::POST,
@@ -1364,33 +1365,103 @@ async fn projects_keep_tasks_here_or_in_a_tracker() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{tracker}");
-    let (status, tracked) = run(
-        "create_project",
-        json!({"name": "Engineering", "key": "ENG", "tracker": "fake", "remote_id": "ENG"}),
+    let (status, refused) = run(
+        "add_source",
+        json!({"name": "Fake", "tracker": "fake", "config": {"workspace": "acme", "token": "wrong"}}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{tracked}");
-    let tracked = tracked["result"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    let (status, added) = run(
+        "add_source",
+        json!({"name": "Fake", "tracker": "fake", "config": {"workspace": "acme", "token": "right"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    assert_eq!(added["result"]["source"]["account"], "ana@example.com");
+    let source = added["result"]["source"]["id"].as_str().unwrap().to_owned();
+    let (_, sources) = run("sources", json!({})).await;
+    assert_eq!(
+        sources["result"]["sources"].as_array().unwrap().len(),
+        2,
+        "{sources}"
+    );
+    let (_, projects) = run("projects", json!({"source": "Fake"})).await;
+    let tracked = projects["result"]["projects"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(tracked, format!("{source}:ENG"));
     let (_, listed) = run("tasks", json!({"project_id": tracked})).await;
     assert_eq!(
         listed["result"]["tasks"][0]["title"], "Set up CI",
         "{listed}"
     );
-    let (_, added) = run(
+    assert_eq!(listed["result"]["tasks"][0]["people"], json!(["Ana"]));
+    // People are given a tracker's tasks there; an agent here.
+    let (status, _) = run(
         "create_task",
-        json!({"project_id": tracked, "title": "Ship"}),
+        json!({"project_id": tracked, "title": "Ship", "assignee": owner}),
     )
     .await;
-    assert_eq!(added["result"]["remote_id"], "ENG-2", "{added}");
-    let added = added["result"]["id"].as_str().unwrap().to_owned();
-    run("update_task", json!({"id": added, "status": "done"})).await;
-    run("comment", json!({"id": added, "text": "Shipped"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, shipped) = run(
+        "create_task",
+        json!({"project_id": tracked, "title": "Ship", "assignee": agent["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{shipped}");
+    assert_eq!(shipped["result"]["key"], "ENG-2");
+    assert_eq!(shipped["result"]["assignee"], agent["id"]);
+    assert_eq!(
+        shipped["result"]["told"]["error"], "The agent has no running session",
+        "{shipped}"
+    );
+    let shipped = shipped["result"]["id"].as_str().unwrap().to_owned();
+    run("update_task", json!({"id": shipped, "status": "done"})).await;
+    run("comment", json!({"id": shipped, "text": "Shipped"})).await;
     let (_, seen) = kernel
         .call(Method::POST, "/ext/zerolux.tracker/seen", Some(json!({})))
         .await;
     let remote = &seen["result"]["tasks"][1];
     assert_eq!(remote["status"], "done", "{seen}");
     assert_eq!(remote["comments"], json!(["Shipped"]));
+    assert!(
+        remote.get("assignee").is_none(),
+        "the agent stays in ZeroLux"
+    );
+    let (_, read) = run("task", json!({"id": shipped})).await;
+    assert_eq!(read["result"]["comments"][0]["author"], "Ana", "{read}");
+    // The agent's work in every source: here and in the tracker.
+    let (_, theirs) = run("tasks", json!({"assignee": agent["id"]})).await;
+    let keys: Vec<&str> = theirs["result"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|task| task["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys.len(), 2, "{theirs}");
+    assert!(keys.contains(&"ZL-1") && keys.contains(&"ENG-2"));
+    // Deleted in the tracker by someone there: gone from the agent's work.
+    kernel
+        .call(
+            Method::POST,
+            "/ext/zerolux.tracker/drop",
+            Some(json!({"id": "t2"})),
+        )
+        .await;
+    let (_, theirs) = run("tasks", json!({"assignee": agent["id"]})).await;
+    assert_eq!(
+        theirs["result"]["tasks"].as_array().unwrap().len(),
+        1,
+        "{theirs}"
+    );
+    // Removed from ZeroLux, nothing goes in the tracker.
+    let (status, _) = run("remove_source", json!({"id": source})).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, seen) = kernel
+        .call(Method::POST, "/ext/zerolux.tracker/seen", Some(json!({})))
+        .await;
+    assert_eq!(seen["result"]["tasks"].as_array().unwrap().len(), 1);
     runtime.shutdown().await.unwrap();
     server.abort();
     livekit.shutdown().await.unwrap();

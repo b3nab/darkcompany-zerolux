@@ -10,38 +10,119 @@ export type Status =
 
 export type Priority = "none" | "low" | "medium" | "high" | "urgent";
 
+/** Where projects are: ZeroLux's own, or a tracker's workspace. */
+export interface Source {
+  id: string;
+  name: string;
+  tracker: string;
+  config: Record<string, unknown>;
+  /** ZeroLux's own, which stays. */
+  own?: boolean;
+  available: boolean;
+  capabilities?: string[] | null;
+  signed_in?: boolean;
+  account?: string | null;
+  error?: string | null;
+}
+
+/** A field a tracker asks for, to add a source of it. */
+export interface Field {
+  key: string;
+  label: string;
+  type: "text" | "secret" | "choice" | "boolean";
+  required?: boolean;
+  description?: string;
+  options?: { value: string; label: string }[];
+}
+
+/** A tracker, as Projects lists them. */
+export interface Tracker {
+  tracker: string;
+  title: string;
+  description?: string;
+  fields?: Field[];
+  sign_in?: boolean;
+  capabilities?: string[];
+  error?: string;
+}
+
 export interface Project {
   id: string;
-  key: string;
+  source: string;
+  key?: string;
   name: string;
-  description: string;
-  tracker: string | null;
+  description?: string;
   archived: boolean;
+  url?: string | null;
 }
 
 export interface Comment {
   id: string;
+  /** Who of the workspace wrote it, here. */
   by: string | null;
+  /** Who wrote it, in a tracker. */
+  author?: string | null;
   text: string;
   at: number;
 }
 
 export interface Task {
   id: string;
-  key: string;
-  number: number;
+  source: string;
   project_id: string;
+  key: string;
   title: string;
   description: string;
   status: Status;
   priority: Priority;
+  /** A person or an agent of the workspace; in a tracker, the agent ZeroLux gave it. */
   assignee: string | null;
+  /** Who does it, in a tracker. */
+  people?: string[];
   labels: string[];
   due: string | null;
   url: string | null;
-  updated_at: number;
+  updated_at: number | null;
   /** Only when the task is read on its own. */
   comments?: Comment[];
+}
+
+/** Whether a source can do something. */
+export const can = (source: Source | undefined, capability: string) =>
+  Boolean(source?.capabilities?.includes(capability));
+
+/** A source's state, in a few words; none when it is ready. */
+export function sourceState(source: Source) {
+  if (!source.available) return "Tracker not installed";
+  if (source.signed_in === false) return "Not signed in";
+  if (source.error) return source.error;
+  return "";
+}
+
+/** What a person filled in for a tracker's fields: empty secrets are left as they were. */
+export function filled(fields: Field[], values: Record<string, unknown>) {
+  const config: Record<string, unknown> = {};
+  for (const field of fields) {
+    const value = values[field.key];
+    if (field.type === "secret" && !String(value ?? "").trim()) continue;
+    if (value !== undefined) config[field.key] = value;
+  }
+  return config;
+}
+
+/** The required fields still empty; changing a source, what it has counts as given. */
+export function missing(
+  fields: Field[],
+  values: Record<string, unknown>,
+  kept?: Record<string, unknown>,
+) {
+  return fields.filter(
+    (field) =>
+      field.required &&
+      !String(values[field.key] ?? "").trim() &&
+      !(kept && field.type === "secret") &&
+      !String(kept?.[field.key] ?? "").trim(),
+  );
 }
 
 /** An action run from a tap: what went wrong shows in its `error`, nothing more is thrown. */
@@ -83,7 +164,7 @@ const rank = (priority: Priority) =>
 export const byUrgency = (a: Task, b: Task) =>
   rank(a.priority) - rank(b.priority) ||
   (a.due ?? "9999").localeCompare(b.due ?? "9999") ||
-  b.updated_at - a.updated_at;
+  (b.updated_at ?? 0) - (a.updated_at ?? 0);
 
 /** Tasks by state, each group in order of urgency. */
 export const byStatus = (tasks: Task[]) =>

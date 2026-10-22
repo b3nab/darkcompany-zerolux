@@ -55,7 +55,7 @@ export default function SessionTasks() {
   })).filter((group) => group.tasks.length);
   const done = all
     .filter((task) => task.status === "done")
-    .sort((a, b) => b.updated_at - a.updated_at);
+    .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
   const error = tasks.error || projects.error;
   return (
     <Stack gap={16}>

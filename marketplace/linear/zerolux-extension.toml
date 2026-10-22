@@ -3,7 +3,7 @@ id = "zerolux.linear"
 name = "Linear"
 version = "0.0.1"
 publisher = "zerolux"
-description = "Projects kept in Linear: each project is a Linear team, its tasks the team's issues"
+description = "Projects in Linear workspaces, live: their teams and issues"
 kernel = ">=0.0.1"
 
 [dependencies]
@@ -11,6 +11,3 @@ kernel = ">=0.0.1"
 
 [process]
 command = ["bun", "run", "main.ts"]
-
-[settings]
-api_key = { type = "secret", label = "API key", description = "From Linear's settings, under Security & access" }

@@ -1,12 +1,19 @@
 import { expect, test } from "bun:test";
-import { byStatus, dueTone, keyFrom, labelsOf } from "./model";
-import type { Task } from "./model";
+import {
+  byStatus,
+  dueTone,
+  keyFrom,
+  labelsOf,
+  missing,
+  sourceState,
+} from "./model";
+import type { Field, Source, Task } from "./model";
 
 const task = (id: string, fields: Partial<Task> = {}): Task => ({
   id,
   key: `AS-${id}`,
-  number: 1,
-  project_id: "aspen",
+  source: "zl",
+  project_id: "zl:aspen",
   title: id,
   description: "",
   status: "todo",
@@ -62,4 +69,30 @@ test("labels in use are listed once, in order", () => {
       task("b", { labels: ["bug"] }),
     ]),
   ).toEqual(["bug", "ui"]);
+});
+
+test("a source says what keeps it from working, and a secret it has is not asked again", () => {
+  const ready: Source = {
+    id: "s",
+    name: "Plane",
+    tracker: "plane",
+    config: {},
+    available: true,
+  };
+  expect(sourceState(ready)).toBe("");
+  expect(sourceState({ ...ready, error: "Plane refused (401)" })).toBe(
+    "Plane refused (401)",
+  );
+  expect(sourceState({ ...ready, available: false })).toBe(
+    "Tracker not installed",
+  );
+  const fields: Field[] = [
+    { key: "workspace", label: "Workspace", type: "text", required: true },
+    { key: "api_key", label: "API key", type: "secret", required: true },
+  ];
+  expect(missing(fields, {}).map((f) => f.key)).toEqual([
+    "workspace",
+    "api_key",
+  ]);
+  expect(missing(fields, {}, { workspace: "acme" })).toEqual([]);
 });
