@@ -6,6 +6,7 @@ import {
   installOffer,
   loadExtensionFolder,
   offerAction,
+  offerVersions,
   offerWarning,
   proposalWarning,
   proposer,
@@ -497,10 +498,7 @@ function MarketplaceSection({
                   <p className="text-sm font-medium">
                     {offer.name}{" "}
                     <span className="font-mono text-[11px] font-normal text-faint">
-                      {action === "update"
-                        ? `${offer.installed} → ${offer.version}`
-                        : offer.version}{" "}
-                      · {offer.publisher}
+                      {offerVersions(offer)} · {offer.publisher}
                     </span>
                   </p>
                   <p className="text-xs text-muted-foreground">
