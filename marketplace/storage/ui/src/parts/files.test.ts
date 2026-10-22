@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  fileIcon,
   filled,
   missing,
   parent,
@@ -60,4 +61,15 @@ test("a location says what keeps it from working", () => {
     "Drive refused (401)",
   );
   expect(state({ ...ready, available: false })).toBe("Provider not installed");
+});
+
+test("a file's icon says its kind, a spreadsheet's too", () => {
+  const icon = (content_type: string) =>
+    fileIcon({ kind: "file", content_type });
+  expect(icon("video/mp4")).toBe("file-video");
+  expect(
+    icon("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+  ).toBe("file-spreadsheet");
+  expect(icon("application/json")).toBe("file-code");
+  expect(fileIcon({ kind: "folder" })).toBe("folder");
 });

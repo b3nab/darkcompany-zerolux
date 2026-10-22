@@ -105,8 +105,9 @@ export function fileIcon(file: { kind?: string; content_type?: string }) {
   if (type === "application/pdf" || type.startsWith("text/"))
     return "file-text";
   if (/zip|tar|gzip|compressed/.test(type)) return "file-archive";
-  if (/json|javascript|typescript|xml/.test(type)) return "file-code";
+  // Office spreadsheets are XML too: `…spreadsheetml.sheet`.
   if (/sheet|csv|excel/.test(type)) return "file-spreadsheet";
+  if (/json|javascript|typescript|xml/.test(type)) return "file-code";
   return "file";
 }
 
