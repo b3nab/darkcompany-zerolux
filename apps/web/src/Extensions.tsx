@@ -1,3 +1,6 @@
+import { WithMenu } from "./native-menus";
+import type { MenuEntry } from "@zerolux/ui";
+import { FolderInput } from "./folder-input";
 import { useContext, useState } from "react";
 import {
   Link,
@@ -20,6 +23,7 @@ import {
 import {
   enableExtension,
   extensionGroups,
+  disableExtension,
   loadExtensionFolder,
   offerAction,
   offerFor,
@@ -73,8 +77,53 @@ function Row({
   consent: (consent: Consent) => void;
 }) {
   const update = !!offer && offerAction(offer) === "update";
+  const navigate = useNavigate();
+  const page = `/extensions/${encodeURIComponent(extension.id)}`;
+  // A right click does what its buttons do, and opens it; Remove asks on its page.
+  const menu: MenuEntry[] = [
+    { title: "Open", icon: "panel-right-open", onPress: () => navigate(page) },
+    ...(owns
+      ? ([
+          { divider: true },
+          ...(update
+            ? [
+                {
+                  title: "Update…",
+                  icon: "arrow-up-circle",
+                  onPress: () =>
+                    consent({ offer: offer!, installed: extension }),
+                },
+              ]
+            : []),
+          extension.enabled
+            ? {
+                title: "Disable",
+                icon: "circle-pause",
+                disabled: busy,
+                onPress: () => act(() => disableExtension(extension.id)),
+              }
+            : {
+                title: "Enable",
+                icon: "circle-play",
+                disabled: busy,
+                onPress: () => act(() => enableExtension(extension.id)),
+              },
+          ...(extension.dev
+            ? [
+                {
+                  title: "Load again",
+                  icon: "rotate-cw",
+                  disabled: busy,
+                  onPress: () =>
+                    act(() => loadExtensionFolder(extension.source)),
+                },
+              ]
+            : []),
+        ] as MenuEntry[])
+      : []),
+  ];
   return (
-    <li>
+    <WithMenu entries={menu} render={<li />}>
       <Link
         to={`/extensions/${encodeURIComponent(extension.id)}`}
         aria-label={extension.name}
@@ -130,7 +179,7 @@ function Row({
         </span>
         <ChevronRightIcon className="size-4 text-faint" />
       </Link>
-    </li>
+    </WithMenu>
   );
 }
 
@@ -444,13 +493,9 @@ function Develop({
               }).then((done) => done && setFolder(""));
           }}
         >
-          <Input
-            aria-label="Folder"
-            placeholder="/path/to/extension"
-            value={folder}
-            onChange={(event) => setFolder(event.target.value)}
-            className="font-mono text-[12.5px]"
-          />
+          <div className="min-w-0 flex-1">
+            <FolderInput value={folder || null} onChange={setFolder} />
+          </div>
           <Button type="submit" disabled={busy || !folder.trim()}>
             Load
           </Button>

@@ -37,6 +37,10 @@ export interface Here {
   save: (file: Blob, name: string) => Promise<void>;
   /** Opens a web address in the device's browser, outside the app. */
   open: (url: string) => Promise<void>;
+  /** Keeps text in the system's clipboard. */
+  copy: (text: string) => Promise<void>;
+  /** One of the person's chats, chosen in the app's own list under `title`; null if none. */
+  chooseChat: (title: string) => Promise<string | null>;
   /** The workspace's people and agents. */
   actors: UiActor[];
 }
@@ -257,6 +261,19 @@ export function useUpload(action: string) {
 export function useOpen() {
   const here = useHere();
   return useCallback((url: string) => openAddress(here, url), [here]);
+}
+
+/** Keeps text in the system's clipboard: a path, a link. */
+export function useCopy() {
+  return useHere().copy;
+}
+
+/**
+ * One of the person's chats, chosen in the app's own list under a title, as "Share Logo.png
+ * in a chat": its id, or null when none is.
+ */
+export function useChooseChat() {
+  return useHere().chooseChat;
 }
 
 /** The file an action gives, kept as the app keeps files. */

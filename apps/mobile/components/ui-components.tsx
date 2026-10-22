@@ -1,10 +1,9 @@
 import * as Haptics from "expo-haptics";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react-native";
-import { Children } from "react";
+import { Children, Fragment, isValidElement, useState } from "react";
 import type { ReactNode } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Image as NativeImage,
   Modal,
   Pressable,
@@ -14,10 +13,18 @@ import {
   View,
 } from "react-native";
 import { useCSSVariable } from "uniwind";
-import { errorMessage } from "@zerolux/chat";
-import type { Tone, UiComponents } from "@zerolux/ui";
-import { Menu, useActionSheet } from "@/components/action-menu";
+import type {
+  ButtonProps,
+  FileButtonProps,
+  MenuEntry,
+  MenuItem,
+  MenuProps,
+  Tone,
+  UiComponents,
+} from "@zerolux/ui";
+import { Menu, RowMenu, useActionSheet } from "@/components/action-menu";
 import { DateInput } from "@/components/date-input";
+import { FolderInput } from "@/components/folder-input";
 import { ActorMark } from "@/components/member";
 import { MessageBody } from "@/components/message-body";
 import { Segmented } from "@/components/segmented";
@@ -26,7 +33,9 @@ import { Button as AppButton } from "@/components/ui/button";
 import { Input as AppInput } from "@/components/ui/input";
 import { Text as AppText } from "@/components/ui/text";
 import { Icon, IconButton } from "@/components/ui-icon";
-import { pickFiles } from "@/components/pick-files";
+import { fileSources } from "@/components/pick-files";
+import { SearchField } from "@/components/search-field";
+import { Choosing, Table } from "@/components/ui-table";
 import { cn } from "@/lib/utils";
 import { useSession } from "../src/kernel";
 
@@ -81,6 +90,129 @@ const Button: UiComponents["Button"] = ({
     </AppButton>
   </Fit>
 );
+
+const Tabs: UiComponents["Tabs"] = ({ items, value, onChange }) => (
+  <Segmented
+    options={items.map((item) => [item.value, item.label])}
+    value={value}
+    choose={onChange}
+  />
+);
+
+const Sheet: UiComponents["Sheet"] = ({ open, onClose, title, children }) => (
+  <Modal
+    visible={open}
+    animationType="slide"
+    presentationStyle="pageSheet"
+    onRequestClose={onClose}
+  >
+    <View className="flex-1 bg-background">
+      <View className="flex-row items-center justify-between border-b border-border px-5 py-3">
+        <AppText className="text-[17px] font-semibold">{title}</AppText>
+        <Pressable accessibilityRole="button" onPress={onClose} hitSlop={12}>
+          <AppText className="text-base font-medium text-human-foreground">
+            Done
+          </AppText>
+        </Pressable>
+      </View>
+      <ScrollView
+        contentContainerClassName="gap-4 px-5 py-5"
+        keyboardShouldPersistTaps="handled"
+      >
+        {children}
+      </ScrollView>
+    </View>
+  </Modal>
+);
+
+/** Groups of a menu, a line between them; empty ones go. */
+const joined = (...groups: MenuEntry[][]) =>
+  groups
+    .filter((group) => group.length)
+    .flatMap((group, i) =>
+      i ? [{ divider: true } as MenuEntry, ...group] : group,
+    );
+
+const FileButton: UiComponents["FileButton"] = ({
+  title,
+  onFiles,
+  multiple = false,
+  variant = "secondary",
+  busy,
+  disabled,
+}) => {
+  const { show, sheet } = useActionSheet();
+  return (
+    <>
+      <Button
+        title={title}
+        variant={variant}
+        busy={busy}
+        disabled={disabled}
+        onPress={() => show(fileSources(multiple, onFiles))}
+      />
+      {sheet}
+    </>
+  );
+};
+
+/** Parts as they are, a fragment's own among them. */
+const flat = (node: ReactNode): ReactNode[] =>
+  Children.toArray(node).flatMap((part) =>
+    isValidElement<{ children?: ReactNode }>(part) && part.type === Fragment
+      ? flat(part.props.children)
+      : [part],
+  );
+
+/**
+ * A page's header sorted for a phone: its views on a line of their own; beside the title its
+ * icons and its main action; the other buttons, its "…" menus and the page's own menu under
+ * one "…".
+ */
+function headerParts(actions: ReactNode, menu: MenuEntry[] = []) {
+  const tabs: ReactNode[] = [];
+  const shown: ReactNode[] = [];
+  const folded: MenuItem[] = [];
+  const menus: MenuEntry[] = [];
+  for (const part of flat(actions)) {
+    if (!isValidElement(part)) shown.push(part);
+    else if (part.type === Tabs) tabs.push(part);
+    else if (part.type === Menu) {
+      const { icon = "ellipsis", items } = part.props as MenuProps;
+      if (icon === "ellipsis") menus.push(...items);
+      else shown.push(part);
+    } else if (part.type === Button || part.type === FileButton) {
+      const props = part.props as Partial<ButtonProps & FileButtonProps>;
+      const variant =
+        props.variant ?? (part.type === Button ? "primary" : "secondary");
+      if (variant === "primary" && !shown.some(isMain)) shown.push(part);
+      else
+        folded.push({
+          title: props.title ?? "",
+          onPress: props.onPress,
+          onFiles: props.onFiles,
+          multiple: props.multiple,
+          disabled: props.disabled || props.busy,
+          tone: variant === "danger" ? "danger" : undefined,
+        });
+    } else shown.push(part);
+  }
+  // What the page's menu already has is not said twice.
+  const titles = new Set(menu.map((entry) => "title" in entry && entry.title));
+  return {
+    tabs,
+    shown,
+    more: joined(
+      menu,
+      folded.filter((item) => !titles.has(item.title)),
+      menus,
+    ),
+  };
+}
+
+/** The page's main action, beside its title. */
+const isMain = (part: ReactNode) =>
+  isValidElement(part) && (part.type === Button || part.type === FileButton);
 
 /**
  * `@zerolux/ui`'s components on the phone, in the app's own design: what an extension's
@@ -201,6 +333,7 @@ export const uiComponents: UiComponents = {
     accessory,
     onPress,
     selected,
+    menu,
   }) {
     const faint = String(useCSSVariable("--color-faint"));
     const body = (
@@ -229,55 +362,27 @@ export const uiComponents: UiComponents = {
       "min-h-12 flex-row items-center gap-3 px-3.5 py-2.5",
       selected && "bg-accent",
     );
-    return onPress ? (
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ selected }}
-        onPress={() => {
-          void Haptics.selectionAsync();
-          onPress();
-        }}
-        className={cn(row, "active:bg-accent")}
-      >
-        {body}
-      </Pressable>
-    ) : (
-      <View className={row}>{body}</View>
+    return (
+      <RowMenu items={menu}>
+        {onPress ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            onPress={() => {
+              void Haptics.selectionAsync();
+              onPress();
+            }}
+            className={cn(row, "bg-card active:bg-accent")}
+          >
+            {body}
+          </Pressable>
+        ) : (
+          <View className={cn(row, "bg-card")}>{body}</View>
+        )}
+      </RowMenu>
     );
   },
-  Table: ({ columns, rows }) => (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-      <View className="overflow-hidden rounded-md border border-border bg-card">
-        <View className="flex-row border-b border-border bg-muted">
-          {columns.map((column) => (
-            <AppText
-              key={column.key}
-              className="w-32 px-3 py-2 font-mono text-[11px] tracking-wider text-faint uppercase"
-            >
-              {column.title}
-            </AppText>
-          ))}
-        </View>
-        {rows.map((row, i) => (
-          <View
-            key={i}
-            className={cn("flex-row", i > 0 && "border-t border-border")}
-          >
-            {columns.map((column) => (
-              <View key={column.key} className="w-32 px-3 py-2">
-                {typeof row[column.key] === "string" ||
-                typeof row[column.key] === "number" ? (
-                  <AppText className="text-sm">{row[column.key]}</AppText>
-                ) : (
-                  row[column.key]
-                )}
-              </View>
-            ))}
-          </View>
-        ))}
-      </View>
-    </ScrollView>
-  ),
+  Table,
   Badge: ({ tone = "default", children }) => (
     <Fit>
       <View className={cn("rounded-sm px-2 py-0.5", badgeTone[tone])}>
@@ -309,29 +414,47 @@ export const uiComponents: UiComponents = {
         className="w-full rounded-md bg-muted"
       />
     ) : null,
-  Card: ({ title, onPress, children }) => {
+  // Its menu a long press away, and by its title as a "…" when it has one.
+  Card: ({ title, onPress, selected, menu, children }) => {
     const body = (
       <>
         {title ? (
-          <AppText className="text-[15px] font-semibold">{title}</AppText>
+          <View className="flex-row items-center gap-2">
+            <AppText className="flex-1 text-[15px] font-semibold">
+              {title}
+            </AppText>
+            {menu?.length ? (
+              <View className="-my-2.5 -mr-2.5">
+                <Menu label="More" items={menu} />
+              </View>
+            ) : null}
+          </View>
         ) : null}
         {children}
       </>
     );
-    const card = "gap-3 rounded-md border border-border bg-card p-4";
-    return onPress ? (
-      <Pressable
-        accessibilityRole="button"
-        onPress={() => {
-          void Haptics.selectionAsync();
-          onPress();
-        }}
-        className={cn(card, "active:bg-accent")}
-      >
-        {body}
-      </Pressable>
-    ) : (
-      <View className={card}>{body}</View>
+    const card = cn(
+      "gap-3 rounded-md border bg-card p-4",
+      selected ? "border-primary bg-accent" : "border-border",
+    );
+    return (
+      <RowMenu items={menu}>
+        {onPress ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            onPress={() => {
+              void Haptics.selectionAsync();
+              onPress();
+            }}
+            className={cn(card, "active:bg-accent")}
+          >
+            {body}
+          </Pressable>
+        ) : (
+          <View className={card}>{body}</View>
+        )}
+      </RowMenu>
     );
   },
   Columns: function Columns({ children }) {
@@ -353,9 +476,25 @@ export const uiComponents: UiComponents = {
     );
   },
   // One at a time on a phone: the list, or what is open in it with the way back to the list.
-  Split: function Split({ label, list, detail, open, onBack }) {
+  Split: function Split({ label, actions, list, detail, open, onBack }) {
     const ink = String(useCSSVariable("--color-foreground"));
-    if (!open) return <>{list}</>;
+    if (!open)
+      return (
+        <View className="gap-3">
+          <View className="min-h-10 flex-row items-center justify-between gap-2">
+            <AppText
+              accessibilityRole="header"
+              className="text-lg font-semibold"
+            >
+              {label}
+            </AppText>
+            {actions ? (
+              <View className="-mr-2 flex-row items-center">{actions}</View>
+            ) : null}
+          </View>
+          {list}
+        </View>
+      );
     return (
       <View className="gap-3">
         <Pressable
@@ -372,75 +511,111 @@ export const uiComponents: UiComponents = {
       </View>
     );
   },
-  DateInput,
-  Menu,
-  FileButton: function FileButton({
+  Section: ({ title, actions, children }) => (
+    <View className="gap-2">
+      <View className="min-h-10 flex-row items-center justify-between gap-2">
+        <AppText
+          accessibilityRole="header"
+          className="font-mono text-[11px] tracking-wider text-faint uppercase"
+        >
+          {title}
+        </AppText>
+        {actions ? (
+          <View className="-mr-2 flex-row items-center">{actions}</View>
+        ) : null}
+      </View>
+      {children}
+    </View>
+  ),
+  // The title large and the way to it under it; beside it what it does, the rest in its "…";
+  // what is open in it comes up as a sheet.
+  Page: function Page({
     title,
-    onFiles,
-    multiple = false,
-    variant = "secondary",
-    busy,
-    disabled,
+    subtitle,
+    search,
+    actions,
+    inspector,
+    menu,
+    children,
   }) {
-    const { show, sheet } = useActionSheet();
-    const pick = (from: "library" | "camera" | "files") =>
-      pickFiles(from, multiple).then(
-        (files) => files.length && onFiles(files),
-        (e: unknown) => Alert.alert(errorMessage(e)),
-      );
+    const faint = String(useCSSVariable("--color-faint"));
+    const [choosing, setChoosing] = useState(false);
+    const crumbs = typeof title === "string" ? [] : title;
+    const { tabs, shown, more } = headerParts(actions, menu);
     return (
-      <>
-        <Button
-          title={title}
-          variant={variant}
-          busy={busy}
-          disabled={disabled}
-          onPress={() =>
-            show([
-              { title: "Photo library", onPress: () => void pick("library") },
-              { title: "Take photo", onPress: () => void pick("camera") },
-              { title: "Files", onPress: () => void pick("files") },
-            ])
-          }
-        />
-        {sheet}
-      </>
+      <View className="gap-3">
+        <View className="flex-row items-start gap-2">
+          <View className="min-w-0 flex-1 gap-0.5">
+            <AppText
+              accessibilityRole="header"
+              className="text-[28px] font-semibold tracking-tight"
+            >
+              {typeof title === "string" ? title : title.at(-1)?.title}
+            </AppText>
+            {crumbs.length > 1 ? (
+              <View className="flex-row flex-wrap items-center gap-1">
+                {crumbs.map((crumb, i) => (
+                  <View key={i} className="flex-row items-center gap-1">
+                    {i ? (
+                      <ChevronRightIcon
+                        color={faint}
+                        size={13}
+                        strokeWidth={1.5}
+                      />
+                    ) : null}
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={!crumb.onPress || i === crumbs.length - 1}
+                      onPress={crumb.onPress}
+                      hitSlop={6}
+                      className="active:opacity-60"
+                    >
+                      <AppText className="text-[13px] text-muted-foreground">
+                        {crumb.title}
+                      </AppText>
+                    </Pressable>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+            {subtitle ? (
+              <AppText className="text-[13px] text-muted-foreground">
+                {subtitle}
+              </AppText>
+            ) : null}
+          </View>
+          {shown.length || more.length ? (
+            <View className="-mr-2 flex-row items-center gap-1 pt-0.5">
+              {shown}
+              {more.length ? <Menu label="More" items={more} /> : null}
+            </View>
+          ) : null}
+        </View>
+        {tabs}
+        {search ? (
+          <SearchField
+            value={search.value}
+            onChange={search.onChange}
+            label={search.placeholder}
+          />
+        ) : null}
+        <Choosing.Provider value={setChoosing}>{children}</Choosing.Provider>
+        {inspector && !choosing ? (
+          <Sheet open title={inspector.title} onClose={inspector.onClose}>
+            {inspector.content}
+          </Sheet>
+        ) : null}
+      </View>
     );
   },
+  FolderInput,
+  DateInput,
+  Menu,
+  FileButton,
   // Nothing is dragged onto a phone's view.
   DropZone: ({ children }) => <>{children}</>,
-  Tabs: ({ items, value, onChange }) => (
-    <Segmented
-      options={items.map((item) => [item.value, item.label])}
-      value={value}
-      choose={onChange}
-    />
-  ),
-  Sheet: ({ open, onClose, title, children }) => (
-    <Modal
-      visible={open}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={onClose}
-    >
-      <View className="flex-1 bg-background">
-        <View className="flex-row items-center justify-between border-b border-border px-5 py-3">
-          <AppText className="text-[17px] font-semibold">{title}</AppText>
-          <Pressable accessibilityRole="button" onPress={onClose} hitSlop={12}>
-            <AppText className="text-base font-medium text-human-foreground">
-              Done
-            </AppText>
-          </Pressable>
-        </View>
-        <ScrollView
-          contentContainerClassName="gap-4 px-5 py-5"
-          keyboardShouldPersistTaps="handled"
-        >
-          {children}
-        </ScrollView>
-      </View>
-    </Modal>
-  ),
+  Tabs,
+  Sheet,
   Spinner: function Spinner({ size = "md" }) {
     const muted = String(useCSSVariable("--color-muted-foreground"));
     return (

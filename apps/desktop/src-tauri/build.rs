@@ -3,6 +3,7 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "workspace_action",
             "open_link",
+            "choose_folder",
             "window_control",
             "read_workspace_credential",
             "write_workspace_credential",

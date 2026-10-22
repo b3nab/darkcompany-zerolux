@@ -564,6 +564,7 @@ test("the chat list shows the last author, escaped text and timestamp, with no t
     <ChatList
       chat={fakeChat({ conversations: [empty, latest] })}
       actors={actors}
+      perform={async () => true}
     />,
   );
   expect(html).toContain(new Date(created_at).toISOString());
@@ -591,7 +592,7 @@ test("the chats home marks finished steps; the list beside it shows every chat",
   const chatting = home(fakeChat());
   expect(chatting.match(/data-done="true"/g)).toHaveLength(2);
   const list = renderToStaticMarkup(
-    <ChatList chat={fakeChat()} actors={actors} />,
+    <ChatList chat={fakeChat()} actors={actors} perform={async () => true} />,
   );
   expect(list).toContain('aria-pressed="true"');
 });
@@ -1061,8 +1062,8 @@ test("starting an agent asks for a harness, an agent, a folder and how it asks p
     /<button[^>]*type="submit"[^>]*disabled=""[^>]*>Start</,
   );
   expect(html).toContain('value="pi">pi</option>');
-  // Each folder suggested once.
-  expect(html.match(/value="\/home\/owner\/app"/g)).toHaveLength(1);
+  // Each recent folder offered once, chosen with a press.
+  expect(html.match(/title="\/home\/owner\/app"/g)).toHaveLength(1);
   for (const id of ["start-model", "start-effort"]) {
     expect(html).toMatch(new RegExp(`<select[^>]*id="${id}"`));
     expect(html).not.toMatch(

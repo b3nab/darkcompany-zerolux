@@ -173,6 +173,30 @@ fn open_link(app: tauri::AppHandle, url: String) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// A folder of this computer, chosen by its person in macOS's own panel, attached to the window
+/// that asks; none when they cancel. Only a path comes back: the folder is read by the kernel.
+#[tauri::command]
+async fn choose_folder(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    start: Option<String>,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let mut panel = app.dialog().file().set_parent(&window);
+    if let Some(start) = start.filter(|start| std::path::Path::new(start).is_dir()) {
+        panel = panel.set_directory(start);
+    }
+    panel
+        .blocking_pick_folder()
+        .map(|chosen| {
+            chosen
+                .into_path()
+                .map(|path| path.to_string_lossy().into_owned())
+                .map_err(|error| error.to_string())
+        })
+        .transpose()
+}
+
 fn manager_request(url: &tauri::Url) -> bool {
     url.scheme() == "zerolux"
         && url.host_str() == Some("workspaces")
@@ -839,6 +863,8 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
         )
         // The page's own `Notification` reaches the system's notifications.
         .plugin(tauri_plugin_notification::init())
+        // Only `choose_folder` opens it: pages are given no dialog of their own.
+        .plugin(tauri_plugin_dialog::init())
         .manage(crate::extension_ui::Kernels::default())
         .register_asynchronous_uri_scheme_protocol(
             crate::extension_ui::SCHEME,
@@ -847,6 +873,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
         .invoke_handler(tauri::generate_handler![
             workspace_action,
             open_link,
+            choose_folder,
             crate::chrome::window_control,
             crate::credentials::read_workspace_credential,
             crate::credentials::write_workspace_credential

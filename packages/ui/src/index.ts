@@ -9,6 +9,8 @@ export type * from "./components";
 export {
   useAction,
   useActionResult,
+  useChooseChat,
+  useCopy,
   useActors,
   useDownload,
   useEvent,
@@ -41,6 +43,9 @@ export declare const Spinner: UiComponents["Spinner"];
 export declare const Avatar: UiComponents["Avatar"];
 export declare const Columns: UiComponents["Columns"];
 export declare const Split: UiComponents["Split"];
+export declare const Section: UiComponents["Section"];
+export declare const Page: UiComponents["Page"];
+export declare const FolderInput: UiComponents["FolderInput"];
 export declare const DateInput: UiComponents["DateInput"];
 export declare const Menu: UiComponents["Menu"];
 export declare const FileButton: UiComponents["FileButton"];

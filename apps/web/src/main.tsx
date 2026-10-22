@@ -29,6 +29,15 @@ try {
 } catch {
   // Unreadable or no storage: drafts start empty.
 }
+// A right click opens the app's own menus; the browser's only where text is written or chosen,
+// for its Cut, Copy and Paste.
+document.addEventListener("contextmenu", (event) => {
+  const writing = (event.target as Element | null)?.closest(
+    "input, textarea, [contenteditable]:not([contenteditable='false'])",
+  );
+  if (!writing && window.getSelection()?.isCollapsed !== false)
+    event.preventDefault();
+});
 // What arrives is read only while this page is in view.
 lookWith(
   () => document.visibilityState === "visible",

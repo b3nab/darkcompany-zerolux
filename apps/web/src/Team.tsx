@@ -1,3 +1,4 @@
+import { FolderInput } from "./folder-input";
 import { useEffect, useState } from "react";
 import type { ReactNode, SubmitEvent } from "react";
 import { Link } from "react-router";
@@ -452,23 +453,51 @@ export function StartSession({
           />
         </div>
       )}
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="start-folder">Folder</Label>
-        <Input
-          id="start-folder"
-          value={workspace}
-          onChange={(e) => setWorkspace(e.target.value)}
-          placeholder="/Users/you/projects/app"
-          list="start-folders"
-          required
-          className="font-mono"
-        />
-        <datalist id="start-folders">
-          {[...new Set(folders)].map((folder) => (
-            <option key={folder} value={folder} />
-          ))}
-        </datalist>
-      </div>
+      {away ? (
+        // A joined computer's folders are not walked from here: its path is written.
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="start-folder">Folder</Label>
+          <Input
+            id="start-folder"
+            value={workspace}
+            onChange={(e) => setWorkspace(e.target.value)}
+            placeholder="/Users/you/projects/app"
+            list="start-folders"
+            required
+            className="font-mono"
+          />
+          <datalist id="start-folders">
+            {[...new Set(folders)].map((folder) => (
+              <option key={folder} value={folder} />
+            ))}
+          </datalist>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <FolderInput
+            label="Folder"
+            value={workspace || null}
+            onChange={setWorkspace}
+          />
+          {folders.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-faint">Recent</span>
+              {[...new Set(folders)].slice(0, 6).map((folder) => (
+                <button
+                  key={folder}
+                  type="button"
+                  title={folder}
+                  aria-pressed={workspace === folder}
+                  onClick={() => setWorkspace(folder)}
+                  className="h-6 rounded-full border px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground aria-pressed:border-ring aria-pressed:text-foreground"
+                >
+                  {folderName(folder)}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex flex-col gap-2">
         <Label className="font-normal">
           <Checkbox

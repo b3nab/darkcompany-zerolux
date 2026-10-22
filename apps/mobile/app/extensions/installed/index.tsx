@@ -1,17 +1,21 @@
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { RefreshControl, ScrollView, View } from "react-native";
+import { Alert, RefreshControl, ScrollView, View } from "react-native";
 import {
+  disableExtension,
   enableExtension,
   errorMessage,
   extensionsNotice,
   extensionGroups,
   loadExtensionFolder,
+  removeInstalled,
   useExtensions,
   useMarketplace,
 } from "@zerolux/chat";
 import type { Extension, MarketplaceOffer } from "@zerolux/chat";
+import type { MenuItem } from "@zerolux/ui";
 import { ExtensionsMenu } from "@/components/extensions-menu";
+import { RowMenu } from "@/components/action-menu";
 import {
   ExtensionRow,
   Group,
@@ -82,27 +86,88 @@ export default function Installed() {
         }
       />
     ) : null;
+  // The row's actions, held down: what its page and its button offer.
+  const menu = (extension: Extension, offer?: MarketplaceOffer): MenuItem[] =>
+    owner
+      ? [
+          { title: "Open", icon: "eye", onPress: () => open(extension.id) },
+          ...(offer
+            ? [
+                {
+                  title: "Update",
+                  icon: "download",
+                  onPress: () => consent(extension.id),
+                },
+              ]
+            : []),
+          ...(extension.dev
+            ? [
+                {
+                  title: "Load again",
+                  icon: "rotate-cw",
+                  onPress: () =>
+                    act(extension.id, () =>
+                      loadExtensionFolder(extension.source, url),
+                    ),
+                },
+              ]
+            : []),
+          extension.enabled
+            ? {
+                title: "Disable",
+                icon: "power-off",
+                onPress: () =>
+                  act(extension.id, () => disableExtension(extension.id, url)),
+              }
+            : {
+                title: "Enable",
+                icon: "power",
+                onPress: () =>
+                  act(extension.id, () => enableExtension(extension.id, url)),
+              },
+          {
+            title: "Remove",
+            icon: "trash-2",
+            tone: "danger",
+            onPress: () =>
+              Alert.alert(`Remove ${extension.name}?`, undefined, [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Remove",
+                  style: "destructive",
+                  onPress: () =>
+                    act(extension.id, () => removeInstalled(extension, url)),
+                },
+              ]),
+          },
+        ]
+      : [];
   const group = (label: string, list: Extension[]) =>
     list.length ? (
       <Group label={label} count={list.length}>
         {list.map((extension, i) => (
-          <ExtensionRow
+          <RowMenu
             key={extension.id}
-            id={extension.id}
-            name={extension.name}
-            card={extension.card}
-            version={extension.version}
-            publisher={extension.publisher}
-            description={extension.description}
-            first={i === 0}
-            onPress={() => open(extension.id)}
+            items={menu(extension, updates.get(extension.id))}
           >
-            <StateChip
-              extension={extension}
-              offer={updates.get(extension.id)}
-            />
-            {button(extension, updates.get(extension.id))}
-          </ExtensionRow>
+            <ExtensionRow
+              key={extension.id}
+              id={extension.id}
+              name={extension.name}
+              card={extension.card}
+              version={extension.version}
+              publisher={extension.publisher}
+              description={extension.description}
+              first={i === 0}
+              onPress={() => open(extension.id)}
+            >
+              <StateChip
+                extension={extension}
+                offer={updates.get(extension.id)}
+              />
+              {button(extension, updates.get(extension.id))}
+            </ExtensionRow>
+          </RowMenu>
         ))}
       </Group>
     ) : null;

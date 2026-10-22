@@ -66,6 +66,22 @@ export async function openLink(url: string) {
 /** Where this page's kernel is: the desktop names it, a browser uses the page's own origin. */
 export const kernelAddress = () => desktopConnection()?.kernelUrl ?? "";
 
+/** The desktop app on the computer its kernel runs on: that computer's folders are this one's. */
+export function kernelHere() {
+  try {
+    const host = new URL(kernelAddress()).hostname;
+    return ["localhost", "127.0.0.1", "[::1]"].includes(host);
+  } catch {
+    return false;
+  }
+}
+
+/** A folder chosen in the system's own panel, from `start`; nothing when it is cancelled. */
+export async function chooseFolder(start?: string) {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string | null>("choose_folder", { start: start ?? null });
+}
+
 /**
  * Where an extension's page is opened: in the desktop through the app's own scheme, which
  * serves it from this workspace's kernel only; in a browser at the kernel's address.

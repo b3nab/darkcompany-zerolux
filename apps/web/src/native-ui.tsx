@@ -1,9 +1,13 @@
 import { createContext, useContext, useRef, useState } from "react";
-import * as lucide from "lucide-react";
-import { ChevronLeftIcon, icons, PuzzleIcon } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { EllipsisIcon } from "lucide-react";
+import { ChevronLeftIcon } from "lucide-react";
+import { lucideIcon } from "./lucide-icon";
+import { FolderInput } from "./folder-input";
+import { MenuEntries, WithMenu, dragFrom, useDropOn } from "./native-menus";
+import { Page, Section } from "./native-page";
+import { Table } from "./native-table";
 import type { Actor } from "@zerolux/chat";
-import type { Tone, UiComponents } from "@zerolux/ui";
+import type { MenuEntry, Tone, UiComponents } from "@zerolux/ui";
 import { cn } from "cn";
 import { MessageText } from "@/components/message-text";
 import { ActorMark } from "@/components/presence";
@@ -20,7 +24,6 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -35,21 +38,33 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 
-const named = lucide as unknown as Record<string, LucideIcon | undefined>;
+export { lucideIcon } from "./lucide-icon";
 
-/**
- * A Lucide icon by its name, as `kanban` or `file-text`, or a name Lucide renamed, as
- * `file-video`; one this app lacks shows as a puzzle.
- */
-export function lucideIcon(name?: string): LucideIcon {
-  const pascal = name
-    ?.split("-")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join("");
+/** Inside a Split's list, rows are the panel's own: compact, without a frame. */
+const InPanel = createContext(false);
+
+/** A "…" that opens what a row or a card can do, as its right click does. */
+function MoreMenu({ entries, label }: { entries: MenuEntry[]; label: string }) {
   return (
-    (pascal &&
-      (icons[pascal as keyof typeof icons] ?? named[`${pascal}Icon`])) ||
-    PuzzleIcon
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label={label}
+            title={label}
+            className="text-faint opacity-0 transition-opacity group-hover/row:opacity-100 group-has-[:focus-visible]/row:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100"
+          />
+        }
+      >
+        <EllipsisIcon />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-52">
+        <MenuEntries entries={entries} />
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -240,15 +255,33 @@ export const uiComponents: UiComponents = {
       {label}
     </label>
   ),
-  List: ({ children }) => (
-    <ul className="flex flex-col divide-y rounded-md border">{children}</ul>
-  ),
-  ListItem: ({ title, subtitle, leading, accessory, onPress, selected }) => {
+  List: function List({ children }) {
+    return useContext(InPanel) ? (
+      <ul className="flex flex-col gap-0.5 px-2">{children}</ul>
+    ) : (
+      <ul className="flex flex-col divide-y rounded-md border">{children}</ul>
+    );
+  },
+  ListItem: function ListItem({
+    title,
+    subtitle,
+    leading,
+    accessory,
+    onPress,
+    selected,
+    menu,
+    drag,
+    onDrop,
+  }) {
+    const panel = useContext(InPanel);
+    const drop = useDropOn(onDrop);
     const body = (
       <>
         {leading}
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-sm">{title}</span>
+          <span className={cn("truncate", panel ? "text-[13.5px]" : "text-sm")}>
+            {title}
+          </span>
           {subtitle && (
             <span className="truncate text-xs text-muted-foreground">
               {subtitle}
@@ -259,13 +292,27 @@ export const uiComponents: UiComponents = {
     );
     // What it holds after its title keeps its own press: a menu in it opens the menu only.
     return (
-      <li
-        className={cn(
-          "flex items-center gap-3 px-3 py-2",
-          onPress && "transition-colors hover:bg-accent",
-          // Open beside the list: more than a hover, a mark at its edge too.
-          selected && "bg-accent shadow-[inset_2px_0_0_var(--color-primary)]",
-        )}
+      <WithMenu
+        entries={menu}
+        render={
+          <li
+            {...(drag && dragFrom(() => [drag]))}
+            {...drop.props}
+            className={cn(
+              "group/row flex items-center gap-3",
+              panel
+                ? "min-h-8 rounded-sm px-2 py-1 text-muted-foreground hover:text-foreground [&_svg]:text-faint"
+                : "px-3 py-2",
+              onPress && "transition-colors hover:bg-accent",
+              // Open beside the list: more than a hover, a mark at its edge too.
+              selected &&
+                (panel
+                  ? "bg-accent text-foreground shadow-[inset_2px_0_0_var(--color-foreground)] [&_svg]:text-foreground"
+                  : "bg-accent shadow-[inset_2px_0_0_var(--color-primary)]"),
+              drop.over && "bg-ring/15 ring-1 ring-ring/60",
+            )}
+          />
+        }
       >
         {onPress ? (
           <button
@@ -280,35 +327,13 @@ export const uiComponents: UiComponents = {
           body
         )}
         {accessory}
-      </li>
+        {menu?.length ? (
+          <MoreMenu entries={menu} label={`${title} actions`} />
+        ) : null}
+      </WithMenu>
     );
   },
-  Table: ({ columns, rows }) => (
-    <div className="overflow-x-auto rounded-md border">
-      <table className="w-full text-sm">
-        <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
-          <tr>
-            {columns.map((column) => (
-              <th key={column.key} className="px-3 py-2 font-medium">
-                {column.title}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y">
-          {rows.map((row, i) => (
-            <tr key={i}>
-              {columns.map((column) => (
-                <td key={column.key} className="px-3 py-2">
-                  {row[column.key]}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  ),
+  Table,
   Badge: ({ tone = "default", children }) => (
     <Badge variant="outline" className={cn("shrink-0", tones[tone])}>
       {children}
@@ -328,40 +353,74 @@ export const uiComponents: UiComponents = {
         className="max-h-80 max-w-full rounded-md border object-contain"
       />
     ) : null,
-  Card: ({ title, onPress, children }) => (
-    <Card
-      size="sm"
-      {...(onPress && {
-        role: "button",
-        tabIndex: 0,
-        // Its own buttons and fields keep their press, and so does a menu it opened elsewhere.
-        onClick: (event: React.MouseEvent) => {
-          const target = event.target as Element;
-          if (
-            event.currentTarget.contains(target) &&
-            !target.closest("button, a, input, select, textarea, label")
-          )
-            onPress();
-        },
-        onKeyDown: (event: React.KeyboardEvent) => {
-          if (event.target !== event.currentTarget) return;
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            onPress();
-          }
-        },
-        className:
-          "cursor-pointer transition-colors outline-none hover:bg-accent/50 focus-visible:ring-3 focus-visible:ring-ring/50",
-      })}
-    >
-      {title && (
-        <CardHeader>
-          <CardTitle>{title}</CardTitle>
-        </CardHeader>
-      )}
-      <CardContent className="flex flex-col gap-3">{children}</CardContent>
-    </Card>
-  ),
+  Card: function DrawnCard({
+    title,
+    onPress,
+    selected,
+    menu,
+    drag,
+    onDrop,
+    children,
+  }) {
+    const drop = useDropOn(onDrop);
+    return (
+      <WithMenu
+        entries={menu}
+        render={
+          <Card
+            size="sm"
+            {...(drag && dragFrom(() => [drag]))}
+            {...drop.props}
+            className={cn(
+              "group/row relative",
+              selected && "ring-2 ring-ring",
+              drop.over && "bg-ring/10 ring-1 ring-ring/60",
+            )}
+            {...(onPress && {
+              role: "button",
+              tabIndex: 0,
+              // Its own buttons and fields keep their press, and so does a menu it opened elsewhere.
+              onClick: (event: React.MouseEvent) => {
+                const target = event.target as Element;
+                if (
+                  event.currentTarget.contains(target) &&
+                  !target.closest("button, a, input, select, textarea, label")
+                )
+                  onPress();
+              },
+              onKeyDown: (event: React.KeyboardEvent) => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onPress();
+                }
+              },
+              className: cn(
+                "group/row relative cursor-pointer transition-colors outline-none hover:bg-accent/50 focus-visible:ring-3 focus-visible:ring-ring/50",
+                selected && "ring-2 ring-ring",
+                drop.over && "bg-ring/10 ring-1 ring-ring/60",
+              ),
+            })}
+          />
+        }
+      >
+        {title ? (
+          <CardHeader className="flex items-center gap-2">
+            <CardTitle className="flex-1">{title}</CardTitle>
+            {menu?.length ? (
+              <MoreMenu entries={menu} label={`${title} actions`} />
+            ) : null}
+          </CardHeader>
+        ) : menu?.length ? (
+          // Without a title, its "…" waits in the corner, over nothing it hides.
+          <span className="absolute top-1.5 right-1.5 z-1">
+            <MoreMenu entries={menu} label="Card actions" />
+          </span>
+        ) : null}
+        <CardContent className="flex flex-col gap-3">{children}</CardContent>
+      </WithMenu>
+    );
+  },
   Tabs: ({ items, value, onChange }) => (
     <Tabs value={value} onValueChange={(next) => onChange(String(next))}>
       <TabsList>
@@ -397,28 +456,36 @@ export const uiComponents: UiComponents = {
       />
     );
   },
-  Split: function Split({ label, list, detail, open, onBack }) {
-    const width = useWidth(`split-${label}`, 256);
+  Split: function Split({ label, actions, list, detail, open, onBack }) {
+    const width = useWidth(`split-${label}`, 248);
     const [drawn, setDrawn] = useState(width.kept);
     const size = (pixels: number) => {
       const kept = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, pixels));
       setDrawn(kept);
       width.resized(kept);
     };
+    // A screen of its own, as Chat's and the Console's: the list as a panel at the side, all
+    // the way down, and what is open beside it.
     return (
-      <div className="@container">
+      <div data-screen className="@container flex min-h-0 min-w-0 flex-1">
         <div
-          className="flex flex-col @2xl:grid @2xl:grid-cols-[var(--split-list)_auto_minmax(0,1fr)]"
+          className="flex min-h-0 min-w-0 flex-1 flex-col @2xl:grid @2xl:grid-cols-[var(--split-list)_auto_minmax(0,1fr)]"
           style={{ "--split-list": `${drawn}px` } as React.CSSProperties}
         >
           <nav
             aria-label={label}
             className={cn(
-              "min-w-0 @2xl:sticky @2xl:top-0 @2xl:max-h-[calc(100dvh-8rem)] @2xl:self-start @2xl:overflow-y-auto @2xl:pr-4",
+              "flex min-h-0 min-w-0 flex-col overflow-y-auto bg-sidebar/40 pb-3",
               open && "@max-2xl:hidden",
             )}
           >
-            {list}
+            <header className="flex items-center justify-between gap-2 pt-4 pr-3 pb-2.5 pl-4">
+              <h2 className="truncate text-lg font-semibold tracking-tight">
+                {label}
+              </h2>
+              <div className="flex items-center gap-0.5">{actions}</div>
+            </header>
+            <InPanel.Provider value>{list}</InPanel.Provider>
           </nav>
           {/* Dragged or moved with the arrows; kept as the app keeps its columns' widths. */}
           <div
@@ -451,15 +518,18 @@ export const uiComponents: UiComponents = {
               size(drawn + by);
               width.keep();
             }}
-            className="group/handle hidden w-3 cursor-col-resize touch-none justify-center outline-none @2xl:flex"
+            className="group/handle hidden w-px cursor-col-resize touch-none justify-center bg-border outline-none after:absolute after:-inset-x-1.5 after:inset-y-0 relative hover:bg-ring focus-visible:bg-ring @2xl:flex"
+          />
+          <div
+            className={cn(
+              "flex min-h-0 min-w-0 flex-1 flex-col",
+              !open && "@max-2xl:hidden",
+            )}
           >
-            <span className="w-px bg-border transition-colors group-hover/handle:bg-ring group-focus-visible/handle:bg-ring" />
-          </div>
-          <div className={cn("min-w-0 @2xl:pl-4", !open && "@max-2xl:hidden")}>
             <Button
               variant="ghost"
               size="sm"
-              className="mb-2 -ml-2 @2xl:hidden"
+              className="m-2 self-start @2xl:hidden"
               onClick={onBack}
             >
               <ChevronLeftIcon />
@@ -505,25 +575,15 @@ export const uiComponents: UiComponents = {
         >
           <Drawn />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-48">
-          {items.map((item) => {
-            const Icon = item.icon ? lucideIcon(item.icon) : undefined;
-            return (
-              <DropdownMenuItem
-                key={item.title}
-                variant={item.tone === "danger" ? "destructive" : "default"}
-                disabled={item.disabled}
-                onClick={item.onPress}
-              >
-                {Icon && <Icon />}
-                {item.title}
-              </DropdownMenuItem>
-            );
-          })}
+        <DropdownMenuContent align="end" className="min-w-52">
+          <MenuEntries entries={items} />
         </DropdownMenuContent>
       </DropdownMenu>
     );
   },
+  Page,
+  Section,
+  FolderInput,
   FileButton: function FileButton({
     title,
     onFiles,

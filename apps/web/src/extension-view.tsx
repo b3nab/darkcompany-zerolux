@@ -21,6 +21,7 @@ import { moduleHost, UiSpace, uiModule } from "@zerolux/ui/host";
 import { cn } from "cn";
 import { ActionForm } from "./ActionForm";
 import { extensionUiAddress, openLink } from "./desktop";
+import { useChatChooser } from "./chat-chooser";
 import { lucideIcon, UiActors, uiComponents } from "./native-ui";
 import { saveFile } from "@/components/file";
 import { MessageText } from "@/components/message-text";
@@ -422,6 +423,9 @@ class ViewBoundary extends Component<
 }
 
 /** An extension's own view, from its package, drawn with this app's components. */
+/** Text a view copies, in the system's clipboard. */
+const copyText = (text: string) => navigator.clipboard.writeText(text);
+
 function NativeView({
   piece,
   context,
@@ -431,6 +435,7 @@ function NativeView({
 }) {
   const opened = usePieceAddress(piece);
   const actors = useContext(UiActors);
+  const [chooseChat, chooser] = useChatChooser();
   const [loaded, setLoaded] = useState<{
     View?: ComponentType;
     error?: string;
@@ -463,11 +468,14 @@ function NativeView({
       kernel={kernelUrl()}
       save={saveFile}
       open={openLink}
+      copy={copyText}
+      chooseChat={chooseChat}
       actors={actors}
     >
       <ViewBoundary>
         <View />
       </ViewBoundary>
+      {chooser}
     </UiSpace>
   );
 }
@@ -493,19 +501,31 @@ export function ExtensionView({
   return null;
 }
 
-/** A page an extension brings, found by its address: `/x/<extension>/<name>`. */
+/**
+ * A page an extension brings, found by its address: `/x/<extension>/<name>`. One drawn as a
+ * screen (a Page or a Split) takes the whole window, as the app's own; any other reads in a
+ * column under its title.
+ */
 export function ExtensionPage() {
   const { extension, name } = useParams();
   const piece = useUiPieces("page").find(
     (one) => one.extension === extension && one.name === name,
   );
-  if (!piece)
-    return <p className="text-sm text-muted-foreground">No such page.</p>;
   return (
-    <>
-      <h1 className="text-2xl font-semibold tracking-tight">{piece.title}</h1>
-      <ExtensionView piece={piece} context={{}} />
-    </>
+    <div className="group/host flex min-h-0 flex-1 flex-col overflow-y-auto has-[[data-screen]]:overflow-hidden">
+      <div className="mx-auto flex w-full max-w-295 flex-col gap-6 px-4 pt-7 pb-14 group-has-[[data-screen]]/host:min-h-0 group-has-[[data-screen]]/host:max-w-none group-has-[[data-screen]]/host:flex-1 group-has-[[data-screen]]/host:p-0 md:px-7">
+        {piece ? (
+          <>
+            <h1 className="text-2xl font-semibold tracking-tight group-has-[[data-screen]]/host:hidden">
+              {piece.title}
+            </h1>
+            <ExtensionView piece={piece} context={{}} />
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">No such page.</p>
+        )}
+      </div>
+    </div>
   );
 }
 

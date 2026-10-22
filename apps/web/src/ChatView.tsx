@@ -1,6 +1,7 @@
+import { WithMenu } from "./native-menus";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { SubmitEvent } from "react";
-import { Link, NavLink } from "react-router";
+import { Link, NavLink, useNavigate } from "react-router";
 import { cn } from "cn";
 import {
   CheckIcon,
@@ -90,7 +91,16 @@ const MAX_TEXT = 64 * 1024;
 const TURN = 5 * 60 * 1000;
 
 /** Every chat, the newest activity first; the ones waiting for you are marked. */
-export function ChatList({ chat, actors }: { chat: Chat; actors: Actor[] }) {
+export function ChatList({
+  chat,
+  actors,
+  perform,
+}: {
+  chat: Chat;
+  actors: Actor[];
+  perform: Perform;
+}) {
+  const navigate = useNavigate();
   const [filter, setFilter] = useState<ChatFilter>("all");
   const name = (id: string) =>
     actors.find((a) => a.id === id)?.name ?? "Former member";
@@ -152,10 +162,32 @@ export function ChatList({ chat, actors }: { chat: Chat; actors: Actor[] }) {
             name,
           );
           return (
-            <NavLink
+            <WithMenu
               key={c.id}
-              to={`/chats/${c.id}`}
-              className="flex items-center gap-3 rounded-md px-2 py-2.5 transition-colors hover:bg-accent aria-[current=page]:bg-accent"
+              entries={[
+                {
+                  title: "Open",
+                  icon: "message-square",
+                  onPress: () => navigate(`/chats/${c.id}`),
+                },
+                {
+                  title: "Meet",
+                  icon: "phone",
+                  onPress: () => navigate(`/meetings?chat=${c.id}`),
+                },
+                { divider: true },
+                {
+                  title: c.paused ? "Resume" : "Pause",
+                  icon: c.paused ? "play" : "pause",
+                  onPress: () => void perform(() => chat.pause(c, !c.paused)),
+                },
+              ]}
+              render={
+                <NavLink
+                  to={`/chats/${c.id}`}
+                  className="flex items-center gap-3 rounded-md px-2 py-2.5 transition-colors hover:bg-accent aria-[current=page]:bg-accent"
+                />
+              }
             >
               <ChatMark conversation={c} actors={actors} />
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -200,7 +232,7 @@ export function ChatList({ chat, actors }: { chat: Chat; actors: Actor[] }) {
                   )}
                 </span>
               </span>
-            </NavLink>
+            </WithMenu>
           );
         })}
         {shown.length === 0 && (
@@ -218,7 +250,7 @@ export function ChatList({ chat, actors }: { chat: Chat; actors: Actor[] }) {
 }
 
 /** A chat's mark: the agent of a direct chat, a group's initial on a wider tile. */
-function ChatMark({
+export function ChatMark({
   conversation,
   actors,
   className,

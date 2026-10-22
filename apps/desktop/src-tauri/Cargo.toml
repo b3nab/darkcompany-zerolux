@@ -20,6 +20,7 @@ clap.workspace = true
 uuid.workspace = true
 tauri-plugin-notification = "2"
 keyring = "4"
+tauri-plugin-dialog = "2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

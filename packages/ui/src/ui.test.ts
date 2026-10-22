@@ -30,6 +30,8 @@ const here: Here = {
   kernel,
   save: async () => {},
   open: async () => {},
+  copy: async () => {},
+  chooseChat: async () => null,
   actors: [],
 };
 const schema = {
@@ -153,6 +155,8 @@ test("an app gives every component a view may draw with", () => {
       "useAction",
       "useActionResult",
       "useOpen",
+      "useCopy",
+      "useChooseChat",
     ]),
   );
 });

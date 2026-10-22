@@ -1,25 +1,21 @@
+import { MenuEntries, WithMenu } from "./native-menus";
+import type { MenuEntry } from "@zerolux/ui";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Link, NavLink, useNavigate, useSearchParams } from "react-router";
 import { cn } from "cn";
 import {
   ActivityIcon,
-  ArchiveIcon,
-  ArchiveRestoreIcon,
   ChevronLeftIcon,
   ChevronDownIcon,
   EllipsisIcon,
   FileSearchIcon,
   GitCompareArrowsIcon,
-  GitForkIcon,
   ImagePlusIcon,
   InfoIcon,
   ListChecksIcon,
-  MessageCircleQuestionIcon,
   SearchIcon,
   PencilIcon,
-  PinIcon,
-  PinOffIcon,
   PlusIcon,
   SquareTerminalIcon,
   UsersIcon,
@@ -129,7 +125,6 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -244,6 +239,89 @@ const emptyLists: Record<ListView, string> = {
  * The Agent Console's column, as an inbox: pinned sessions first, then each live session in
  * one state, what needs you first, the latest within each; stopped and archived on request.
  */
+/**
+ * What can be done with one's own session: from its "…", or a right click on it in the list,
+ * where it opens first. Renaming where it is not open opens it with its title to change.
+ */
+function sessionMenu(
+  session: ChatSession,
+  {
+    chat,
+    perform,
+    navigate,
+    open,
+    rename,
+    ask,
+    continueThere,
+  }: {
+    chat: Chat;
+    perform: Perform;
+    navigate: (to: string) => void;
+    open?: boolean;
+    rename?: () => void;
+    ask?: () => void;
+    continueThere?: () => void;
+  },
+): MenuEntry[] {
+  const change = (changes: { pinned?: boolean; archived?: boolean }) => () =>
+    void perform(() => chat.updateSession(session.id, changes));
+  return [
+    ...(open
+      ? ([
+          {
+            title: "Open",
+            icon: "panel-right-open",
+            onPress: () => navigate(`/console/${session.id}`),
+          },
+          { divider: true },
+        ] as const)
+      : []),
+    {
+      title: "Rename",
+      icon: "pencil",
+      onPress: rename ?? (() => navigate(`/console/${session.id}?rename`)),
+    },
+    {
+      title: session.pinned_at ? "Unpin" : "Pin",
+      icon: session.pinned_at ? "pin-off" : "pin",
+      onPress: change({ pinned: !session.pinned_at }),
+    },
+    {
+      title: session.archived_at ? "Unarchive" : "Archive",
+      icon: session.archived_at ? "archive-restore" : "archive",
+      onPress: change({ archived: !session.archived_at }),
+    },
+    { divider: true },
+    {
+      title: "Fork",
+      icon: "git-fork",
+      onPress: () =>
+        void perform(async () => {
+          const { session: forked } = await chat.forkSession(session.id, {});
+          navigate(`/console/${forked.id}`);
+        }),
+    },
+    ...(ask
+      ? [
+          {
+            title: "Ask on the side…",
+            icon: "message-circle-question",
+            onPress: ask,
+          },
+        ]
+      : []),
+    ...(continueThere
+      ? [
+          {
+            title: "Continue in terminal…",
+            icon: "square-terminal",
+            onPress: continueThere,
+          },
+        ]
+      : []),
+  ];
+}
+
 export function ConsoleList({
   chat,
   actors,
@@ -404,9 +482,23 @@ export function ConsoleList({
                   </span>
                 </h3>
               )}
-              <NavLink
-                to={`/console/${session.id}`}
-                className="flex items-center gap-3 rounded-md px-2 py-2.5 transition-colors hover:bg-accent aria-[current=page]:bg-accent"
+              <WithMenu
+                entries={
+                  session.owner_id === me?.id
+                    ? sessionMenu(session, {
+                        chat,
+                        perform,
+                        navigate,
+                        open: true,
+                      })
+                    : undefined
+                }
+                render={
+                  <NavLink
+                    to={`/console/${session.id}`}
+                    className="flex items-center gap-3 rounded-md px-2 py-2.5 transition-colors hover:bg-accent aria-[current=page]:bg-accent"
+                  />
+                }
               >
                 <SessionMark
                   session={session}
@@ -481,7 +573,7 @@ export function ConsoleList({
                     <span className="truncate">{line}</span>
                   </span>
                 </span>
-              </NavLink>
+              </WithMenu>
             </div>
           );
         })}
@@ -796,7 +888,21 @@ export function SessionView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, at]);
   // A link to a point of its work (`?at=`, from a search) opens there, not at the bottom.
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
+  // Opened from the list to be renamed: its title is ready to change.
+  useEffect(() => {
+    if (!params.has("rename")) return;
+    setTitle(session.title);
+    setParams(
+      (next) => {
+        next.delete("rename");
+        return next;
+      },
+      { replace: true },
+    );
+    // Only the address says to rename.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
   const target = params.get("at");
   // New work follows at the bottom, as in a chat, while you are there; reading further up,
   // earlier work coming in above or anything changing size keeps your place.
@@ -1029,53 +1135,19 @@ export function SessionView({
                 >
                   <EllipsisIcon />
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48">
-                  <DropdownMenuItem onClick={() => setTitle(session.title)}>
-                    <PencilIcon />
-                    Rename
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() =>
-                      void perform(() =>
-                        chat.updateSession(session.id, {
-                          pinned: !session.pinned_at,
-                        }),
-                      )
-                    }
-                  >
-                    {session.pinned_at ? <PinOffIcon /> : <PinIcon />}
-                    {session.pinned_at ? "Unpin" : "Pin"}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() =>
-                      void perform(() =>
-                        chat.updateSession(session.id, {
-                          archived: !session.archived_at,
-                        }),
-                      )
-                    }
-                  >
-                    {session.archived_at ? (
-                      <ArchiveRestoreIcon />
-                    ) : (
-                      <ArchiveIcon />
-                    )}
-                    {session.archived_at ? "Unarchive" : "Archive"}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => void fork()}>
-                    <GitForkIcon />
-                    Fork
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setAsking(true)}>
-                    <MessageCircleQuestionIcon />
-                    Ask on the side…
-                  </DropdownMenuItem>
-                  {ownComputer && (
-                    <DropdownMenuItem onClick={() => setContinuing(true)}>
-                      <SquareTerminalIcon />
-                      Continue in terminal…
-                    </DropdownMenuItem>
-                  )}
+                <DropdownMenuContent align="end" className="min-w-52">
+                  <MenuEntries
+                    entries={sessionMenu(session, {
+                      chat,
+                      perform,
+                      navigate,
+                      rename: () => setTitle(session.title),
+                      ask: () => setAsking(true),
+                      continueThere: ownComputer
+                        ? () => setContinuing(true)
+                        : undefined,
+                    })}
+                  />
                 </DropdownMenuContent>
               </DropdownMenu>
             )}

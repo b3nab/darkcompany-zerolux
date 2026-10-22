@@ -1,6 +1,8 @@
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
-import type { PickedFile } from "@zerolux/ui";
+import { Alert } from "react-native";
+import { errorMessage } from "@zerolux/chat";
+import type { MenuItem, PickedFile } from "@zerolux/ui";
 
 /** A picked file's bytes, typed as the picker says, with its name. */
 async function read(uri: string, name: string, type?: string | null) {
@@ -52,3 +54,24 @@ export async function pickFiles(
     ),
   );
 }
+
+/** Where files are picked from, as a menu's rows: each gives what was picked to `onFiles`. */
+export const fileSources = (
+  multiple: boolean,
+  onFiles: (files: PickedFile[]) => void,
+): MenuItem[] =>
+  (
+    [
+      ["library", "Photo library", "image"],
+      ["camera", "Take photo", "camera"],
+      ["files", "Files", "folder"],
+    ] as const
+  ).map(([from, title, icon]) => ({
+    title,
+    icon,
+    onPress: () =>
+      void pickFiles(from, multiple).then(
+        (files) => files.length && onFiles(files),
+        (e: unknown) => Alert.alert(errorMessage(e)),
+      ),
+  }));

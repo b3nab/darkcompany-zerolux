@@ -35,6 +35,8 @@ export function UiSpace({
   kernel,
   save,
   open,
+  copy,
+  chooseChat,
   actors,
   children,
 }: Here & { children: ReactNode }) {
@@ -53,10 +55,12 @@ export function UiSpace({
       kernel,
       save,
       open,
+      copy,
+      chooseChat,
       actors: JSON.parse(people) as Here["actors"],
       actions: known,
     }),
-    [piece, place, kernel, save, open, people, known],
+    [piece, place, kernel, save, open, copy, chooseChat, people, known],
   );
   return createElement(HereContext.Provider, { value }, children);
 }
@@ -78,6 +82,8 @@ export function uiModule(components: UiComponents) {
     useUpload: hooks.useUpload,
     useDownload: hooks.useDownload,
     useOpen: hooks.useOpen,
+    useCopy: hooks.useCopy,
+    useChooseChat: hooks.useChooseChat,
   };
 }
 

@@ -1,3 +1,4 @@
+import * as Clipboard from "expo-clipboard";
 import * as React from "react";
 import { Component, useEffect, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
@@ -12,6 +13,7 @@ import {
 } from "@zerolux/chat";
 import type { UiContext, UiPiece } from "@zerolux/chat";
 import { moduleHost, uiModule, UiSpace } from "@zerolux/ui/host";
+import { useChatChooser } from "@/components/chat-chooser";
 import { saveFile } from "@/components/save-file";
 import { Text } from "@/components/ui/text";
 import { uiComponents } from "@/components/ui-components";
@@ -20,6 +22,10 @@ import { useSession } from "../src/kernel";
 // A view opens web addresses in the system browser, as every link in the app.
 const openInBrowser = async (url: string) => {
   await Linking.openURL(url);
+};
+
+const copyText = async (text: string) => {
+  await Clipboard.setStringAsync(text);
 };
 
 // The bundle running now, by its address: its view is kept by that name.
@@ -76,6 +82,7 @@ export function NativeView({
 }) {
   const { url, workspace } = useSession();
   const muted = String(useCSSVariable("--color-muted-foreground"));
+  const [chooseChat, chooser] = useChatChooser();
   // Loaded again when its extension changes, not each time the list is read again: a view
   // loaded anew starts over, and what was typed in it would go.
   const { extensions } = useExtensions(url);
@@ -117,10 +124,13 @@ export function NativeView({
         kernel={url}
         save={saveFile}
         open={openInBrowser}
+        copy={copyText}
+        chooseChat={chooseChat}
         actors={activeActors(workspace?.actors ?? [])}
       >
         <View />
       </UiSpace>
+      {chooser}
     </Contained>
   );
 }

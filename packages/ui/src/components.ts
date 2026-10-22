@@ -95,7 +95,18 @@ export interface ListProps {
   children?: ReactNode;
 }
 
-export interface ListItemProps {
+/**
+ * What can be dragged and where it lands: a row or a card carries `drag`, the id it is known
+ * by; one with `onDrop` takes what is dropped on it, as a folder takes files. On a phone,
+ * nothing drags: its menu moves things instead.
+ */
+export interface Droppable {
+  drag?: string;
+  /** `copy`: ⌥ was held, as in Finder, to copy instead of moving. */
+  onDrop?: (ids: string[], copy: boolean) => void;
+}
+
+export interface ListItemProps extends Droppable {
   title: string;
   subtitle?: string;
   /** Before the title: an icon or an avatar. */
@@ -106,11 +117,59 @@ export interface ListItemProps {
   onPress?: () => void;
   /** The row open beside the list, as in a Split. */
   selected?: boolean;
+  /** What can be done with it: its "…", a right click, a long press on a phone. */
+  menu?: MenuEntry[];
 }
 
+/** A group of rows under its name, with what can be added to it, as a source and its projects. */
+export interface SectionProps {
+  title: string;
+  /** Beside the name: an IconButton or a Menu. */
+  actions?: ReactNode;
+  children?: ReactNode;
+}
+
+export interface TableColumn {
+  key: string;
+  title: string;
+  /** Numbers and sizes end on the right. */
+  align?: "start" | "end";
+}
+
+export interface TableRow extends Droppable {
+  /** How it is known in a selection and a drag. */
+  id: string;
+  /** Its icon by Lucide name, large in the icons view. */
+  icon?: string;
+  cells: Record<string, ReactNode>;
+  /** Opens it: a double click or Enter, a tap on a phone. */
+  onOpen?: () => void;
+  /** What can be done with it: a right click, a long press on a phone. */
+  menu?: MenuEntry[];
+}
+
+/**
+ * Rows under their columns, chosen as in the system's own lists: a click, ⌘ for more, ⇧ for a
+ * range, ⌘A for all and Esc for none; on a phone, Select and taps.
+ */
 export interface TableProps {
-  columns: { key: string; title: string }[];
-  rows: Record<string, ReactNode>[];
+  columns: TableColumn[];
+  rows: TableRow[];
+  /** As a list under the columns, or as icons named by the first column, as in Finder. */
+  view?: "list" | "icons";
+  /** The rows chosen, by id; without `onSelect` none are. */
+  selected?: string[];
+  onSelect?: (ids: string[]) => void;
+  /**
+   * What can be done with all the rows chosen: in a bar along the bottom while more than one
+   * is, and on a right click among them.
+   */
+  selectionMenu?: MenuEntry[];
+  /** The column it is sorted by; pressing a column's title sorts by it, again the other way. */
+  sort?: { key: string; descending?: boolean };
+  onSort?: (sort: { key: string; descending: boolean }) => void;
+  /** Said when there are no rows. */
+  empty?: string;
 }
 
 export interface BadgeProps {
@@ -130,10 +189,14 @@ export interface ImageProps {
   height?: number;
 }
 
-export interface CardProps {
+export interface CardProps extends Droppable {
   title?: string;
   /** A card that opens something shows that it does. */
   onPress?: () => void;
+  /** The card open beside the list, as a task in the inspector. */
+  selected?: boolean;
+  /** What can be done with it: its "…" by the title, a right click, a long press on a phone. */
+  menu?: MenuEntry[];
   children?: ReactNode;
 }
 
@@ -148,8 +211,10 @@ export interface ColumnsProps {
  * shows, and once something is open its detail takes its place, with the way back.
  */
 export interface SplitProps {
-  /** What the list holds: its label, and the way back to it. */
+  /** What the list holds: its label, its title on top, and the way back to it. */
   label: string;
+  /** Beside the list's title: what adds to it, as an IconButton. */
+  actions?: ReactNode;
   list: ReactNode;
   detail: ReactNode;
   /** Something in the list is open: on a phone its detail shows instead of the list. */
@@ -167,14 +232,25 @@ export interface DateInputProps {
   disabled?: boolean;
 }
 
-/** Something to do with what a row shows. */
+/** Something to do with what a row shows; with `items`, a submenu of choices instead. */
 export interface MenuItem {
   title: string;
   icon?: string;
   tone?: "danger";
   disabled?: boolean;
-  onPress: () => void;
+  /** The choice made, among its neighbours, as the current status. */
+  checked?: boolean;
+  /** The keys that do it on a computer, as the system writes them: `⌘⌫`, `⇧⌘N`. */
+  shortcut?: string;
+  onPress?: () => void;
+  items?: MenuEntry[];
+  /** Picks files instead, as a FileButton: Upload in a folder's menu. */
+  onFiles?: (files: PickedFile[]) => void;
+  multiple?: boolean;
 }
+
+/** A line of a menu: something to do, a line between groups, or a group's name. */
+export type MenuEntry = MenuItem | { divider: true } | { section: string };
 
 /** What can be done with something, behind one button: a menu here, an action sheet on a phone. */
 export interface MenuProps {
@@ -182,7 +258,48 @@ export interface MenuProps {
   label: string;
   /** Its icon, by Lucide name; `ellipsis` by default. */
   icon?: string;
-  items: MenuItem[];
+  items: MenuEntry[];
+}
+
+/** A place on the way to where a page is: pressing one goes back to it. */
+export interface Crumb {
+  title: string;
+  onPress?: () => void;
+}
+
+/**
+ * A screen as the app's own are: a header that says where you are and holds what you can do,
+ * then what it shows; while something is open in it, an inspector beside it.
+ */
+export interface PageProps {
+  /** Where you are: a title, or the way to it, the last being here. */
+  title: string | Crumb[];
+  /** Beside the title: a key, a source. */
+  subtitle?: string;
+  /** Searching what the page shows, in its header. */
+  search?: {
+    placeholder: string;
+    value: string;
+    onChange: (value: string) => void;
+  };
+  /** In the header: Tabs for views, Buttons, a Menu. A primary Button is the page's main action. */
+  actions?: ReactNode;
+  /** What is open, beside what the page shows; on a phone, over it. */
+  inspector?: { title: string; content: ReactNode; onClose: () => void };
+  /** What can be done where nothing is: a right click on the empty page, a long press. */
+  menu?: MenuEntry[];
+  children?: ReactNode;
+}
+
+/**
+ * A folder on the computer ZeroLux runs on, chosen and never typed: with the system's own
+ * panel where that computer is this one, else in a sheet that walks its folders.
+ */
+export interface FolderInputProps {
+  value: string | null;
+  onChange: (path: string) => void;
+  label?: string;
+  disabled?: boolean;
 }
 
 /** A file a person picked or dropped, with its name. */
@@ -264,6 +381,9 @@ export interface UiComponents {
   Avatar: ComponentType<AvatarProps>;
   Columns: ComponentType<ColumnsProps>;
   Split: ComponentType<SplitProps>;
+  Section: ComponentType<SectionProps>;
+  Page: ComponentType<PageProps>;
+  FolderInput: ComponentType<FolderInputProps>;
   DateInput: ComponentType<DateInputProps>;
   Menu: ComponentType<MenuProps>;
   FileButton: ComponentType<FileButtonProps>;
@@ -296,6 +416,9 @@ export const componentNames = [
   "Avatar",
   "Columns",
   "Split",
+  "Section",
+  "Page",
+  "FolderInput",
   "DateInput",
   "Menu",
   "FileButton",
