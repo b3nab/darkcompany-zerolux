@@ -28,7 +28,7 @@ import {
   offerFor,
   offerVersions,
   readCardText,
-  removeExtension,
+  removeInstalled,
   runAction,
   setExtensionSettings,
 } from "@zerolux/chat";
@@ -243,7 +243,7 @@ function RemoveDialog({
             disabled={busy}
             onClick={() =>
               void perform(async () => {
-                await removeExtension(extension.id);
+                await removeInstalled(extension);
               }).then((done) => done && navigate("/extensions"))
             }
           >

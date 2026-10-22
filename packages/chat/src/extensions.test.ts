@@ -18,6 +18,7 @@ import {
   enableExtension,
   loadExtensionFolder,
   removeExtension,
+  removeInstalled,
   runAction,
   setExtensionSettings,
 } from "./extensions";
@@ -282,4 +283,21 @@ test("a card's files are read on the kernel, its icon follows the theme, its REA
   ).toBe("dark.png");
   expect(cardFileNamed(card, "./media/one.png")?.kind).toBe("image");
   expect(cardFileNamed(card, "media/two.png")).toBeUndefined();
+});
+
+test("an enabled extension is disabled before it is removed; a disabled one is removed at once", async () => {
+  const asked: string[] = [];
+  setKernelFetch(async (url, init) => {
+    asked.push(`${init?.method ?? "GET"} ${new URL(String(url)).pathname}`);
+    return init?.method === "DELETE"
+      ? Response.json({ removed: true })
+      : Response.json({ extension: { id: "acme.notes" } });
+  });
+  await removeInstalled({ id: "acme.notes", enabled: true }, kernel);
+  await removeInstalled({ id: "acme.notes", enabled: false }, kernel);
+  expect(asked).toEqual([
+    "POST /api/extensions/acme.notes/disable",
+    "DELETE /api/extensions/acme.notes",
+    "DELETE /api/extensions/acme.notes",
+  ]);
 });

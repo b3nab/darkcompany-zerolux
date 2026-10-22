@@ -268,6 +268,15 @@ export const removeExtension = (id: string, kernel = kernelUrl()) =>
     "DELETE",
   );
 
+/** Removes an installed extension: the kernel removes only a disabled one, so it is disabled first. */
+export async function removeInstalled(
+  extension: Pick<Extension, "id" | "enabled">,
+  kernel = kernelUrl(),
+) {
+  if (extension.enabled) await disableExtension(extension.id, kernel);
+  return removeExtension(extension.id, kernel);
+}
+
 /** Settings and secrets by key; `null` takes one away. */
 export const setExtensionSettings = (
   id: string,
