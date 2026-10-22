@@ -9,8 +9,8 @@ import {
   List,
   ListItem,
   Menu,
-  Select,
   Spinner,
+  Split,
   Stack,
   Text,
   useActionResult,
@@ -39,6 +39,8 @@ export default function Files() {
   const locations = useActionResult<{ locations: Location[] }>("locations", {});
   const all = locations.data?.locations ?? [];
   const [chosen, setChosen] = useState("");
+  // On a phone, whether a location is open instead of the list of them.
+  const [opened, setOpened] = useState(false);
   const location =
     all.find((l) => l.id === chosen) ?? all.find((l) => l.default) ?? all[0];
   const [folder, setFolder] = useState("");
@@ -127,52 +129,70 @@ export default function Files() {
       : []),
   ];
 
-  return (
+  const locationActions = (location: Location): MenuItem[] => [
+    {
+      title: "Settings",
+      icon: "settings",
+      onPress: () => setAsk({ kind: "location", location }),
+    },
+    ...(location.own
+      ? []
+      : [
+          {
+            title: "Remove",
+            icon: "trash-2",
+            tone: "danger" as const,
+            onPress: () => setAsk({ kind: "remove-location", location }),
+          },
+        ]),
+  ];
+
+  const list = (
+    <Stack gap={8}>
+      {locations.loading && !locations.data ? (
+        <Spinner />
+      ) : all.length ? (
+        <List>
+          {all.map((each) => (
+            <ListItem
+              key={each.id}
+              title={each.name}
+              selected={each.id === at}
+              subtitle={state(each) || each.account || undefined}
+              leading={
+                <Icon
+                  name={providerIcon(each.provider)}
+                  tone={state(each) ? "danger" : "muted"}
+                />
+              }
+              onPress={() => {
+                setChosen(each.id);
+                setOpened(true);
+              }}
+              accessory={
+                <Menu label="Location actions" items={locationActions(each)} />
+              }
+            />
+          ))}
+        </List>
+      ) : (
+        <Empty>No locations</Empty>
+      )}
+      <Button
+        title="Add location"
+        onPress={() => setAsk({ kind: "add-location" })}
+      />
+    </Stack>
+  );
+
+  const detail = location ? (
     <DropZone
       label="Drop to upload"
-      disabled={!location || !can("write") || Boolean(problem)}
+      disabled={!can("write") || Boolean(problem)}
       onFiles={(picked) => void send(picked)}
     >
       <Stack gap={12}>
-        <Stack direction="row" gap={8} align="center">
-          {location && <Icon name={providerIcon(location.provider)} />}
-          <Select
-            label="Location"
-            value={at}
-            options={all.map((l) => ({ value: l.id, label: l.name }))}
-            onChange={setChosen}
-            placeholder={locations.loading ? "Loading" : "None"}
-          />
-          {location && (
-            <Menu
-              label="Location actions"
-              icon="settings"
-              items={[
-                {
-                  title: "Settings",
-                  icon: "settings",
-                  onPress: () => setAsk({ kind: "location", location }),
-                },
-                ...(location.own
-                  ? []
-                  : [
-                      {
-                        title: "Remove",
-                        icon: "trash-2",
-                        tone: "danger" as const,
-                        onPress: () =>
-                          setAsk({ kind: "remove-location", location }),
-                      },
-                    ]),
-              ]}
-            />
-          )}
-          <Button
-            title="Add location"
-            onPress={() => setAsk({ kind: "add-location" })}
-          />
-        </Stack>
-        {location && problem && (
+        {problem && (
           <Stack direction="row" gap={8} align="center">
             <Text tone="danger">{problem}</Text>
             <Button
@@ -182,7 +202,7 @@ export default function Files() {
             />
           </Stack>
         )}
-        {location && !searching && (
+        {!searching && (
           <Stack direction="row" gap={4} align="center">
             <Button
               title={location.name}
@@ -201,42 +221,34 @@ export default function Files() {
             ))}
           </Stack>
         )}
-        {location && (
-          <Stack direction="row" gap={8} align="center">
-            {can("search") && (
-              <Input
-                value={query}
-                onChange={setQuery}
-                placeholder={`Search ${location.name}`}
-              />
-            )}
-            {can("write") && (
-              <Button
-                title="New folder"
-                onPress={() =>
-                  setAsk({ kind: "new-folder", location: at, folder })
-                }
-              />
-            )}
-            {can("write") && (
-              <FileButton
-                title="Upload"
-                variant="primary"
-                multiple
-                busy={upload.busy}
-                onFiles={(picked) => void send(picked)}
-              />
-            )}
-          </Stack>
-        )}
+        <Stack direction="row" gap={8} align="center">
+          {can("search") && (
+            <Input
+              value={query}
+              onChange={setQuery}
+              placeholder={`Search ${location.name}`}
+            />
+          )}
+          {can("write") && (
+            <Button
+              title="New folder"
+              onPress={() =>
+                setAsk({ kind: "new-folder", location: at, folder })
+              }
+            />
+          )}
+          {can("write") && (
+            <FileButton
+              title="Upload"
+              variant="primary"
+              multiple
+              busy={upload.busy}
+              onFiles={(picked) => void send(picked)}
+            />
+          )}
+        </Stack>
         {error && <Text tone="danger">{error}</Text>}
-        {!location ? (
-          locations.loading ? (
-            <Spinner />
-          ) : (
-            <Empty>No locations</Empty>
-          )
-        ) : shown?.loading && !shown.data ? (
+        {shown?.loading && !shown.data ? (
           <Spinner />
         ) : entries.length ? (
           <List>
@@ -269,12 +281,26 @@ export default function Files() {
           <Empty>{searching ? "No files match" : "No files"}</Empty>
         )}
       </Stack>
+    </DropZone>
+  ) : (
+    <Empty>No locations</Empty>
+  );
+
+  return (
+    <>
+      <Split
+        label="Locations"
+        list={list}
+        detail={detail}
+        open={opened && Boolean(location)}
+        onBack={() => setOpened(false)}
+      />
       <Asking
         ask={ask}
         locations={all}
         close={() => setAsk(undefined)}
         done={reload}
       />
-    </DropZone>
+    </>
   );
 }
