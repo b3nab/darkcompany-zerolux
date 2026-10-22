@@ -1,5 +1,5 @@
 import * as Haptics from "expo-haptics";
-import { ChevronRightIcon } from "lucide-react-native";
+import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react-native";
 import { Children } from "react";
 import type { ReactNode } from "react";
 import {
@@ -345,6 +345,26 @@ export const uiComponents: UiComponents = {
           </View>
         ))}
       </ScrollView>
+    );
+  },
+  // One at a time on a phone: the list, or what is open in it with the way back to the list.
+  Split: function Split({ label, list, detail, open, onBack }) {
+    const ink = String(useCSSVariable("--color-foreground"));
+    if (!open) return <>{list}</>;
+    return (
+      <View className="gap-3">
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={label}
+          onPress={onBack}
+          hitSlop={8}
+          className="flex-row items-center gap-1 self-start active:opacity-60"
+        >
+          <ChevronLeftIcon color={ink} size={18} strokeWidth={1.75} />
+          <AppText className="text-sm font-medium">{label}</AppText>
+        </Pressable>
+        {detail}
+      </View>
     );
   },
   DateInput,
