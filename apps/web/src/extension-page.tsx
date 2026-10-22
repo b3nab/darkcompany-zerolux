@@ -597,7 +597,15 @@ function Gallery({ media }: { media: CardFile[] }) {
   const shown = open === undefined ? undefined : images[open];
   return (
     <>
-      <ul className="mb-6 grid snap-x auto-cols-[min(300px,80%)] grid-flow-col gap-3 overflow-x-auto pb-1.5">
+      <ul
+        className={cn(
+          "mb-6 grid snap-x grid-flow-col gap-3 overflow-x-auto pb-1.5",
+          // One alone is shown large; more, side by side.
+          media.length === 1
+            ? "max-w-3xl auto-cols-fr"
+            : "auto-cols-[min(300px,80%)]",
+        )}
+      >
         {media.map((file) => (
           <li
             key={file.sha256}
