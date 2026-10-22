@@ -1,0 +1,12 @@
+[extension]
+id = "zerolux.disk"
+name = "Disk"
+version = "1.0.0"
+publisher = "zerolux"
+description = "A test extension: Storage locations kept in memory, signed in to with OAuth"
+
+[dependencies]
+"zerolux.storage" = ">=0.2"
+
+[process]
+command = ["bun", "run", "main.ts"]

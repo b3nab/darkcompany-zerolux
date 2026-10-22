@@ -1,15 +1,69 @@
-/** A file Storage keeps, as its actions give it. */
+/** A location: a provider with its configuration and account, as Storage shows it. */
+export interface Location {
+  id: string;
+  name: string;
+  provider: string;
+  config: Record<string, unknown>;
+  capabilities: string[];
+  /** Where chat attachments go. */
+  default: boolean;
+  /** ZeroLux's own, which stays. */
+  own?: boolean;
+  /** Whether its provider is installed and enabled. */
+  available: boolean;
+  /** False until the person signs in, for a provider that asks it. */
+  signed_in?: boolean;
+  account?: string | null;
+  /** What went wrong with it last. */
+  error?: string | null;
+}
+
+/** A field a provider asks for, to add a location of it. */
+export interface Field {
+  key: string;
+  label: string;
+  type: "text" | "secret" | "choice" | "boolean";
+  required?: boolean;
+  description?: string;
+  options?: { value: string; label: string }[];
+}
+
+/** A provider: Storage's own folder, or another extension's service. */
+export interface Provider {
+  provider: string;
+  extension: string;
+  title: string;
+  description?: string;
+  fields?: Field[];
+  sign_in?: boolean;
+  capabilities?: string[];
+  error?: string;
+}
+
+/** A file or a folder of a location, as its service holds it. */
+export interface Entry {
+  name: string;
+  path: string;
+  kind: "file" | "folder";
+  size?: number;
+  modified?: number;
+  content_type?: string;
+  /** In search results, the location it is in. */
+  location?: string;
+}
+
+/** A file shared in a chat, as chats show it. */
 export interface StoredFile {
   id: string;
   name: string;
-  /** `a/b`, or empty at the top. */
-  folder: string;
   size: number;
   content_type: string;
   created_by: string;
   created_at: number;
   updated_at: number;
   conversation_id: string | null;
+  location: string;
+  path: string;
 }
 
 /** A size as people read it. */
@@ -42,8 +96,9 @@ export function when(at: number, now = Date.now()) {
 }
 
 /** The Lucide icon for a file, by its kind. */
-export function fileIcon(file: StoredFile) {
-  const type = file.content_type;
+export function fileIcon(file: { kind?: string; content_type?: string }) {
+  if (file.kind === "folder") return "folder";
+  const type = file.content_type ?? "";
   if (type.startsWith("image/")) return "file-image";
   if (type.startsWith("video/")) return "file-video";
   if (type.startsWith("audio/")) return "file-audio";
@@ -55,18 +110,61 @@ export function fileIcon(file: StoredFile) {
   return "file";
 }
 
-/** The folders right inside `folder`, by name, from every folder that holds files. */
-export function subfolders(folders: string[], folder: string) {
-  const prefix = folder ? `${folder}/` : "";
-  const names = new Set<string>();
-  for (const path of folders)
-    if (path.startsWith(prefix) && path !== folder) {
-      const name = path.slice(prefix.length).split("/")[0];
-      if (name) names.add(name);
-    }
-  return [...names].sort((a, b) => a.localeCompare(b));
+/** The Lucide icon of a provider. */
+export function providerIcon(provider: string) {
+  switch (provider) {
+    case "folder":
+      return "hard-drive";
+    case "drive":
+      return "cloud";
+    case "s3":
+      return "database";
+    default:
+      return "folder-cog";
+  }
 }
 
-/** A folder within another, as a path. */
+/** A location's state, in a few words; none when it is ready. */
+export function state(location: Location) {
+  if (!location.available) return "Provider not installed";
+  if (location.signed_in === false) return "Not signed in";
+  if (location.error) return location.error;
+  return "";
+}
+
+/** A path within a location, from a folder and a name. */
 export const within = (folder: string, name: string) =>
   folder ? `${folder}/${name}` : name;
+
+export const parent = (path: string) => path.split("/").slice(0, -1).join("/");
+
+export const leaf = (path: string) => path.split("/").pop() ?? path;
+
+/** What a person filled in for a provider's fields: empty secrets are left as they were. */
+export function filled(fields: Field[], values: Record<string, unknown>) {
+  const config: Record<string, unknown> = {};
+  for (const field of fields) {
+    const value = values[field.key];
+    if (field.type === "secret" && !String(value ?? "").trim()) continue;
+    if (value !== undefined) config[field.key] = value;
+  }
+  return config;
+}
+
+/**
+ * The required fields still empty. Changing a location, `kept` is what it has: its fields count
+ * as given, and its secrets, which the provider keeps, are left as they are when empty.
+ */
+export function missing(
+  fields: Field[],
+  values: Record<string, unknown>,
+  kept?: Record<string, unknown>,
+) {
+  return fields.filter(
+    (field) =>
+      field.required &&
+      !String(values[field.key] ?? "").trim() &&
+      !(kept && field.type === "secret") &&
+      !String(kept?.[field.key] ?? "").trim(),
+  );
+}

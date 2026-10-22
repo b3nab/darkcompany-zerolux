@@ -1,21 +1,13 @@
 [extension]
 id = "zerolux.s3"
 name = "S3"
-version = "0.1.0"
+version = "0.2.0"
 publisher = "zerolux"
-description = "Storage's files kept in an S3 bucket: Amazon S3, Cloudflare R2, MinIO and the like"
+description = "Storage locations in S3 buckets, live: Amazon S3, Cloudflare R2, MinIO and the like"
 kernel = ">=0.0.1"
 
 [dependencies]
-"zerolux.storage" = ">=0.1"
+"zerolux.storage" = ">=0.2"
 
 [process]
 command = ["bun", "run", "main.ts"]
-
-[settings]
-bucket = { type = "text", label = "Bucket" }
-region = { type = "text", label = "Region", default = "us-east-1" }
-endpoint = { type = "text", label = "Endpoint", description = "Only for a service other than Amazon S3" }
-prefix = { type = "text", label = "Prefix", description = "A folder in the bucket for the workspace's files" }
-access_key_id = { type = "text", label = "Access key ID" }
-secret_access_key = { type = "secret", label = "Secret access key" }

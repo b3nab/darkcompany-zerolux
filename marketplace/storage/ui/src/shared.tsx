@@ -27,14 +27,14 @@ export default function Shared() {
   useEvent("changed", () => void files.reload());
   const upload = useUpload("upload");
   const download = useDownload("download");
-  const share = useAction("share");
+  const unshare = useAction("unshare");
   const send = async (picked: PickedFile[]) => {
     for (const { file, name } of picked)
       await upload.upload(file, name).catch(() => {});
     // Read again at once, not only when the notice comes.
     void files.reload();
   };
-  const error = files.error || upload.error || download.error || share.error;
+  const error = files.error || upload.error || download.error || unshare.error;
 
   return (
     <DropZone label="Drop to share" onFiles={(picked) => void send(picked)}>
@@ -64,12 +64,10 @@ export default function Shared() {
                         title: "Stop sharing",
                         icon: "link-2-off",
                         onPress: () =>
-                          void share
-                            .run({ id: file.id, conversation_id: null })
-                            .then(
-                              () => files.reload(),
-                              () => {},
-                            ),
+                          void unshare.run({ id: file.id }).then(
+                            () => files.reload(),
+                            () => {},
+                          ),
                       },
                     ]}
                   />

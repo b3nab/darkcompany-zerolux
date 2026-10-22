@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  Avatar,
   Button,
   DropZone,
   Empty,
@@ -10,97 +9,185 @@ import {
   List,
   ListItem,
   Menu,
+  Select,
   Spinner,
   Stack,
-  Tabs,
   Text,
   useActionResult,
-  useActors,
   useDownload,
   useEvent,
   useUpload,
 } from "@zerolux/ui";
-import type { PickedFile } from "@zerolux/ui";
-import { Asking, parent } from "./parts/asking";
-import type { Ask } from "./parts/asking";
+import type { MenuItem, PickedFile } from "@zerolux/ui";
+import { Asking, type Ask } from "./parts/asking";
 import {
   fileIcon,
+  providerIcon,
   size,
-  subfolders,
+  state,
   when,
-  within,
-  type StoredFile,
+  type Entry,
+  type Location,
 } from "./parts/files";
 
-type Who = "all" | "people" | "agents";
-
 /**
- * The workspace's files, as a person finds them: folder by folder, or by name across all of
- * them; uploaded by picking or dropping them, and downloaded, renamed, moved and deleted.
+ * The workspace's files where they are: each location as its service holds it, live, folder
+ * by folder or searched by name; uploaded by picking or dropping, and downloaded, renamed,
+ * moved, copied and deleted there. Locations are added, changed and removed here too.
  */
 export default function Files() {
+  const locations = useActionResult<{ locations: Location[] }>("locations", {});
+  const all = locations.data?.locations ?? [];
+  const [chosen, setChosen] = useState("");
+  const location =
+    all.find((l) => l.id === chosen) ?? all.find((l) => l.default) ?? all[0];
   const [folder, setFolder] = useState("");
   const [query, setQuery] = useState("");
-  const [who, setWho] = useState<Who>("all");
   const [ask, setAsk] = useState<Ask>();
   const searching = query.trim() !== "";
-  const files = useActionResult<{ files: StoredFile[] }>(
-    "files",
-    searching ? {} : { folder },
+  const at = location?.id ?? "";
+  const listing = useActionResult<{ entries: Entry[] }>(
+    "list",
+    location && !searching ? { location: at, path: folder } : { location: "" },
   );
-  const folders = useActionResult<{ folders: string[] }>("folders", {});
-  useEvent("changed", () => reload());
-  const actors = useActors();
+  const found = useActionResult<{ entries: Entry[] }>(
+    "search",
+    searching ? { query: query.trim(), location: at } : { query: "" },
+  );
   const upload = useUpload("upload");
   const download = useDownload("download");
-  const kind = (file: StoredFile) =>
-    actors.find((actor) => actor.id === file.created_by)?.kind;
-  const words = query.trim().toLowerCase();
-  const shown = (files.data?.files ?? []).filter(
-    (file) =>
-      (who === "all" ||
-        kind(file) === (who === "people" ? "human" : "agent")) &&
-      (!searching || file.name.toLowerCase().includes(words)),
-  );
-  // The folder open, gone because it was renamed, moved or deleted, here or by someone else,
-  // gives way to the nearest one still there.
-  const known = folders.data?.folders;
-  useEffect(() => {
-    if (!known || !folder || known.includes(folder)) return;
-    let up = parent(folder);
-    while (up && !known.includes(up)) up = parent(up);
-    setFolder(up);
-  }, [known, folder]);
-  const inside = searching
-    ? []
-    : subfolders(folders.data?.folders ?? [], folder);
-  const path = folder ? folder.split("/") : [];
-
-  // One file after another, into the folder open now.
-  // What this view changes it reads again at once, not only when the notice comes.
+  // What this view changes, and what changes elsewhere, it reads again.
   const reload = () => {
-    void files.reload();
-    void folders.reload();
+    void locations.reload();
+    void listing.reload();
+    if (searching) void found.reload();
   };
+  useEvent("changed", reload);
+  // Another location opens at its top.
+  useEffect(() => {
+    setFolder("");
+    setQuery("");
+  }, [at]);
+
+  const can = (capability: string) =>
+    location?.capabilities.includes(capability) ?? false;
+  const shown = searching ? found : location ? listing : undefined;
+  const entries = (shown?.data?.entries ?? []).filter(
+    (entry) => !entry.location || entry.location === at,
+  );
+  const path = folder ? folder.split("/") : [];
+  const problem = location ? state(location) : "";
   const send = async (picked: PickedFile[]) => {
     for (const { file, name } of picked)
-      await upload.upload(file, name, { folder }).catch(() => {});
+      await upload
+        .upload(file, name, { location: at, path: folder })
+        .catch(() => {});
     reload();
   };
-  const error = files.error || upload.error || download.error;
+  const error = (problem ? "" : shown?.error) || upload.error || download.error;
+  const actions = (entry: Entry): MenuItem[] => [
+    ...(entry.kind === "file"
+      ? [
+          {
+            title: "Download",
+            icon: "download",
+            onPress: () =>
+              void download.download({ location: at, path: entry.path }),
+          },
+        ]
+      : []),
+    ...(can("write")
+      ? [
+          {
+            title: "Rename",
+            icon: "pencil",
+            onPress: () => setAsk({ kind: "rename", location: at, entry }),
+          },
+          {
+            title: "Move",
+            icon: "folder-input",
+            onPress: () => setAsk({ kind: "move", location: at, entry }),
+          },
+        ]
+      : []),
+    {
+      title: "Copy",
+      icon: "copy",
+      onPress: () => setAsk({ kind: "copy", location: at, entry }),
+    },
+    ...(can("delete")
+      ? [
+          {
+            title: "Delete",
+            icon: "trash-2",
+            tone: "danger" as const,
+            onPress: () => setAsk({ kind: "delete", location: at, entry }),
+          },
+        ]
+      : []),
+  ];
 
   return (
-    <DropZone label="Drop to upload" onFiles={(picked) => void send(picked)}>
+    <DropZone
+      label="Drop to upload"
+      disabled={!location || !can("write") || Boolean(problem)}
+      onFiles={(picked) => void send(picked)}
+    >
       <Stack gap={12}>
-        {folder && (
+        <Stack direction="row" gap={8} align="center">
+          {location && <Icon name={providerIcon(location.provider)} />}
+          <Select
+            label="Location"
+            value={at}
+            options={all.map((l) => ({ value: l.id, label: l.name }))}
+            onChange={setChosen}
+            placeholder={locations.loading ? "Loading" : "None"}
+          />
+          {location && (
+            <Menu
+              label="Location actions"
+              icon="settings"
+              items={[
+                {
+                  title: "Settings",
+                  icon: "settings",
+                  onPress: () => setAsk({ kind: "location", location }),
+                },
+                ...(location.own
+                  ? []
+                  : [
+                      {
+                        title: "Remove",
+                        icon: "trash-2",
+                        tone: "danger" as const,
+                        onPress: () =>
+                          setAsk({ kind: "remove-location", location }),
+                      },
+                    ]),
+              ]}
+            />
+          )}
+          <Button
+            title="Add location"
+            onPress={() => setAsk({ kind: "add-location" })}
+          />
+        </Stack>
+        {location && problem && (
+          <Stack direction="row" gap={8} align="center">
+            <Text tone="danger">{problem}</Text>
+            <Button
+              title="Settings"
+              variant="ghost"
+              onPress={() => setAsk({ kind: "location", location })}
+            />
+          </Stack>
+        )}
+        {location && !searching && (
           <Stack direction="row" gap={4} align="center">
             <Button
-              title="Files"
+              title={location.name}
               variant="ghost"
-              onPress={() => {
-                setFolder("");
-                setQuery("");
-              }}
+              onPress={() => setFolder("")}
             />
             {path.map((name, i) => (
               <Stack key={i} direction="row" gap={4} align="center">
@@ -114,126 +201,77 @@ export default function Files() {
             ))}
           </Stack>
         )}
-        <Stack direction="row" gap={8} align="center">
-          <Tabs
-            value={who}
-            onChange={(value) => setWho(value as Who)}
-            items={[
-              { value: "all", label: "All" },
-              { value: "people", label: "People" },
-              { value: "agents", label: "Agents" },
-            ]}
-          />
-          <Button
-            title="New folder"
-            onPress={() => setAsk({ kind: "new-folder", folder })}
-          />
-          <FileButton
-            title="Upload"
-            variant="primary"
-            multiple
-            busy={upload.busy}
-            onFiles={(picked) => void send(picked)}
-          />
-        </Stack>
-        <Input value={query} onChange={setQuery} placeholder="Search files" />
+        {location && (
+          <Stack direction="row" gap={8} align="center">
+            {can("search") && (
+              <Input
+                value={query}
+                onChange={setQuery}
+                placeholder={`Search ${location.name}`}
+              />
+            )}
+            {can("write") && (
+              <Button
+                title="New folder"
+                onPress={() =>
+                  setAsk({ kind: "new-folder", location: at, folder })
+                }
+              />
+            )}
+            {can("write") && (
+              <FileButton
+                title="Upload"
+                variant="primary"
+                multiple
+                busy={upload.busy}
+                onFiles={(picked) => void send(picked)}
+              />
+            )}
+          </Stack>
+        )}
         {error && <Text tone="danger">{error}</Text>}
-        {files.loading && !files.data ? (
+        {!location ? (
+          locations.loading ? (
+            <Spinner />
+          ) : (
+            <Empty>No locations</Empty>
+          )
+        ) : shown?.loading && !shown.data ? (
           <Spinner />
-        ) : inside.length || shown.length ? (
+        ) : entries.length ? (
           <List>
-            {inside.map((name) => {
-              const at = within(folder, name);
-              return (
-                <ListItem
-                  key={`folder:${at}`}
-                  title={name}
-                  leading={<Icon name="folder" />}
-                  onPress={() => setFolder(at)}
-                  accessory={
-                    <Menu
-                      label="Folder actions"
-                      items={[
-                        {
-                          title: "Rename",
-                          icon: "pencil",
-                          onPress: () =>
-                            setAsk({ kind: "rename-folder", folder: at }),
-                        },
-                        {
-                          title: "Move",
-                          icon: "folder-input",
-                          onPress: () =>
-                            setAsk({ kind: "move-folder", folder: at }),
-                        },
-                        {
-                          title: "Delete",
-                          icon: "trash-2",
-                          tone: "danger",
-                          onPress: () =>
-                            setAsk({ kind: "delete-folder", folder: at }),
-                        },
-                      ]}
-                    />
-                  }
-                />
-              );
-            })}
-            {shown.map((file) => (
+            {entries.map((entry) => (
               <ListItem
-                key={file.id}
-                title={file.name}
+                key={entry.path}
+                title={entry.name}
                 subtitle={[
-                  searching && file.folder,
-                  size(file.size),
-                  when(file.updated_at),
+                  searching &&
+                    entry.path.includes("/") &&
+                    entry.path.slice(0, entry.path.lastIndexOf("/")),
+                  entry.kind === "file" &&
+                    entry.size !== undefined &&
+                    size(entry.size),
+                  entry.modified && when(entry.modified),
                 ]
                   .filter(Boolean)
                   .join(" · ")}
-                leading={<Icon name={fileIcon(file)} />}
-                onPress={() => void download.download({ id: file.id })}
-                accessory={
-                  <Stack direction="row" gap={8} align="center">
-                    <Avatar actorId={file.created_by} size="sm" />
-                    <Menu
-                      label="File actions"
-                      items={[
-                        {
-                          title: "Download",
-                          icon: "download",
-                          onPress: () =>
-                            void download.download({ id: file.id }),
-                        },
-                        {
-                          title: "Rename",
-                          icon: "pencil",
-                          onPress: () => setAsk({ kind: "rename", file }),
-                        },
-                        {
-                          title: "Move",
-                          icon: "folder-input",
-                          onPress: () => setAsk({ kind: "move", file }),
-                        },
-                        {
-                          title: "Delete",
-                          icon: "trash-2",
-                          tone: "danger",
-                          onPress: () => setAsk({ kind: "delete", file }),
-                        },
-                      ]}
-                    />
-                  </Stack>
+                leading={<Icon name={fileIcon(entry)} />}
+                onPress={() =>
+                  entry.kind === "folder"
+                    ? (setQuery(""), setFolder(entry.path))
+                    : void download.download({ location: at, path: entry.path })
                 }
+                accessory={<Menu label="Actions" items={actions(entry)} />}
               />
             ))}
           </List>
-        ) : (
+        ) : problem ? null : (
           <Empty>{searching ? "No files match" : "No files"}</Empty>
         )}
       </Stack>
       <Asking
         ask={ask}
-        folders={folders.data?.folders ?? []}
+        locations={all}
         close={() => setAsk(undefined)}
         done={reload}
       />

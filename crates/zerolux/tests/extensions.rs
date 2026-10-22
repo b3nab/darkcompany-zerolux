@@ -920,7 +920,7 @@ async fn extensions_are_installed_from_an_index_only_as_their_publisher_signed_t
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn storage_keeps_files_and_gives_them_back() {
+async fn storage_shows_each_location_live_and_changes_files_where_they_are() {
     use zerolux::extensions::library;
     if std::process::Command::new("livekit-server")
         .arg("--version")
@@ -951,24 +951,50 @@ async fn storage_keeps_files_and_gives_them_back() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{installed}");
-    // An agent's text, written and read back.
-    let (status, written) = kernel
-        .call(
-            Method::POST,
-            "/ext/zerolux.storage/write",
-            Some(json!({"name": "notes.md", "folder": "plans/q4", "text": "# Q4"})),
-        )
-        .await;
+    let storage = |action: &'static str, input: Value| {
+        let kernel = &kernel;
+        async move {
+            kernel
+                .call(
+                    Method::POST,
+                    &format!("/ext/zerolux.storage/{action}"),
+                    Some(input),
+                )
+                .await
+        }
+    };
+    let names = |listed: &Value| -> Vec<String> {
+        listed["result"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    // ZeroLux's own location is there from the start, for whoever has no other.
+    let (_, locations) = storage("locations", json!({})).await;
+    let own = &locations["result"]["locations"][0];
+    assert_eq!(own["name"], "ZeroLux", "{locations}");
+    assert_eq!(own["default"], true);
+    let own = own["id"].as_str().unwrap().to_owned();
+    let (_, providers) = storage("providers", json!({})).await;
+    assert_eq!(providers["result"]["providers"][0]["provider"], "folder");
+
+    // An agent's text, written at a path and read back.
+    let (status, written) = storage(
+        "write",
+        json!({"path": "plans/q4/notes.md", "text": "# Q4"}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{written}");
-    let notes = written["result"]["id"].as_str().unwrap().to_owned();
-    let (_, read) = kernel
-        .call(
-            Method::POST,
-            "/ext/zerolux.storage/read",
-            Some(json!({"id": notes})),
-        )
-        .await;
+    let (_, read) = storage(
+        "read",
+        json!({"location": own, "path": "plans/q4/notes.md"}),
+    )
+    .await;
     assert_eq!(read["result"]["text"], "# Q4", "{read}");
+
     // A person's upload, shared in a chat, and downloaded as it was.
     let bytes: Vec<u8> = (0..300_000u32).map(|n| (n % 251) as u8).collect();
     let input = serde_json::to_string(&json!({"conversation_id": "c1"})).unwrap();
@@ -989,136 +1015,222 @@ async fn storage_keeps_files_and_gives_them_back() {
         .unwrap();
     let photo = uploaded["result"]["id"]
         .as_str()
-        .expect("uploaded")
+        .expect("shared")
         .to_owned();
     assert_eq!(uploaded["result"]["size"], 300_000, "{uploaded}");
     assert_eq!(uploaded["result"]["conversation_id"], "c1");
-    let input = serde_json::to_string(&json!({"id": photo})).unwrap();
-    let response = kernel
-        .client
-        .get(format!("{}/api/ext/zerolux.storage/download", kernel.url))
-        .query(&[("input", input.as_str())])
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["content-type"], "image/png");
-    assert!(
-        response.headers()["content-disposition"]
-            .to_str()
-            .unwrap()
-            .contains("photo.png")
-    );
-    assert_eq!(response.bytes().await.unwrap().to_vec(), bytes);
-    // What was given to the action is gone from its folder.
-    let incoming = dir.path().join("extensions/zerolux.storage/.incoming");
-    assert_eq!(std::fs::read_dir(&incoming).unwrap().count(), 0);
-    // Listed by folder and by chat; renamed, moved, deleted.
-    let (_, in_chat) = kernel
-        .call(
-            Method::POST,
-            "/ext/zerolux.storage/files",
-            Some(json!({"conversation_id": "c1"})),
-        )
-        .await;
-    assert_eq!(in_chat["result"]["files"].as_array().unwrap().len(), 1);
-    let (_, folders) = kernel
-        .call(
-            Method::POST,
-            "/ext/zerolux.storage/folders",
-            Some(json!({})),
-        )
-        .await;
-    assert_eq!(folders["result"]["folders"], json!(["plans", "plans/q4"]));
-    for (action, input) in [
-        ("rename", json!({"id": notes, "name": "plan.md"})),
-        ("move", json!({"id": notes, "folder": "plans"})),
-    ] {
-        let (status, changed) = kernel
-            .call(
-                Method::POST,
-                &format!("/ext/zerolux.storage/{action}"),
-                Some(input),
-            )
-            .await;
-        assert_eq!(status, StatusCode::OK, "{changed}");
-    }
-    let (_, moved) = kernel
-        .call(
-            Method::POST,
-            "/ext/zerolux.storage/files",
-            Some(json!({"folder": "plans"})),
-        )
-        .await;
-    assert_eq!(moved["result"]["files"][0]["name"], "plan.md", "{moved}");
-    let (status, _) = kernel
-        .call(
-            Method::POST,
-            "/ext/zerolux.storage/move",
-            Some(json!({"id": notes, "folder": "../out"})),
-        )
-        .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    let (status, _) = kernel
-        .call(
-            Method::POST,
-            "/ext/zerolux.storage/delete",
-            Some(json!({"id": photo})),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK);
-    let (_, all) = kernel
-        .call(Method::POST, "/ext/zerolux.storage/files", Some(json!({})))
-        .await;
-    assert_eq!(all["result"]["files"].as_array().unwrap().len(), 1);
-    assert!(
-        !dir.path()
-            .join(format!("extensions/zerolux.storage/files/{photo}"))
-            .exists()
-    );
-    // Folders: made empty, renamed and moved with what they hold, deleted with it.
-    let storage = |action: &'static str, input: Value| {
+    assert_eq!(uploaded["result"]["path"], "Chats/photo.png");
+    let download = |input: Value| {
         let kernel = &kernel;
         async move {
+            let input = serde_json::to_string(&input).unwrap();
             kernel
-                .call(
-                    Method::POST,
-                    &format!("/ext/zerolux.storage/{action}"),
-                    Some(input),
-                )
+                .client
+                .get(format!("{}/api/ext/zerolux.storage/download", kernel.url))
+                .query(&[("input", input.as_str())])
+                .send()
                 .await
+                .unwrap()
         }
     };
-    let (status, _) = storage("create_folder", json!({"folder": "drafts/empty"})).await;
-    assert_eq!(status, StatusCode::OK);
-    let (_, folders) = storage("folders", json!({})).await;
+    let response = download(json!({"id": photo})).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "image/png");
+    assert_eq!(response.bytes().await.unwrap().to_vec(), bytes);
+    let incoming = dir.path().join("extensions/zerolux.storage/.incoming");
+    assert_eq!(std::fs::read_dir(&incoming).unwrap().count(), 0);
+    let (_, in_chat) = storage("files", json!({"conversation_id": "c1"})).await;
     assert_eq!(
-        folders["result"]["folders"],
-        json!(["drafts", "drafts/empty", "plans"]),
-        "{folders}"
+        in_chat["result"]["files"][0]["name"], "photo.png",
+        "{in_chat}"
     );
-    storage(
-        "rename_folder",
-        json!({"folder": "plans", "name": "roadmap"}),
+    // The same name again is not overwritten.
+    let again: Value = kernel
+        .client
+        .post(format!(
+            "{}/api/ext/zerolux.storage/upload/file",
+            kernel.url
+        ))
+        .query(&[("input", input.as_str()), ("name", "photo.png")])
+        .body(vec![1u8, 2, 3])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(again["result"]["path"], "Chats/photo (2).png", "{again}");
+
+    // A folder of this computer, as another location: what it holds shows as it is, and
+    // what changes there shows at once, with nothing copied.
+    let outside = dir.path().join("work");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("existing.txt"), "there before").unwrap();
+    let (status, added) = storage(
+        "add_location",
+        json!({"name": "Work", "provider": "folder", "config": {"path": outside}}),
     )
     .await;
-    storage(
-        "move_folder",
-        json!({"folder": "roadmap", "into": "drafts"}),
+    assert_eq!(status, StatusCode::OK, "{added}");
+    let work = added["result"]["location"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, listed) = storage("list", json!({"location": "Work"})).await;
+    assert_eq!(names(&listed), ["existing.txt"]);
+    std::fs::write(outside.join("later.txt"), "written elsewhere").unwrap();
+    let (_, listed) = storage("list", json!({"location": work})).await;
+    assert_eq!(names(&listed), ["existing.txt", "later.txt"]);
+    // Never outside it.
+    let (status, _) = storage("list", json!({"location": work, "path": "../.."})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Across locations: a folder copied with what it holds, a shared file moved and still
+    // shared, then renamed.
+    let (status, copied) = storage(
+        "copy",
+        json!({"location": own, "path": "plans", "to_location": work, "to": ""}),
     )
     .await;
-    let (_, moved) = storage("files", json!({"folder": "drafts/roadmap"})).await;
-    assert_eq!(moved["result"]["files"][0]["name"], "plan.md", "{moved}");
+    assert_eq!(status, StatusCode::OK, "{copied}");
+    assert_eq!(
+        std::fs::read_to_string(outside.join("plans/q4/notes.md")).unwrap(),
+        "# Q4"
+    );
+    let (status, moved) = storage(
+        "move",
+        json!({"location": own, "path": "Chats/photo.png", "to_location": work, "to": "pictures"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    assert!(outside.join("pictures/photo.png").is_file());
+    let response = download(json!({"id": photo})).await;
+    assert_eq!(response.bytes().await.unwrap().to_vec(), bytes);
+    storage(
+        "rename",
+        json!({"location": work, "path": "pictures", "name": "photos"}),
+    )
+    .await;
+    let response = download(json!({"id": photo})).await;
+    assert_eq!(response.status(), StatusCode::OK, "the share follows");
+    let (_, found) = storage("search", json!({"query": "NOTES"})).await;
+    assert_eq!(
+        found["result"]["entries"].as_array().unwrap().len(),
+        2,
+        "{found}"
+    );
     let (status, _) = storage(
-        "move_folder",
-        json!({"folder": "drafts", "into": "drafts/roadmap"}),
+        "move",
+        json!({"location": work, "path": "plans", "to": "plans/q4"}),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    let (_, deleted) = storage("delete_folder", json!({"folder": "drafts"})).await;
-    assert_eq!(deleted["result"]["deleted"], 1, "{deleted}");
-    let (_, left) = storage("folders", json!({})).await;
-    assert_eq!(left["result"]["folders"], json!([]), "{left}");
+
+    // Deleted where it is; a location removed from ZeroLux keeps its files.
+    storage("delete", json!({"location": work, "path": "plans"})).await;
+    assert!(!outside.join("plans").exists());
+    let (status, _) = storage("remove_location", json!({"id": work})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(outside.join("existing.txt").is_file());
+    let (status, _) = storage("remove_location", json!({"id": own})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, in_chat) = storage("files", json!({"conversation_id": "c1"})).await;
+    assert_eq!(
+        in_chat["result"]["files"].as_array().unwrap().len(),
+        1,
+        "{in_chat}"
+    );
+
+    // Another extension's provider: a location of it asks the person to sign in, and is
+    // ready once the service sent them back.
+    if std::process::Command::new("bun")
+        .arg("--version")
+        .output()
+        .is_ok()
+    {
+        let (status, body) = kernel
+            .call(
+                Method::POST,
+                "/extensions/folder",
+                Some(json!({"folder": fixture("disk")})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, providers) = storage("providers", json!({})).await;
+        assert_eq!(
+            providers["result"]["providers"][1]["title"], "Disk",
+            "{providers}"
+        );
+        let (service, _) = token_service().await;
+        let (status, added) = storage(
+            "add_location",
+            json!({"name": "Disk", "provider": "disk", "config": {"service": service}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{added}");
+        let disk = added["result"]["location"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let address =
+            reqwest::Url::parse(added["result"]["sign_in"]["url"].as_str().unwrap()).unwrap();
+        let state = address
+            .query_pairs()
+            .find(|(key, _)| key == "state")
+            .unwrap()
+            .1
+            .into_owned();
+        let (_, locations) = storage("locations", json!({})).await;
+        let signed_in = |locations: &Value| {
+            locations["result"]["locations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|location| location["id"] == disk.as_str())
+                .unwrap()["signed_in"]
+                .clone()
+        };
+        assert_eq!(signed_in(&locations), false);
+        kernel
+            .client
+            .get(format!(
+                "{}/api/extensions/oauth/callback?state={state}&code=code-1",
+                kernel.url
+            ))
+            .send()
+            .await
+            .unwrap();
+        let mut ready = Value::Null;
+        for _ in 0..100 {
+            let (_, locations) = storage("locations", json!({})).await;
+            ready = signed_in(&locations);
+            if ready == true {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert_eq!(ready, true);
+        // Files go there and come back through its provider.
+        let (status, written) = storage(
+            "write",
+            json!({"location": "Disk", "path": "hello.txt", "text": "hi"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{written}");
+        let (_, read) = storage("read", json!({"location": disk, "path": "hello.txt"})).await;
+        assert_eq!(read["result"]["text"], "hi", "{read}");
+        // A provider without renames: a copy under the new name, then the old goes.
+        storage(
+            "rename",
+            json!({"location": disk, "path": "hello.txt", "name": "hey.txt"}),
+        )
+        .await;
+        let (_, listed) = storage("list", json!({"location": disk})).await;
+        assert_eq!(names(&listed), ["hey.txt"]);
+        // Only a location's own provider says it signed in.
+        let (status, _) = storage("signed_in", json!({"location": disk, "ok": false})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
     runtime.shutdown().await.unwrap();
     server.abort();
     livekit.shutdown().await.unwrap();
