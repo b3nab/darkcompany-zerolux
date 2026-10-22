@@ -311,26 +311,36 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     }
   }
 
+  // Notices may have been missed: live state, records on screen, terminals, extensions and
+  // background commands are read again too.
+  function resyncAll() {
+    liveResync();
+    recordsResync();
+    terminalResync();
+    extensionsNotice();
+    uiResync();
+    backgroundResync();
+    void background(sync());
+  }
   useEffect(() => {
     if (!enabled) return;
     void background(sync());
     return connectRealtime({
       kernel: server,
       event: onEvent,
-      sync: () => {
-        // Notices may have been missed meanwhile: live state, records on screen, terminals,
-        // extensions and background commands are read again too.
-        liveResync();
-        recordsResync();
-        terminalResync();
-        extensionsNotice();
-        uiResync();
-        backgroundResync();
-        void background(sync());
-      },
+      sync: resyncAll,
       status: setRealtime,
     });
     // Handlers only use refs and state setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled]);
+  useEffect(() => {
+    if (!enabled) return;
+    // Back in view, what may have been missed meanwhile is read again: a phone's connection
+    // can live through a suspension with its notices lost, and no reconnection says so.
+    return whenLooking(() => {
+      if (isLooking()) resyncAll();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);
 
