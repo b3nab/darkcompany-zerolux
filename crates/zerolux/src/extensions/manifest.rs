@@ -23,7 +23,37 @@ pub struct Manifest {
     pub remote: Option<RemotePart>,
     #[serde(default)]
     pub settings: BTreeMap<String, Setting>,
+    /// Where people read more of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links: Option<Links>,
 }
+
+/// An extension's addresses, each on HTTPS.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Links {
+    pub homepage: Option<String>,
+    pub repository: Option<String>,
+    pub issues: Option<String>,
+    pub privacy: Option<String>,
+}
+
+/// What an extension is for in a workspace, as marketplaces group them; at most two each.
+pub const CATEGORIES: [&str; 13] = [
+    "files-storage",
+    "projects-tasks",
+    "communication",
+    "meetings-voice",
+    "agents-ai",
+    "development",
+    "knowledge",
+    "data-analytics",
+    "automation",
+    "calendar-time",
+    "customers-business",
+    "security-admin",
+    "other",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -37,6 +67,20 @@ pub struct Identity {
     pub description: String,
     /// The kernel versions it works with, as a semver range.
     pub kernel: Option<String>,
+    /// Its icon: a square PNG in its folder, and one for dark themes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_dark: Option<String>,
+    /// One or two of `CATEGORIES`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub categories: Vec<String>,
+    /// Up to four words people search it by.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
+    /// Its licence, as an SPDX expression such as `MIT`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -114,6 +158,15 @@ pub fn kernel_version() -> semver::Version {
 /// The longest an action may take, when it says so; otherwise a minute.
 pub const LONGEST: u64 = 30 * 60;
 
+/// A path within an extension's folder: relative, without `..`.
+pub fn inside(path: &str) -> bool {
+    let path = std::path::Path::new(path);
+    !path.as_os_str().is_empty()
+        && path
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+}
+
 fn invalid(message: impl Into<String>) -> Error {
     Error::Invalid(message.into())
 }
@@ -161,6 +214,54 @@ impl Manifest {
                 return Err(invalid(format!(
                     "This extension works with kernel {range}; this one is {kernel}"
                 )));
+            }
+        }
+        if identity.categories.len() > 2
+            || identity
+                .categories
+                .iter()
+                .any(|category| !CATEGORIES.contains(&category.as_str()))
+        {
+            return Err(invalid(format!(
+                "An extension has one or two categories, of {}",
+                CATEGORIES.join(", ")
+            )));
+        }
+        if identity.keywords.len() > 4
+            || identity
+                .keywords
+                .iter()
+                .any(|keyword| keyword.trim().is_empty() || keyword.len() > 30)
+        {
+            return Err(invalid(
+                "An extension has up to 4 keywords, each up to 30 bytes",
+            ));
+        }
+        if identity
+            .license
+            .as_ref()
+            .is_some_and(|license| license.trim().is_empty() || license.len() > 64)
+        {
+            return Err(invalid("A licence is an SPDX expression, such as MIT"));
+        }
+        for icon in [&identity.icon, &identity.icon_dark].into_iter().flatten() {
+            if !inside(icon) || !icon.to_ascii_lowercase().ends_with(".png") {
+                return Err(invalid("An icon is a PNG file in the extension's folder"));
+            }
+        }
+        if let Some(links) = &self.links {
+            for link in [
+                &links.homepage,
+                &links.repository,
+                &links.issues,
+                &links.privacy,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if !link.starts_with("https://") || link.len() > 2048 {
+                    return Err(invalid(format!("{link} is not an HTTPS address")));
+                }
             }
         }
         for (dependency, range) in &self.dependencies {

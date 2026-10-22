@@ -821,12 +821,25 @@ async fn extensions_are_installed_from_an_index_only_as_their_publisher_signed_t
     std::fs::copy(&built, modules.join(library::file_name("tally"))).unwrap();
     std::fs::write(
         folder.join("zerolux-extension.toml"),
-        "[extension]\nid = \"zerolux.tally\"\nname = \"Tally\"\nversion = \"1.0.0\"\npublisher = \"zerolux\"\n\n[kernel]\nlibrary = \"tally\"\n",
+        "[extension]\nid = \"zerolux.tally\"\nname = \"Tally\"\nversion = \"1.0.0\"\npublisher = \"zerolux\"\nicon = \"icon.png\"\ncategories = [\"data-analytics\"]\n\n[kernel]\nlibrary = \"tally\"\n",
     )
     .unwrap();
+    // What it shows: an icon, 512 pixels square, and a README.
+    let mut icon = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    icon.extend(512u32.to_be_bytes());
+    icon.extend(512u32.to_be_bytes());
+    icon.extend([8, 6, 0, 0, 0]);
+    std::fs::write(folder.join("icon.png"), &icon).unwrap();
+    std::fs::write(folder.join("README.md"), "# Tally\n\nCounts.").unwrap();
     let key = package::Key::new("zerolux").unwrap();
     let site = dir.path().join("site");
     let packed = package::pack(&folder, &key, &site.join("packages")).unwrap();
+    let card_file = package::card_beside(&folder, &site.join("cards")).unwrap();
+    let mut card: Value = serde_json::from_slice(&std::fs::read(&card_file).unwrap()).unwrap();
+    for asset in ["icon", "readme"] {
+        let name = card[asset]["name"].as_str().unwrap().to_owned();
+        card[asset]["url"] = json!(format!("cards/zerolux.tally-1.0.0.card/{name}"));
+    }
     let digest = package::sha256(&std::fs::read(&packed).unwrap());
     // Another key signs a copy that claims to be the same.
     let forged = package::pack(
@@ -847,7 +860,8 @@ async fn extensions_are_installed_from_an_index_only_as_their_publisher_signed_t
                 {"id": "zerolux.tally", "name": "Tally", "publisher": "zerolux",
                     "versions": [listing("1.0.0", "packages/zerolux.tally-1.0.0.zlx", &digest),
                         listing("1.0.1", "forged/zerolux.tally-1.0.0.zlx", &forged_digest),
-                        listing("1.0.2", "packages/zerolux.tally-1.0.0.zlx", &"0".repeat(64)),
+                        {"version": "1.0.2", "kernel": ">=0.0.1", "parts": ["kernel"], "card": card,
+                            "packages": {library::platform(): {"url": "packages/zerolux.tally-1.0.0.zlx", "sha256": "0".repeat(64)}}},
                         {"version": "9.0.0", "kernel": ">=99", "packages": {"any": {"url": "x", "sha256": "x"}}}]},
             ]})
         .to_string(),
@@ -870,10 +884,37 @@ async fn extensions_are_installed_from_an_index_only_as_their_publisher_signed_t
         .call(Method::GET, "/extensions/marketplace", None)
         .await;
     assert_eq!(status, StatusCode::OK, "{offered}");
+    assert_eq!(
+        offered["marketplaces"],
+        json!([{"index": index, "name": "Test"}])
+    );
     // The newest version that runs here: 9.0.0 needs another kernel.
     assert_eq!(offered["offers"][0]["id"], "zerolux.tally");
     assert_eq!(offered["offers"][0]["version"], "1.0.2");
     assert_eq!(offered["offers"][0]["parts"], json!(["kernel"]));
+    // Its card, each file given by the kernel, as its digest says.
+    let shown = &offered["offers"][0]["card"];
+    assert_eq!(shown["categories"], json!(["data-analytics"]), "{offered}");
+    let fetch = |address: String| {
+        let client = kernel.client.clone();
+        let url = format!("{}{address}", kernel.url);
+        async move { client.get(url).send().await.unwrap() }
+    };
+    let got = fetch(shown["icon"]["url"].as_str().unwrap().to_owned()).await;
+    assert_eq!(got.status(), StatusCode::OK);
+    assert_eq!(got.headers()["content-type"], "image/png");
+    assert_eq!(got.bytes().await.unwrap().to_vec(), icon);
+    // Changed at the index, it is not given.
+    std::fs::write(
+        dir.path()
+            .join("site/cards/zerolux.tally-1.0.0.card/README.md"),
+        "# Changed",
+    )
+    .unwrap();
+    let refused = fetch(shown["readme"]["url"].as_str().unwrap().to_owned()).await;
+    assert_ne!(refused.status(), StatusCode::OK);
+    let unknown = fetch(format!("/api/extensions/assets/{}", "a".repeat(64))).await;
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
     // Not as the index lists it, or not signed by its publisher: refused.
     for version in ["1.0.2", "1.0.1"] {
         let (status, refused) = kernel
@@ -904,6 +945,14 @@ async fn extensions_are_installed_from_an_index_only_as_their_publisher_signed_t
     assert_eq!(status, StatusCode::OK, "{installed}");
     assert_eq!(installed["extension"]["dev"], false);
     assert_eq!(installed["extension"]["running"], true);
+    // Installed, its card is read from its package.
+    let readme = installed["extension"]["card"]["readme"]["url"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let got = fetch(readme).await;
+    assert_eq!(got.status(), StatusCode::OK);
+    assert_eq!(got.text().await.unwrap(), "# Tally\n\nCounts.");
     let (status, added) = kernel
         .call(Method::POST, "/ext/zerolux.tally/add", Some(json!({})))
         .await;

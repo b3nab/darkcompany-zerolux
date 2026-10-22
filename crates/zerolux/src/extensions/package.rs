@@ -154,6 +154,8 @@ pub fn pack(folder: &Path, key: &Key, out: &Path) -> Result<PathBuf> {
             kernel.library
         );
     }
+    // What a marketplace shows of it, checked before it is packed.
+    super::card::card(folder, &manifest)?;
     let files = files(folder)?;
     let mut signed = Vec::new();
     for (path, file) in &files {
@@ -399,6 +401,29 @@ fn stale(folder: &Path, out: &Path) -> bool {
         }
     }
     false
+}
+
+/// Beside a package, its card and the files it shows, for an index to list:
+/// `<out>/<id>-<version>.card/card.json` and each file at its path.
+pub fn card_beside(folder: &Path, out: &Path) -> Result<PathBuf> {
+    let manifest = Manifest::parse(&std::fs::read_to_string(folder.join(FILE))?)?;
+    let card = super::card::card(folder, &manifest)?;
+    let beside = out.join(format!(
+        "{}-{}.card",
+        manifest.extension.id, manifest.extension.version
+    ));
+    let _ = std::fs::remove_dir_all(&beside);
+    std::fs::create_dir_all(&beside)?;
+    for asset in card.assets() {
+        let to = beside.join(&asset.name);
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(folder.join(&asset.name), to)?;
+    }
+    let path = beside.join("card.json");
+    std::fs::write(&path, serde_json::to_vec_pretty(&card)?)?;
+    Ok(path)
 }
 
 #[cfg(test)]

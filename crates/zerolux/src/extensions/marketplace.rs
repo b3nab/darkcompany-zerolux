@@ -46,6 +46,10 @@ pub struct Release {
     pub parts: Vec<String>,
     /// A package for each computer, or `any`.
     pub packages: BTreeMap<String, Package>,
+    /// What a marketplace shows of it: its icon, images, video, README and CHANGELOG, each
+    /// with its address and digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<super::card::Card>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

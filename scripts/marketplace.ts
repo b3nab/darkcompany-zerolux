@@ -2,8 +2,9 @@
  * The local marketplace, for development: each extension in `marketplace/`, built for this
  * computer, packed and signed with a development key kept in the data folder, and listed in
  * `marketplace/index.json` there, which a kernel run from this checkout reads. It never reaches
- * a marketplace in production. Run it again after changing an extension; raise its version to see
- * it offered as an update.
+ * a marketplace in production. Run it again after changing an extension: a new build is offered
+ * as an update, even at the same version. Each version lists its card, with its icon, images,
+ * video, README and CHANGELOG beside its package.
  *
  *   bun run marketplace [--data-dir .zerolux]
  */
@@ -17,7 +18,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "..");
 const flag = process.argv.indexOf("--data-dir");
@@ -73,9 +74,12 @@ for (const entry of await readdir(join(root, "marketplace"), {
   const kernel = /^\[kernel\]/m.test(manifest);
   if (kernel || existsSync(join(folder, "ui/src")))
     await zerolux("ext", "build", folder);
-  const packed = (
+  const said = (
     await zerolux("ext", "pack", folder, "--key", key, "--out", packages)
-  ).split("\n")[0]!;
+  ).split("\n");
+  const packed = said[0]!;
+  // Its card, and the files it shows, beside its package in the index.
+  const cardFile = said.find((line) => line.startsWith("card "))?.slice(5);
   const sha256 = new Bun.CryptoHasher("sha256")
     .update(await readFile(packed))
     .digest("hex");
@@ -90,6 +94,24 @@ for (const entry of await readdir(join(root, "marketplace"), {
     ...(/^\[process\]/m.test(manifest) ? ["process"] : []),
     ...(existsSync(join(folder, "ui/native")) ? ["interface"] : []),
   ];
+  let card: Record<string, unknown> | undefined;
+  if (cardFile) {
+    card = JSON.parse(await readFile(cardFile, "utf8"));
+    const into = join(packages, id, version);
+    const assets = [
+      card!.icon,
+      card!.icon_dark,
+      card!.readme,
+      card!.changelog,
+      ...((card!.media as unknown[]) ?? []),
+    ].filter(Boolean) as { name: string; url?: string }[];
+    for (const asset of assets) {
+      await mkdir(dirname(join(into, asset.name)), { recursive: true });
+      await rename(join(dirname(cardFile), asset.name), join(into, asset.name));
+      asset.url = `packages/${id}/${version}/${asset.name}`;
+    }
+    await rm(dirname(cardFile), { recursive: true, force: true });
+  }
   extensions.push({
     id,
     name: field(manifest, "name"),
@@ -101,6 +123,7 @@ for (const entry of await readdir(join(root, "marketplace"), {
         kernel: field(manifest, "kernel") || undefined,
         parts,
         packages: { [target]: { url: `packages/${file}`, sha256 } },
+        ...(card ? { card } : {}),
       },
     ],
   });

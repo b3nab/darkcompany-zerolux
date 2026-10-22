@@ -3,6 +3,7 @@
 //! the implementations of others', events, triggers, settings and stored values, through its
 //! parts. The kernel offers the mechanism; what the contracts mean is the extensions' own.
 
+pub mod card;
 pub mod library;
 pub mod manifest;
 pub mod marketplace;
@@ -85,6 +86,18 @@ pub struct Installed {
     pub updated_at: i64,
     /// The agent that proposed it, until the owner enables it.
     pub proposed_by: Option<String>,
+    /// What it shows of itself: icon, images, video, README, CHANGELOG, categories, links; each
+    /// file at its `address`.
+    pub card: Option<Value>,
+}
+
+/// Where a file a card shows is found, by its digest.
+#[derive(Debug, Clone)]
+enum AssetSource {
+    /// In an installed extension's folder.
+    File(PathBuf),
+    /// In an index, at this address.
+    Index(String),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -138,6 +151,9 @@ pub struct Extensions {
     vault: vault::Vault,
     /// Sign-ins to other services under way.
     sign_ins: oauth::Flows,
+    /// The files cards show, by digest, and each installed folder's card as last read.
+    assets: std::sync::Mutex<HashMap<String, (AssetSource, String)>>,
+    cards: std::sync::Mutex<HashMap<PathBuf, (String, Option<card::Card>)>>,
     me: Weak<Extensions>,
 }
 
@@ -158,6 +174,18 @@ fn kept(name: &str) -> Result<String> {
 
 const VAULT: &str = "vault/";
 
+/// A card as clients read it: each file at the kernel's address for it.
+fn shown_card(card: &card::Card) -> Value {
+    let mut shown = card.clone();
+    for asset in shown.assets_mut() {
+        asset.url = Some(format!(
+            "/api/extensions/assets/{}",
+            asset.sha256.to_lowercase()
+        ));
+    }
+    json!(shown)
+}
+
 fn row_manifest(row: &extensions::Model) -> Result<Manifest> {
     Ok(serde_json::from_str(&row.manifest_json)?)
 }
@@ -174,6 +202,8 @@ impl Extensions {
             runtime: std::sync::OnceLock::new(),
             vault: vault::Vault::at(root.join("vault.key")),
             sign_ins: oauth::Flows::default(),
+            assets: std::sync::Mutex::default(),
+            cards: std::sync::Mutex::default(),
             root,
             me: me.clone(),
         })
@@ -369,9 +399,116 @@ impl Extensions {
                 installed_at: row.installed_at,
                 updated_at: row.updated_at,
                 proposed_by: row.proposed_by.clone(),
+                card: self.folder_card(Path::new(&row.source), &manifest),
             });
         }
         Ok(result)
+    }
+
+    /// An installed folder's card, read again when its files change; its files known by digest.
+    fn folder_card(&self, folder: &Path, manifest: &Manifest) -> Option<Value> {
+        let identity = &manifest.extension;
+        let mut seen = String::new();
+        let mut note = |path: &Path| {
+            if let Ok(meta) = std::fs::metadata(path) {
+                let at = meta
+                    .modified()
+                    .ok()
+                    .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |since| since.as_nanos());
+                seen.push_str(&format!("{}:{}:{at};", path.display(), meta.len()));
+            }
+        };
+        for name in [identity.icon.as_deref(), identity.icon_dark.as_deref()]
+            .into_iter()
+            .flatten()
+            .chain(["README.md", "CHANGELOG.md", manifest::FILE])
+        {
+            note(&folder.join(name));
+        }
+        if let Ok(entries) = std::fs::read_dir(folder.join("media")) {
+            let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+            paths.sort();
+            for path in paths {
+                note(&path);
+            }
+        }
+        let known = self
+            .cards
+            .lock()
+            .expect("cards")
+            .get(folder)
+            .filter(|(was, _)| *was == seen)
+            .map(|(_, card)| card.clone());
+        let card = match known {
+            Some(card) => card,
+            None => {
+                let card = card::card(folder, manifest)
+                    .inspect_err(|error| {
+                        tracing::warn!(folder = %folder.display(), error = format!("{error:#}"), "Card not shown")
+                    })
+                    .ok();
+                self.cards
+                    .lock()
+                    .expect("cards")
+                    .insert(folder.to_path_buf(), (seen, card.clone()));
+                card
+            }
+        }?;
+        let mut assets = self.assets.lock().expect("assets");
+        for asset in card.assets() {
+            assets.insert(
+                asset.sha256.clone(),
+                (
+                    AssetSource::File(folder.join(&asset.name)),
+                    asset.name.clone(),
+                ),
+            );
+        }
+        Some(shown_card(&card))
+    }
+
+    /// A file a card shows, by its digest: from an installed folder, or from its index,
+    /// downloaded once and kept, and only as its digest says. Its path and type.
+    pub async fn asset(&self, sha256: &str) -> Result<(PathBuf, &'static str)> {
+        let sha256 = sha256.to_ascii_lowercase();
+        ensure!(
+            sha256.len() == 64 && sha256.bytes().all(|b| b.is_ascii_hexdigit()),
+            Error::NotFound
+        );
+        let (source, name) = self
+            .assets
+            .lock()
+            .expect("assets")
+            .get(&sha256)
+            .cloned()
+            .ok_or(Error::NotFound)?;
+        let kind = card::content_type(&name);
+        match source {
+            AssetSource::File(path) => {
+                let bytes = tokio::fs::read(&path).await.map_err(|_| Error::NotFound)?;
+                ensure!(package::sha256(&bytes) == sha256, Error::NotFound);
+                Ok((path, kind))
+            }
+            AssetSource::Index(url) => {
+                let kept = self.root.join("assets").join(&sha256);
+                if !kept.is_file() {
+                    let bytes = marketplace::download(
+                        &url,
+                        &marketplace::Package {
+                            url: url.clone(),
+                            sha256: sha256.clone(),
+                        },
+                    )
+                    .await?;
+                    tokio::fs::create_dir_all(self.root.join("assets")).await?;
+                    let staged = kept.with_extension("part");
+                    tokio::fs::write(&staged, &bytes).await?;
+                    tokio::fs::rename(&staged, &kept).await?;
+                }
+                Ok((kept, kind))
+            }
+        }
     }
 
     /// Installs, or installs again, the extension in `folder` on the kernel's computer, as one
@@ -456,10 +593,11 @@ impl Extensions {
                 Some((row.id.clone(), digest.to_owned()))
             })
             .collect();
-        let (mut offers, mut errors) = (Vec::new(), Vec::new());
+        let (mut offers, mut errors, mut marketplaces) = (Vec::new(), Vec::new(), Vec::new());
         for url in marketplace::indexes(self.root.parent().unwrap_or(&self.root)) {
             match marketplace::read(&url).await {
                 Ok(index) => {
+                    marketplaces.push(json!({"index": url, "name": index.name}));
                     for listing in &index.extensions {
                         let Some(release) = listing.newest() else {
                             continue;
@@ -471,18 +609,35 @@ impl Extensions {
                             (Some(held), Some(digest)) => Some(digest.starts_with(held.as_str())),
                             _ => None,
                         };
+                        // What it shows, each file known by digest at the index's address.
+                        let card =
+                            release.card.as_ref().map(|card| {
+                                let mut assets = self.assets.lock().expect("assets");
+                                for asset in card.assets() {
+                                    let Some(at) = asset.url.as_deref().and_then(|at| {
+                                        reqwest::Url::parse(&url).ok()?.join(at).ok()
+                                    }) else {
+                                        continue;
+                                    };
+                                    assets.entry(asset.sha256.to_lowercase()).or_insert((
+                                        AssetSource::Index(at.to_string()),
+                                        asset.name.clone(),
+                                    ));
+                                }
+                                shown_card(card)
+                            });
                         offers.push(json!({"index": url, "id": listing.id,
                             "name": listing.name, "description": listing.description,
                             "publisher": listing.publisher, "version": release.version,
                             "parts": release.parts,
                             "installed": installed.get(&listing.id),
-                            "current": current}));
+                            "current": current, "card": card}));
                     }
                 }
                 Err(error) => errors.push(json!({"index": url, "error": format!("{error:#}")})),
             }
         }
-        Ok(json!({"offers": offers, "errors": errors}))
+        Ok(json!({"offers": offers, "errors": errors, "marketplaces": marketplaces}))
     }
 
     /// Installs an extension from one of the indexes, its newest version or the one named:

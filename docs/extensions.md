@@ -20,6 +20,16 @@ version = "1.2.0"          # semver
 publisher = "acme"
 description = "Notes kept where you choose"
 kernel = ">=0.0.1"         # optional: the kernel versions it works with
+icon = "icon.png"          # optional: a square PNG, 512 pixels best; icon_dark for dark themes
+categories = ["knowledge"] # one or two
+keywords = ["notes"]       # up to four
+license = "MIT"            # SPDX
+
+[links]                    # optional, each on HTTPS
+homepage = "https://acme.example/notes"
+repository = "https://github.com/acme/notes"
+issues = "https://github.com/acme/notes/issues"
+privacy = "https://acme.example/privacy"
 
 [dependencies]
 "acme.storage" = ">=1.0"   # enabled before it, at a matching version
@@ -34,6 +44,18 @@ token = { type = "secret", label = "Token" }
 ```
 
 Settings are `text`, `number`, `boolean`, `secret` or `choice`, with its `options` (`[{ value, label }]`). A secret is never shown to clients; only the extension's own parts read it.
+
+Categories say what an extension is for in a workspace: `files-storage`, `projects-tasks`, `communication`, `meetings-voice`, `agents-ai`, `development`, `knowledge`, `data-analytics`, `automation`, `calendar-time`, `customers-business`, `security-admin` and `other`.
+
+## Card
+
+What a marketplace shows of an extension is its **card**: its summary (the manifest's `description`), categories, keywords, licence and links, its icon, the images and video in `media/`, and its `README.md` and `CHANGELOG.md`. `zerolux ext pack` checks it before packing:
+
+- an icon is a square PNG of 128 to 1024 pixels, up to 256 KB;
+- `media/` holds up to 6 PNG, JPEG or WebP images, 2 MB each (16:10 at 2000×1250 shows best), and one MP4 video, up to 50 MB;
+- `README.md` and `CHANGELOG.md` are Markdown up to 256 KB, without HTML outside code; the README's images are files in `media/`.
+
+Beside the package it writes `<id>-<version>.card/`: `card.json` and the files it names, each with its path in the package (`name`), SHA-256, size and kind (`icon`, `image`, `video` or `text`). An index lists the card with each version, each file at its `url`. Clients never reach an index or another host for them: the kernel gives each file at `/api/extensions/assets/<sha256>`, downloaded from its index once, kept, and only as its digest says; an installed extension's from its folder. Both `GET /extensions` and `GET /extensions/marketplace` give cards with each file's `url` there.
 
 ## Secrets and signing in
 
@@ -150,7 +172,7 @@ An action can take a file and give one, without either passing through its messa
 
 ## Packages and indexes
 
-`zerolux ext build` builds what an extension brings: its kernel module, a Cargo package, for this computer into `kernel/<platform>/`, and its interface from `ui/src/*.tsx` into `ui/native/`. `zerolux ext key <publisher>` makes a publisher's Ed25519 key, kept in `~/.zerolux/keys/<publisher>.json` and readable only by its user; it prints the public key. `zerolux ext pack --key <file>` packs the extension into a signed `<id>-<version>.zlx` and prints its SHA-256. A package is a gzipped tar of the extension's files, without what tools make and download (`target`, `dist`, `node_modules`, `.venv`, `__pycache__`, `.git`), with `files.json` (each file's path, size and SHA-256) and `SIGNATURE` (the publisher's signature of `files.json`).
+`zerolux ext build` builds what an extension brings: its kernel module, a Cargo package, for this computer into `kernel/<platform>/`, and its interface from `ui/src/*.tsx` into `ui/native/`. `zerolux ext key <publisher>` makes a publisher's Ed25519 key, kept in `~/.zerolux/keys/<publisher>.json` and readable only by its user; it prints the public key. `zerolux ext pack --key <file>` checks its card, packs the extension into a signed `<id>-<version>.zlx`, prints its SHA-256, and writes its card beside it. A package is a gzipped tar of the extension's files, without what tools make and download (`target`, `dist`, `node_modules`, `.venv`, `__pycache__`, `.git`), with `files.json` (each file's path, size and SHA-256) and `SIGNATURE` (the publisher's signature of `files.json`).
 
 An index is a JSON file on HTTPS that anyone may host:
 
@@ -169,6 +191,17 @@ An index is a JSON file on HTTPS that anyone may host:
           "version": "1.0.0",
           "kernel": ">=0.0.1",
           "parts": ["process"],
+          "card": {
+            "summary": "…",
+            "categories": ["knowledge"],
+            "icon": {
+              "name": "icon.png",
+              "sha256": "…",
+              "size": 1234,
+              "kind": "icon",
+              "url": "acme.notes/1.0.0/icon.png"
+            }
+          },
           "packages": {
             "macos-aarch64": {
               "url": "acme.notes-1.0.0-macos-aarch64.zlx",
@@ -196,17 +229,17 @@ People and agents' sessions run actions. Clients hear `extensions.changed` and r
 
 ## API
 
-| Route                                      | Purpose                                                                                                                                                                 |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /extensions`                          | Installed extensions, their state, settings and what they bring                                                                                                         |
-| `POST /extensions/folder {folder}`         | Install, or install again, from a folder, and enable                                                                                                                    |
-| `GET /extensions/marketplace`              | What the indexes offer, with the version installed and `current`, whether it came from the package offered (a new build of the same version is not); unreadable indexes |
-| `POST /extensions/marketplace/install`     | `{index, id, version?}`: install from an index, and enable                                                                                                              |
-| `POST /extensions/{id}/enable`, `/disable` | Enable or disable                                                                                                                                                       |
-| `PATCH /extensions/{id}/settings`          | Change settings and secrets; `null` removes one                                                                                                                         |
-| `DELETE /extensions/{id}`                  | Remove a disabled extension and its data                                                                                                                                |
-| `GET /actions`                             | The enabled extensions' actions                                                                                                                                         |
-| `POST /ext/{extension}/{action}`           | Run an action; the body is its input, the answer `{result}`                                                                                                             |
-| `POST /ext/{extension}/{action}/file`      | Run an action with a file: the body, up to 2 GiB; `?input=<json>&name=`                                                                                                 |
-| `GET /ext/{extension}/{action}?input=`     | Run an action that reads: its `{result}`, or the file it gives                                                                                                          |
-| `POST /extensions/{id}/ui {entry}`         | The address of one of its pages, under a key good for an hour                                                                                                           |
+| Route                                      | Purpose                                                                                                                                                                                                                   |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /extensions`                          | Installed extensions, their state, settings and what they bring                                                                                                                                                           |
+| `POST /extensions/folder {folder}`         | Install, or install again, from a folder, and enable                                                                                                                                                                      |
+| `GET /extensions/marketplace`              | What the indexes offer, with the version installed and `current`, whether it came from the package offered (a new build of the same version is not); each index read, `marketplaces: [{index, name}]`; unreadable indexes |
+| `POST /extensions/marketplace/install`     | `{index, id, version?}`: install from an index, and enable                                                                                                                                                                |
+| `POST /extensions/{id}/enable`, `/disable` | Enable or disable                                                                                                                                                                                                         |
+| `PATCH /extensions/{id}/settings`          | Change settings and secrets; `null` removes one                                                                                                                                                                           |
+| `DELETE /extensions/{id}`                  | Remove a disabled extension and its data                                                                                                                                                                                  |
+| `GET /actions`                             | The enabled extensions' actions                                                                                                                                                                                           |
+| `POST /ext/{extension}/{action}`           | Run an action; the body is its input, the answer `{result}`                                                                                                                                                               |
+| `POST /ext/{extension}/{action}/file`      | Run an action with a file: the body, up to 2 GiB; `?input=<json>&name=`                                                                                                                                                   |
+| `GET /ext/{extension}/{action}?input=`     | Run an action that reads: its `{result}`, or the file it gives                                                                                                                                                            |
+| `POST /extensions/{id}/ui {entry}`         | The address of one of its pages, under a key good for an hour                                                                                                                                                             |

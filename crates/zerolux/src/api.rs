@@ -392,6 +392,8 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/extension-ui/{key}/{*path}", get(extension_ui_file))
         // Where another service sends a person back from signing in for an extension.
         .route("/extensions/oauth/callback", get(extension_signed_in))
+        // A file an extension's card shows, by its digest: what is there cannot change.
+        .route("/extensions/assets/{sha256}", get(extension_asset))
         .route("/auth/{*rest}", axum::routing::any(auth_proxy));
     let api = open
         .merge(domain)
@@ -2976,6 +2978,32 @@ async fn extension_ui_address(
 }
 
 /// One of an extension's page files, isolated: it runs its scripts, apart from the app.
+async fn extension_asset(
+    State(state): State<AppState>,
+    Path(sha256): Path<String>,
+) -> Result<Response, ApiFailure> {
+    let (path, kind) = runtime(&state)?
+        .extensions
+        .asset(&sha256)
+        .await
+        .map_err(said)?;
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|_| ApiFailure::from(Error::NotFound))?;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, kind),
+            (
+                axum::http::header::CACHE_CONTROL,
+                "private, max-age=31536000, immutable",
+            ),
+            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
 #[derive(Deserialize)]
 struct SignedIn {
     #[serde(default)]

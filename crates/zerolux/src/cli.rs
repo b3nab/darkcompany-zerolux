@@ -316,6 +316,8 @@ pub async fn run() -> anyhow::Result<()> {
                     "sha256 {}",
                     crate::extensions::package::sha256(&std::fs::read(&package)?)
                 );
+                let card = crate::extensions::package::card_beside(&folder, &out)?;
+                println!("card {}", card.display());
             }
         },
         Command::Doctor => println!(
