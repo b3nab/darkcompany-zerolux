@@ -3,11 +3,12 @@ import { PortalHost } from "@rn-primitives/portal";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
+import { AppState } from "react-native";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useCSSVariable } from "uniwind";
 import { KernelProvider, useKernel } from "../src/kernel";
-import { requiresSignIn } from "@zerolux/chat";
+import { lookWith, requiresSignIn } from "@zerolux/chat";
 import { useAuthentication } from "../src/auth";
 import { restoreDensity } from "../src/density";
 import { noticeChoice } from "../src/notices";
@@ -16,6 +17,11 @@ import { restoreTheme, useTheme } from "../src/theme";
 
 // Before any box is drawn, so none starts empty over a kept draft.
 restoreDrafts();
+// What arrives is read only while the app is in front of you.
+lookWith(
+  () => AppState.currentState === "active",
+  (changed) => void AppState.addEventListener("change", changed),
+);
 
 export default function Layout() {
   const { resolved } = useTheme();

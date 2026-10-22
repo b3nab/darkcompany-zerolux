@@ -1,5 +1,4 @@
 import { useEffect, useRef } from "react";
-import { AppState } from "react-native";
 import * as Notifications from "expo-notifications";
 import { router, usePathname } from "expo-router";
 import {
@@ -10,6 +9,7 @@ import {
   sessionName,
   sessionNotices,
   useExtensions,
+  isLooking,
 } from "@zerolux/chat";
 import type { Attention, Extension } from "@zerolux/chat";
 import { useMe } from "./me";
@@ -65,14 +65,25 @@ export function useSessionNotices() {
   );
   const before = useRef<Record<string, Attention>>(undefined);
   const changed = JSON.stringify(attentions);
+  // A session seen further, here or on another of your clients, takes its notification away.
+  const seen = useRef<Record<string, number | null | undefined>>(undefined);
+  const seenAt = JSON.stringify(
+    Object.fromEntries(chat.sessions.map((s) => [s.id, s.seen_at])),
+  );
+  useEffect(() => {
+    const was = seen.current;
+    seen.current = JSON.parse(seenAt) as Record<string, number | null>;
+    if (!was) return;
+    for (const [id, at] of Object.entries(seen.current))
+      if (at && at > (was[id] ?? 0)) dismissNotice(id);
+  }, [seenAt]);
   useEffect(() => {
     const was = before.current;
     before.current = attentions;
     if (!was) return;
     const choice = noticeChoice.current();
     const notices = sessionNotices(was, attentions).filter(({ id, notice }) => {
-      const watched =
-        pathname === `/session/${id}` && AppState.currentState === "active";
+      const watched = pathname === `/session/${id}` && isLooking();
       return (
         !watched && (notice === "finished" ? choice.finished : choice.needs)
       );
@@ -132,8 +143,7 @@ export function useProposalNotices() {
     const was = before.current?.url === url ? before.current : undefined;
     before.current = { url, extensions };
     // Not while Extensions is on screen, where they show.
-    const watched =
-      AppState.currentState === "active" && pathname.startsWith("/extensions");
+    const watched = isLooking() && pathname.startsWith("/extensions");
     const proposals = watched ? [] : newProposals(was?.extensions, extensions);
     if (!proposals.length || !noticeChoice.current().needs) return;
     void (async () => {

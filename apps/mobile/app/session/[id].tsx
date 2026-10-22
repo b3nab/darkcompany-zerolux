@@ -19,7 +19,6 @@ import {
   ActionSheetIOS,
   ActivityIndicator,
   Alert,
-  AppState,
   Modal,
   Platform,
   Pressable,
@@ -40,6 +39,7 @@ import {
   folderName,
   harnessLabels,
   inputImagesError,
+  isLooking,
   MAX_INPUT_IMAGES,
   saveDraft,
   agentSettingFields,
@@ -65,6 +65,7 @@ import {
   useSessionCompacting,
   useSessionQueue,
   useSessionUsage,
+  whenLooking,
   withMention,
   contextShare,
   percent,
@@ -296,13 +297,12 @@ export default function SessionPage() {
     useCallback(() => {
       if (!at) return;
       const look = () => {
-        if (AppState.currentState !== "active") return;
+        if (!isLooking()) return;
         chat.markSeen(id, at);
         dismissNotice(id);
       };
       look();
-      const watch = AppState.addEventListener("change", look);
-      return () => watch.remove();
+      return whenLooking(look);
     }, [id, at]),
   );
   if (!session)
