@@ -22,7 +22,9 @@ const words = (text: string) => text.replace(/\s+/g, " ").trim();
 
 /**
  * The inputs sent to a session that neither its record, from where each was sent, nor its
- * queue show yet, in order. Each input of the record or the queue answers one sent input.
+ * queue show yet, in order. Each input of the record or the queue answers one sent input:
+ * those on their way first, then failed ones, which go too once the record shows they arrived
+ * after all, as when the harness took one after reporting it lost.
  */
 export function unseenInputs(
   sent: SentInput[],
@@ -32,9 +34,7 @@ export function unseenInputs(
 ) {
   const recorded = new Set<string>();
   const queued = new Set<string>();
-  return sent.filter((input) => {
-    if (input.session_id !== sessionId) return false;
-    if (input.status === "failed") return true;
+  const inRecord = (input: SentInput) => {
     const text = words(input.text);
     const block = blocks.find(
       (b) =>
@@ -44,15 +44,19 @@ export function unseenInputs(
         // Images alone: the first input after it.
         (!text || words(b.text) === text),
     );
-    if (block) {
-      recorded.add(block.key);
-      return false;
-    }
+    if (block) recorded.add(block.key);
+    return !!block;
+  };
+  const mine = sent.filter((input) => input.session_id === sessionId);
+  const unseen = mine.filter((input) => {
+    if (input.status === "failed") return true;
+    if (inRecord(input)) return false;
+    const text = words(input.text);
     const item = queue.find((q) => !queued.has(q.id) && words(q.text) === text);
-    if (item) {
-      queued.add(item.id);
-      return false;
-    }
-    return true;
+    if (item) queued.add(item.id);
+    return !item;
   });
+  return unseen.filter(
+    (input) => input.status !== "failed" || !inRecord(input),
+  );
 }

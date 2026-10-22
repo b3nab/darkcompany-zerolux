@@ -58,12 +58,19 @@ test("an input in the queue no longer shows as sent", () => {
   ).toEqual([]);
 });
 
-test("a failed input stays, and other sessions' inputs never show", () => {
+test("a failed input stays until the record shows it arrived after all", () => {
   const failed = sent("a", "go on", 0, "failed");
   const elsewhere = { ...sent("b", "hi", 0), session_id: "s2" };
+  expect(unseenInputs([failed, elsewhere], "s1", [], [])).toEqual([failed]);
+  // The harness took it after reporting it lost: the session went on with it.
   expect(
     unseenInputs([failed, elsewhere], "s1", [input(10, "go on")], []),
-  ).toEqual([failed]);
+  ).toEqual([]);
+  // Written again after the failure: the record's one answers the new input, not the failed.
+  const again = sent("c", "go on", 5);
+  expect(unseenInputs([failed, again], "s1", [input(10, "go on")], [])).toEqual(
+    [failed],
+  );
 });
 
 test("images alone answer to the first input after them", () => {
