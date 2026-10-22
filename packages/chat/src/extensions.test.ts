@@ -1,6 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { setKernelFetch } from "./client";
 import {
+  consentParts,
+  extensionGroups,
   installOffer,
   newProposals,
   offerAction,
@@ -93,6 +95,60 @@ test("an offer is installed, updated to its newest version, or already there", (
   );
   expect(offerAction({ ...offer, installed: "1.2.0", current: null })).toBe(
     "installed",
+  );
+});
+
+test("the installed are listed by what they wait for, agents' proposals apart", () => {
+  const installed = (id: string, more: Partial<Extension> = {}) =>
+    ({
+      id,
+      enabled: true,
+      dev: false,
+      parts: ["process"],
+      proposed_by: null,
+      ...more,
+    }) as Extension;
+  const notes = installed("aspen.notes");
+  const groups = extensionGroups(
+    [
+      notes,
+      installed("birch.board", { enabled: false }),
+      installed("cedar.draft", { dev: true }),
+      installed("maple.report", { enabled: false, proposed_by: "agent-1" }),
+    ],
+    [
+      { ...offer, installed: "1.1.0" },
+      { ...offer, id: "cedar.draft", installed: "0.1.0" },
+    ],
+  );
+  expect(groups.updates).toEqual([
+    { extension: notes, offer: { ...offer, installed: "1.1.0" } },
+  ]);
+  expect(groups.active.map((e) => e.id)).toEqual(["aspen.notes"]);
+  expect(groups.disabled.map((e) => e.id)).toEqual(["birch.board"]);
+  // One loaded from a folder updates from its folder, never from a marketplace.
+  expect(groups.development.map((e) => e.id)).toEqual(["cedar.draft"]);
+  expect(groups.proposals.map((e) => e.id)).toEqual(["maple.report"]);
+});
+
+test("a consent says what runs, and in an update what is new or gone", () => {
+  const installed = {
+    id: "aspen.notes",
+    parts: ["process", "interface"],
+  } as Extension;
+  expect(consentParts({ ...offer, parts: ["process"] })).toEqual([
+    { part: "process", change: "kept" },
+  ]);
+  expect(
+    consentParts({ ...offer, parts: ["kernel", "interface"] }, installed),
+  ).toEqual([
+    { part: "kernel", change: "new" },
+    { part: "interface", change: "kept" },
+    { part: "process", change: "gone" },
+  ]);
+  // An index that does not say its parts changes none of what is known.
+  expect(consentParts(offer, installed).every((p) => p.change === "kept")).toBe(
+    true,
   );
 });
 

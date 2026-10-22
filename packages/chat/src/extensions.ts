@@ -262,6 +262,54 @@ export const offerVersions = (offer: MarketplaceOffer) =>
       ? `${offer.version} · new build`
       : `${offer.installed} → ${offer.version}`;
 
+/** What a marketplace offers of an installed extension: its update, when there is one. */
+export const offerFor = (extension: Extension, offers: MarketplaceOffer[]) =>
+  extension.dev ? undefined : offers.find((offer) => offer.id === extension.id);
+
+/**
+ * The workspace's extensions as the Extensions page lists them: what an update waits for,
+ * then those running, those disabled, and those loaded from a folder; agents' proposals apart,
+ * until the owner enables them.
+ */
+export function extensionGroups(
+  extensions: Extension[],
+  offers: MarketplaceOffer[],
+) {
+  const proposals = extensions.filter((e) => e.proposed_by);
+  const settled = extensions.filter((e) => !e.proposed_by);
+  return {
+    updates: settled.flatMap((extension) => {
+      const offer = offerFor(extension, offers);
+      return offer && offerAction(offer) === "update"
+        ? [{ extension, offer }]
+        : [];
+    }),
+    active: settled.filter((e) => !e.dev && e.enabled),
+    disabled: settled.filter((e) => !e.dev && !e.enabled),
+    development: settled.filter((e) => e.dev),
+    proposals,
+  };
+}
+
+/**
+ * What installing or updating to an offer runs, said before it does: each part, and in an
+ * update whether it is new, or no longer there.
+ */
+export function consentParts(offer: MarketplaceOffer, installed?: Extension) {
+  const before = installed?.parts ?? [];
+  // An index that does not say its parts changes none of what is known.
+  const now = offer.parts ?? before;
+  return [
+    ...now.map((part) => ({
+      part,
+      change: installed && !before.includes(part) ? "new" : "kept",
+    })),
+    ...before
+      .filter((part) => !now.includes(part))
+      .map((part) => ({ part, change: "gone" })),
+  ] as { part: string; change: "new" | "kept" | "gone" }[];
+}
+
 /**
  * What parts let run beyond their own process, and from whom: code inside the kernel, an
  * interface inside the apps; nothing when they are neither.
