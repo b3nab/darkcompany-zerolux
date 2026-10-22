@@ -1,11 +1,12 @@
 import { createContext, useContext, useRef, useState } from "react";
-import { icons, PuzzleIcon } from "lucide-react";
+import { ChevronLeftIcon, icons, PuzzleIcon } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { Actor } from "@zerolux/chat";
 import type { Tone, UiComponents } from "@zerolux/ui";
 import { cn } from "cn";
 import { MessageText } from "@/components/message-text";
 import { ActorMark } from "@/components/presence";
+import { useWidth } from "@/components/side-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -71,6 +72,10 @@ function Labelled({
 }
 
 /** `@zerolux/ui`'s components, drawn with this app's. */
+/** How narrow and how wide a Split's list can be dragged, in pixels. */
+const SPLIT_MIN = 192;
+const SPLIT_MAX = 480;
+
 export const uiComponents: UiComponents = {
   Stack: ({ direction = "column", gap = 12, align, children }) => (
     <div
@@ -228,7 +233,7 @@ export const uiComponents: UiComponents = {
   List: ({ children }) => (
     <ul className="flex flex-col divide-y rounded-md border">{children}</ul>
   ),
-  ListItem: ({ title, subtitle, leading, accessory, onPress }) => {
+  ListItem: ({ title, subtitle, leading, accessory, onPress, selected }) => {
     const body = (
       <>
         {leading}
@@ -248,11 +253,14 @@ export const uiComponents: UiComponents = {
         className={cn(
           "flex items-center gap-3 px-3 py-2",
           onPress && "transition-colors hover:bg-accent",
+          // Open beside the list: more than a hover, a mark at its edge too.
+          selected && "bg-accent shadow-[inset_2px_0_0_var(--color-primary)]",
         )}
       >
         {onPress ? (
           <button
             type="button"
+            aria-current={selected || undefined}
             onClick={onPress}
             className="flex min-w-0 flex-1 items-center gap-3 text-left outline-none focus-visible:underline"
           >
@@ -377,6 +385,80 @@ export const uiComponents: UiComponents = {
         name={actor?.name ?? "?"}
         className={size === "sm" ? "size-6 text-[10px]" : undefined}
       />
+    );
+  },
+  Split: function Split({ label, list, detail, open, onBack }) {
+    const width = useWidth(`split-${label}`, 256);
+    const [drawn, setDrawn] = useState(width.kept);
+    const size = (pixels: number) => {
+      const kept = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, pixels));
+      setDrawn(kept);
+      width.resized(kept);
+    };
+    return (
+      <div className="@container">
+        <div
+          className="flex flex-col @2xl:grid @2xl:grid-cols-[var(--split-list)_auto_minmax(0,1fr)]"
+          style={{ "--split-list": `${drawn}px` } as React.CSSProperties}
+        >
+          <nav
+            aria-label={label}
+            className={cn(
+              "min-w-0 @2xl:sticky @2xl:top-0 @2xl:max-h-[calc(100dvh-8rem)] @2xl:self-start @2xl:overflow-y-auto @2xl:pr-4",
+              open && "@max-2xl:hidden",
+            )}
+          >
+            {list}
+          </nav>
+          {/* Dragged or moved with the arrows; kept as the app keeps its columns' widths. */}
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={`${label} width`}
+            aria-valuenow={drawn}
+            aria-valuemin={SPLIT_MIN}
+            aria-valuemax={SPLIT_MAX}
+            tabIndex={0}
+            onPointerDown={(event) => {
+              const from = event.clientX - drawn;
+              const handle = event.currentTarget;
+              handle.setPointerCapture(event.pointerId);
+              const move = (next: PointerEvent) => size(next.clientX - from);
+              handle.addEventListener("pointermove", move);
+              handle.addEventListener(
+                "pointerup",
+                () => {
+                  handle.removeEventListener("pointermove", move);
+                  width.keep();
+                },
+                { once: true },
+              );
+            }}
+            onKeyDown={(event) => {
+              const by = { ArrowLeft: -16, ArrowRight: 16 }[event.key];
+              if (!by) return;
+              event.preventDefault();
+              size(drawn + by);
+              width.keep();
+            }}
+            className="group/handle hidden w-3 cursor-col-resize touch-none justify-center outline-none @2xl:flex"
+          >
+            <span className="w-px bg-border transition-colors group-hover/handle:bg-ring group-focus-visible/handle:bg-ring" />
+          </div>
+          <div className={cn("min-w-0 @2xl:pl-4", !open && "@max-2xl:hidden")}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mb-2 -ml-2 @2xl:hidden"
+              onClick={onBack}
+            >
+              <ChevronLeftIcon />
+              {label}
+            </Button>
+            {detail}
+          </div>
+        </div>
+      </div>
     );
   },
   Columns: ({ children }) => (

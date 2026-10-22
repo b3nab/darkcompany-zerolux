@@ -40,6 +40,7 @@ export declare const Sheet: UiComponents["Sheet"];
 export declare const Spinner: UiComponents["Spinner"];
 export declare const Avatar: UiComponents["Avatar"];
 export declare const Columns: UiComponents["Columns"];
+export declare const Split: UiComponents["Split"];
 export declare const DateInput: UiComponents["DateInput"];
 export declare const Menu: UiComponents["Menu"];
 export declare const FileButton: UiComponents["FileButton"];

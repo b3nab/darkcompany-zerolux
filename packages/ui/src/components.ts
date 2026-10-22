@@ -104,6 +104,8 @@ export interface ListItemProps {
   accessory?: ReactNode;
   /** A row that does something shows that it does. */
   onPress?: () => void;
+  /** The row open beside the list, as in a Split. */
+  selected?: boolean;
 }
 
 export interface TableProps {
@@ -138,6 +140,22 @@ export interface CardProps {
 /** Cards side by side, each as wide as the others, scrolled sideways when they do not fit. */
 export interface ColumnsProps {
   children?: ReactNode;
+}
+
+/**
+ * A list beside what is chosen in it, as a storage's places beside their files. Where there is
+ * room both show, the list at the side, as wide as the reader drags it; on a phone the list
+ * shows, and once something is open its detail takes its place, with the way back.
+ */
+export interface SplitProps {
+  /** What the list holds: its label, and the way back to it. */
+  label: string;
+  list: ReactNode;
+  detail: ReactNode;
+  /** Something in the list is open: on a phone its detail shows instead of the list. */
+  open: boolean;
+  /** Back to the list, on a phone. */
+  onBack: () => void;
 }
 
 /** A day, as `YYYY-MM-DD`, picked with the system's calendar; `null` is none. */
@@ -245,6 +263,7 @@ export interface UiComponents {
   Spinner: ComponentType<SpinnerProps>;
   Avatar: ComponentType<AvatarProps>;
   Columns: ComponentType<ColumnsProps>;
+  Split: ComponentType<SplitProps>;
   DateInput: ComponentType<DateInputProps>;
   Menu: ComponentType<MenuProps>;
   FileButton: ComponentType<FileButtonProps>;
@@ -276,6 +295,7 @@ export const componentNames = [
   "Spinner",
   "Avatar",
   "Columns",
+  "Split",
   "DateInput",
   "Menu",
   "FileButton",

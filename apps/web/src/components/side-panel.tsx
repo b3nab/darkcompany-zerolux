@@ -11,7 +11,7 @@ import {
  * The panel's width in pixels, kept in this browser: a width kept as a share of the window
  * would change with the window. Without storage it lasts until the page reloads.
  */
-function useWidth(id: string, size: number) {
+export function useWidth(id: string, size: number) {
   const key = `zerolux-panel-${id}`;
   const [kept, setKept] = useState(() => {
     try {
