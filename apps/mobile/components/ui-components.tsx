@@ -200,6 +200,7 @@ export const uiComponents: UiComponents = {
     leading,
     accessory,
     onPress,
+    selected,
   }) {
     const faint = String(useCSSVariable("--color-faint"));
     const body = (
@@ -224,10 +225,14 @@ export const uiComponents: UiComponents = {
         ) : null}
       </>
     );
-    const row = "min-h-12 flex-row items-center gap-3 px-3.5 py-2.5";
+    const row = cn(
+      "min-h-12 flex-row items-center gap-3 px-3.5 py-2.5",
+      selected && "bg-accent",
+    );
     return onPress ? (
       <Pressable
         accessibilityRole="button"
+        accessibilityState={{ selected }}
         onPress={() => {
           void Haptics.selectionAsync();
           onPress();
