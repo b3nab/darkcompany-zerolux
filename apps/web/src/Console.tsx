@@ -148,6 +148,7 @@ import { SessionSchedules } from "./SessionSchedules";
 import { BackgroundPanel } from "./SessionBackground";
 import { useReadingPlace } from "./reading";
 import { LoadingEarlier } from "@/components/loading-earlier";
+import { ToLatest } from "@/components/to-latest";
 import { ExtensionView, pieceIcon } from "./extension-view";
 import { SessionTriggers } from "./SessionTriggers";
 import { ContinueInTerminal } from "./ContinueInTerminal";
@@ -1180,6 +1181,11 @@ export function SessionView({
                 </p>
               )}
             </div>
+            <ToLatest
+              shown={reading.away}
+              label="Back to the latest work"
+              onClick={reading.toLatest}
+            />
           </div>
           <SessionInput
             key={session.id}

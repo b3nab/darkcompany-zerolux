@@ -3,7 +3,6 @@ import type { SubmitEvent } from "react";
 import { Link, NavLink } from "react-router";
 import { cn } from "cn";
 import {
-  ArrowDownIcon,
   CheckIcon,
   ChevronLeftIcon,
   ClockIcon,
@@ -67,6 +66,7 @@ import { Listen } from "@/components/listen";
 import { useReadAloud } from "./read-aloud";
 import { useReadingPlace } from "./reading";
 import { LoadingEarlier } from "@/components/loading-earlier";
+import { ToLatest } from "@/components/to-latest";
 import { ARRIVE } from "@/components/session-blocks";
 import { useMe } from "./AuthGate";
 import { ChatAbout } from "@/components/chat-about";
@@ -673,21 +673,11 @@ export function ChatView({
                 <DayLabel>No messages yet</DayLabel>
               )}
             </ol>
-            {/* No height of its own: it rides the bottom edge without moving the content. */}
-            {reading.away && (
-              <div className="sticky bottom-0 mx-auto h-0 max-w-3xl">
-                <Button
-                  variant="outline"
-                  size="icon"
-                  aria-label="Back to the latest messages"
-                  title="Back to the latest messages"
-                  className="absolute right-0 bottom-0 rounded-full bg-card shadow-md"
-                  onClick={reading.toLatest}
-                >
-                  <ArrowDownIcon />
-                </Button>
-              </div>
-            )}
+            <ToLatest
+              shown={reading.away}
+              label="Back to the latest messages"
+              onClick={reading.toLatest}
+            />
           </div>
           {thread ? (
             conversation.closed_at && (
