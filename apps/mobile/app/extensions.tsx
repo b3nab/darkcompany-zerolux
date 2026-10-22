@@ -9,6 +9,7 @@ import {
   installOffer,
   loadExtensionFolder,
   offerAction,
+  offerVersions,
   offerWarning,
   useExtensions,
   useMarketplace,
@@ -225,9 +226,7 @@ export default function Extensions() {
                         <Text numberOfLines={1} className="text-xs text-faint">
                           {[
                             offer.publisher,
-                            action === "update"
-                              ? `${offer.installed} → ${offer.version}`
-                              : offer.version,
+                            offerVersions(offer),
                             ...partLabels(offer.parts),
                           ]
                             .filter(Boolean)

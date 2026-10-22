@@ -84,6 +84,16 @@ test("an offer is installed, updated to its newest version, or already there", (
   expect(offerAction(offer)).toBe("install");
   expect(offerAction({ ...offer, installed: "1.1.0" })).toBe("update");
   expect(offerAction({ ...offer, installed: "1.2.0" })).toBe("installed");
+  expect(offerAction({ ...offer, installed: "1.2.0", current: true })).toBe(
+    "installed",
+  );
+  // Another build of the same version is an update; one that cannot be told apart is not.
+  expect(offerAction({ ...offer, installed: "1.2.0", current: false })).toBe(
+    "update",
+  );
+  expect(offerAction({ ...offer, installed: "1.2.0", current: null })).toBe(
+    "installed",
+  );
 });
 
 test("installing an offer asks its index for that version, and gives the extension", async () => {

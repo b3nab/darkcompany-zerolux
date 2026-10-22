@@ -214,6 +214,11 @@ export interface MarketplaceOffer {
   /** Its newest version that runs on this kernel. */
   version: string;
   installed: string | null;
+  /**
+   * Whether the installed one is this very package: `false` is another, even of the same
+   * version; `null` is not known, as for one loaded from a folder.
+   */
+  current?: boolean | null;
   /** Its parts, where the index says: `kernel` runs inside the kernel. */
   parts?: string[];
 }
@@ -238,13 +243,24 @@ export function useMarketplace(kernel = kernelUrl(), enabled = true) {
   return { marketplace: items, ...rest };
 }
 
-/** What an offer's button does: install it, update it to its newest version, or nothing. */
+/**
+ * What an offer's button does: install it, update it to its newest version, or nothing. A new
+ * build of the version installed is an update too.
+ */
 export const offerAction = (offer: MarketplaceOffer) =>
   offer.installed === null || offer.installed === undefined
     ? "install"
-    : offer.installed === offer.version
+    : offer.installed === offer.version && offer.current !== false
       ? "installed"
       : "update";
+
+/** An offer's version, and in an update the one it replaces: a new build of the same says so. */
+export const offerVersions = (offer: MarketplaceOffer) =>
+  offerAction(offer) !== "update"
+    ? offer.version
+    : offer.installed === offer.version
+      ? `${offer.version} · new build`
+      : `${offer.installed} → ${offer.version}`;
 
 /**
  * What parts let run beyond their own process, and from whom: code inside the kernel, an
