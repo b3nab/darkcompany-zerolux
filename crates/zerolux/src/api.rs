@@ -390,6 +390,8 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/hosts/channel", get(host_channel))
         // An extension's own page, opened by the key its address carries.
         .route("/extension-ui/{key}/{*path}", get(extension_ui_file))
+        // Where another service sends a person back from signing in for an extension.
+        .route("/extensions/oauth/callback", get(extension_signed_in))
         .route("/auth/{*rest}", axum::routing::any(auth_proxy));
     let api = open
         .merge(domain)
@@ -2974,6 +2976,36 @@ async fn extension_ui_address(
 }
 
 /// One of an extension's page files, isolated: it runs its scripts, apart from the app.
+#[derive(Deserialize)]
+struct SignedIn {
+    #[serde(default)]
+    state: String,
+    code: Option<String>,
+    error: Option<String>,
+}
+
+async fn extension_signed_in(
+    State(state): State<AppState>,
+    Query(query): Query<SignedIn>,
+) -> Result<Response, ApiFailure> {
+    let page = runtime(&state)?
+        .extensions
+        .signed_in(&query.state, query.code.as_deref(), query.error.as_deref())
+        .await;
+    Ok(axum::response::Html(page).into_response())
+}
+
+/// The kernel's address as a person's device reached it.
+fn origin(headers: &axum::http::HeaderMap) -> Option<String> {
+    let host = headers.get(axum::http::header::HOST)?.to_str().ok()?;
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .filter(|scheme| *scheme == "https")
+        .unwrap_or("http");
+    Some(format!("{scheme}://{host}"))
+}
+
 async fn extension_ui_file(
     State(state): State<AppState>,
     Path((key, path)): Path<(String, String)>,
@@ -3138,12 +3170,13 @@ async fn run_action(
     State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
     Path((extension, action)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
     ChatJson(input): ChatJson<Value>,
 ) -> Result<Json<Value>, ApiFailure> {
     let result = runtime(&state)?
         .extensions
         .run(
-            crate::extensions::Caller::of(&who),
+            crate::extensions::Caller::of(&who).at(origin(&headers)),
             &extension,
             &action,
             input,
@@ -3224,7 +3257,7 @@ async fn run_action_on_file(
     let result = runtime
         .extensions
         .run(
-            crate::extensions::Caller::of(&who),
+            crate::extensions::Caller::of(&who).at(origin(&headers)),
             &extension,
             &action,
             input,
@@ -3250,6 +3283,7 @@ async fn read_action(
     Extension(who): Extension<ChatIdentity>,
     Path((extension, action)): Path<(String, String)>,
     Query(query): Query<ActionQuery>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiFailure> {
     let input = query_input(&query)?;
     ensure_object(&input)?;
@@ -3257,7 +3291,7 @@ async fn read_action(
     let result = runtime
         .extensions
         .run(
-            crate::extensions::Caller::of(&who),
+            crate::extensions::Caller::of(&who).at(origin(&headers)),
             &extension,
             &action,
             input,

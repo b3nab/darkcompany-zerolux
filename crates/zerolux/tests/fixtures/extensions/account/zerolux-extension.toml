@@ -1,0 +1,9 @@
+[extension]
+id = "zerolux.account"
+name = "Account"
+version = "1.0.0"
+publisher = "zerolux"
+description = "A test extension: accounts of another service, signed in to with OAuth"
+
+[process]
+command = ["bun", "run", "main.ts"]

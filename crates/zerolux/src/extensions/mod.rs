@@ -6,9 +6,11 @@
 pub mod library;
 pub mod manifest;
 pub mod marketplace;
+pub mod oauth;
 pub mod package;
 pub mod process;
 pub mod scaffold;
+pub mod vault;
 
 use std::{
     collections::HashMap,
@@ -39,6 +41,9 @@ pub struct Caller {
     pub session_id: Option<String>,
     /// The extension or trigger that runs it.
     pub by: Option<String>,
+    /// The kernel's address as the person's device reached it, for a sign-in to come back to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 
 impl Caller {
@@ -47,7 +52,14 @@ impl Caller {
             actor_id: who.actor_id.clone(),
             session_id: who.session_id.clone(),
             by: None,
+            origin: None,
         }
+    }
+
+    /// From a person's device, which reached the kernel at `origin`.
+    pub fn at(mut self, origin: Option<String>) -> Self {
+        self.origin = origin;
+        self
     }
 }
 
@@ -122,8 +134,29 @@ pub struct Extensions {
     ui_keys: std::sync::Mutex<HashMap<String, (String, i64)>>,
     /// The runtime extensions reach the rest of ZeroLux through.
     runtime: std::sync::OnceLock<Weak<crate::chat_runtime::ChatRuntime>>,
+    /// Their secrets, encrypted with the kernel's key.
+    vault: vault::Vault,
+    /// Sign-ins to other services under way.
+    sign_ins: oauth::Flows,
     me: Weak<Extensions>,
 }
+
+/// Secrets, encrypted: their settings' and those they keep themselves.
+fn sealed(kind: &str) -> bool {
+    kind == "secret"
+}
+
+/// Where a secret an extension keeps itself is, beside its settings' secrets, whose names
+/// have no slash: `vault/<name>`, its name 1 to 200 bytes.
+fn kept(name: &str) -> Result<String> {
+    ensure!(
+        !name.is_empty() && name.len() <= 200,
+        Error::Invalid("A secret's name is 1 to 200 bytes".into())
+    );
+    Ok(format!("{VAULT}{name}"))
+}
+
+const VAULT: &str = "vault/";
 
 fn row_manifest(row: &extensions::Model) -> Result<Manifest> {
     Ok(serde_json::from_str(&row.manifest_json)?)
@@ -133,13 +166,15 @@ impl Extensions {
     pub fn new(store: Store, root: PathBuf, tell: Box<dyn Fn(Value) + Send + Sync>) -> Arc<Self> {
         Arc::new_cyclic(|me| Self {
             store,
-            root,
             loaded: RwLock::default(),
             tell,
             next_runs: std::sync::Mutex::default(),
             watched: std::sync::Mutex::default(),
             ui_keys: std::sync::Mutex::default(),
             runtime: std::sync::OnceLock::new(),
+            vault: vault::Vault::at(root.join("vault.key")),
+            sign_ins: oauth::Flows::default(),
+            root,
             me: me.clone(),
         })
     }
@@ -225,6 +260,50 @@ impl Extensions {
             Error::Invalid("An extension's id is `publisher.name`".into())
         );
         Ok(self.root.join(format!("{id}.log")))
+    }
+
+    /// A service sent the person back from a sign-in: the tokens go into the secret the
+    /// extension named, and it hears `zerolux/signed_in` with whether it worked. The page the
+    /// person sees.
+    pub async fn signed_in(&self, state: &str, code: Option<&str>, error: Option<&str>) -> String {
+        let Some(flow) = self.sign_ins.take(state) else {
+            return oauth::page(Err("this sign-in expired; start it again".into()));
+        };
+        let done: Result<()> = async {
+            if let Some(error) = error {
+                bail!("the service said `{error}`");
+            }
+            let code = code.context("the service gave no code")?;
+            let tokens = oauth::exchange(&flow, code).await?;
+            self.put_value(
+                &flow.extension,
+                "secret",
+                &kept(&flow.request.secret)?,
+                Some(&tokens),
+            )
+            .await
+        }
+        .await;
+        let done = done.map_err(|error| format!("{error:#}"));
+        let payload = match &done {
+            Ok(()) => json!({"secret": flow.request.secret, "ok": true}),
+            Err(error) => json!({"secret": flow.request.secret, "ok": false, "error": error}),
+        };
+        if let Some(process) = self
+            .loaded
+            .read()
+            .await
+            .get(&flow.extension)
+            .and_then(|loaded| loaded.process.clone())
+        {
+            process.notify(
+                "event",
+                json!({"name": "zerolux/signed_in", "payload": payload}),
+            );
+        }
+        (self.tell)(json!({"type": "extension.event",
+            "event": format!("{}/signed_in", flow.extension)}));
+        oauth::page(done)
     }
 
     /// Extensions reach the rest of ZeroLux through this runtime: its agents' sessions.
@@ -863,14 +942,24 @@ impl Extensions {
     }
 
     async fn values(&self, id: &str, kind: &str) -> Result<HashMap<String, Value>> {
-        Ok(extension_values::Entity::find()
+        let rows = extension_values::Entity::find()
             .filter(extension_values::Column::ExtensionId.eq(id))
             .filter(extension_values::Column::Kind.eq(kind))
             .all(self.store.db())
-            .await?
-            .into_iter()
-            .filter_map(|row| Some((row.key, serde_json::from_str(&row.value_json).ok()?)))
-            .collect())
+            .await?;
+        let mut values = HashMap::new();
+        for row in rows {
+            let Ok(value) = serde_json::from_str(&row.value_json) else {
+                continue;
+            };
+            let value = if sealed(kind) {
+                self.vault.open(value)?
+            } else {
+                value
+            };
+            values.insert(row.key, value);
+        }
+        Ok(values)
     }
 
     async fn put_value(
@@ -887,6 +976,11 @@ impl Extensions {
             .exec(self.store.db())
             .await?;
         if let Some(value) = value {
+            let value = if sealed(kind) {
+                self.vault.seal(value)?
+            } else {
+                value.clone()
+            };
             extension_values::ActiveModel {
                 extension_id: Set(id.to_owned()),
                 kind: Set(kind.to_owned()),
@@ -1311,6 +1405,71 @@ impl process::Kernel for Extensions {
                 );
                 self.put_value(&extension, "value", &key, value).await?;
                 Ok(json!({}))
+            }
+            // Secrets it keeps itself, as many as it needs: one for each account, say. Encrypted,
+            // and never shown to people's clients.
+            "secrets.get" => {
+                let key = kept(&text("name"))?;
+                Ok(json!({"value": self.values(&extension, "secret").await?.remove(&key)}))
+            }
+            "secrets.set" => {
+                let key = kept(&text("name"))?;
+                let value = params.get("value").filter(|value| !value.is_null());
+                ensure!(
+                    value.is_none_or(|value| value.to_string().len() <= 64 * 1024),
+                    Error::Invalid("A secret is up to 64 KiB".into())
+                );
+                self.put_value(&extension, "secret", &key, value).await?;
+                Ok(json!({}))
+            }
+            "secrets.list" => {
+                let prefix = format!("{VAULT}{}", text("prefix"));
+                let mut names: Vec<String> = extension_values::Entity::find()
+                    .filter(extension_values::Column::ExtensionId.eq(&extension))
+                    .filter(extension_values::Column::Kind.eq("secret"))
+                    .all(self.store.db())
+                    .await?
+                    .into_iter()
+                    .filter(|row| row.key.starts_with(&prefix))
+                    .map(|row| row.key[VAULT.len()..].to_owned())
+                    .collect();
+                names.sort();
+                Ok(json!({"names": names}))
+            }
+            // A sign-in to another service: the address the person opens. The service comes
+            // back to the kernel, which keeps the tokens in the secret named and tells the
+            // extension with its `zerolux/signed_in` event.
+            "oauth.start" => {
+                let request: oauth::Request = serde_json::from_value(params.clone())
+                    .map_err(|error| Error::Invalid(format!("Invalid sign-in: {error}")))?;
+                let origin = self
+                    .runtime
+                    .get()
+                    .and_then(Weak::upgrade)
+                    .map(|runtime| runtime.base_url().to_owned())
+                    .unwrap_or_default();
+                self.sign_ins.start(&extension, request, &origin)
+            }
+            // A valid access token from a secret a sign-in filled, renewed when due.
+            "oauth.token" => {
+                let key = kept(&text("secret"))?;
+                let held = self
+                    .values(&extension, "secret")
+                    .await?
+                    .remove(&key)
+                    .filter(|held| held["type"] == "oauth")
+                    .ok_or_else(|| Error::Invalid("Not signed in".into()))?;
+                let held = if oauth::due(&held) {
+                    let renewed = oauth::renew(&held).await?;
+                    self.put_value(&extension, "secret", &key, Some(&renewed))
+                        .await?;
+                    renewed
+                } else {
+                    held
+                };
+                Ok(json!({"access_token": held["access_token"],
+                    "token_type": held["token_type"], "expires_at": held["expires_at"],
+                    "scope": held["scope"]}))
             }
             "values.list" => {
                 let prefix = text("prefix");

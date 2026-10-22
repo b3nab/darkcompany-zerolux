@@ -13,6 +13,8 @@ export interface Caller {
   actor_id: string | null;
   session_id: string | null;
   by: string | null;
+  /** The kernel's address as the person's device reached it, for a sign-in to come back to. */
+  origin?: string;
 }
 
 /** What an extension can ask the kernel, and what it knows of itself. */
@@ -30,6 +32,32 @@ export interface Context {
     set(key: string, value: unknown): Promise<void>;
     delete(key: string): Promise<void>;
     list(prefix?: string): Promise<string[]>;
+  };
+  /**
+   * Secrets it keeps itself, as many as it needs (one for each account, say): encrypted with
+   * the kernel's key and never shown to people's clients.
+   */
+  vault: {
+    get<T = unknown>(name: string): Promise<T | undefined>;
+    set(name: string, value: unknown): Promise<void>;
+    delete(name: string): Promise<void>;
+    list(prefix?: string): Promise<string[]>;
+  };
+  /**
+   * Signing in to another service with OAuth (authorization code with PKCE). `start` gives the
+   * address the person opens; the service comes back to the kernel, which keeps the tokens in
+   * the secret named and tells the extension with its `zerolux/signed_in` event,
+   * `{secret, ok, error?}`. `token` gives a valid access token from that secret, renewed when
+   * due.
+   */
+  oauth: {
+    start(request: SignIn): Promise<{ url: string; redirect_uri: string }>;
+    token(secret: string): Promise<{
+      access_token: string;
+      token_type: string;
+      expires_at: number | null;
+      scope: string | null;
+    }>;
   };
   /** The workspace's name, and its people and agents. */
   workspace(): Promise<{
@@ -63,6 +91,21 @@ export interface Context {
    */
   tellAgent(actorId: string, text: string): Promise<string>;
   log(message: string): void;
+}
+
+/** A sign-in to another service. */
+export interface SignIn {
+  /** The secret the tokens are kept in. */
+  secret: string;
+  authorize_url: string;
+  token_url: string;
+  client_id: string;
+  client_secret?: string;
+  scopes?: string[];
+  /** More of the service's own parameters, such as `access_type: "offline"`. */
+  params?: Record<string, string>;
+  /** The caller's `origin`, so that the service sends the person back to the kernel they reached. */
+  origin?: string;
 }
 
 export interface Action<I = any, O = unknown> {
@@ -235,6 +278,20 @@ export async function serve(
       delete: async (key) =>
         void (await ask("values.set", { key, value: null })),
       list: async (prefix = "") => (await ask("values.list", { prefix })).keys,
+    },
+    vault: {
+      get: async (name) =>
+        (await ask("secrets.get", { name })).value ?? undefined,
+      set: async (name, value) =>
+        void (await ask("secrets.set", { name, value })),
+      delete: async (name) =>
+        void (await ask("secrets.set", { name, value: null })),
+      list: async (prefix = "") =>
+        (await ask("secrets.list", { prefix })).names,
+    },
+    oauth: {
+      start: async (request) => ask("oauth.start", request),
+      token: async (secret) => ask("oauth.token", { secret }),
     },
     workspace: async () => ask("workspace.actors"),
     publish: async (name, payload) =>

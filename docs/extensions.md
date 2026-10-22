@@ -35,6 +35,12 @@ token = { type = "secret", label = "Token" }
 
 Settings are `text`, `number`, `boolean`, `secret` or `choice`, with its `options` (`[{ value, label }]`). A secret is never shown to clients; only the extension's own parts read it.
 
+## Secrets and signing in
+
+Besides its settings' secrets, an extension keeps as many secrets as it needs, by name (one for each account it connects, say): `secrets.get {name}`, `secrets.set {name, value}` (`null` removes it) and `secrets.list {prefix}`. Every secret, these and the settings', is stored encrypted with a key of the kernel's own, `extensions/vault.key` in the data folder, readable only by the kernel's user: a copy of the database alone reveals none. Clients never see them.
+
+To sign in to another service with OAuth, an extension calls `oauth.start {secret, authorize_url, token_url, client_id, client_secret?, scopes?, params?, origin?}` and gets `{url, redirect_uri}`: the person opens `url`, signs in there, and the service sends them back to `redirect_uri`, `/api/extensions/oauth/callback` on the kernel at `origin` (the caller's `origin`, the kernel's address as the person's device reached it; the kernel's own on this computer by default). The kernel exchanges the code with PKCE, keeps the tokens in the secret named, and sends the extension its `zerolux/signed_in` event, `{secret, ok, error?}`, which it hears like any other with `on`. A sign-in expires after 15 minutes and comes back once. `oauth.token {secret}` gives a valid access token, `{access_token, token_type, expires_at, scope}`, renewed with the refresh token when it is due. The service decides which addresses it sends people back to: many take any port on this computer (`127.0.0.1`), and only HTTPS elsewhere.
+
 An extension has a kernel module or a process part. **Current limitation:** a manifest with a remote part is refused.
 
 ## What an extension brings
@@ -75,7 +81,7 @@ A tree is made of `stack {direction?, children}`, `heading {text}`, `text {text,
 
 The kernel starts the command in the extension's folder with a cleared environment (`PATH`, `HOME`, `TMPDIR`, `LANG` and `USER`, on Windows also what its system needs, such as `SystemRoot`, `TEMP` and `USERPROFILE`; and `ZEROLUX_EXTENSION`), and talks JSON-RPC 2.0 over standard input and output, one message per line. Standard error goes to `extensions/<id>.log` in the data folder.
 
-Each extension has a private folder for its files, `extensions/<id>/` in the data folder, given to it in `initialize` and removed with it. The kernel calls `initialize` (answered with what it brings), `action.run` and `point.call`, and notifies `event`, `settings` and `shutdown`. The extension calls `settings.get` (with its secrets), `workspace.actors` (the workspace's name, and its people and agents), `values.get`, `values.set`, `values.list`, `events.publish`, `actions.run`, `points.implementations`, `points.call`, `views.update` and `agents.tell` (an agent hears a text in its newest running session, as input that waits for its turn; refused when it has none running), and notifies `log`. The kernel's requests wait a minute, or an action's own `seconds`.
+Each extension has a private folder for its files, `extensions/<id>/` in the data folder, given to it in `initialize` and removed with it. The kernel calls `initialize` (answered with what it brings), `action.run` and `point.call`, and notifies `event`, `settings` and `shutdown`. The extension calls `settings.get` (with its secrets), `workspace.actors` (the workspace's name, and its people and agents), `values.get`, `values.set`, `values.list`, `events.publish`, `actions.run`, `points.implementations`, `points.call`, `views.update`, `agents.tell` (an agent hears a text in its newest running session, as input that waits for its turn; refused when it has none running), `secrets.get`, `secrets.set`, `secrets.list`, `oauth.start` and `oauth.token`, and notifies `log`. An action's `caller` is `{actor_id, session_id, by, origin}`. The kernel's requests wait a minute, or an action's own `seconds`.
 
 `@zerolux/extension-sdk` (`packages/extension-sdk`) writes this in TypeScript:
 
@@ -123,7 +129,7 @@ if __name__ == "__main__":
     extension.serve()
 ```
 
-It also has `point` and `implement` for extension points, `on` for the events it hears, `trigger`, `ui` for its interface pieces, `update_view`, `secrets`, `get_value`, `set_value`, `delete_value`, `list_values`, `workspace`, `run` for another extension's action, `implementations_of`, `call` and `log`; `started` and `changed` run once it starts and after its settings change. Actions run in threads.
+It also has `point` and `implement` for extension points, `on` for the events it hears, `trigger`, `ui` for its interface pieces, `update_view`, `secrets`, `secret`, `set_secret`, `secret_names`, `oauth_start`, `oauth_token`, `get_value`, `set_value`, `delete_value`, `list_values`, `workspace`, `run` for another extension's action, `implementations_of`, `call` and `log`; `started` and `changed` run once it starts and after its settings change. Actions run in threads.
 
 ## Kernel modules
 

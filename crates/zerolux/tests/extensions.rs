@@ -1388,3 +1388,142 @@ async fn an_agent_proposes_an_extension_and_the_owner_enables_it() {
     server.abort();
     livekit.shutdown().await.unwrap();
 }
+
+/// A service to sign in to, as OAuth's token endpoint: a code for tokens that expire at once,
+/// then a refresh token for lasting ones. What it was sent, form by form.
+async fn token_service() -> (String, Arc<std::sync::Mutex<Vec<Value>>>) {
+    use axum::{Form, Json, Router, routing::post};
+    let sent: Arc<std::sync::Mutex<Vec<Value>>> = Arc::default();
+    let app = Router::new().route(
+        "/token",
+        post({
+            let sent = sent.clone();
+            move |Form(form): Form<std::collections::HashMap<String, String>>| {
+                let sent = sent.clone();
+                async move {
+                    sent.lock().unwrap().push(json!(form));
+                    Json(match form["grant_type"].as_str() {
+                        "authorization_code" if form["code"] == "code-1" => json!({
+                            "access_token": "access-1", "refresh_token": "refresh-1",
+                            "expires_in": 1, "token_type": "Bearer"}),
+                        "refresh_token" if form["refresh_token"] == "refresh-1" => {
+                            json!({"access_token": "access-2", "expires_in": 3600})
+                        }
+                        _ => json!({"error": "invalid_grant"}),
+                    })
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (url, sent)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_extension_keeps_secrets_and_signs_in_to_another_service() {
+    for program in ["livekit-server", "bun"] {
+        if std::process::Command::new(program)
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("{program} not installed: skipped");
+            return;
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (kernel, runtime, livekit, server, database) = kernel_for(dir.path()).await;
+    let (status, body) = kernel
+        .call(
+            Method::POST,
+            "/extensions/folder",
+            Some(json!({"folder": fixture("account")})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let run = |action: &'static str, input: Value| {
+        let kernel = &kernel;
+        async move {
+            kernel
+                .call(
+                    Method::POST,
+                    &format!("/ext/zerolux.account/{action}"),
+                    Some(input),
+                )
+                .await
+        }
+    };
+
+    // As many secrets as it needs, kept encrypted.
+    let (_, kept) = run("remember", json!({"name": "work", "key": "key-of-work"})).await;
+    assert_eq!(kept["result"]["names"], json!(["key:work"]), "{kept}");
+    run("remember", json!({"name": "home", "key": "key-of-home"})).await;
+    let (_, recalled) = run("recall", json!({"name": "home"})).await;
+    assert_eq!(recalled["result"], json!({"kept": true, "length": 11}));
+    let (_, left) = run("forget", json!({"name": "home"})).await;
+    assert_eq!(left["result"]["names"], json!(["key:work"]));
+    let stored = std::fs::read(dir.path().join("kernel.db")).unwrap();
+    let plain = |needle: &str| stored.windows(needle.len()).any(|w| w == needle.as_bytes());
+    assert!(!plain("key-of-work"), "secrets are not kept in the clear");
+
+    // A sign-in: the person opens the service's page, which sends them back to the kernel.
+    let (service, sent) = token_service().await;
+    let (status, started) = run("connect", json!({"service": service})).await;
+    assert_eq!(status, StatusCode::OK, "{started}");
+    let address = reqwest::Url::parse(started["result"]["url"].as_str().unwrap()).unwrap();
+    assert!(
+        address
+            .as_str()
+            .starts_with(&format!("{service}/authorize"))
+    );
+    let query: std::collections::HashMap<_, _> = address.query_pairs().into_owned().collect();
+    assert_eq!(
+        query["redirect_uri"],
+        format!("{}/api/extensions/oauth/callback", kernel.url)
+    );
+    assert_eq!(query["scope"], "read write");
+    assert_eq!(query["access_type"], "offline");
+    let back = |state: &str, code: &str| {
+        let client = kernel.client.clone();
+        let url = format!(
+            "{}/api/extensions/oauth/callback?state={state}&code={code}",
+            kernel.url
+        );
+        async move { client.get(url).send().await.unwrap() }
+    };
+    let page = back(&query["state"], "code-1").await;
+    assert_eq!(page.status(), StatusCode::OK);
+    assert!(page.text().await.unwrap().contains("Signed in"));
+    let exchanged = sent.lock().unwrap()[0].clone();
+    assert_eq!(exchanged["redirect_uri"], query["redirect_uri"].as_str());
+    assert_eq!(exchanged["client_secret"], "client-secret");
+    assert!(exchanged["code_verifier"].as_str().unwrap().len() >= 43);
+    // Once only.
+    let again = back(&query["state"], "code-1").await;
+    assert!(again.text().await.unwrap().contains("Not signed in"));
+    // The extension heard of it.
+    let mut heard = Value::Null;
+    for _ in 0..100 {
+        heard = run("heard", json!({})).await.1["result"]["heard"].clone();
+        if !heard.is_null() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(heard, json!({"secret": "account:main", "ok": true}));
+    // The token expired at once: it is renewed, and the renewal kept.
+    let (_, token) = run("token", json!({})).await;
+    assert_eq!(token["result"]["access_token"], "access-2", "{token}");
+    let (_, token) = run("token", json!({})).await;
+    assert_eq!(token["result"]["access_token"], "access-2");
+    assert_eq!(sent.lock().unwrap().len(), 2, "renewed once");
+    let stored = std::fs::read(dir.path().join("kernel.db")).unwrap();
+    let plain = |needle: &str| stored.windows(needle.len()).any(|w| w == needle.as_bytes());
+    assert!(!plain("refresh-1") && !plain("access-2"));
+    drop(database);
+    runtime.shutdown().await.unwrap();
+    server.abort();
+    livekit.shutdown().await.unwrap();
+}

@@ -155,6 +155,35 @@ impl Context {
         serde_json::from_value(keys).map_err(|error| error.to_string())
     }
 
+    /// One of the secrets it keeps itself, or null: encrypted with the kernel's key and never
+    /// shown to people's clients.
+    pub fn secret(&self, name: &str) -> Result<Value, String> {
+        Ok(self.ask("secrets.get", json!({"name": name}))?["value"].take())
+    }
+
+    /// Keeps a secret; null removes it.
+    pub fn set_secret(&self, name: &str, value: Value) -> Result<(), String> {
+        self.ask("secrets.set", json!({"name": name, "value": value}))
+            .map(drop)
+    }
+
+    pub fn secret_names(&self, prefix: &str) -> Result<Vec<String>, String> {
+        let names = self.ask("secrets.list", json!({"prefix": prefix}))?["names"].take();
+        serde_json::from_value(names).map_err(|error| error.to_string())
+    }
+
+    /// Starts a sign-in to another service with OAuth: `{url, redirect_uri}`, the address the
+    /// person opens. The service comes back to the kernel, which keeps the tokens in the
+    /// request's `secret` and sends the `zerolux/signed_in` event, `{secret, ok, error?}`.
+    pub fn oauth_start(&self, request: Value) -> Result<Value, String> {
+        self.ask("oauth.start", request)
+    }
+
+    /// A valid access token from a secret a sign-in filled, renewed when due.
+    pub fn oauth_token(&self, secret: &str) -> Result<Value, String> {
+        self.ask("oauth.token", json!({"secret": secret}))
+    }
+
     /// The workspace's name, and its people and agents.
     pub fn workspace(&self) -> Result<Value, String> {
         self.ask("workspace.actors", json!({}))

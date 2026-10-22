@@ -161,6 +161,11 @@ async fn git(dir: &std::path::Path, args: &[&str]) -> Result<String> {
 }
 
 impl ChatRuntime {
+    /// The kernel's own address, on this computer.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     /// The folder a new session works in: `workspace`, or with `worktree` the same folder in
     /// a new git worktree of its repository, on a branch of its own (`worktree` names it;
     /// empty, ZeroLux does).

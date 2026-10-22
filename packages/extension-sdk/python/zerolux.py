@@ -154,6 +154,28 @@ class Extension:
     def list_values(self, prefix: str = "") -> list[str]:
         return self.ask("values.list", {"prefix": prefix})["keys"]
 
+    def secret(self, name: str) -> Any:
+        """One of the secrets it keeps itself, or None: encrypted with the kernel's key and
+        never shown to people's clients."""
+        return self.ask("secrets.get", {"name": name}).get("value")
+
+    def set_secret(self, name: str, value: Any) -> None:
+        """Keeps a secret; None removes it."""
+        self.ask("secrets.set", {"name": name, "value": value})
+
+    def secret_names(self, prefix: str = "") -> list[str]:
+        return self.ask("secrets.list", {"prefix": prefix})["names"]
+
+    def oauth_start(self, request: dict) -> dict:
+        """Starts a sign-in to another service with OAuth: `{url, redirect_uri}`, the address
+        the person opens. The service comes back to the kernel, which keeps the tokens in
+        `request["secret"]` and sends the `zerolux/signed_in` event, `{secret, ok, error?}`."""
+        return self.ask("oauth.start", request)
+
+    def oauth_token(self, secret: str) -> dict:
+        """A valid access token from a secret a sign-in filled, renewed when due."""
+        return self.ask("oauth.token", {"secret": secret})
+
     def workspace(self) -> dict:
         """The workspace's name, and its people and agents."""
         return self.ask("workspace.actors")
