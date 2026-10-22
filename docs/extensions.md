@@ -196,17 +196,17 @@ People and agents' sessions run actions. Clients hear `extensions.changed` and r
 
 ## API
 
-| Route                                      | Purpose                                                                 |
-| ------------------------------------------ | ----------------------------------------------------------------------- |
-| `GET /extensions`                          | Installed extensions, their state, settings and what they bring         |
-| `POST /extensions/folder {folder}`         | Install, or install again, from a folder, and enable                    |
-| `GET /extensions/marketplace`              | What the indexes offer, with what is installed; unreadable indexes      |
-| `POST /extensions/marketplace/install`     | `{index, id, version?}`: install from an index, and enable              |
-| `POST /extensions/{id}/enable`, `/disable` | Enable or disable                                                       |
-| `PATCH /extensions/{id}/settings`          | Change settings and secrets; `null` removes one                         |
-| `DELETE /extensions/{id}`                  | Remove a disabled extension and its data                                |
-| `GET /actions`                             | The enabled extensions' actions                                         |
-| `POST /ext/{extension}/{action}`           | Run an action; the body is its input, the answer `{result}`             |
-| `POST /ext/{extension}/{action}/file`      | Run an action with a file: the body, up to 2 GiB; `?input=<json>&name=` |
-| `GET /ext/{extension}/{action}?input=`     | Run an action that reads: its `{result}`, or the file it gives          |
-| `POST /extensions/{id}/ui {entry}`         | The address of one of its pages, under a key good for an hour           |
+| Route                                      | Purpose                                                                                                                                                                 |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /extensions`                          | Installed extensions, their state, settings and what they bring                                                                                                         |
+| `POST /extensions/folder {folder}`         | Install, or install again, from a folder, and enable                                                                                                                    |
+| `GET /extensions/marketplace`              | What the indexes offer, with the version installed and `current`, whether it came from the package offered (a new build of the same version is not); unreadable indexes |
+| `POST /extensions/marketplace/install`     | `{index, id, version?}`: install from an index, and enable                                                                                                              |
+| `POST /extensions/{id}/enable`, `/disable` | Enable or disable                                                                                                                                                       |
+| `PATCH /extensions/{id}/settings`          | Change settings and secrets; `null` removes one                                                                                                                         |
+| `DELETE /extensions/{id}`                  | Remove a disabled extension and its data                                                                                                                                |
+| `GET /actions`                             | The enabled extensions' actions                                                                                                                                         |
+| `POST /ext/{extension}/{action}`           | Run an action; the body is its input, the answer `{result}`                                                                                                             |
+| `POST /ext/{extension}/{action}/file`      | Run an action with a file: the body, up to 2 GiB; `?input=<json>&name=`                                                                                                 |
+| `GET /ext/{extension}/{action}?input=`     | Run an action that reads: its `{result}`, or the file it gives                                                                                                          |
+| `POST /extensions/{id}/ui {entry}`         | The address of one of its pages, under a key good for an hour                                                                                                           |

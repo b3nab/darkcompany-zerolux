@@ -6,7 +6,7 @@ publisher = "zerolux"
 description = "A test extension: Storage locations kept in memory, signed in to with OAuth"
 
 [dependencies]
-"zerolux.storage" = ">=0.2"
+"zerolux.storage" = ">=0.0.1"
 
 [process]
 command = ["bun", "run", "main.ts"]

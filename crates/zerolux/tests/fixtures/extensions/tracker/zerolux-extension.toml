@@ -6,7 +6,7 @@ publisher = "zerolux"
 description = "A test extension: a project tracker kept in memory, for Projects"
 
 [dependencies]
-"zerolux.projects" = ">=0.1"
+"zerolux.projects" = ">=0.0.1"
 
 [process]
 command = ["bun", "run", "main.ts"]

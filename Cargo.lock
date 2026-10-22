@@ -8540,7 +8540,7 @@ dependencies = [
 
 [[package]]
 name = "zerolux-projects"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "uuid",
  "zerolux-extension",
@@ -8548,7 +8548,7 @@ dependencies = [
 
 [[package]]
 name = "zerolux-storage"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "uuid",
  "zerolux-extension",

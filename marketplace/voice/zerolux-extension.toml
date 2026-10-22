@@ -1,7 +1,7 @@
 [extension]
 id = "zerolux.voice"
 name = "Voice"
-version = "0.1.0"
+version = "0.0.1"
 publisher = "zerolux"
 description = "Speech to text and agents' voices"
 

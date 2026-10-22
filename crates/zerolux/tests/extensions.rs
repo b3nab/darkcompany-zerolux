@@ -912,6 +912,8 @@ async fn extensions_are_installed_from_an_index_only_as_their_publisher_signed_t
         .call(Method::GET, "/extensions/marketplace", None)
         .await;
     assert_eq!(offered["offers"][0]["installed"], "1.0.0");
+    // The index offers 1.0.2's package, not the one installed.
+    assert_eq!(offered["offers"][0]["current"], false, "{offered}");
     unsafe { std::env::remove_var("ZEROLUX_EXTENSION_INDEXES") };
     runtime.shutdown().await.unwrap();
     server.abort();

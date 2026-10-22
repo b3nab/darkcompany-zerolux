@@ -1,13 +1,13 @@
 [extension]
 id = "zerolux.linear"
 name = "Linear"
-version = "0.1.0"
+version = "0.0.1"
 publisher = "zerolux"
 description = "Projects kept in Linear: each project is a Linear team, its tasks the team's issues"
 kernel = ">=0.0.1"
 
 [dependencies]
-"zerolux.projects" = ">=0.1"
+"zerolux.projects" = ">=0.0.1"
 
 [process]
 command = ["bun", "run", "main.ts"]

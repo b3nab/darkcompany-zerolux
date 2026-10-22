@@ -1,7 +1,7 @@
 [package]
 name = "zerolux-projects"
 description = "ZeroLux's Projects: the work of the workspace's people and agents, as projects and tasks"
-version = "0.1.0"
+version = "0.0.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

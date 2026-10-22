@@ -1,13 +1,13 @@
 [extension]
 id = "zerolux.drive"
 name = "Google Drive"
-version = "0.2.0"
+version = "0.0.1"
 publisher = "zerolux"
 description = "Storage locations in Google Drive, live: My Drive, its folders and shared drives"
 kernel = ">=0.0.1"
 
 [dependencies]
-"zerolux.storage" = ">=0.2"
+"zerolux.storage" = ">=0.0.1"
 
 [process]
 command = ["bun", "run", "main.ts"]

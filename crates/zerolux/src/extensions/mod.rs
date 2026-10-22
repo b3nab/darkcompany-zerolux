@@ -436,11 +436,25 @@ impl Extensions {
     /// installed of it; an index that cannot be read is listed with its error.
     pub async fn offers(&self, who: &ChatIdentity) -> Result<Value> {
         ensure!(who.is_person(), Error::Forbidden);
-        let installed: HashMap<String, String> = extensions::Entity::find()
-            .all(self.store.db())
-            .await?
-            .into_iter()
-            .map(|row| (row.id, row.version))
+        let rows = extensions::Entity::find().all(self.store.db()).await?;
+        let installed: HashMap<String, String> = rows
+            .iter()
+            .map(|row| (row.id.clone(), row.version.clone()))
+            .collect();
+        // Which package each was installed from, by the start of its digest: a new build of the
+        // same version is an update too.
+        let packages: HashMap<String, String> = rows
+            .iter()
+            .filter_map(|row| {
+                let folder = Path::new(&row.source);
+                folder
+                    .parent()?
+                    .parent()
+                    .filter(|up| up.ends_with("packages"))?;
+                let name = folder.file_name()?.to_str()?;
+                let (_, digest) = name.rsplit_once('-')?;
+                Some((row.id.clone(), digest.to_owned()))
+            })
             .collect();
         let (mut offers, mut errors) = (Vec::new(), Vec::new());
         for url in marketplace::indexes(self.root.parent().unwrap_or(&self.root)) {
@@ -450,11 +464,19 @@ impl Extensions {
                         let Some(release) = listing.newest() else {
                             continue;
                         };
+                        let digest = release
+                            .package()
+                            .map(|package| package.sha256.to_lowercase());
+                        let current = match (packages.get(&listing.id), &digest) {
+                            (Some(held), Some(digest)) => Some(digest.starts_with(held.as_str())),
+                            _ => None,
+                        };
                         offers.push(json!({"index": url, "id": listing.id,
                             "name": listing.name, "description": listing.description,
                             "publisher": listing.publisher, "version": release.version,
                             "parts": release.parts,
-                            "installed": installed.get(&listing.id)}));
+                            "installed": installed.get(&listing.id),
+                            "current": current}));
                     }
                 }
                 Err(error) => errors.push(json!({"index": url, "error": format!("{error:#}")})),

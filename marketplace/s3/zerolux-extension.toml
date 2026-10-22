@@ -1,13 +1,13 @@
 [extension]
 id = "zerolux.s3"
 name = "S3"
-version = "0.2.0"
+version = "0.0.1"
 publisher = "zerolux"
 description = "Storage locations in S3 buckets, live: Amazon S3, Cloudflare R2, MinIO and the like"
 kernel = ">=0.0.1"
 
 [dependencies]
-"zerolux.storage" = ">=0.2"
+"zerolux.storage" = ">=0.0.1"
 
 [process]
 command = ["bun", "run", "main.ts"]

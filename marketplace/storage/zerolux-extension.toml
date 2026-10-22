@@ -1,7 +1,7 @@
 [extension]
 id = "zerolux.storage"
 name = "Storage"
-version = "0.2.0"
+version = "0.0.1"
 publisher = "zerolux"
 description = "The workspace's files where they are, live: folders on this computer, Google Drive, S3 and any other provider, as many locations as wanted"
 kernel = ">=0.0.1"
