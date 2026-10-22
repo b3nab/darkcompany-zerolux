@@ -227,3 +227,10 @@ export function keyFrom(name: string) {
       : (words[0] ?? "").slice(0, 3);
   return /^[A-Z]/.test(key) ? key.slice(0, 10) : "";
 }
+
+/** Whether a task holds what is searched: in its title, key or labels, ignoring case. */
+export function matches(task: Task, query: string) {
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const text = [task.title, task.key, ...task.labels].join(" ").toLowerCase();
+  return words.every((word) => text.includes(word));
+}

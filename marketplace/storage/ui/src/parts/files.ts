@@ -22,7 +22,8 @@ export interface Location {
 export interface Field {
   key: string;
   label: string;
-  type: "text" | "secret" | "choice" | "boolean";
+  /** `folder` is a folder on the kernel's computer, chosen by browsing it. */
+  type: "text" | "secret" | "choice" | "boolean" | "folder";
   required?: boolean;
   description?: string;
   options?: { value: string; label: string }[];
@@ -167,5 +168,63 @@ export function missing(
       !String(values[field.key] ?? "").trim() &&
       !(kept && field.type === "secret") &&
       !String(kept?.[field.key] ?? "").trim(),
+  );
+}
+
+/** What a file is, as people call it: by its type, else by its name's ending. */
+export function kind(entry: Pick<Entry, "kind" | "name" | "content_type">) {
+  if (entry.kind === "folder") return "Folder";
+  const type = entry.content_type ?? "";
+  const ending = entry.name.includes(".")
+    ? entry.name.split(".").pop()!.toLowerCase()
+    : "";
+  const named: Record<string, string> = {
+    pdf: "PDF document",
+    doc: "Word document",
+    docx: "Word document",
+    xls: "Spreadsheet",
+    xlsx: "Spreadsheet",
+    csv: "Spreadsheet",
+    ppt: "Presentation",
+    pptx: "Presentation",
+    md: "Markdown",
+    txt: "Text",
+    zip: "Archive",
+    json: "JSON",
+  };
+  if (named[ending]) return named[ending]!;
+  if (type.startsWith("image/"))
+    return `${(ending || type.slice(6)).toUpperCase()} image`;
+  if (type.startsWith("video/")) return "Video";
+  if (type.startsWith("audio/")) return "Audio";
+  if (type.startsWith("text/")) return "Text";
+  return ending ? `${ending.toUpperCase()} file` : "File";
+}
+
+/** How a folder's entries are sorted: by a column, either way. */
+export interface Sort {
+  key: "name" | "kind" | "size" | "modified";
+  descending?: boolean;
+}
+
+/** Folders first, then by the column chosen; names break ties, ignoring case. */
+export function sorted(entries: Entry[], sort: Sort) {
+  const byName = (a: Entry, b: Entry) =>
+    a.name.localeCompare(b.name, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  const by: Record<Sort["key"], (a: Entry, b: Entry) => number> = {
+    name: byName,
+    kind: (a, b) => kind(a).localeCompare(kind(b)),
+    size: (a, b) => (a.size ?? 0) - (b.size ?? 0),
+    modified: (a, b) => (a.modified ?? 0) - (b.modified ?? 0),
+  };
+  const way = sort.descending ? -1 : 1;
+  return [...entries].sort(
+    (a, b) =>
+      Number(b.kind === "folder") - Number(a.kind === "folder") ||
+      way * by[sort.key](a, b) ||
+      byName(a, b),
   );
 }

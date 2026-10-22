@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import {
   Button,
+  FolderInput,
+  Icon,
   Input,
+  List,
+  ListItem,
   Select,
   Sheet,
   Stack,
@@ -14,7 +18,7 @@ import {
 import {
   filled,
   missing,
-  parent,
+  providerIcon,
   within,
   type Entry,
   type Field,
@@ -25,8 +29,8 @@ import {
 /** What a sheet asks before something changes, and what it is about. */
 export type Ask =
   | { kind: "new-folder"; location: string; folder: string }
-  | { kind: "rename" | "delete"; location: string; entry: Entry }
-  | { kind: "move" | "copy"; location: string; entry: Entry }
+  | { kind: "rename"; location: string; entry: Entry }
+  | { kind: "delete"; location: string; entries: Entry[] }
   | { kind: "add-location" }
   | { kind: "location"; location: Location }
   | { kind: "remove-location"; location: Location };
@@ -58,6 +62,19 @@ function Fields({
             options={field.options ?? []}
             onChange={(value) => set(field.key, value)}
           />
+        ) : field.type === "folder" ? (
+          <Stack key={field.key} gap={4}>
+            <FolderInput
+              label={field.label}
+              value={values[field.key] ? String(values[field.key]) : null}
+              onChange={(path) => set(field.key, path)}
+            />
+            {field.description && (
+              <Text tone="muted" size="sm">
+                {field.description}
+              </Text>
+            )}
+          </Stack>
         ) : field.type === "boolean" ? (
           <Switch
             key={field.key}
@@ -89,24 +106,20 @@ function Fields({
 }
 
 /**
- * The sheet for one question: a name, where to move or copy to, a location to add or change,
- * or a yes to delete. `done` follows each change.
+ * The sheet for one question: a name, a location to add or change, or a yes to delete.
+ * `done` follows each change.
  */
 export function Asking({
   ask,
-  locations,
   close,
   done,
 }: {
   ask: Ask | undefined;
-  locations: Location[];
   close: () => void;
   done: () => void;
 }) {
   const create = useAction("create_folder");
   const rename = useAction("rename");
-  const move = useAction("move");
-  const copy = useAction("copy");
   const remove = useAction("delete");
   const add = useAction("add_location");
   const change = useAction("change_location");
@@ -116,7 +129,6 @@ export function Asking({
   const adding = ask?.kind === "add-location";
   const providers = useActionResult<{ providers: Provider[] }>("providers", {});
   const [text, setText] = useState("");
-  const [target, setTarget] = useState("");
   const [provider, setProvider] = useState("");
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [failed, setFailed] = useState("");
@@ -132,14 +144,7 @@ export function Asking({
         ? ask.entry.name
         : ask?.kind === "location"
           ? ask.location.name
-          : ask?.kind === "move" || ask?.kind === "copy"
-            ? parent(ask.entry.path)
-            : "",
-    );
-    setTarget(
-      ask && "location" in ask && typeof ask.location === "string"
-        ? ask.location
-        : "",
+          : "",
     );
   }, [ask]);
   if (!ask) return null;
@@ -186,32 +191,22 @@ export function Asking({
           go: () =>
             rename.run({ location: ask.location, path: ask.entry.path, name }),
         };
-      case "move":
-      case "copy": {
-        const action = ask.kind === "move" ? move : copy;
+      case "delete": {
+        const [only] = ask.entries;
         return {
-          title: `${ask.kind === "move" ? "Move" : "Copy"} ${ask.entry.name}`,
-          submit: ask.kind === "move" ? "Move" : "Copy",
-          busy: action.busy,
-          blocked: !target,
-          go: () =>
-            action.run({
-              location: ask.location,
-              path: ask.entry.path,
-              to_location: target,
-              to: text.trim(),
-            }),
-        };
-      }
-      case "delete":
-        return {
-          title: `Delete ${ask.entry.name}${ask.entry.kind === "folder" ? " and everything in it" : ""}?`,
+          title:
+            ask.entries.length === 1 && only
+              ? `Delete ${only.name}${only.kind === "folder" ? " and everything in it" : ""}?`
+              : `Delete ${ask.entries.length} items?`,
           submit: "Delete",
           danger: true,
           busy: remove.busy,
-          go: () =>
-            remove.run({ location: ask.location, path: ask.entry.path }),
+          go: async () => {
+            for (const entry of ask.entries)
+              await remove.run({ location: ask.location, path: entry.path });
+          },
         };
+      }
       case "add-location":
         return {
           title: "Add location",
@@ -265,9 +260,6 @@ export function Asking({
       (error: unknown) => setFailed(message(error)),
     );
   };
-  const places = locations
-    .filter((location) => location.capabilities.includes("write"))
-    .map((location) => ({ value: location.id, label: location.name }));
 
   return (
     <Sheet open onClose={close} title={step.title}>
@@ -283,9 +275,28 @@ export function Asking({
           </>
         ) : (
           <>
+            {adding && (
+              <List>
+                {known
+                  .filter((p) => !p.error)
+                  .map((p) => (
+                    <ListItem
+                      key={p.provider}
+                      title={p.title}
+                      subtitle={p.description}
+                      leading={<Icon name={providerIcon(p.provider)} />}
+                      selected={p.provider === provider}
+                      onPress={() => {
+                        setProvider(p.provider);
+                        setValues({});
+                      }}
+                    />
+                  ))}
+              </List>
+            )}
             {(ask.kind === "new-folder" ||
               ask.kind === "rename" ||
-              ask.kind === "add-location" ||
+              (adding && chosen) ||
               ask.kind === "location") && (
               <Input
                 label={
@@ -296,45 +307,9 @@ export function Asking({
                 value={text}
                 onChange={setText}
                 placeholder="Name"
-                autoFocus
+                autoFocus={!adding}
                 onSubmit={submit}
               />
-            )}
-            {(ask.kind === "move" || ask.kind === "copy") && (
-              <>
-                <Select
-                  label="Location"
-                  value={target}
-                  options={places}
-                  onChange={setTarget}
-                />
-                <Input
-                  label="Folder"
-                  value={text}
-                  onChange={setText}
-                  placeholder="The top of the location"
-                  onSubmit={submit}
-                />
-              </>
-            )}
-            {adding && (
-              <Select
-                label="Provider"
-                value={provider}
-                placeholder={providers.loading ? "Loading" : "Choose"}
-                options={known
-                  .filter((p) => !p.error)
-                  .map((p) => ({ value: p.provider, label: p.title }))}
-                onChange={(value) => {
-                  setProvider(value);
-                  setValues({});
-                }}
-              />
-            )}
-            {adding && chosen?.description && (
-              <Text tone="muted" size="sm">
-                {chosen.description}
-              </Text>
             )}
             {(adding || ask.kind === "location") && (
               <Fields

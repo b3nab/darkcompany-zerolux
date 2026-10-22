@@ -108,7 +108,7 @@ function Labels({
 }
 
 /** A task read on its own, with its comments: every property changes as it is chosen. */
-function Detail({
+export function TaskDetail({
   id,
   known,
   onChanged,
@@ -362,7 +362,7 @@ export function TaskSheet({
   return (
     <Sheet open={task !== undefined} onClose={onClose} title={task?.key}>
       {task ? (
-        <Detail
+        <TaskDetail
           id={task.id}
           known={known}
           onChanged={onChanged}

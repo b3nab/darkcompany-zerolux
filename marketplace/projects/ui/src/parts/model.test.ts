@@ -4,6 +4,7 @@ import {
   dueTone,
   keyFrom,
   labelsOf,
+  matches,
   missing,
   sourceState,
 } from "./model";
@@ -95,4 +96,16 @@ test("a source says what keeps it from working, and a secret it has is not asked
     "api_key",
   ]);
   expect(missing(fields, {}, { workspace: "acme" })).toEqual([]);
+});
+
+test("a search finds tasks by title, key or label, every word", () => {
+  const found = task("birch", {
+    title: "Write the landing copy",
+    labels: ["web"],
+  });
+  expect(matches(found, "")).toBe(true);
+  expect(matches(found, "landing")).toBe(true);
+  expect(matches(found, "as-birch")).toBe(true);
+  expect(matches(found, "WEB copy")).toBe(true);
+  expect(matches(found, "copy pricing")).toBe(false);
 });

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { MenuEntry } from "@zerolux/ui";
 import { Avatar, Badge, Card, Icon, ListItem, Stack, Text } from "@zerolux/ui";
 import { dueLabel, dueTone, priorityOf, statusOf } from "./model";
 import type { Status, Task } from "./model";
@@ -32,17 +33,26 @@ export function StatusHeading({
   );
 }
 
+/** What a task offers where it shows: its menu, whether it is open, and where it can be dropped. */
+export interface TaskPlace {
+  menu?: MenuEntry[];
+  selected?: boolean;
+  drag?: string;
+  onDrop?: (ids: string[]) => void;
+}
+
 /** A task on the board: its key and priority, its title, then its due day, labels and assignee. */
 export function TaskCard({
   task,
   onPress,
+  ...place
 }: {
   task: Task;
   onPress: () => void;
-}) {
+} & TaskPlace) {
   const priority = priorityOf(task.priority);
   return (
-    <Card onPress={onPress}>
+    <Card onPress={onPress} {...place}>
       <Stack gap={6}>
         <Stack direction="row" gap={6}>
           {task.priority === "none" ? null : (
@@ -79,10 +89,11 @@ export function TaskCard({
 export function TaskRow({
   task,
   onPress,
+  ...place
 }: {
   task: Task;
   onPress: () => void;
-}) {
+} & TaskPlace) {
   const priority = priorityOf(task.priority);
   return (
     <ListItem
@@ -99,6 +110,7 @@ export function TaskRow({
         task.assignee ? <Avatar actorId={task.assignee} size="sm" /> : undefined
       }
       onPress={onPress}
+      {...place}
     />
   );
 }

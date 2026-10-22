@@ -2,11 +2,14 @@ import { expect, test } from "bun:test";
 import {
   fileIcon,
   filled,
+  kind,
   missing,
   parent,
   size,
+  sorted,
   state,
   within,
+  type Entry,
   type Field,
   type Location,
 } from "./files";
@@ -72,4 +75,45 @@ test("a file's icon says its kind, a spreadsheet's too", () => {
   ).toBe("file-spreadsheet");
   expect(icon("application/json")).toBe("file-code");
   expect(fileIcon({ kind: "folder" })).toBe("folder");
+});
+
+test("folders come first, then the column chosen, either way", () => {
+  const entries: Entry[] = [
+    { name: "notes.md", path: "notes.md", kind: "file", size: 6, modified: 3 },
+    { name: "Press", path: "Press", kind: "folder", modified: 1 },
+    {
+      name: "budget.xlsx",
+      path: "budget.xlsx",
+      kind: "file",
+      size: 212,
+      modified: 2,
+    },
+    { name: "assets", path: "assets", kind: "folder", modified: 4 },
+  ];
+  const names = (list: Entry[]) => list.map((entry) => entry.name);
+  expect(names(sorted(entries, { key: "name" }))).toEqual([
+    "assets",
+    "Press",
+    "budget.xlsx",
+    "notes.md",
+  ]);
+  expect(names(sorted(entries, { key: "size", descending: true }))).toEqual([
+    "assets",
+    "Press",
+    "budget.xlsx",
+    "notes.md",
+  ]);
+  expect(names(sorted(entries, { key: "modified", descending: true }))).toEqual(
+    ["assets", "Press", "notes.md", "budget.xlsx"],
+  );
+});
+
+test("a file's kind reads as people call it", () => {
+  expect(kind({ kind: "folder", name: "Press" })).toBe("Folder");
+  expect(kind({ kind: "file", name: "Roadmap.pdf" })).toBe("PDF document");
+  expect(
+    kind({ kind: "file", name: "Logo.png", content_type: "image/png" }),
+  ).toBe("PNG image");
+  expect(kind({ kind: "file", name: "build.log" })).toBe("LOG file");
+  expect(kind({ kind: "file", name: "README" })).toBe("File");
 });
