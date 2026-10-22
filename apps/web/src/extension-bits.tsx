@@ -11,6 +11,7 @@ import {
   marketplaceName,
   offerAction,
   offerVersions,
+  updateExtensions,
 } from "@zerolux/chat";
 import type {
   CardFile,
@@ -18,6 +19,7 @@ import type {
   ExtensionCard,
   Marketplace,
   MarketplaceOffer,
+  UpdatesDone,
 } from "@zerolux/chat";
 import { cn } from "cn";
 import { lucideIcon } from "./native-ui";
@@ -192,9 +194,17 @@ export function StateChip({
 }
 
 /** What a consent is for: an offer to install or update, or an agent's proposal to enable. */
+/** An update waiting: the offer, and the extension it updates. */
+export type Update = { offer: MarketplaceOffer; installed: Extension };
+
+/**
+ * What a consent is for: an offer to install or update, an agent's proposal to enable, or
+ * every update waiting at once.
+ */
 export type Consent =
   | { offer: MarketplaceOffer; installed?: Extension }
-  | { proposal: Extension; agent: string };
+  | { proposal: Extension; agent: string }
+  | { updates: Update[] };
 
 const changeMark = {
   new: "border-success/45 text-success",
@@ -212,7 +222,7 @@ export function ConsentDialog({
   close,
   done,
 }: {
-  consent: Consent;
+  consent: Exclude<Consent, { updates: Update[] }>;
   marketplace?: Marketplace;
   close: () => void;
   /** It was installed, updated or enabled, or failed to be. */
@@ -323,6 +333,123 @@ export function ConsentDialog({
               ? `${verb === "Enable" ? "Enabling" : verb === "Update" ? "Updating" : "Installing"}…`
               : verb}
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Every update waiting, asked for at once: each extension with its versions and only what
+ * changes in what it runs. Only those shown are updated; then each says whether it was, and
+ * why not.
+ */
+export function UpdatesDialog({
+  updates,
+  close,
+  done,
+}: {
+  updates: Update[];
+  close: () => void;
+  /** They were updated, or some failed to be. */
+  done: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<UpdatesDone>();
+  const go = () => {
+    setBusy(true);
+    setError("");
+    updateExtensions(updates.map(({ offer }) => offer.id))
+      .then(
+        (updated) => {
+          setResult(updated);
+          if (!updated.failed.length) close();
+        },
+        (problem: unknown) => setError(errorMessage(problem)),
+      )
+      .finally(() => {
+        setBusy(false);
+        done();
+      });
+  };
+  return (
+    <Dialog open onOpenChange={(open) => !open && !busy && close()}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>
+            Update {updates.length}{" "}
+            {updates.length === 1 ? "extension" : "extensions"}?
+          </DialogTitle>
+        </DialogHeader>
+        <ul className="flex max-h-96 flex-col divide-y overflow-y-auto rounded-lg border">
+          {updates.map(({ offer, installed }) => {
+            const changes = consentParts(offer, installed).filter(
+              ({ change }) => change !== "kept",
+            );
+            const failed = result?.failed.find((one) => one.id === offer.id);
+            const updated = result?.updated.some((one) => one.id === offer.id);
+            return (
+              <li key={offer.id} className="flex items-start gap-3 px-3.5 py-3">
+                <ExtensionIcon
+                  id={offer.id}
+                  extension={installed}
+                  card={offer.card}
+                  size="sm"
+                />
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  <span className="flex items-baseline gap-2 text-sm">
+                    <span className="font-medium">{offer.name}</span>
+                    <span className="font-mono text-[11.5px] text-faint">
+                      {offerVersions(offer)}
+                    </span>
+                  </span>
+                  {changes.length > 0 && (
+                    <span className="flex flex-wrap gap-1.5">
+                      {changes.map(({ part, change }) => (
+                        <span
+                          key={part}
+                          className={cn(
+                            "rounded-full border px-2 text-[11px]",
+                            changeMark[change],
+                          )}
+                        >
+                          {partNames[part] ?? part} · {change}
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                  {failed && (
+                    <span role="alert" className="text-xs text-destructive">
+                      {failed.error}
+                    </span>
+                  )}
+                </div>
+                {updated && (
+                  <span className="text-xs text-success">Updated</span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
+        <DialogFooter>
+          {result ? (
+            <Button onClick={close}>Done</Button>
+          ) : (
+            <>
+              <Button variant="ghost" disabled={busy} onClick={close}>
+                Cancel
+              </Button>
+              <Button disabled={busy} onClick={go}>
+                {busy ? "Updating…" : "Update all"}
+              </Button>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

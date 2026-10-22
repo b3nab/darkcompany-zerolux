@@ -192,6 +192,25 @@ test("installed extensions are listed by what they wait for, each opening its pa
   );
 });
 
+test("more than one update waiting is updated all at once, asked first", () => {
+  const two = home(
+    [extension({}), extension({ id: "birch.notes", name: "Notes" })],
+    true,
+    "installed",
+    [
+      offerOf({ installed: "1.0.0" }),
+      offerOf({ id: "birch.notes", name: "Notes", installed: "1.0.0" }),
+    ],
+  );
+  expect(two).toContain("2 updates available");
+  expect(two).toContain(">Update all</button>");
+  const one = home([extension({})], true, "installed", [
+    offerOf({ installed: "1.0.0" }),
+  ]);
+  expect(one).toContain(">Update</button>");
+  expect(one).not.toContain("Update all");
+});
+
 test("an extension's page shows what it can do, its actions running only while it is enabled", () => {
   const extensions = [
     extension({ dependencies: { "birch.notes": ">=1.0" } }),

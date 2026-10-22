@@ -21,6 +21,7 @@ import {
   removeInstalled,
   runAction,
   setExtensionSettings,
+  updateExtensions,
 } from "./extensions";
 import type { Actor } from "./client";
 import type { CardFile, ExtensionCard } from "./extensions";
@@ -300,4 +301,26 @@ test("an enabled extension is disabled before it is removed; a disabled one is r
     "DELETE /api/extensions/acme.notes",
     "DELETE /api/extensions/acme.notes",
   ]);
+});
+
+test("updating several extensions names the ones shown, and says which were and which failed", async () => {
+  const asked: { path: string; body: unknown }[] = [];
+  setKernelFetch(async (url, init) => {
+    asked.push({
+      path: new URL(String(url)).pathname,
+      body: JSON.parse(String(init?.body)),
+    });
+    return Response.json({
+      updated: [{ id: "aspen.notes", version: "1.2.0" }],
+      failed: [{ id: "birch.board", error: "Cannot reach it" }],
+    });
+  });
+  const done = await updateExtensions(["aspen.notes", "birch.board"], kernel);
+  expect(asked).toEqual([
+    {
+      path: "/api/extensions/marketplace/update",
+      body: { ids: ["aspen.notes", "birch.board"] },
+    },
+  ]);
+  expect(done.failed[0]!.error).toBe("Cannot reach it");
 });

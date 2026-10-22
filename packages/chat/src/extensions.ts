@@ -452,6 +452,16 @@ export const installOffer = (offer: MarketplaceOffer, kernel = kernelUrl()) =>
     }),
   );
 
+/** What updating several extensions did: those updated, and those that failed with why. */
+export interface UpdatesDone {
+  updated: { id: string; version: string }[];
+  failed: { id: string; error: string }[];
+}
+
+/** The owner updates the extensions named, each from the index it came from. */
+export const updateExtensions = (ids: string[], kernel = kernelUrl()) =>
+  request<UpdatesDone>(kernel, "/extensions/marketplace/update", { ids });
+
 /** An extension from a folder on the kernel's computer, in development. */
 export const loadExtensionFolder = (folder: string, kernel = kernelUrl()) =>
   changed(request(kernel, "/extensions/folder", { folder }));

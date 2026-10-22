@@ -42,8 +42,9 @@ import type {
 import {
   ConsentDialog,
   ExtensionIcon,
-  StateChip,
   partNames,
+  StateChip,
+  UpdatesDialog,
 } from "./extension-bits";
 import type { Consent } from "./extension-bits";
 import { ExtensionPage } from "./extension-page";
@@ -331,17 +332,28 @@ export function ExtensionsHome({
                     .join(", ")}
                 </p>
               </div>
-              {owns && all.updates.length === 1 && (
+              {owns && (
                 <Button
                   size="sm"
                   onClick={() =>
-                    consent({
-                      offer: all.updates[0]!.offer,
-                      installed: all.updates[0]!.extension,
-                    })
+                    consent(
+                      all.updates.length === 1
+                        ? {
+                            offer: all.updates[0]!.offer,
+                            installed: all.updates[0]!.extension,
+                          }
+                        : {
+                            updates: all.updates.map(
+                              ({ offer, extension }) => ({
+                                offer,
+                                installed: extension,
+                              }),
+                            ),
+                          },
+                    )
                   }
                 >
-                  Update
+                  {all.updates.length === 1 ? "Update" : "Update all"}
                 </Button>
               )}
             </div>
@@ -661,14 +673,21 @@ export function ExtensionsPage({
           }
         />
       </Routes>
-      {consent && (
-        <ConsentDialog
-          consent={consent}
-          marketplace={marketplace}
-          close={() => setConsent(undefined)}
-          done={reloadAll}
-        />
-      )}
+      {consent &&
+        ("updates" in consent ? (
+          <UpdatesDialog
+            updates={consent.updates}
+            close={() => setConsent(undefined)}
+            done={reloadAll}
+          />
+        ) : (
+          <ConsentDialog
+            consent={consent}
+            marketplace={marketplace}
+            close={() => setConsent(undefined)}
+            done={reloadAll}
+          />
+        ))}
     </div>
   );
 }

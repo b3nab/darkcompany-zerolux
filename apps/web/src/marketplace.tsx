@@ -163,6 +163,13 @@ export function MarketplacePage({
       inCategory(offer, category) && matches(offer, query.trim().toLowerCase()),
   );
   const updates = offers.filter((offer) => offerAction(offer) === "update");
+  // Every update waiting, whatever is searched: Update all takes them all.
+  const waiting = all.flatMap((offer) => {
+    const installed = extensions?.find((e) => e.id === offer.id && !e.dev);
+    return installed && offerAction(offer) === "update"
+      ? [{ offer, installed }]
+      : [];
+  });
   const choose = (id: string | null) =>
     setParams(id ? { category: id } : {}, { replace: true });
   const sources = marketplaceIndexes(marketplace);
@@ -250,7 +257,17 @@ export function MarketplacePage({
           )}
           {updates.length > 0 && !category && (
             <section className="flex flex-col gap-3">
-              <h2 className="text-[15px] font-semibold">Updates</h2>
+              <header className="flex items-center justify-between gap-3">
+                <h2 className="text-[15px] font-semibold">Updates</h2>
+                {owns && waiting.length > 1 && (
+                  <Button
+                    size="sm"
+                    onClick={() => consent({ updates: waiting })}
+                  >
+                    Update all
+                  </Button>
+                )}
+              </header>
               <ul className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-3.5">
                 {updates.map(tile)}
               </ul>
