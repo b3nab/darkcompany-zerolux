@@ -24,6 +24,7 @@ import type {
   CodexSandbox,
   NewSession,
 } from "@zerolux/chat";
+import { FolderInput } from "@/components/folder-input";
 import { Screen } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -224,15 +225,26 @@ export default function NewSessionScreen() {
           </View>
         ) : null}
         <View className="gap-2">
-          <Text className="text-sm font-medium">Folder</Text>
-          <Input
-            value={workspace}
-            onChangeText={setWorkspace}
-            placeholder="/Users/you/projects/app"
-            autoCapitalize="none"
-            autoCorrect={false}
-            className="font-mono"
-          />
+          {elsewhere || guest ? (
+            // Only the kernel's own person walks its folders: elsewhere the path is written.
+            <>
+              <Text className="text-sm font-medium">Folder</Text>
+              <Input
+                value={workspace}
+                onChangeText={setWorkspace}
+                placeholder="/Users/you/projects/app"
+                autoCapitalize="none"
+                autoCorrect={false}
+                className="font-mono"
+              />
+            </>
+          ) : (
+            <FolderInput
+              label="Folder"
+              value={workspace || null}
+              onChange={setWorkspace}
+            />
+          )}
           {folders.length > 0 ? (
             <View className="flex-row flex-wrap gap-1.5">
               {folders.map((folder) => (

@@ -14,9 +14,9 @@ import {
   RowButton,
   StateChip,
 } from "@/components/extensions";
+import { FolderInput } from "@/components/folder-input";
 import { Screen } from "@/components/screen";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Text } from "@/components/ui/text";
 import { useSession } from "../../../src/kernel";
 
@@ -59,20 +59,12 @@ export default function Develop() {
           An extension from a folder on the kernel's computer runs as written,
           signed by no one.
         </Text>
-        <View className="flex-row gap-2">
-          <Input
-            value={folder}
-            onChangeText={setFolder}
-            placeholder="/path/to/extension"
-            autoCapitalize="none"
-            autoCorrect={false}
-            returnKeyType="go"
-            onSubmitEditing={() => void load()}
-            className="flex-1 font-mono text-[13px]"
-          />
+        <View className="gap-2">
+          <FolderInput value={folder || null} onChange={setFolder} />
           <Button
             disabled={Boolean(busy) || !folder.trim()}
             onPress={() => void load()}
+            className="self-start"
           >
             <Text>{busy === "folder" ? "Loading…" : "Load"}</Text>
           </Button>
