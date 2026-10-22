@@ -37,6 +37,24 @@ test("a message never runs HTML nor loads images from elsewhere", () => {
   expect(html).not.toMatch(/<script|<img|<b>/);
 });
 
+test("a document keeps Markdown's line breaks and draws only the images it finds", () => {
+  const html = renderToStaticMarkup(
+    <MessageText
+      text={
+        "line one\nline two\n\n![shot](media/one.png) ![far](https://t.example/p.png) ![gone](media/two.png)"
+      }
+      document={{
+        image: (src, alt) =>
+          src === "media/one.png" ? <img src="blob:shot" alt={alt} /> : null,
+      }}
+    />,
+  );
+  expect(html).not.toContain("<br/>");
+  expect(html).toContain('<img src="blob:shot" alt="shot"/>');
+  expect(html).not.toContain("t.example");
+  expect(html.match(/<img/g)).toHaveLength(1);
+});
+
 test("highlighting and diagrams load for every fence CommonMark accepts, nested too", () => {
   expect(pluginsFor("plain **text** with `inline` code")).toEqual([]);
   expect(pluginsFor("```ts\nconst a = 1\n```")).toEqual(["code"]);

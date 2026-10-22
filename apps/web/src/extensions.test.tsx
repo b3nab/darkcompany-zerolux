@@ -4,7 +4,7 @@ import { actionFields } from "@zerolux/chat";
 import type { Extension, ExtensionSetting, JsonSchema } from "@zerolux/chat";
 import { ActionForm } from "./ActionForm";
 import { MemoryRouter } from "react-router";
-import type { MarketplaceOffer } from "@zerolux/chat";
+import type { ExtensionCard, MarketplaceOffer } from "@zerolux/chat";
 import { ExtensionsHome } from "./Extensions";
 import {
   ExtensionPage,
@@ -422,4 +422,75 @@ test("an extension an agent proposed waits in Proposals for the owner, by the ag
   expect(html).toContain(">Remove</button>");
   // It is not among the installed ones until the owner enables it.
   expect(home([proposed], true)).toContain("No extensions.");
+});
+
+const cardOf = (over: Partial<ExtensionCard> = {}): ExtensionCard => ({
+  summary: "",
+  categories: ["knowledge"],
+  keywords: ["notes", "markdown"],
+  license: "MIT",
+  links: { homepage: "https://192.0.2.1/notes", issues: null },
+  icon: null,
+  icon_dark: null,
+  media: [],
+  readme: null,
+  changelog: null,
+  ...over,
+});
+
+test("an extension's page shows its card: categories, licence, keywords and links", () => {
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <ExtensionPage
+        id="aspen.notes"
+        extensions={[]}
+        marketplace={{
+          offers: [
+            offerOf({ id: "aspen.notes", name: "Notes", card: cardOf() }),
+          ],
+          marketplaces: [],
+          errors: [],
+        }}
+        owns
+        busy={false}
+        perform={async () => true}
+        consent={() => {}}
+      />
+    </MemoryRouter>,
+  );
+  expect(html).toContain("Knowledge");
+  expect(html).toContain("MIT");
+  expect(html).toContain("markdown");
+  expect(html).toMatch(/href="https:\/\/192.0.2.1\/notes"[^>]*>.*Website/);
+  expect(html).not.toContain("Report a problem");
+});
+
+test("the marketplace counts each category and shows the one chosen", () => {
+  const html = renderToStaticMarkup(
+    <MemoryRouter
+      initialEntries={["/extensions/marketplace?category=knowledge"]}
+    >
+      <MarketplacePage
+        extensions={[]}
+        marketplace={{
+          offers: [
+            offerOf({ id: "aspen.notes", name: "Notes", card: cardOf() }),
+            offerOf({
+              id: "aspen.drive",
+              name: "Drive",
+              card: cardOf({ categories: ["files-storage"] }),
+            }),
+          ],
+          marketplaces: [],
+          errors: [],
+        }}
+        error=""
+        owns
+        consent={() => {}}
+      />
+    </MemoryRouter>,
+  );
+  expect(html).toMatch(/aria-current="true"[^>]*>.*Knowledge.*1</);
+  expect(html).toContain(">Notes</h2>");
+  expect(html).not.toContain(">Drive</h2>");
 });

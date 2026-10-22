@@ -1,31 +1,42 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import {
   ArrowUpCircleIcon,
+  BugIcon,
+  ChevronLeftIcon,
   ChevronRightIcon,
+  CodeIcon,
   DownloadIcon,
   EllipsisIcon,
   EyeIcon,
+  GlobeIcon,
   PencilIcon,
+  PlayIcon,
+  ShieldIcon,
   TriangleAlertIcon,
 } from "lucide-react";
 import {
   ago,
+  cardFileNamed,
   disableExtension,
   enableExtension,
   errorMessage,
+  extensionCategories,
   loadExtensionFolder,
   marketplaceName,
   offerAction,
   offerFor,
   offerVersions,
+  readCardText,
   removeExtension,
   runAction,
   setExtensionSettings,
 } from "@zerolux/chat";
 import type {
+  CardFile,
   Extension,
   ExtensionAction,
+  ExtensionCard,
   ExtensionSetting,
   JsonSchema,
   Marketplace,
@@ -39,11 +50,15 @@ import {
   ExtensionIcon,
   StateChip,
   partLines,
+  useCardFile,
   partNames,
 } from "./extension-bits";
 import type { Consent } from "./extension-bits";
 import { lucideIcon } from "./native-ui";
+import { MessageText } from "./components/message-text";
+import type { MarkdownDocument } from "./components/message-text";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Dialog,
   DialogContent,
@@ -485,6 +500,184 @@ function Versions({
   );
 }
 
+/** A card's README or CHANGELOG, read from the kernel once for each digest. */
+function useCardText(file: CardFile | null | undefined) {
+  const [read, setRead] = useState<{
+    sha256: string;
+    text?: string;
+    error?: string;
+  }>();
+  const sha256 = file?.sha256;
+  useEffect(() => {
+    if (!file) return;
+    let live = true;
+    readCardText(file).then(
+      (text) => live && setRead({ sha256: file.sha256, text }),
+      (error: unknown) =>
+        live && setRead({ sha256: file.sha256, error: errorMessage(error) }),
+    );
+    return () => {
+      live = false;
+    };
+    // The same digest is the same text, in whichever list it came.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sha256]);
+  return read?.sha256 === sha256 ? read : undefined;
+}
+
+/** A README or CHANGELOG as Markdown, with the images of its card. */
+function CardText({ card, file }: { card: ExtensionCard; file: CardFile }) {
+  const read = useCardText(file);
+  const document = useMemo<MarkdownDocument>(
+    () => ({
+      image: (src, alt) => {
+        const named = cardFileNamed(card, src);
+        return named?.kind === "image" ? (
+          <CardImage file={named} alt={alt} className="rounded-lg border" />
+        ) : null;
+      },
+    }),
+    [card],
+  );
+  if (read?.error)
+    return <p className="text-sm text-destructive">{read.error}</p>;
+  return read?.text !== undefined ? (
+    <article className="max-w-3xl">
+      <MessageText text={read.text} document={document} />
+    </article>
+  ) : null;
+}
+
+/** An image of a card, once read. */
+function CardImage({
+  file,
+  alt = "",
+  className,
+}: {
+  file: CardFile;
+  alt?: string;
+  className?: string;
+}) {
+  const url = useCardFile(file);
+  return url ? <img src={url} alt={alt} className={className} /> : null;
+}
+
+/** A card's video, read when it is played: it may be large. */
+function CardVideo({ file }: { file: CardFile }) {
+  const [play, setPlay] = useState(false);
+  const url = useCardFile(file, play);
+  return url ? (
+    <video
+      src={url}
+      controls
+      autoPlay
+      className="size-full bg-black object-contain"
+    />
+  ) : (
+    <button
+      aria-label="Play the video"
+      onClick={() => setPlay(true)}
+      className="grid size-full place-items-center bg-gradient-to-br from-muted to-accent text-foreground"
+    >
+      <span className="grid size-12 place-items-center rounded-full bg-background/80 shadow-sm backdrop-blur">
+        {play ? <Spinner /> : <PlayIcon className="ml-0.5 size-5" />}
+      </span>
+    </button>
+  );
+}
+
+/** A card's images and video, side by side; an image opens large, and the arrows go through them. */
+function Gallery({ media }: { media: CardFile[] }) {
+  const images = media.filter((file) => file.kind === "image");
+  const [open, setOpen] = useState<number>();
+  const step = (by: number) =>
+    setOpen((at) =>
+      at === undefined ? at : (at + by + images.length) % images.length,
+    );
+  const shown = open === undefined ? undefined : images[open];
+  return (
+    <>
+      <ul className="mb-6 grid snap-x auto-cols-[min(300px,80%)] grid-flow-col gap-3 overflow-x-auto pb-1.5">
+        {media.map((file) => (
+          <li
+            key={file.sha256}
+            className="aspect-[16/10] snap-start overflow-hidden rounded-lg border bg-muted"
+          >
+            {file.kind === "video" ? (
+              <CardVideo file={file} />
+            ) : (
+              <button
+                aria-label={`Open ${file.name}`}
+                onClick={() => setOpen(images.indexOf(file))}
+                className="size-full cursor-zoom-in"
+              >
+                <CardImage
+                  file={file}
+                  className="size-full object-cover transition-transform duration-300 hover:scale-[1.02]"
+                />
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      <Dialog
+        open={shown !== undefined}
+        onOpenChange={(opened) => !opened && setOpen(undefined)}
+      >
+        <DialogContent
+          className="gap-3 p-3 sm:max-w-5xl"
+          onKeyDown={(event) => {
+            if (event.key === "ArrowRight") step(1);
+            if (event.key === "ArrowLeft") step(-1);
+          }}
+        >
+          <DialogTitle className="sr-only">{shown?.name}</DialogTitle>
+          {shown && (
+            <CardImage
+              file={shown}
+              className="max-h-[80vh] w-full rounded-md object-contain"
+            />
+          )}
+          {images.length > 1 && (
+            <div className="flex items-center justify-center gap-3 text-xs text-muted-foreground">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Previous"
+                onClick={() => step(-1)}
+              >
+                <ChevronLeftIcon />
+              </Button>
+              {(open ?? 0) + 1} / {images.length}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Next"
+                onClick={() => step(1)}
+              >
+                <ChevronRightIcon />
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+const linkKinds = [
+  ["homepage", "Website", GlobeIcon],
+  ["repository", "Source", CodeIcon],
+  ["issues", "Report a problem", BugIcon],
+  ["privacy", "Privacy", ShieldIcon],
+] as const;
+
+/** A card's categories by their names. */
+const categoryNames = (card?: ExtensionCard | null) =>
+  (card?.categories ?? []).map(
+    (id) => extensionCategories.find((c) => c.id === id)?.name ?? id,
+  );
+
 export type Tab = "overview" | "access" | "settings" | "versions";
 
 /**
@@ -524,6 +717,11 @@ export function ExtensionPage({
     ) : null;
   const name = extension?.name ?? offer!.name;
   const update = offer && offerAction(offer) === "update";
+  const newBuild = update && offer.installed === offer.version;
+  // The installed one's card; the newer one's for what changed.
+  const card = extension?.card ?? offer?.card;
+  const changes = update ? offer!.card : card;
+  const links = linkKinds.filter(([kind]) => card?.links?.[kind]);
   const tabs: Tab[] = [
     "overview",
     "access",
@@ -543,7 +741,7 @@ export function ExtensionPage({
   ) : extension.proposed_by ? null : update ? (
     <Button onClick={() => consent({ offer: offer!, installed: extension })}>
       <ArrowUpCircleIcon data-icon="inline-start" />
-      Update to {offer!.version}
+      {newBuild ? "Update" : `Update to ${offer!.version}`}
     </Button>
   ) : !extension.enabled ? (
     <Button
@@ -580,7 +778,7 @@ export function ExtensionPage({
         <span>{name}</span>
       </nav>
       <header className="grid grid-cols-[auto_1fr_auto] items-start gap-5">
-        <ExtensionIcon id={id} extension={extension} size="lg" />
+        <ExtensionIcon id={id} extension={extension} card={card} size="lg" />
         <div className="flex min-w-0 flex-col gap-2">
           <h1 className="flex items-baseline gap-2.5 text-2xl font-semibold tracking-tight">
             {name}
@@ -593,6 +791,14 @@ export function ExtensionPage({
           </p>
           <div className="flex flex-wrap items-center gap-3.5 text-[12.5px] text-muted-foreground">
             <span>{extension?.publisher ?? offer!.publisher}</span>
+            {categoryNames(card).map((category) => (
+              <span
+                key={category}
+                className="rounded-full border px-2 py-0.5 text-[11.5px]"
+              >
+                {category}
+              </span>
+            ))}
             <span>
               {extension?.dev
                 ? "From a folder"
@@ -655,8 +861,8 @@ export function ExtensionPage({
         <div className="flex items-center gap-3 rounded-lg border border-attention/35 bg-attention/5 px-3.5 py-3 text-sm">
           <ArrowUpCircleIcon className="size-4 shrink-0 text-attention" />
           <span className="flex-1">
+            {newBuild ? "A new build of " : ""}
             <span className="font-semibold">{offer!.version}</span> is available
-            · {offerVersions(offer!)}
           </span>
           <Button variant="ghost" size="sm" onClick={() => setTab("versions")}>
             Versions
@@ -682,9 +888,16 @@ export function ExtensionPage({
             ))}
           </div>
           {shown === "overview" && (
-            <p className="max-w-2xl text-sm leading-relaxed">
-              {extension?.description || offer?.description}
-            </p>
+            <>
+              {!!card?.media.length && <Gallery media={card.media} />}
+              {card?.readme ? (
+                <CardText card={card} file={card.readme} />
+              ) : (
+                <p className="max-w-2xl text-sm leading-relaxed">
+                  {extension?.description || offer?.description}
+                </p>
+              )}
+            </>
           )}
           {shown === "access" && <Access extension={extension} offer={offer} />}
           {shown === "settings" && extension && (
@@ -698,31 +911,82 @@ export function ExtensionPage({
           {shown === "versions" && (
             <Versions extension={extension} offer={offer} />
           )}
-        </div>
-        <dl className="grid h-fit grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-[13px] [&_dd]:text-right [&_dt]:text-faint">
-          <dt>Version</dt>
-          <dd className="font-mono">{extension?.version ?? offer!.version}</dd>
-          <dt>Publisher</dt>
-          <dd>{extension?.publisher ?? offer!.publisher}</dd>
-          {extension && (
-            <>
-              <dt>Installed</dt>
-              <dd>{ago(extension.installed_at)}</dd>
-              <dt>Updated</dt>
-              <dd>{ago(extension.updated_at)}</dd>
-            </>
+          {shown === "versions" && changes?.changelog && (
+            <div className="mt-6">
+              <CardText card={changes} file={changes.changelog} />
+            </div>
           )}
-          <dt>From</dt>
-          <dd className="truncate">
-            {extension?.dev
-              ? extension.source
-              : offer
-                ? marketplaceName(offer.index, marketplace)
-                : "—"}
-          </dd>
-          <dt>Id</dt>
-          <dd className="truncate font-mono text-[12px]">{id}</dd>
-        </dl>
+        </div>
+        <aside className="flex h-fit flex-col gap-6 text-[13px]">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 [&_dd]:text-right [&_dt]:text-faint">
+            <dt>Version</dt>
+            <dd className="font-mono">
+              {extension?.version ?? offer!.version}
+            </dd>
+            <dt>Publisher</dt>
+            <dd>{extension?.publisher ?? offer!.publisher}</dd>
+            {extension && (
+              <>
+                <dt>Installed</dt>
+                <dd>{ago(extension.installed_at)}</dd>
+                <dt>Updated</dt>
+                <dd>{ago(extension.updated_at)}</dd>
+              </>
+            )}
+            <dt>From</dt>
+            <dd className="truncate">
+              {extension?.dev
+                ? extension.source
+                : offer
+                  ? marketplaceName(offer.index, marketplace)
+                  : "—"}
+            </dd>
+            {card?.license && (
+              <>
+                <dt>License</dt>
+                <dd className="font-mono text-[12px]">{card.license}</dd>
+              </>
+            )}
+            <dt>Id</dt>
+            <dd className="truncate font-mono text-[12px]">{id}</dd>
+          </dl>
+          {!!card?.keywords.length && (
+            <section className="flex flex-col gap-2">
+              <h2 className="text-[11px] font-medium tracking-wider text-faint uppercase">
+                Keywords
+              </h2>
+              <ul className="flex flex-wrap gap-1.5">
+                {card.keywords.map((keyword) => (
+                  <li
+                    key={keyword}
+                    className="rounded-full border px-2 py-0.5 text-[11.5px] text-muted-foreground"
+                  >
+                    {keyword}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {links.length > 0 && (
+            <section className="flex flex-col gap-1">
+              <h2 className="mb-1 text-[11px] font-medium tracking-wider text-faint uppercase">
+                Links
+              </h2>
+              {links.map(([kind, label, Icon]) => (
+                <a
+                  key={kind}
+                  href={card!.links![kind]!}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-2 py-1 text-muted-foreground hover:text-foreground [&_svg]:size-3.5"
+                >
+                  <Icon />
+                  {label}
+                </a>
+              ))}
+            </section>
+          )}
+        </aside>
       </div>
       {removing && extension && (
         <RemoveDialog

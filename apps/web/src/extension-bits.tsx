@@ -1,17 +1,27 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BlocksIcon } from "lucide-react";
 import {
+  cardFileUrl,
+  cardIcon,
   consentParts,
   enableExtension,
   errorMessage,
+  fetchKernel,
   installOffer,
   marketplaceName,
   offerAction,
   offerVersions,
 } from "@zerolux/chat";
-import type { Extension, Marketplace, MarketplaceOffer } from "@zerolux/chat";
+import type {
+  CardFile,
+  Extension,
+  ExtensionCard,
+  Marketplace,
+  MarketplaceOffer,
+} from "@zerolux/chat";
 import { cn } from "cn";
 import { lucideIcon } from "./native-ui";
+import { useTheme } from "./theme";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -46,30 +56,86 @@ const tints = [
 const tintOf = (id: string) =>
   tints[[...id].reduce((sum, c) => sum + c.charCodeAt(0), 0) % tints.length];
 
+const read = new Map<string, Promise<string>>();
+
 /**
- * An extension's mark, until packages bring their own icons: the icon of its first piece of
- * interface, in a color of its own.
+ * A card's file as the page shows it: read from the kernel once, kept by its digest, and shown
+ * from memory, since pages draw only what they hold.
+ */
+export function useCardFile(file: CardFile | null | undefined, load = true) {
+  const [shown, setShown] = useState<{ sha256: string; url: string }>();
+  const sha256 = file?.sha256;
+  useEffect(() => {
+    if (!file || !load) return;
+    let live = true;
+    let reading = read.get(file.sha256);
+    if (!reading) {
+      reading = fetchKernel(cardFileUrl(file))
+        .then((response) => {
+          if (!response.ok) throw new Error(`${file.name} could not be read`);
+          return response.blob();
+        })
+        .then((blob) => URL.createObjectURL(blob));
+      read.set(file.sha256, reading);
+      // A failed read is tried again the next time it is shown.
+      reading.catch(() => read.delete(file.sha256));
+    }
+    reading.then(
+      (url) => live && setShown({ sha256: file.sha256, url }),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+    // The same digest is the same file, in whichever list it came.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sha256, load]);
+  return shown?.sha256 === sha256 ? shown?.url : undefined;
+}
+
+/**
+ * An extension's mark: the icon of its card, for the theme; without one, the icon of its first
+ * piece of interface, in a color of its own.
  */
 export function ExtensionIcon({
   extension,
+  card,
   id,
   size = "md",
 }: {
   extension?: Extension;
+  /** Its card, when not the installed one's. */
+  card?: ExtensionCard | null;
   id: string;
   size?: "sm" | "md" | "lg";
 }) {
+  const { resolved } = useTheme();
+  const icon = cardIcon(card ?? extension?.card, resolved === "dark");
+  const url = useCardFile(icon);
   const named = extension?.contributes?.ui?.find((piece) => piece.icon)?.icon;
   const Icon = named ? lucideIcon(named) : BlocksIcon;
-  return (
+  const box = cn(
+    "shrink-0",
+    size === "sm" && "size-8 rounded-md",
+    size === "md" && "size-10 rounded-lg",
+    size === "lg" && "size-16 rounded-xl",
+  );
+  return icon ? (
+    url ? (
+      <img aria-hidden alt="" src={url} className={cn(box, "object-cover")} />
+    ) : (
+      <span aria-hidden className={cn(box, "bg-muted")} />
+    )
+  ) : (
     <span
       aria-hidden
       className={cn(
-        "grid shrink-0 place-items-center",
+        box,
+        "grid place-items-center",
         tintOf(id),
-        size === "sm" && "size-8 rounded-md [&_svg]:size-4",
-        size === "md" && "size-10 rounded-lg [&_svg]:size-5",
-        size === "lg" && "size-16 rounded-xl [&_svg]:size-8",
+        size === "sm" && "[&_svg]:size-4",
+        size === "md" && "[&_svg]:size-5",
+        size === "lg" && "[&_svg]:size-8",
       )}
     >
       <Icon />
@@ -182,11 +248,15 @@ export function ConsentDialog({
           <ExtensionIcon
             id={offer?.id ?? extension!.id}
             extension={extension}
+            card={offer?.card ?? extension?.card}
           />
           <div className="flex flex-col gap-0.5">
             <DialogTitle>
               {verb} {name}
-              {update ? ` to ${offer.version}` : ""}?
+              {update && offer.installed !== offer.version
+                ? ` to ${offer.version}`
+                : ""}
+              ?
             </DialogTitle>
             <span className="font-mono text-[11.5px] text-faint">
               {offer ? offerVersions(offer) : extension!.version}

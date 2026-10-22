@@ -1,4 +1,10 @@
-import { Component, memo, useEffect, useSyncExternalStore } from "react";
+import {
+  Component,
+  memo,
+  useEffect,
+  useMemo,
+  useSyncExternalStore,
+} from "react";
 import type { ReactNode } from "react";
 import remarkBreaks from "remark-breaks";
 import {
@@ -11,22 +17,45 @@ import codeRenderer from "../../generated/renderer/code.js" with { type: "file" 
 import mermaidRenderer from "../../generated/renderer/mermaid.js" with { type: "file" };
 import { useTheme } from "../theme";
 
-// A chat keeps the line breaks people type.
-const remarkPlugins = [...Object.values(defaultRemarkPlugins), remarkBreaks];
+// A chat keeps the line breaks people type; a document's are Markdown's.
+const documentRemark = Object.values(defaultRemarkPlugins);
+const chatRemark = [...documentRemark, remarkBreaks];
 const [harden] = defaultRehypePlugins.harden as [unknown, unknown];
-/** Raw HTML shows as text; links only to the web or mail; no images. */
-const rehypePlugins = [
-  defaultRehypePlugins.sanitize,
+type Hast = {
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  children?: Hast[];
+};
+/** A document's images by their path in it, as `./media/…`: harden keeps only those as paths. */
+const relativeImages = () => (tree: Hast) => {
+  const walk = (node: Hast) => {
+    const src = node.tagName === "img" ? node.properties?.src : undefined;
+    if (typeof src === "string" && !/^([a-z][a-z\d+.-]*:|[./])/i.test(src))
+      node.properties!.src = `./${src}`;
+    node.children?.forEach(walk);
+  };
+  walk(tree);
+};
+/**
+ * Raw HTML shows as text; links only to the web or mail; no images in a message, and in a
+ * document only those its `image` finds.
+ */
+const rehype = (images: boolean) =>
   [
-    harden,
-    {
-      allowedLinkPrefixes: ["*"],
-      allowedProtocols: ["http", "https", "mailto"],
-      allowedImagePrefixes: [],
-      allowDataImages: false,
-    },
-  ],
-] as StreamdownProps["rehypePlugins"];
+    ...(images ? [relativeImages] : []),
+    defaultRehypePlugins.sanitize,
+    [
+      harden,
+      {
+        allowedLinkPrefixes: ["*"],
+        allowedProtocols: ["http", "https", "mailto"],
+        allowedImagePrefixes: images ? ["*"] : [],
+        allowDataImages: false,
+      },
+    ],
+  ] as StreamdownProps["rehypePlugins"];
+const chatRehype = rehype(false);
+const documentRehype = rehype(true);
 
 // Real links, opened in a new tab: no confirmation dialog in front of them.
 const directLinks = { enabled: false };
@@ -108,11 +137,19 @@ class Contained extends Component<
   }
 }
 
+/** A document beside the chat, as a README: it draws the images it shows, by their address in it. */
+export interface MarkdownDocument {
+  image: (src: string, alt: string) => ReactNode;
+}
+
 /** A message's text as Markdown: tables, links, code and Mermaid diagrams. */
 export const MessageText = memo(function MessageText({
   text,
+  document,
 }: {
   text: string;
+  /** It is a document, not a message. */
+  document?: MarkdownDocument;
 }) {
   const loaded = useSyncExternalStore(
     subscribe,
@@ -120,6 +157,17 @@ export const MessageText = memo(function MessageText({
     () => plugins,
   );
   const { resolved } = useTheme();
+  // A document draws its images; a message has none.
+  const components = useMemo<StreamdownProps["components"]>(
+    () =>
+      document && {
+        img: ({ src, alt }) =>
+          typeof src === "string"
+            ? document.image(decodeURI(src.replace(/^\.?\//, "")), alt ?? "")
+            : null,
+      },
+    [document],
+  );
   const needs = pluginsFor(text).join();
   useEffect(() => {
     for (const name of pluginsFor(text)) load(name);
@@ -131,8 +179,9 @@ export const MessageText = memo(function MessageText({
     <Contained key={Object.keys(loaded).join()} text={text}>
       <Streamdown
         mode="static"
-        remarkPlugins={remarkPlugins}
-        rehypePlugins={rehypePlugins}
+        remarkPlugins={document ? documentRemark : chatRemark}
+        rehypePlugins={document ? documentRehype : chatRehype}
+        components={components}
         plugins={{
           code: loaded.code,
           mermaid: resolved === "light" ? loaded.mermaidLight : loaded.mermaid,
