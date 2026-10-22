@@ -3217,3 +3217,106 @@ async fn a_host_is_its_persons_and_open_to_others_only_with_their_own_harness_fo
     let (_, agent) = f.hire("helper", None).await;
     assert_eq!(store.host_use(&agent).await.unwrap(), None);
 }
+
+#[tokio::test]
+async fn how_far_a_person_read_is_the_same_on_all_their_devices_and_only_goes_forward() {
+    let f = Fixture::new().await;
+    let (aspen, aspen_id) = f.hire("aspen", None).await;
+    let chat = f.room(&[&aspen]).await;
+    for text in ["one", "two", "three"] {
+        f.store
+            .send_chat_message(&f.owner, &chat.id, message(text))
+            .await
+            .unwrap();
+    }
+    f.clear_outbox().await;
+    let read = |kind: &'static str, id: String| {
+        let store = &f.store;
+        let owner = &f.owner;
+        async move {
+            store
+                .read_positions(owner)
+                .await
+                .unwrap()
+                .get(&(kind.to_owned(), id))
+                .copied()
+        }
+    };
+    assert_eq!(read("conversation", chat.id.clone()).await, None);
+    // A workspace from before: what was there counts as read, once.
+    f.store.adopt_read_positions().await.unwrap();
+    assert_eq!(read("conversation", chat.id.clone()).await, Some(3));
+    assert!(read("session", aspen.session.id.clone()).await.is_some());
+    f.exec("DELETE FROM read_positions", vec![]).await;
+    // Read up to the second message, then further than there is: up to the last.
+    assert_eq!(
+        f.store
+            .mark_read(&f.owner, "conversation", &chat.id, 2)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        f.store
+            .mark_read(&f.owner, "conversation", &chat.id, 99)
+            .await
+            .unwrap(),
+        3
+    );
+    // An older device's position does not take it back.
+    assert_eq!(
+        f.store
+            .mark_read(&f.owner, "conversation", &chat.id, 1)
+            .await
+            .unwrap(),
+        3
+    );
+    assert_eq!(read("conversation", chat.id.clone()).await, Some(3));
+    // Once positions are kept, nothing is adopted again.
+    f.store
+        .send_chat_message(&f.owner, &chat.id, message("four"))
+        .await
+        .unwrap();
+    f.store.adopt_read_positions().await.unwrap();
+    assert_eq!(read("conversation", chat.id.clone()).await, Some(3));
+    // The person's other devices hear each move forward, and only those.
+    let events = f.store.pending_chat_events(100).await.unwrap();
+    let mut moves: Vec<_> = events
+        .iter()
+        .filter(|event| event.actor_ids == [f.owner.actor_id.clone().unwrap()])
+        .map(|event| &event.payload)
+        .filter(|payload| payload["type"] == "read.changed")
+        .map(|payload| payload["position"].as_i64().unwrap())
+        .collect();
+    moves.sort();
+    assert_eq!(moves, [2, 3]);
+    // A session's work, seen up to a moment; not past now.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let seen = f
+        .store
+        .mark_read(&f.owner, "session", &aspen.session.id, now + 3_600_000)
+        .await
+        .unwrap();
+    assert!(seen <= now + 60_000, "{seen}");
+    assert_eq!(read("session", aspen.session.id.clone()).await, Some(seen));
+    // Only a person reads; a chat they are not in, and a kind there is not, are refused.
+    assert!(matches!(
+        f.store
+            .mark_read(&aspen_id, "conversation", &chat.id, 1)
+            .await,
+        Err(Error::Forbidden)
+    ));
+    assert!(matches!(
+        f.store
+            .mark_read(&f.owner, "conversation", &Uuid::new_v4().to_string(), 1)
+            .await,
+        Err(Error::NotFound)
+    ));
+    assert!(matches!(
+        f.store.mark_read(&f.owner, "message", &chat.id, 1).await,
+        Err(Error::Invalid(_))
+    ));
+}

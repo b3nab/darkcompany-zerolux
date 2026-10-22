@@ -15,6 +15,7 @@ pub mod extensions;
 pub mod hosts;
 pub mod invites;
 pub mod messages;
+pub mod read_positions;
 pub mod schedules;
 pub mod sessions;
 pub mod tool_approvals;

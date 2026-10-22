@@ -15,8 +15,8 @@ use uuid::Uuid;
 
 use crate::{
     entity::{
-        actors, chat_outbox, conversation_members, conversations, deliveries, messages, sessions,
-        tool_approvals, workspace,
+        actors, chat_outbox, conversation_members, conversations, deliveries, messages,
+        read_positions, sessions, tool_approvals, workspace,
     },
     harness::Harness,
     model::*,
@@ -2574,5 +2574,125 @@ impl Store {
         }
         tx.commit().await?;
         Ok(())
+    }
+}
+
+/// How far each person has read, the same on all their devices.
+impl Store {
+    /// A person's read positions: each chat's seq and each session's time, by kind and id.
+    pub async fn read_positions(
+        &self,
+        who: &ChatIdentity,
+    ) -> Result<std::collections::HashMap<(String, String), i64>> {
+        let Some(actor) = who.actor_id.as_deref().filter(|_| who.is_person()) else {
+            return Ok(Default::default());
+        };
+        Ok(read_positions::Entity::find()
+            .filter(read_positions::Column::ActorId.eq(actor))
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(|row| ((row.kind, row.subject_id), row.position))
+            .collect())
+    }
+
+    /// A workspace from before read positions were kept: what its people had then counts as
+    /// read, once, rather than every chat and session showing as new.
+    pub async fn adopt_read_positions(&self) -> Result<()> {
+        let tx = self.write().await?;
+        let kept: i64 = scalar(&tx, sql(&tx, "SELECT COUNT(*) FROM read_positions", [])).await?;
+        if kept > 0 {
+            return Ok(());
+        }
+        let now = now_ms();
+        execute(
+            &tx,
+            sql(
+                &tx,
+                "INSERT INTO read_positions (actor_id,kind,subject_id,position,updated_at)
+                SELECT a.id,'conversation',c.id,
+                    COALESCE((SELECT MAX(m.seq) FROM messages m WHERE m.conversation_id=c.id),0),$1
+                FROM actors a CROSS JOIN conversations c WHERE a.kind='human'",
+                [now.into()],
+            ),
+        )
+        .await?;
+        execute(
+            &tx,
+            sql(
+                &tx,
+                "INSERT INTO read_positions (actor_id,kind,subject_id,position,updated_at)
+                SELECT a.id,'session',s.id,$1,$1 FROM actors a CROSS JOIN sessions s
+                WHERE a.kind='human'",
+                [now.into()],
+            ),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// A person read a chat up to `seq`, or saw a session's work up to `at`: only forward,
+    /// and never past what there is. Their other devices hear of it. The position now.
+    pub async fn mark_read(
+        &self,
+        who: &ChatIdentity,
+        kind: &str,
+        id: &str,
+        position: i64,
+    ) -> Result<i64> {
+        if !who.is_person() {
+            return Err(Error::Forbidden);
+        }
+        let actor = who.actor()?.to_owned();
+        let tx = self.write().await?;
+        identity_in(&tx, who).await?;
+        let most = match kind {
+            "conversation" => {
+                conversations_in(&tx, who)
+                    .await?
+                    .into_iter()
+                    .find(|conversation| conversation.id == id)
+                    .ok_or(Error::NotFound)?
+                    .last_seq
+            }
+            "session" => {
+                session_access(&tx, who, id).await?;
+                now_ms()
+            }
+            _ => return Err(Error::Invalid("Read a conversation or a session".into())),
+        };
+        let wanted = position.clamp(0, most);
+        let held =
+            read_positions::Entity::find_by_id((actor.clone(), kind.to_owned(), id.to_owned()))
+                .one(&tx)
+                .await?;
+        let now = match held {
+            Some(row) if row.position >= wanted => row.position,
+            held => {
+                let row = read_positions::ActiveModel {
+                    actor_id: Set(actor.clone()),
+                    kind: Set(kind.to_owned()),
+                    subject_id: Set(id.to_owned()),
+                    position: Set(wanted),
+                    updated_at: Set(now_ms()),
+                };
+                if held.is_some() {
+                    row.update(&tx).await?;
+                } else {
+                    row.insert(&tx).await?;
+                }
+                event_in(
+                    &tx,
+                    "read.changed",
+                    json!({"kind": kind, "id": id, "position": wanted}),
+                    vec![actor],
+                )
+                .await?;
+                wanted
+            }
+        };
+        tx.commit().await?;
+        Ok(now)
     }
 }

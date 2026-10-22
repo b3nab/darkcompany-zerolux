@@ -83,6 +83,7 @@ pub fn sql(backend: DatabaseBackend) -> String {
         extension_values,
         extension_calls,
         background_commands,
+        read_positions,
     );
     tables.extend(indexes);
     tables.extend(foreign_keys);

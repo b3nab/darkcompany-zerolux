@@ -218,6 +218,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/sessions/attach", post(attach_session))
         .route("/sessions/catalog", get(settings_catalog))
         .route("/sessions/{id}", get(read_session).patch(change_session))
+        .route("/sessions/{id}/seen", post(session_seen))
         .route(
             "/sessions/{id}/settings",
             get(read_session_settings).patch(change_session_settings),
@@ -316,6 +317,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
             get(conversations).post(create_conversation),
         )
         .route("/conversations/{id}/members", post(add_conversation_member))
+        .route("/conversations/{id}/read", post(conversation_read))
         .route("/conversations/{id}/threads", post(open_thread))
         .route("/conversations/{id}/close", post(close_thread))
         .route("/conversations/{id}/pause", post(pause_conversation))
@@ -1179,7 +1181,48 @@ async fn list_sessions(
     Extension(who): Extension<ChatIdentity>,
 ) -> Result<Json<Value>, Error> {
     let sessions = crate::native_output::with_tails(store.sessions(&who).await?);
+    let read = store.read_positions(&who).await?;
+    let mut sessions = json!(sessions);
+    // How far the person saw each, the same on all their devices.
+    for session in sessions.as_array_mut().into_iter().flatten() {
+        let id = session["id"].as_str().unwrap_or_default().to_owned();
+        session["seen_at"] = json!(read.get(&("session".to_owned(), id)));
+    }
     Ok(Json(json!({ "sessions": sessions })))
+}
+
+#[derive(Deserialize)]
+struct Seen {
+    at: i64,
+}
+
+/// A person saw a session's work up to `at`, on one of their devices.
+async fn session_seen(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<Seen>,
+) -> Result<Json<Value>, Error> {
+    let at = store.mark_read(&who, "session", &id, input.at).await?;
+    Ok(Json(json!({ "seen_at": at })))
+}
+
+#[derive(Deserialize)]
+struct Read {
+    seq: i64,
+}
+
+/// A person read a chat up to `seq`, on one of their devices.
+async fn conversation_read(
+    State(store): State<Store>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<Read>,
+) -> Result<Json<Value>, Error> {
+    let seq = store
+        .mark_read(&who, "conversation", &id, input.seq)
+        .await?;
+    Ok(Json(json!({ "read_seq": seq })))
 }
 
 async fn read_session(
@@ -2213,9 +2256,14 @@ async fn conversations(
     State(store): State<Store>,
     Extension(who): Extension<ChatIdentity>,
 ) -> Result<Json<Value>, Error> {
-    Ok(Json(
-        json!({ "conversations": store.conversations(&who).await? }),
-    ))
+    let read = store.read_positions(&who).await?;
+    let mut conversations = json!(store.conversations(&who).await?);
+    // How far the person read each, the same on all their devices.
+    for conversation in conversations.as_array_mut().into_iter().flatten() {
+        let id = conversation["id"].as_str().unwrap_or_default().to_owned();
+        conversation["read_seq"] = json!(read.get(&("conversation".to_owned(), id)).unwrap_or(&0));
+    }
+    Ok(Json(json!({ "conversations": conversations })))
 }
 
 async fn create_conversation(

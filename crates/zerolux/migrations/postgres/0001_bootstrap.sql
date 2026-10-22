@@ -38,6 +38,8 @@ CREATE TABLE "hosts" ("id" text NOT NULL, "name" text NOT NULL, "person_id" text
 CREATE TABLE "invites" ("id" text NOT NULL, "token_hash" text NOT NULL, "created_by" text NOT NULL, "created_at" bigint NOT NULL, "expires_at" bigint NOT NULL, "accepted_by" text NULL, "accepted_at" bigint NULL, PRIMARY KEY ("id"), CONSTRAINT "invites_token_hash_key" UNIQUE ("token_hash"));
 -- Create "messages" table
 CREATE TABLE "messages" ("id" text NOT NULL, "conversation_id" text NOT NULL, "seq" bigint NOT NULL, "author_id" text NOT NULL, "text" text NOT NULL, "reply_to_delivery_id" text NULL, "created_at" bigint NOT NULL, PRIMARY KEY ("id"), CONSTRAINT "messages_conversation_id_seq_key" UNIQUE ("conversation_id", "seq"), CONSTRAINT "messages_reply_to_delivery_id_key" UNIQUE ("reply_to_delivery_id"));
+-- Create "read_positions" table
+CREATE TABLE "read_positions" ("actor_id" text NOT NULL, "kind" text NOT NULL, "subject_id" text NOT NULL, "position" bigint NOT NULL, "updated_at" bigint NOT NULL, PRIMARY KEY ("actor_id", "kind", "subject_id"), CONSTRAINT "read_positions_kind_check" CHECK (kind = ANY (ARRAY['conversation'::text, 'session'::text])), CONSTRAINT "read_positions_position_check" CHECK ("position" >= 0));
 -- Create "schedules" table
 CREATE TABLE "schedules" ("id" text NOT NULL, "session_id" text NOT NULL, "cron" text NOT NULL, "prompt" text NOT NULL, "enabled" boolean NOT NULL, "next_run_at" bigint NULL, "last_run_at" bigint NULL, "last_error" text NULL, "created_at" bigint NOT NULL, PRIMARY KEY ("id"));
 -- Create index "schedules_due" to table: "schedules"
@@ -68,6 +70,8 @@ ALTER TABLE "hosts" ADD CONSTRAINT "hosts_person_id_fkey" FOREIGN KEY ("person_i
 ALTER TABLE "invites" ADD CONSTRAINT "invites_accepted_by_fkey" FOREIGN KEY ("accepted_by") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "invites_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
 -- Modify "messages" table
 ALTER TABLE "messages" ADD CONSTRAINT "messages_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "messages_conversation_id_fkey" FOREIGN KEY ("conversation_id") REFERENCES "conversations" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "messages_reply_to_delivery_id_fkey" FOREIGN KEY ("reply_to_delivery_id") REFERENCES "deliveries" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
+-- Modify "read_positions" table
+ALTER TABLE "read_positions" ADD CONSTRAINT "read_positions_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "actors" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
 -- Modify "schedules" table
 ALTER TABLE "schedules" ADD CONSTRAINT "schedules_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "sessions" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
 -- Modify "sessions" table

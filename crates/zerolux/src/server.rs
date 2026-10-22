@@ -88,6 +88,7 @@ impl Server {
         let host_id = host_id(&data_dir).await?;
         let store = store.hosted(host_id).with_people(data_dir.join("people"));
         store.register_host().await?;
+        store.adopt_read_positions().await?;
         let workspace = store.workspace_info().await?;
         let base_url = format!("http://{address}");
         let auth = match &options.auth {
