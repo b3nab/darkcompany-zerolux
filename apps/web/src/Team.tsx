@@ -453,8 +453,9 @@ export function StartSession({
           />
         </div>
       )}
-      {away ? (
-        // A joined computer's folders are not walked from here: its path is written.
+      {away || ready ? (
+        // Only the kernel's own person walks its folders: on a joined computer, or as a guest
+        // on this one, the path is written.
         <div className="flex flex-col gap-2">
           <Label htmlFor="start-folder">Folder</Label>
           <Input

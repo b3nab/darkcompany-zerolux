@@ -1061,6 +1061,9 @@ test("starting an agent asks for a harness, an agent, a folder and how it asks p
   expect(guest).toMatch(
     /<button[^>]*type="submit"[^>]*disabled=""[^>]*>Start</,
   );
+  // A guest writes the folder's path: only the computer's own person walks its folders.
+  expect(guest).toContain('id="start-folder"');
+  expect(guest).not.toContain("Choose…");
   expect(html).toContain('value="pi">pi</option>');
   // Each recent folder offered once, chosen with a press.
   expect(html.match(/title="\/home\/owner\/app"/g)).toHaveLength(1);

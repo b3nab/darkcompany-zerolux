@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Field, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 
 /** A folder's path as the steps to it, each with its own path; a path not from the root is one step. */
@@ -54,6 +55,8 @@ function FolderSheet({
   const [listing, setListing] = useState<FolderListing>();
   const [picked, setPicked] = useState<string>();
   const [error, setError] = useState("");
+  // Where its folders cannot be walked (only its own person may), the path is written.
+  const [written, setWritten] = useState(start ?? "");
   useEffect(() => {
     let live = true;
     setError("");
@@ -70,7 +73,7 @@ function FolderSheet({
     };
   }, [path]);
   const shown = listing?.folders.filter((folder) => !folder.hidden) ?? [];
-  const chosen = picked ?? listing?.path;
+  const chosen = error ? written.trim() : (picked ?? listing?.path);
   return (
     <Dialog open onOpenChange={(open) => !open && close()}>
       <DialogContent className="gap-3 sm:max-w-xl">
@@ -134,8 +137,17 @@ function FolderSheet({
             className="overflow-y-auto p-1"
           >
             {error ? (
-              <li role="alert" className="p-3 text-sm text-destructive">
-                {error}
+              <li className="flex flex-col gap-2 p-3">
+                <p role="alert" className="text-sm text-destructive">
+                  {error}
+                </p>
+                <Input
+                  aria-label="Folder's full path"
+                  placeholder="Folder's full path"
+                  value={written}
+                  onChange={(event) => setWritten(event.target.value)}
+                  className="font-mono text-xs"
+                />
               </li>
             ) : !listing ? (
               <li className="grid h-full place-items-center">
