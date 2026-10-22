@@ -8551,6 +8551,7 @@ dependencies = [
 name = "zerolux-storage"
 version = "0.0.1"
 dependencies = [
+ "tempfile",
  "uuid",
  "zerolux-extension",
 ]

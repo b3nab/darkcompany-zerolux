@@ -168,7 +168,7 @@ impl Storage {
             .ok_or_else(|| "Add a location first".to_owned())
     }
 
-    /// The ZeroLux location, a folder of Storage's own, for whoever has no other; and what an
+    /// The ZeroLux location, the workspace's storage area, for whoever has no other; and what an
     /// earlier Storage kept, brought over once.
     fn ready(&self, context: &Context) -> Result<(), String> {
         let mut ready = self.ready.lock().map_err(|_| "Storage is unavailable")?;
@@ -176,19 +176,35 @@ impl Storage {
             return Ok(());
         }
         let _held = self.held.lock().map_err(|_| "Storage is unavailable")?;
+        let area = Some(context.storage_area())
+            .filter(|area| !area.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| Path::new(&context.folder()).join("space"));
+        std::fs::create_dir_all(&area).map_err(|error| error.to_string())?;
         let mut locations = Self::read_map(context, "locations")?;
         if locations.is_empty() {
-            let space = Path::new(&context.folder()).join("space");
-            std::fs::create_dir_all(&space).map_err(|error| error.to_string())?;
             let id = uuid::Uuid::new_v4().to_string();
             locations.insert(
                 id.clone(),
                 json!({"id": id, "name": "ZeroLux", "provider": FOLDER,
-                    "config": {"path": space}, "created_at": now_ms(), "own": true}),
+                    "config": {"path": area}, "created_at": now_ms(), "own": true}),
             );
             context.set_value("locations", json!(locations))?;
             context.set_value("default", json!(id))?;
             bring_over(context, &locations[&id])?;
+        } else if let Some(own) = locations.values_mut().find(|location| {
+            location["own"] == true
+                && location["config"]["path"] == json!(Path::new(&context.folder()).join("space"))
+                && area != Path::new(&context.folder()).join("space")
+        }) {
+            // ZeroLux's location was a folder of Storage's: what it held joins the storage area.
+            let old = Path::new(&context.folder()).join("space");
+            if old.is_dir() {
+                merge_into(&old, &area).map_err(|error| error.to_string())?;
+                let _ = std::fs::remove_dir(&old);
+            }
+            own["config"]["path"] = json!(area);
+            context.set_value("locations", json!(locations))?;
         }
         *ready = true;
         Ok(())
@@ -488,12 +504,42 @@ fn bring_over(context: &Context, location: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Moves what `from` holds into `to`: folders merged, and a file whose name is taken there
+/// kept beside it with a number.
+fn merge_into(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if !target.exists() {
+            std::fs::rename(entry.path(), &target)?;
+        } else if entry.file_type()?.is_dir() && target.is_dir() {
+            merge_into(&entry.path(), &target)?;
+            let _ = std::fs::remove_dir(entry.path());
+        } else {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let (stem, extension) = match name.rsplit_once('.') {
+                Some((stem, extension)) if !stem.is_empty() => {
+                    (stem.to_owned(), format!(".{extension}"))
+                }
+                _ => (name.clone(), String::new()),
+            };
+            let free = (2..)
+                .map(|number| to.join(format!("{stem} {number}{extension}")))
+                .find(|path| !path.exists())
+                .expect("a free name");
+            std::fs::rename(entry.path(), free)?;
+        }
+    }
+    Ok(())
+}
+
 // The `folder` provider: a folder on the kernel's computer.
 
 fn describe_folder() -> Value {
     json!({"provider": FOLDER, "extension": "zerolux.storage", "title": "Folder",
         "description": "A folder on the kernel's computer",
-        "fields": [{"key": "path", "label": "Folder", "type": "text", "required": true,
+        "fields": [{"key": "path", "label": "Folder", "type": "folder", "required": true,
             "description": "Its full path on the kernel's computer"}],
         "capabilities": ["write", "move", "copy", "delete", "search"]})
 }
@@ -1289,3 +1335,27 @@ impl Extension for Storage {
 }
 
 zerolux_extension::export!(Storage::default);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn what_a_folder_held_joins_another_without_losing_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, to) = (dir.path().join("space"), dir.path().join("storage"));
+        std::fs::create_dir_all(from.join("Chats/c1")).unwrap();
+        std::fs::create_dir_all(to.join("Chats")).unwrap();
+        std::fs::create_dir_all(to.join("zero")).unwrap();
+        std::fs::write(from.join("Chats/c1/plan.md"), "new").unwrap();
+        std::fs::write(from.join("notes.md"), "from space").unwrap();
+        std::fs::write(to.join("notes.md"), "already there").unwrap();
+        merge_into(&from, &to).unwrap();
+        let read = |path: &str| std::fs::read_to_string(to.join(path)).unwrap();
+        assert_eq!(read("Chats/c1/plan.md"), "new");
+        assert_eq!(read("notes.md"), "already there");
+        assert_eq!(read("notes 2.md"), "from space");
+        assert!(to.join("zero").is_dir());
+        assert_eq!(std::fs::read_dir(&from).unwrap().count(), 0);
+    }
+}

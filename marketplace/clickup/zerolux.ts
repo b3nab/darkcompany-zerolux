@@ -22,6 +22,8 @@ export interface Context {
   extension: { id: string; version: string };
   /** Its own folder, for its files: private to it and the kernel, removed with it. */
   folder: string;
+  /** The workspace's storage area: the files its people and agents keep. */
+  storageArea: string;
   /** Its settings, without secrets; kept current as they change. */
   settings: Record<string, unknown>;
   /** Its settings with its secrets, read from the kernel when needed. */
@@ -270,6 +272,7 @@ export async function serve(
   const context: Context = {
     extension: { id: "", version: "" },
     folder: "",
+    storageArea: "",
     settings: {},
     secrets: async () => (await ask("settings.get")).settings,
     values: {
@@ -329,6 +332,7 @@ export async function serve(
       case "initialize":
         context.extension = params.extension;
         context.folder = params.folder ?? "";
+        context.storageArea = params.storage ?? "";
         context.settings = params.settings ?? {};
         await extension.start?.(context);
         return { contributes: contributes(extension) };

@@ -1004,7 +1004,7 @@ async fn storage_shows_each_location_live_and_changes_files_where_they_are() {
     let built = built_module(&["-p", "zerolux-storage", "--lib"], "zerolux_storage");
     let dir = tempfile::tempdir().unwrap();
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../marketplace/storage");
-    let folder = dir.path().join("storage");
+    let folder = dir.path().join("storage-extension");
     let modules = folder.join("kernel").join(library::platform());
     std::fs::create_dir_all(&modules).unwrap();
     std::fs::copy(
@@ -1048,6 +1048,12 @@ async fn storage_shows_each_location_live_and_changes_files_where_they_are() {
     let own = &locations["result"]["locations"][0];
     assert_eq!(own["name"], "ZeroLux", "{locations}");
     assert_eq!(own["default"], true);
+    // It is the workspace's storage area, with what its people and agents keep there.
+    assert_eq!(
+        own["config"]["path"],
+        json!(dir.path().join("storage")),
+        "{locations}"
+    );
     let own = own["id"].as_str().unwrap().to_owned();
     let (_, providers) = storage("providers", json!({})).await;
     assert_eq!(providers["result"]["providers"][0]["provider"], "folder");

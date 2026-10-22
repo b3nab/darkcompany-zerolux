@@ -43,6 +43,8 @@ class Extension:
         self.pieces: list[dict] = []
         self.settings: dict[str, Any] = {}
         self.folder = ""
+        # The workspace's storage area: the files its people and agents keep.
+        self.storage_area = ""
         self.id = ""
         self.version = ""
         # Run once the kernel has started it, and after its settings changed.
@@ -226,6 +228,7 @@ class Extension:
                 self.id = params["extension"]["id"]
                 self.version = params["extension"].get("version", "")
                 self.folder = params.get("folder", "")
+                self.storage_area = params.get("storage", "")
                 self.settings = params.get("settings") or {}
                 for start in self.started:
                     start()

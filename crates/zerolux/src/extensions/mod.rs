@@ -351,6 +351,12 @@ impl Extensions {
         self.root.join(id)
     }
 
+    /// The workspace's storage area, `storage/` in the data folder: the files its people and
+    /// agents keep, which Storage shows as the location `ZeroLux`.
+    fn storage_area(&self) -> PathBuf {
+        self.root.with_file_name("storage")
+    }
+
     async fn owner_only(&self, who: &ChatIdentity) -> Result<()> {
         ensure!(self.store.is_workspace_owner(who).await?, Error::Forbidden);
         Ok(())
@@ -872,12 +878,14 @@ impl Extensions {
             let settings = self.setting_values(&id, &manifest, false).await?;
             let folder = self.folder(&id);
             crate::platform::private_dir(&folder)?;
+            let storage = self.storage_area();
+            std::fs::create_dir_all(&storage)?;
             let answer = started
                 .request_within(
                     "initialize",
                     json!({"extension": {"id": id, "version": manifest.extension.version},
                         "kernel": {"version": env!("CARGO_PKG_VERSION"), "api": manifest::API},
-                        "settings": settings, "folder": folder}),
+                        "settings": settings, "folder": folder, "storage": storage}),
                     std::time::Duration::from_secs(seconds),
                 )
                 .await;

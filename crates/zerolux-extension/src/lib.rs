@@ -87,6 +87,7 @@ struct State {
     id: String,
     version: String,
     folder: String,
+    storage: String,
     settings: Value,
 }
 
@@ -114,6 +115,11 @@ impl Context {
     /// Its own folder, for its files: private to it and the kernel, removed with it.
     pub fn folder(&self) -> String {
         self.state.lock().expect("state").folder.clone()
+    }
+
+    /// The workspace's storage area: the files its people and agents keep.
+    pub fn storage_area(&self) -> String {
+        self.state.lock().expect("state").storage.clone()
     }
 
     /// Its settings, without secrets; kept current as they change.
@@ -327,6 +333,7 @@ fn handle(
                     .unwrap_or_default()
                     .into();
                 state.folder = text("folder");
+                state.storage = text("storage");
                 state.settings = params["settings"].clone();
             }
             Ok(json!({"contributes": extension.initialize(context)?}))
