@@ -646,6 +646,39 @@ impl Extensions {
         Ok(json!({"offers": offers, "errors": errors, "marketplaces": marketplaces}))
     }
 
+    /// Updates every installed extension an index offers anew, a newer version or another build
+    /// of it, or only those of `ids`, one after the other: which were updated, and why the
+    /// others were not.
+    pub async fn update_all(&self, who: &ChatIdentity, ids: Option<&[String]>) -> Result<Value> {
+        self.owner_only(who).await?;
+        let offers = self.offers(who).await?;
+        let mut seen = std::collections::HashSet::new();
+        let (mut updated, mut failed) = (Vec::new(), Vec::new());
+        for offer in offers["offers"].as_array().into_iter().flatten() {
+            let (Some(index), Some(id), Some(installed)) = (
+                offer["index"].as_str(),
+                offer["id"].as_str(),
+                offer["installed"].as_str(),
+            ) else {
+                continue;
+            };
+            let newer = offer["version"].as_str() != Some(installed) || offer["current"] == false;
+            let asked = ids.is_none_or(|ids| ids.iter().any(|asked| asked == id));
+            // An extension two indexes offer is updated from the first.
+            if !newer || !asked || !seen.insert(id.to_owned()) {
+                continue;
+            }
+            match self.install_offer(who, index, id, None).await {
+                Ok(_) => updated.push(json!({"id": id, "version": offer["version"]})),
+                Err(error) => failed.push(json!({"id": id, "error": format!("{error:#}")})),
+            }
+        }
+        if !updated.is_empty() {
+            self.changed();
+        }
+        Ok(json!({"updated": updated, "failed": failed}))
+    }
+
     /// Installs an extension from one of the indexes, its newest version or the one named:
     /// downloaded, checked against the index, unpacked only if its publisher signed it, and
     /// enabled.

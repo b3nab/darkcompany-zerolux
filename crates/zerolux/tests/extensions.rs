@@ -983,6 +983,36 @@ async fn extensions_are_installed_from_an_index_only_as_their_publisher_signed_t
     assert_eq!(offered["offers"][0]["installed"], "1.0.0");
     // The index offers 1.0.2's package, not the one installed.
     assert_eq!(offered["offers"][0]["current"], false, "{offered}");
+    // Updating everything tries 1.0.2, which its index does not list as it is: it says why,
+    // and 1.0.0 goes on running.
+    let (status, update) = kernel
+        .call(
+            Method::POST,
+            "/extensions/marketplace/update",
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{update}");
+    assert_eq!(update["updated"], json!([]), "{update}");
+    assert_eq!(update["failed"][0]["id"], "zerolux.tally", "{update}");
+    assert!(update["failed"][0]["error"].is_string());
+    let (_, offered) = kernel
+        .call(Method::GET, "/extensions/marketplace", None)
+        .await;
+    assert_eq!(offered["offers"][0]["installed"], "1.0.0");
+    let (status, _) = kernel
+        .call(Method::POST, "/ext/zerolux.tally/add", Some(json!({})))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    // Only those named are updated.
+    let (_, update) = kernel
+        .call(
+            Method::POST,
+            "/extensions/marketplace/update",
+            Some(json!({"ids": ["zerolux.other"]})),
+        )
+        .await;
+    assert_eq!(update, json!({"updated": [], "failed": []}));
     unsafe { std::env::remove_var("ZEROLUX_EXTENSION_INDEXES") };
     runtime.shutdown().await.unwrap();
     server.abort();

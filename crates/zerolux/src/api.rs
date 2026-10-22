@@ -356,6 +356,10 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
             "/extensions/marketplace/install",
             post(install_from_marketplace),
         )
+        .route(
+            "/extensions/marketplace/update",
+            post(update_from_marketplace),
+        )
         .route("/extensions/{id}", axum::routing::delete(remove_extension))
         .route("/extensions/{id}/enable", post(enable_extension))
         .route("/extensions/{id}/disable", post(disable_extension))
@@ -3209,6 +3213,28 @@ async fn install_from_marketplace(
         .await
         .map_err(said)?;
     Ok(Json(json!({ "extension": extension })))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct Updates {
+    #[serde(default)]
+    ids: Option<Vec<String>>,
+}
+
+/// Updates every installed extension the indexes offer anew, or only those named.
+async fn update_from_marketplace(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    ChatJson(input): ChatJson<Updates>,
+) -> Result<Json<Value>, ApiFailure> {
+    Ok(Json(
+        runtime(&state)?
+            .extensions
+            .update_all(&who, input.ids.as_deref())
+            .await
+            .map_err(said)?,
+    ))
 }
 
 async fn enable_extension(
