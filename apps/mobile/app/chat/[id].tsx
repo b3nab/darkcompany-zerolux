@@ -16,7 +16,7 @@ import type { NativeStackNavigationProp } from "expo-router";
 import type { LucideIcon } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LegendListRef } from "@legendapp/list/react-native";
-import { Modal, Pressable, ScrollView, View } from "react-native";
+import { Pressable, ScrollView, View } from "react-native";
 import type { TextInputInstance } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCSSVariable } from "uniwind";
@@ -55,6 +55,7 @@ import type {
   Conversation,
   Message,
 } from "@zerolux/chat";
+import { PageSheet } from "@/components/page-sheet";
 import { ApprovalCard } from "@/components/approval-card";
 import { ChatAbout } from "@/components/chat-about";
 import { ChatMark } from "@/components/chat-mark";
@@ -767,34 +768,27 @@ export default function ChatScreen() {
           }
         />
       )}
-      <Modal
-        visible={about}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setAbout(false)}
-      >
-        <View className="flex-1 bg-background">
-          <View className="flex-row items-center justify-between border-b border-border px-5 py-3">
-            <Text className="text-[17px] font-semibold">About this chat</Text>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => setAbout(false)}
-              hitSlop={12}
-            >
-              <Text className="text-base font-medium text-human-foreground">
-                Done
-              </Text>
-            </Pressable>
-          </View>
-          {conversation ? (
-            <ChatAbout
-              conversation={conversation}
-              actors={actors}
-              sessions={chat.sessions}
-            />
-          ) : null}
+      <PageSheet open={about} onClose={() => setAbout(false)}>
+        <View className="flex-row items-center justify-between border-b border-border px-5 py-3">
+          <Text className="text-[17px] font-semibold">About this chat</Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setAbout(false)}
+            hitSlop={12}
+          >
+            <Text className="text-base font-medium text-human-foreground">
+              Done
+            </Text>
+          </Pressable>
         </View>
-      </Modal>
+        {conversation ? (
+          <ChatAbout
+            conversation={conversation}
+            actors={actors}
+            sessions={chat.sessions}
+          />
+        ) : null}
+      </PageSheet>
       {sheet.sheet}
     </Screen>
   );

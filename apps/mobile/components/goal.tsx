@@ -1,12 +1,5 @@
 import { useState } from "react";
-import {
-  Alert,
-  Modal,
-  Pressable,
-  ScrollView,
-  TextInput,
-  View,
-} from "react-native";
+import { Alert, Pressable, ScrollView, TextInput, View } from "react-native";
 import { useCSSVariable } from "uniwind";
 import {
   clearSessionGoal,
@@ -17,6 +10,7 @@ import {
   useSessionGoal,
 } from "@zerolux/chat";
 import type { ChatSession, GoalChange, SessionGoal } from "@zerolux/chat";
+import { PageSheet } from "@/components/page-sheet";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { useSession } from "../src/kernel";
@@ -141,12 +135,7 @@ export function GoalSection({ session }: { session: ChatSession }) {
         <Text className="text-xs text-faint">No goal.</Text>
       )}
       {error ? <Text className="text-xs text-destructive">{error}</Text> : null}
-      <Modal
-        visible={editing}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setEditing(false)}
-      >
+      <PageSheet open={editing} onClose={() => setEditing(false)}>
         <GoalForm
           goal={goal}
           save={async (objective, budget) => {
@@ -169,7 +158,7 @@ export function GoalSection({ session }: { session: ChatSession }) {
           error={error}
           close={() => setEditing(false)}
         />
-      </Modal>
+      </PageSheet>
     </View>
   );
 }

@@ -5,7 +5,6 @@ import type { ReactNode } from "react";
 import {
   ActivityIndicator,
   Image as NativeImage,
-  Modal,
   Pressable,
   ScrollView,
   Switch as NativeSwitch,
@@ -22,6 +21,7 @@ import type {
   Tone,
   UiComponents,
 } from "@zerolux/ui";
+import { PageSheet } from "@/components/page-sheet";
 import { Menu, RowMenu, useActionSheet } from "@/components/action-menu";
 import { DateInput } from "@/components/date-input";
 import { FolderInput } from "@/components/folder-input";
@@ -100,29 +100,22 @@ const Tabs: UiComponents["Tabs"] = ({ items, value, onChange }) => (
 );
 
 const Sheet: UiComponents["Sheet"] = ({ open, onClose, title, children }) => (
-  <Modal
-    visible={open}
-    animationType="slide"
-    presentationStyle="pageSheet"
-    onRequestClose={onClose}
-  >
-    <View className="flex-1 bg-background">
-      <View className="flex-row items-center justify-between border-b border-border px-5 py-3">
-        <AppText className="text-[17px] font-semibold">{title}</AppText>
-        <Pressable accessibilityRole="button" onPress={onClose} hitSlop={12}>
-          <AppText className="text-base font-medium text-human-foreground">
-            Done
-          </AppText>
-        </Pressable>
-      </View>
-      <ScrollView
-        contentContainerClassName="gap-4 px-5 py-5"
-        keyboardShouldPersistTaps="handled"
-      >
-        {children}
-      </ScrollView>
+  <PageSheet open={open} onClose={onClose}>
+    <View className="flex-row items-center justify-between border-b border-border px-5 py-3">
+      <AppText className="text-[17px] font-semibold">{title}</AppText>
+      <Pressable accessibilityRole="button" onPress={onClose} hitSlop={12}>
+        <AppText className="text-base font-medium text-human-foreground">
+          Done
+        </AppText>
+      </Pressable>
     </View>
-  </Modal>
+    <ScrollView
+      contentContainerClassName="gap-4 px-5 py-5"
+      keyboardShouldPersistTaps="handled"
+    >
+      {children}
+    </ScrollView>
+  </PageSheet>
 );
 
 /** Groups of a menu, a line between them; empty ones go. */

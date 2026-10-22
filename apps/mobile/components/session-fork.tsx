@@ -5,7 +5,6 @@ import { useState } from "react";
 import {
   ActionSheetIOS,
   Alert,
-  Modal,
   Platform,
   Pressable,
   TextInput,
@@ -19,6 +18,7 @@ import type {
   SessionFork,
 } from "@zerolux/chat";
 import { useCSSVariable } from "uniwind";
+import { PageSheet } from "@/components/page-sheet";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { useSession } from "../src/kernel";
@@ -192,54 +192,47 @@ function ForkEditor({
     close();
   };
   return (
-    <Modal
-      visible={text !== undefined}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={cancel}
-    >
-      <View className="flex-1 bg-background">
-        <View className="flex-row items-center justify-between border-b border-border px-5 py-3">
-          <Pressable accessibilityRole="button" onPress={cancel} hitSlop={12}>
-            <Text className="text-base text-muted-foreground">Cancel</Text>
-          </Pressable>
-          <Text className="text-[17px] font-semibold">{title}</Text>
-          <Pressable
-            accessibilityRole="button"
-            disabled={busy || !text?.trim()}
-            onPress={() => {
-              setBusy(true);
-              setError("");
-              send(text!.trim())
-                .catch((e: unknown) => setError(errorMessage(e)))
-                .finally(() => setBusy(false));
-            }}
-            hitSlop={12}
-            className="disabled:opacity-40"
-          >
-            <Text className="text-base font-medium text-human-foreground">
-              Send
-            </Text>
-          </Pressable>
-        </View>
-        <View className="gap-3 px-5 py-4">
-          <TextInput
-            value={text ?? ""}
-            onChangeText={setText}
-            multiline
-            autoFocus
-            editable={!busy}
-            placeholder={placeholder}
-            placeholderTextColor={faint}
-            className="min-h-32 rounded-md border border-input bg-card px-3 py-2.5 text-[15px] leading-[21px] text-foreground"
-            textAlignVertical="top"
-          />
-          {error ? (
-            <Text className="text-sm text-destructive">{error}</Text>
-          ) : null}
-        </View>
+    <PageSheet open={text !== undefined} onClose={cancel}>
+      <View className="flex-row items-center justify-between border-b border-border px-5 py-3">
+        <Pressable accessibilityRole="button" onPress={cancel} hitSlop={12}>
+          <Text className="text-base text-muted-foreground">Cancel</Text>
+        </Pressable>
+        <Text className="text-[17px] font-semibold">{title}</Text>
+        <Pressable
+          accessibilityRole="button"
+          disabled={busy || !text?.trim()}
+          onPress={() => {
+            setBusy(true);
+            setError("");
+            send(text!.trim())
+              .catch((e: unknown) => setError(errorMessage(e)))
+              .finally(() => setBusy(false));
+          }}
+          hitSlop={12}
+          className="disabled:opacity-40"
+        >
+          <Text className="text-base font-medium text-human-foreground">
+            Send
+          </Text>
+        </Pressable>
       </View>
-    </Modal>
+      <View className="gap-3 px-5 py-4">
+        <TextInput
+          value={text ?? ""}
+          onChangeText={setText}
+          multiline
+          autoFocus
+          editable={!busy}
+          placeholder={placeholder}
+          placeholderTextColor={faint}
+          className="min-h-32 rounded-md border border-input bg-card px-3 py-2.5 text-[15px] leading-[21px] text-foreground"
+          textAlignVertical="top"
+        />
+        {error ? (
+          <Text className="text-sm text-destructive">{error}</Text>
+        ) : null}
+      </View>
+    </PageSheet>
   );
 }
 

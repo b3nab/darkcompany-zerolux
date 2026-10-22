@@ -1,7 +1,6 @@
 import { useState } from "react";
 import {
   Alert,
-  Modal,
   Pressable,
   ScrollView,
   Switch,
@@ -21,6 +20,7 @@ import {
   weekdays,
 } from "@zerolux/chat";
 import type { ChatSession, Schedule, ScheduleRule } from "@zerolux/chat";
+import { PageSheet } from "@/components/page-sheet";
 import { SettingSelect } from "@/components/setting-select";
 import { TimeField } from "@/components/time-field";
 import { Text } from "@/components/ui/text";
@@ -113,11 +113,9 @@ export function Schedules({ session }: { session: ChatSession }) {
       ) : schedules.schedules ? (
         <Text className="text-xs text-faint">Nothing scheduled.</Text>
       ) : null}
-      <Modal
-        visible={editing !== undefined}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setEditing(undefined)}
+      <PageSheet
+        open={editing !== undefined}
+        onClose={() => setEditing(undefined)}
       >
         {editing !== undefined ? (
           <ScheduleForm
@@ -133,7 +131,7 @@ export function Schedules({ session }: { session: ChatSession }) {
             close={() => setEditing(undefined)}
           />
         ) : null}
-      </Modal>
+      </PageSheet>
     </View>
   );
 }

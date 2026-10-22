@@ -98,6 +98,7 @@ import type {
   PlanStep,
   SessionBlock,
 } from "@zerolux/chat";
+import { PageSheet } from "@/components/page-sheet";
 import { ApprovalCard, ApprovalReceipt } from "@/components/approval-card";
 import { Composer as ComposerBox } from "@/components/composer";
 import { pieceIcon } from "@/components/extension-view";
@@ -492,12 +493,7 @@ export default function SessionPage() {
         ) : null}
       </Composer>
       {inputs.sheet}
-      <Modal
-        visible={about}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setAbout(false)}
-      >
+      <PageSheet open={about} onClose={() => setAbout(false)}>
         <About
           subagents={subagents}
           session={session}
@@ -505,7 +501,7 @@ export default function SessionPage() {
           name={name}
           close={() => setAbout(false)}
         />
-      </Modal>
+      </PageSheet>
     </Screen>
   );
 }

@@ -14,7 +14,6 @@ import {
   ActionSheetIOS,
   Alert,
   Linking,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -35,6 +34,7 @@ import {
   useSessionPullRequest,
 } from "@zerolux/chat";
 import type { Check, GitChange, PullRequest } from "@zerolux/chat";
+import { PageSheet } from "@/components/page-sheet";
 import { Screen } from "@/components/screen";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
@@ -344,18 +344,13 @@ export default function ChangesPage() {
           </View>
         </KeyboardStickyView>
       ) : null}
-      <Modal
-        visible={opening}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setOpening(false)}
-      >
+      <PageSheet open={opening} onClose={() => setOpening(false)}>
         <OpenPullRequest
           branch={status?.branch ?? ""}
           open={(input) => pr.open(input).then(() => setOpening(false))}
           close={() => setOpening(false)}
         />
-      </Modal>
+      </PageSheet>
     </Screen>
   );
 }

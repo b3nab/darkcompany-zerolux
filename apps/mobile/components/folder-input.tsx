@@ -1,18 +1,13 @@
 import * as Haptics from "expo-haptics";
 import { ChevronRightIcon, HouseIcon } from "lucide-react-native";
 import { useEffect, useState } from "react";
-import {
-  ActivityIndicator,
-  Modal,
-  Pressable,
-  ScrollView,
-  View,
-} from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCSSVariable } from "uniwind";
 import { errorMessage, readFolders } from "@zerolux/chat";
 import type { FolderListing } from "@zerolux/chat";
 import type { FolderInputProps } from "@zerolux/ui";
+import { PageSheet } from "@/components/page-sheet";
 import { Menu } from "@/components/action-menu";
 import { SearchField } from "@/components/search-field";
 import { Button } from "@/components/ui/button";
@@ -142,168 +137,161 @@ function FolderSheet({
       folder.name.toLowerCase().includes(query.trim().toLowerCase()),
   );
   return (
-    <Modal
-      visible
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={onClose}
-    >
-      <View className="flex-1 bg-background">
-        <View className="flex-row items-center justify-between border-b border-border py-1.5 pr-2 pl-5">
-          <Pressable accessibilityRole="button" onPress={onClose} hitSlop={12}>
-            <Text className="text-base font-medium text-human-foreground">
-              Cancel
-            </Text>
-          </Pressable>
-          <Text className="text-[17px] font-semibold">Choose a folder</Text>
-          <Menu
-            label="More"
-            items={[
-              {
-                title: "Show hidden folders",
-                checked: hidden,
-                onPress: () => setHidden(!hidden),
-              },
-              ...(listing?.home
-                ? [
-                    { divider: true as const },
-                    {
-                      title: "Home",
-                      icon: "house",
-                      onPress: () => setPath(listing.home ?? undefined),
-                    },
-                  ]
-                : []),
-            ]}
-          />
-        </View>
-        <ScrollView
-          contentContainerClassName="gap-3 px-4 pt-3 pb-6"
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-        >
-          {here ? (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerClassName="items-center gap-1"
-            >
-              {way(here.path, here.home).map((stop, i, all) => {
-                const last = i === all.length - 1;
-                return (
-                  <View key={stop} className="flex-row items-center gap-1">
-                    {i ? (
-                      <ChevronRightIcon
-                        color={faint}
-                        size={14}
-                        strokeWidth={1.5}
-                      />
+    <PageSheet open={true} onClose={onClose}>
+      <View className="flex-row items-center justify-between border-b border-border py-1.5 pr-2 pl-5">
+        <Pressable accessibilityRole="button" onPress={onClose} hitSlop={12}>
+          <Text className="text-base font-medium text-human-foreground">
+            Cancel
+          </Text>
+        </Pressable>
+        <Text className="text-[17px] font-semibold">Choose a folder</Text>
+        <Menu
+          label="More"
+          items={[
+            {
+              title: "Show hidden folders",
+              checked: hidden,
+              onPress: () => setHidden(!hidden),
+            },
+            ...(listing?.home
+              ? [
+                  { divider: true as const },
+                  {
+                    title: "Home",
+                    icon: "house",
+                    onPress: () => setPath(listing.home ?? undefined),
+                  },
+                ]
+              : []),
+          ]}
+        />
+      </View>
+      <ScrollView
+        contentContainerClassName="gap-3 px-4 pt-3 pb-6"
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+      >
+        {here ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerClassName="items-center gap-1"
+          >
+            {way(here.path, here.home).map((stop, i, all) => {
+              const last = i === all.length - 1;
+              return (
+                <View key={stop} className="flex-row items-center gap-1">
+                  {i ? (
+                    <ChevronRightIcon
+                      color={faint}
+                      size={14}
+                      strokeWidth={1.5}
+                    />
+                  ) : null}
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={last}
+                    onPress={() => setPath(stop)}
+                    hitSlop={6}
+                    className="flex-row items-center gap-1 active:opacity-60"
+                  >
+                    {stop === here.home ? (
+                      <HouseIcon color={muted} size={14} strokeWidth={1.5} />
                     ) : null}
-                    <Pressable
-                      accessibilityRole="button"
-                      disabled={last}
-                      onPress={() => setPath(stop)}
-                      hitSlop={6}
-                      className="flex-row items-center gap-1 active:opacity-60"
+                    <Text
+                      className={cn(
+                        "text-[13px]",
+                        last
+                          ? "font-semibold text-foreground"
+                          : "text-muted-foreground",
+                      )}
                     >
-                      {stop === here.home ? (
-                        <HouseIcon color={muted} size={14} strokeWidth={1.5} />
-                      ) : null}
-                      <Text
-                        className={cn(
-                          "text-[13px]",
-                          last
-                            ? "font-semibold text-foreground"
-                            : "text-muted-foreground",
-                        )}
-                      >
-                        {named(stop)}
-                      </Text>
-                    </Pressable>
-                  </View>
-                );
-              })}
-            </ScrollView>
-          ) : null}
-          {here?.folders.length ? (
-            <SearchField
-              value={query}
-              onChange={setQuery}
-              label={`Search in ${named(here.path)}`}
-            />
-          ) : null}
-          {error ? (
-            <View className="gap-2">
-              <Text className="text-sm text-destructive">{error}</Text>
-              {path ? (
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => setPath(undefined)}
-                  className="self-start"
-                >
-                  <Text className="text-[15px] font-medium text-human-foreground">
-                    Home
-                  </Text>
-                </Pressable>
-              ) : null}
-            </View>
-          ) : !here ? (
-            <ActivityIndicator size="small" color={muted} className="mt-4" />
-          ) : folders.length ? (
-            <View className="overflow-hidden rounded-md border border-border bg-card">
-              {folders.map((folder, i) => (
-                <Pressable
-                  key={folder.path}
-                  accessibilityRole="button"
-                  onPress={() => setPath(folder.path)}
+                      {named(stop)}
+                    </Text>
+                  </Pressable>
+                </View>
+              );
+            })}
+          </ScrollView>
+        ) : null}
+        {here?.folders.length ? (
+          <SearchField
+            value={query}
+            onChange={setQuery}
+            label={`Search in ${named(here.path)}`}
+          />
+        ) : null}
+        {error ? (
+          <View className="gap-2">
+            <Text className="text-sm text-destructive">{error}</Text>
+            {path ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setPath(undefined)}
+                className="self-start"
+              >
+                <Text className="text-[15px] font-medium text-human-foreground">
+                  Home
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : !here ? (
+          <ActivityIndicator size="small" color={muted} className="mt-4" />
+        ) : folders.length ? (
+          <View className="overflow-hidden rounded-md border border-border bg-card">
+            {folders.map((folder, i) => (
+              <Pressable
+                key={folder.path}
+                accessibilityRole="button"
+                onPress={() => setPath(folder.path)}
+                className={cn(
+                  "min-h-12 flex-row items-center gap-3 px-3.5 py-2.5 active:bg-accent",
+                  i > 0 && "border-t border-border",
+                )}
+              >
+                <Icon name="folder-closed" />
+                <Text
+                  numberOfLines={1}
                   className={cn(
-                    "min-h-12 flex-row items-center gap-3 px-3.5 py-2.5 active:bg-accent",
-                    i > 0 && "border-t border-border",
+                    "flex-1 text-[15px]",
+                    folder.hidden && "text-muted-foreground",
                   )}
                 >
-                  <Icon name="folder-closed" />
-                  <Text
-                    numberOfLines={1}
-                    className={cn(
-                      "flex-1 text-[15px]",
-                      folder.hidden && "text-muted-foreground",
-                    )}
-                  >
-                    {folder.name}
-                  </Text>
-                  <ChevronRightIcon color={faint} size={16} strokeWidth={1.5} />
-                </Pressable>
-              ))}
-            </View>
-          ) : (
-            <Text className="py-6 text-center text-sm text-faint">
-              {query.trim() ? "No folder matches." : "No folders."}
-            </Text>
-          )}
-          {here?.truncated ? (
-            <Text className="text-center text-xs text-faint">
-              {`The first ${here.folders.length} folders by name.`}
-            </Text>
-          ) : null}
-        </ScrollView>
-        <View
-          className="gap-1.5 border-t border-border px-4 pt-3"
-          style={{ paddingBottom: bottom + 12 }}
-        >
-          <Button disabled={!here} onPress={() => here && onChoose(here.path)}>
-            <Text>Use this folder</Text>
-          </Button>
-          {here ? (
-            <Text
-              numberOfLines={1}
-              ellipsizeMode="middle"
-              className="text-center text-[12.5px] text-muted-foreground"
-            >
-              {here.path}
-            </Text>
-          ) : null}
-        </View>
+                  {folder.name}
+                </Text>
+                <ChevronRightIcon color={faint} size={16} strokeWidth={1.5} />
+              </Pressable>
+            ))}
+          </View>
+        ) : (
+          <Text className="py-6 text-center text-sm text-faint">
+            {query.trim() ? "No folder matches." : "No folders."}
+          </Text>
+        )}
+        {here?.truncated ? (
+          <Text className="text-center text-xs text-faint">
+            {`The first ${here.folders.length} folders by name.`}
+          </Text>
+        ) : null}
+      </ScrollView>
+      <View
+        className="gap-1.5 border-t border-border px-4 pt-3"
+        style={{ paddingBottom: bottom + 12 }}
+      >
+        <Button disabled={!here} onPress={() => here && onChoose(here.path)}>
+          <Text>Use this folder</Text>
+        </Button>
+        {here ? (
+          <Text
+            numberOfLines={1}
+            ellipsizeMode="middle"
+            className="text-center text-[12.5px] text-muted-foreground"
+          >
+            {here.path}
+          </Text>
+        ) : null}
       </View>
-    </Modal>
+    </PageSheet>
   );
 }
