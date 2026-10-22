@@ -3,7 +3,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { actionFields } from "@zerolux/chat";
 import type { Extension, ExtensionSetting, JsonSchema } from "@zerolux/chat";
 import { ActionForm } from "./ActionForm";
-import { ExtensionList, settingChanges, settingsSchema } from "./Extensions";
+import { MemoryRouter } from "react-router";
+import type { MarketplaceOffer } from "@zerolux/chat";
+import { ExtensionsHome } from "./Extensions";
+import {
+  ExtensionPage,
+  settingChanges,
+  settingsSchema,
+} from "./extension-page";
+import type { Tab } from "./extension-page";
+import { MarketplacePage } from "./marketplace";
 import { Part } from "./extension-view";
 import { uiComponents } from "./native-ui";
 import { uiModule } from "@zerolux/ui/host";
@@ -94,19 +103,63 @@ const extension = (over: Partial<Extension>): Extension => ({
   ...over,
 });
 
-const list = (extensions: Extension[], owns: boolean) =>
+const offerOf = (over: Partial<MarketplaceOffer>): MarketplaceOffer => ({
+  index: "https://192.0.2.1/index.json",
+  id: "aspen.tasks",
+  name: "Tasks",
+  publisher: "aspen",
+  description: "Tasks for people and agents",
+  version: "1.1.0",
+  installed: null,
+  ...over,
+});
+
+const home = (
+  extensions: Extension[],
+  owns: boolean,
+  view: "installed" | "proposals" = "installed",
+  offers: MarketplaceOffer[] = [],
+) =>
   renderToStaticMarkup(
-    <ExtensionList
-      extensions={extensions}
-      error=""
-      owns={owns}
-      busy={false}
-      perform={async () => true}
-    />,
+    <MemoryRouter>
+      <ExtensionsHome
+        view={view}
+        extensions={extensions}
+        marketplace={{ offers, marketplaces: [], errors: [] }}
+        error=""
+        proposerOf={(one) => (one.proposed_by === "a-cedar" ? "cedar" : "")}
+        owns={owns}
+        busy={false}
+        act={() => {}}
+        consent={() => {}}
+      />
+    </MemoryRouter>,
   );
 
-test("everyone sees each extension, whether it runs, and runs its actions", () => {
-  const html = list(
+const page = (
+  id: string,
+  extensions: Extension[],
+  owns: boolean,
+  tab: Tab = "overview",
+  offers: MarketplaceOffer[] = [],
+) =>
+  renderToStaticMarkup(
+    <MemoryRouter>
+      <ExtensionPage
+        id={id}
+        extensions={extensions}
+        marketplace={{ offers, marketplaces: [], errors: [] }}
+        owns={owns}
+        busy={false}
+        perform={async () => true}
+        consent={() => {}}
+        tab={tab}
+      />
+    </MemoryRouter>,
+  );
+
+test("installed extensions are listed by what they wait for, each opening its page", () => {
+  const html = home(
     [
       extension({}),
       extension({
@@ -115,31 +168,68 @@ test("everyone sees each extension, whether it runs, and runs its actions", () =
         enabled: false,
         running: false,
         error: "The process ended",
-        dependencies: { "aspen.tasks": ">=1.0" },
       }),
+      extension({ id: "cedar.draft", name: "Draft", dev: true }),
     ],
     false,
+    "installed",
+    [offerOf({ installed: "1.0.0" })],
   );
-  expect(html).toContain("Tasks");
-  expect(html).toContain("Running");
-  expect(html).toContain("Error");
+  expect(html).toContain(">Active");
+  expect(html).toContain(">Disabled");
+  expect(html).toContain(">In development");
+  expect(html).toContain("1 update available");
+  expect(html).toContain("1.0.0 → 1.1.0");
   expect(html).toContain("The process ended");
-  expect(html).toContain("Needs aspen.tasks &gt;=1.0");
-  expect(html).toContain("Create task");
-  expect(html).toContain("Writes");
-  // An action runs only while its extension is enabled.
-  expect(html.match(/>Run</g)).toHaveLength(2);
-  expect(html.match(/disabled=""[^>]*>Run</g)).toHaveLength(1);
-  // Only the owner manages them.
-  expect(html).not.toContain(">Disable<");
-  expect(html).not.toContain("Load from a folder");
+  expect(html).toContain('href="/extensions/birch.notes"');
+  // The Marketplace is a page of its own, a button away.
+  expect(html).toContain('href="/extensions/marketplace"');
+  // Only the owner updates, enables and loads again.
+  expect(html).not.toMatch(/>(Update|Enable|Load again)<\/button>/);
+  expect(home([extension({ enabled: false })], true)).toContain(
+    ">Enable</button>",
+  );
 });
 
-test("the owner enables, sets up, loads again and removes them", () => {
-  const html = list(
+test("an extension's page shows what it can do, its actions running only while it is enabled", () => {
+  const extensions = [
+    extension({ dependencies: { "birch.notes": ">=1.0" } }),
+    extension({ id: "birch.notes", name: "Notes", enabled: false }),
+  ];
+  const html = page("aspen.tasks", extensions, false, "access");
+  expect(html).toContain("What it contains");
+  expect(html).toContain("Create task");
+  expect(html).toContain(">write<");
+  expect(html).toContain("birch.notes &gt;=1.0");
+  expect(html.match(/>Run</g)).toHaveLength(1);
+  expect(page("birch.notes", extensions, false, "access")).toMatch(
+    /disabled=""[^>]*>Run</,
+  );
+  // Only the owner acts on it.
+  expect(html).not.toContain('aria-label="More"');
+  expect(page("birch.notes", extensions, true)).toContain(">Enable</button>");
+});
+
+test("an extension's page offers the owner its update, or its install when it is only offered", () => {
+  const html = page("aspen.tasks", [extension({})], true, "versions", [
+    offerOf({ installed: "1.0.0" }),
+  ]);
+  expect(html).toContain("Update to 1.1.0");
+  expect(html).toContain(">Available<");
+  expect(html).toContain(">Installed<");
+  const offered = page("aspen.tasks", [], true, "overview", [offerOf({})]);
+  expect(offered).toContain(">Install</button>");
+  expect(offered).toContain('href="/extensions/marketplace"');
+  expect(offered).toContain("192.0.2.1");
+  // Settings show only for an installed one that has them.
+  expect(offered).not.toContain(">settings<");
+});
+
+test("an extension's settings are in its page", () => {
+  const html = page(
+    "aspen.tasks",
     [
       extension({
-        dev: true,
         settings: [
           {
             key: "token",
@@ -151,18 +241,13 @@ test("the owner enables, sets up, loads again and removes them", () => {
           },
         ],
       }),
-      extension({ id: "birch.notes", name: "Notes", enabled: false }),
     ],
     true,
+    "settings",
   );
-  expect(html).toContain(">Disable<");
-  expect(html).toContain(">Enable<");
-  expect(html).toContain(">Settings<");
-  expect(html).toContain("/home/owner/extensions/tasks");
-  expect(html).toContain(">Load again<");
-  // Only a disabled one is removed.
-  expect(html.match(/>Remove</g)).toHaveLength(1);
-  expect(html).toContain("Load from a folder");
+  expect(html).toContain("Token");
+  expect(html).toContain(">Save</button>");
+  expect(html).toContain("Forget Token");
 });
 
 test("settings saved: an emptied one is cleared, an empty secret kept", () => {
@@ -261,38 +346,54 @@ test("a described view draws its parts; only items with an action run one, none 
 });
 
 test("the marketplace offers install or update to the owner, and shows each index it cannot read", () => {
-  const offer = {
-    index: "https://192.0.2.1/index.json",
-    publisher: "aspen",
-    description: "",
-    version: "1.1.0",
-  };
   const html = (owns: boolean) =>
     renderToStaticMarkup(
-      <ExtensionList
-        extensions={[]}
-        marketplace={{
-          offers: [
-            { ...offer, id: "aspen.notes", name: "Notes", installed: null },
-            { ...offer, id: "aspen.clock", name: "Clock", installed: "1.0.0" },
-            { ...offer, id: "aspen.maps", name: "Maps", installed: "1.1.0" },
-          ],
-          errors: [
-            { index: "https://192.0.2.2/index.json", error: "Cannot reach it" },
-          ],
-        }}
-        error=""
-        owns={owns}
-        busy={false}
-        perform={async () => true}
-      />,
+      <MemoryRouter>
+        <MarketplacePage
+          extensions={[]}
+          marketplace={{
+            offers: [
+              offerOf({ id: "aspen.notes", name: "Notes" }),
+              offerOf({ id: "aspen.clock", name: "Clock", installed: "1.0.0" }),
+              offerOf({ id: "aspen.maps", name: "Maps", installed: "1.1.0" }),
+              offerOf({
+                id: "aspen.trail",
+                name: "Trail",
+                installed: "1.1.0",
+                current: false,
+              }),
+            ],
+            marketplaces: [
+              { index: "https://192.0.2.1/index.json", name: "Aspen market" },
+            ],
+            errors: [
+              {
+                index: "https://192.0.2.2/index.json",
+                error: "Cannot reach it",
+              },
+            ],
+          }}
+          error=""
+          owns={owns}
+          consent={() => {}}
+        />
+      </MemoryRouter>,
     );
+  // Updates first, then everything.
   expect(html(true).match(/>(Install|Update)<\/button>/g)).toEqual([
+    ">Update</button>",
+    ">Update</button>",
     ">Install</button>",
+    ">Update</button>",
     ">Update</button>",
   ]);
   expect(html(true)).toContain("1.0.0 → 1.1.0");
-  expect(html(true)).toContain("Cannot reach it");
+  expect(html(true)).toContain("1.1.0 · new build");
+  expect(html(true)).toContain(
+    "Extensions from 2 marketplaces: Aspen market and 192.0.2.2",
+  );
+  expect(html(true)).toContain("192.0.2.2: Cannot reach it");
+  expect(html(true)).toContain('href="/extensions/marketplaces"');
   expect(html(false)).not.toMatch(/>(Install|Update)<\/button>/);
 });
 
@@ -305,20 +406,20 @@ test("the web gives every component a native view uses, and draws only images th
   expect(image("https://192.0.2.1/aspen.png")).toBe("");
 });
 
-test("an extension an agent proposed waits disabled for the owner, by the agent's name", () => {
-  const html = renderToStaticMarkup(
-    <ExtensionList
-      extensions={[
-        extension({ enabled: false, running: false, proposed_by: "a-cedar" }),
-      ]}
-      proposerOf={(one) => (one.proposed_by === "a-cedar" ? "cedar" : "")}
-      error=""
-      owns
-      busy={false}
-      perform={async () => true}
-    />,
+test("an extension an agent proposed waits in Proposals for the owner, by the agent's name", () => {
+  const proposed = extension({
+    enabled: false,
+    running: false,
+    proposed_by: "a-cedar",
+  });
+  const html = home(
+    [proposed, extension({ id: "birch.notes", name: "Notes" })],
+    true,
+    "proposals",
   );
-  expect(html).toContain("cedar");
-  expect(html.match(/>Enable<\/button>/g)).toHaveLength(1);
-  expect(html.match(/>Remove</g)).toHaveLength(1);
+  expect(html).toContain("Proposed by cedar");
+  expect(html).toContain(">Review and enable</button>");
+  expect(html).toContain(">Remove</button>");
+  // It is not among the installed ones until the owner enables it.
+  expect(home([proposed], true)).toContain("No extensions.");
 });

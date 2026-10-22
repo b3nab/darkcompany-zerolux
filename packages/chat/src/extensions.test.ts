@@ -1,9 +1,14 @@
 import { afterEach, expect, test } from "bun:test";
 import { setKernelFetch } from "./client";
 import {
+  cardFileNamed,
+  cardFileUrl,
+  cardIcon,
   consentParts,
   extensionGroups,
   installOffer,
+  marketplaceIndexes,
+  marketplaceName,
   newProposals,
   offerAction,
   offerWarning,
@@ -17,6 +22,7 @@ import {
   setExtensionSettings,
 } from "./extensions";
 import type { Actor } from "./client";
+import type { CardFile, ExtensionCard } from "./extensions";
 import type { ChatSession } from "./chat";
 import type { Extension, MarketplaceOffer } from "./extensions";
 
@@ -224,4 +230,56 @@ test("a proposal warns before it is enabled only of what runs beyond its own pro
   expect(
     proposalWarning({ ...notes, parts: ["kernel", "interface"] }, "birch"),
   ).toContain("birch");
+});
+
+test("a marketplace is named by its index, else by its host, and a local one is this computer's", () => {
+  const marketplace = {
+    offers: [],
+    marketplaces: [{ index: "https://192.0.2.1/index.json", name: "Aspen" }],
+    errors: [{ index: "https://192.0.2.2/index.json", error: "Gone" }],
+  };
+  expect(marketplaceName("https://192.0.2.1/index.json", marketplace)).toBe(
+    "Aspen",
+  );
+  expect(marketplaceName("https://192.0.2.2/index.json", marketplace)).toBe(
+    "192.0.2.2",
+  );
+  expect(marketplaceName("file:///tmp/marketplace/index.json")).toBe(
+    "This computer",
+  );
+  expect(marketplaceIndexes(marketplace)).toEqual([
+    "https://192.0.2.1/index.json",
+    "https://192.0.2.2/index.json",
+  ]);
+});
+
+test("a card's files are read on the kernel, its icon follows the theme, its README's images by name", () => {
+  const file = (name: string, kind: CardFile["kind"]): CardFile => ({
+    name,
+    sha256: name,
+    size: 1,
+    kind,
+    url: `/api/extensions/assets/${name}`,
+  });
+  const card: ExtensionCard = {
+    summary: "",
+    categories: ["knowledge"],
+    keywords: [],
+    license: null,
+    links: null,
+    icon: file("icon.png", "icon"),
+    icon_dark: null,
+    media: [file("media/one.png", "image")],
+    readme: null,
+    changelog: null,
+  };
+  expect(cardFileUrl(card.icon!, "http://192.0.2.1:4310")).toBe(
+    "http://192.0.2.1:4310/api/extensions/assets/icon.png",
+  );
+  expect(cardIcon(card, true)?.name).toBe("icon.png");
+  expect(
+    cardIcon({ ...card, icon_dark: file("dark.png", "icon") }, true)?.name,
+  ).toBe("dark.png");
+  expect(cardFileNamed(card, "./media/one.png")?.kind).toBe("image");
+  expect(cardFileNamed(card, "media/two.png")).toBeUndefined();
 });

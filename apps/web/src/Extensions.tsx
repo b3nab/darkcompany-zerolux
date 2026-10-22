@@ -1,679 +1,529 @@
 import { useContext, useState } from "react";
 import {
-  disableExtension,
+  Link,
+  NavLink,
+  Route,
+  Routes,
+  useNavigate,
+  useParams,
+} from "react-router";
+import {
+  ArrowUpCircleIcon,
+  ChevronRightIcon,
+  EllipsisIcon,
+  FlaskConicalIcon,
+  LibraryIcon,
+  RotateCwIcon,
+  SearchIcon,
+  StoreIcon,
+} from "lucide-react";
+import {
   enableExtension,
-  errorMessage,
-  installOffer,
+  extensionGroups,
   loadExtensionFolder,
   offerAction,
-  offerVersions,
-  offerWarning,
-  proposalWarning,
+  offerFor,
   proposer,
   removeExtension,
-  runAction,
-  setExtensionSettings,
   useExtensions,
   useMarketplace,
 } from "@zerolux/chat";
 import type {
   ChatSession,
   Extension,
-  ExtensionAction,
-  ExtensionSetting,
-  JsonSchema,
   Marketplace,
+  MarketplaceOffer,
   Perform,
 } from "@zerolux/chat";
-import { Section, Settings } from "./Account";
-import { ActionForm } from "./ActionForm";
-import { ConfirmButton } from "./extension-view";
-import { UiActors } from "./native-ui";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  ConsentDialog,
+  ExtensionIcon,
+  StateChip,
+  partNames,
+} from "./extension-bits";
+import type { Consent } from "./extension-bits";
+import { ExtensionPage } from "./extension-page";
+import { MarketplacePage, MarketplacesPage } from "./marketplace";
+import { UiActors } from "./native-ui";
+import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 
-const parts: Record<string, string> = {
-  kernel: "Kernel module",
-  interface: "Interface",
-  process: "Process",
-  remote: "Remote",
-};
+type Act = (operation: () => Promise<unknown>) => void;
 
-/** Whether it runs, and if not, why. */
-function State({ extension }: { extension: Extension }) {
-  if (extension.error) return <Badge variant="destructive">Error</Badge>;
-  if (!extension.enabled) return <Badge variant="secondary">Disabled</Badge>;
-  return extension.running ? (
-    <Badge className="bg-human/10 text-human-foreground">Running</Badge>
-  ) : (
-    <Badge variant="outline">Restarting</Badge>
-  );
-}
-
-/**
- * Its settings as an action's input: a secret is never shown, only replaced or forgotten; a
- * choice offers its values by their labels.
- */
-export const settingsSchema = (settings: ExtensionSetting[]): JsonSchema => ({
-  type: "object",
-  properties: Object.fromEntries(
-    settings.map((setting) => [
-      setting.key,
-      {
-        type:
-          setting.type === "number" || setting.type === "boolean"
-            ? setting.type
-            : "string",
-        format: setting.type === "secret" ? "password" : undefined,
-        oneOf:
-          setting.type === "choice"
-            ? (setting.options ?? []).map((option) => ({
-                const: option.value,
-                title: option.label,
-              }))
-            : undefined,
-        title: setting.label,
-        description:
-          [
-            setting.description,
-            setting.type === "secret" && setting.set ? "Saved" : "",
-          ]
-            .filter(Boolean)
-            .join(" ") || undefined,
-      },
-    ]),
-  ),
-});
-
-/** What the form gives, as changes: an emptied setting is cleared, an empty secret kept. */
-export const settingChanges = (
-  settings: ExtensionSetting[],
-  input: Record<string, unknown>,
-) =>
-  Object.fromEntries(
-    settings.flatMap((setting) =>
-      setting.type === "secret"
-        ? setting.key in input
-          ? [[setting.key, input[setting.key]]]
-          : []
-        : [[setting.key, input[setting.key] ?? null]],
-    ),
-  );
-
-function SettingsDialog({
+/** An installed extension in the list: what it is and how it is, what it waits for; it opens its page. */
+function Row({
   extension,
-  close,
-  busy,
-  perform,
-}: {
-  extension: Extension;
-  close: () => void;
-  busy: boolean;
-  perform: Perform;
-}) {
-  const settings = extension.settings;
-  const saved = settings.filter((s) => s.type === "secret" && s.set);
-  return (
-    <Dialog open onOpenChange={(open) => !open && close()}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{extension.name} settings</DialogTitle>
-        </DialogHeader>
-        <ActionForm
-          schema={settingsSchema(settings)}
-          value={Object.fromEntries(
-            settings.flatMap((s) =>
-              s.type !== "secret" && s.value != null ? [[s.key, s.value]] : [],
-            ),
-          )}
-          submit="Save"
-          busy={busy}
-          run={(input) =>
-            void perform(async () => {
-              await setExtensionSettings(
-                extension.id,
-                settingChanges(settings, input),
-              );
-            }).then((done) => done && close())
-          }
-        />
-        {saved.length > 0 && (
-          <div className="flex flex-wrap gap-x-3 gap-y-1 border-t pt-3">
-            {saved.map((secret) => (
-              <Button
-                key={secret.key}
-                variant="link"
-                size="sm"
-                className="h-auto p-0 text-destructive"
-                disabled={busy}
-                onClick={() =>
-                  void perform(async () => {
-                    await setExtensionSettings(extension.id, {
-                      [secret.key]: null,
-                    });
-                  })
-                }
-              >
-                Forget {secret.label}
-              </Button>
-            ))}
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/** An action run by hand: its input as a form, and what it gave back. */
-export function ActionDialog({
-  action,
-  close,
-}: {
-  action: ExtensionAction;
-  close: () => void;
-}) {
-  const [run, setRun] = useState<{
-    busy?: boolean;
-    result?: unknown;
-    error?: string;
-  }>({});
-  // A destructive action runs only once its input is confirmed.
-  const [confirm, setConfirm] = useState<Record<string, unknown>>();
-  const start = (input: Record<string, unknown>) => {
-    setConfirm(undefined);
-    setRun({ busy: true });
-    runAction(action.extension, action.name, input).then(
-      (result) => setRun({ result }),
-      (failed: unknown) => setRun({ error: errorMessage(failed) }),
-    );
-  };
-  // An action that may run longer than a minute says so, and shows it is still running.
-  const minutes = Math.ceil((action.seconds ?? 0) / 60);
-  const long = minutes > 1 ? `${minutes} minutes` : "";
-  return (
-    <Dialog open onOpenChange={(open) => !open && close()}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{action.title}</DialogTitle>
-          {action.description && (
-            <DialogDescription>{action.description}</DialogDescription>
-          )}
-        </DialogHeader>
-        <ActionForm
-          schema={action.input as JsonSchema}
-          submit={action.title}
-          busy={run.busy === true}
-          run={(input) =>
-            action.effects === "destructive" ? setConfirm(input) : start(input)
-          }
-        />
-        {confirm && (
-          <div
-            role="alertdialog"
-            aria-label="Confirm"
-            className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 p-3"
-          >
-            <p className="flex-1 text-sm">
-              Run {action.title}? It deletes or overwrites data.
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setConfirm(undefined)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => start(confirm)}
-            >
-              {action.title}
-            </Button>
-          </div>
-        )}
-        {run.busy && long && (
-          <p role="status" className="text-sm text-muted-foreground">
-            Running…
-          </p>
-        )}
-        {run.error && (
-          <p role="alert" className="text-sm text-destructive">
-            {run.error}
-          </p>
-        )}
-        {"result" in run && (
-          <pre className="max-h-64 overflow-auto rounded-sm bg-muted px-2 py-1.5 font-mono text-[12px]">
-            {JSON.stringify(run.result, null, 2) ?? "Done"}
-          </pre>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function RemoveDialog({
-  extension,
-  close,
-  busy,
-  perform,
-}: {
-  extension: Extension;
-  close: () => void;
-  busy: boolean;
-  perform: Perform;
-}) {
-  return (
-    <Dialog open onOpenChange={(open) => !open && close()}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Remove {extension.name}?</DialogTitle>
-          <DialogDescription>
-            Its settings, secrets and stored values are deleted.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="outline" onClick={close}>
-            Cancel
-          </Button>
-          <Button
-            variant="destructive"
-            disabled={busy}
-            onClick={() =>
-              void perform(async () => {
-                await removeExtension(extension.id);
-              }).then((done) => done && close())
-            }
-          >
-            Remove
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/** A dialog open on an extension, which follows the list as it is read again. */
-type Open =
-  | { kind: "settings" | "remove"; id: string }
-  | { kind: "action"; action: ExtensionAction };
-
-function ExtensionItem({
-  extension,
-  proposer,
+  offer,
   owns,
   busy,
-  perform,
-  open,
+  act,
+  consent,
 }: {
   extension: Extension;
-  /** The agent that proposed it, by name, while it waits for the owner. */
-  proposer: string;
+  offer?: MarketplaceOffer;
   owns: boolean;
   busy: boolean;
-  perform: Perform;
-  open: (open: Open) => void;
+  act: Act;
+  consent: (consent: Consent) => void;
 }) {
-  const actions = extension.contributes?.actions ?? [];
-  const needs = Object.entries(extension.dependencies);
-  const act = (operation: () => Promise<unknown>) =>
-    void perform(async () => {
-      await operation();
-    });
+  const update = !!offer && offerAction(offer) === "update";
   return (
-    <li
-      aria-label={extension.name}
-      className="flex flex-col gap-3 rounded-xl border bg-card p-5"
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-base font-semibold">{extension.name}</h2>
-        <span className="font-mono text-[11px] text-faint">
-          {extension.version} · {extension.publisher}
+    <li>
+      <Link
+        to={`/extensions/${encodeURIComponent(extension.id)}`}
+        aria-label={extension.name}
+        className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3.5 rounded-lg px-3.5 py-3 transition-colors hover:bg-accent"
+      >
+        <ExtensionIcon id={extension.id} extension={extension} />
+        <span className="min-w-0">
+          <span className="flex items-baseline gap-2">
+            <span className="font-semibold">{extension.name}</span>
+            <span className="font-mono text-xs text-faint">
+              {extension.version}
+            </span>
+            <span className="text-xs text-faint">{extension.publisher}</span>
+          </span>
+          <span className="block truncate text-[13px] text-muted-foreground">
+            {extension.error ?? extension.description}
+          </span>
         </span>
-        <State extension={extension} />
-        {extension.dev && <Badge variant="outline">In development</Badge>}
-        {extension.proposed_by && (
-          <Badge variant="outline" className="text-attention">
-            Proposed by {proposer}
-          </Badge>
-        )}
-      </div>
-      {extension.description && (
-        <p className="text-sm text-muted-foreground">{extension.description}</p>
-      )}
-      {extension.error && (
-        <p role="alert" className="text-sm text-destructive">
-          {extension.error}
-        </p>
-      )}
-      <p className="font-mono text-[11px] text-faint">
-        {[
-          extension.parts.map((part) => parts[part] ?? part).join(" · "),
-          needs.length
-            ? `Needs ${needs.map(([id, version]) => `${id} ${version}`).join(", ")}`
-            : "",
-          extension.dev ? extension.source : "",
-        ]
-          .filter(Boolean)
-          .join(" — ")}
-      </p>
-      {actions.length > 0 && (
-        <ul aria-label="Actions" className="flex flex-col divide-y border-t">
-          {actions.map((action) => (
-            <li key={action.name} className="flex items-center gap-3 py-2.5">
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium">{action.title}</p>
-                <p className="text-xs text-muted-foreground">
-                  {action.description}
-                </p>
-              </div>
-              {action.effects !== "read" && (
-                <span
-                  className={
-                    action.effects === "destructive"
-                      ? "font-mono text-[11px] text-destructive"
-                      : "font-mono text-[11px] text-faint"
-                  }
-                >
-                  {action.effects === "destructive" ? "Destructive" : "Writes"}
-                </span>
-              )}
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!extension.enabled}
-                onClick={() =>
-                  open({
-                    kind: "action",
-                    action: { ...action, extension: extension.id },
-                  })
-                }
-              >
-                Run
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {owns && (
-        <div className="flex flex-wrap gap-2 border-t pt-3">
-          {extension.enabled ? (
+        <span
+          className="flex items-center gap-2"
+          onClick={(event) => event.preventDefault()}
+        >
+          <StateChip extension={extension} offer={offer} />
+          {owns && update && (
+            <Button
+              size="sm"
+              onClick={() => consent({ offer: offer!, installed: extension })}
+            >
+              Update
+            </Button>
+          )}
+          {owns && !update && !extension.enabled && !extension.dev && (
             <Button
               size="sm"
               variant="outline"
               disabled={busy}
-              onClick={() => act(() => disableExtension(extension.id))}
+              onClick={() => act(() => enableExtension(extension.id))}
             >
-              Disable
-            </Button>
-          ) : (
-            <ConfirmButton
-              title="Enable"
-              tone="primary"
-              // An agent's extension says first what it runs, as an offer does.
-              confirm={
-                extension.proposed_by
-                  ? proposalWarning(extension, proposer)
-                  : undefined
-              }
-              busy={busy}
-              go={() => act(() => enableExtension(extension.id))}
-            />
-          )}
-          {extension.settings.length > 0 && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => open({ kind: "settings", id: extension.id })}
-            >
-              Settings
+              Enable
             </Button>
           )}
-          {extension.dev && (
+          {owns && extension.dev && (
             <Button
               size="sm"
               variant="outline"
               disabled={busy}
               onClick={() => act(() => loadExtensionFolder(extension.source))}
             >
+              <RotateCwIcon data-icon="inline-start" />
               Load again
             </Button>
           )}
-          {!extension.enabled && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="ml-auto text-destructive"
-              onClick={() => open({ kind: "remove", id: extension.id })}
-            >
-              Remove
-            </Button>
-          )}
-        </div>
-      )}
+        </span>
+        <ChevronRightIcon className="size-4 text-faint" />
+      </Link>
     </li>
   );
 }
 
-/**
- * What the indexes offer, installed or updated by the owner in one press, and the indexes that
- * could not be read. Code that runs inside the kernel says so, and who signed it, before it
- * installs.
- */
-function MarketplaceSection({
-  marketplace,
-  error,
-  owns,
-  installed,
+function Group({
+  title,
+  children,
 }: {
-  marketplace?: Marketplace;
-  error: string;
-  owns: boolean;
-  installed: () => void;
+  title: string;
+  children: React.ReactNode[];
 }) {
-  const [installing, setInstalling] = useState<string>();
-  const [failed, setFailed] = useState("");
-  const offers = marketplace?.offers ?? [];
-  const errors = marketplace?.errors ?? [];
-  if (!offers.length && !errors.length && !error) return null;
+  if (!children.length) return null;
   return (
-    <Section title="Marketplace">
-      {!!offers.length && (
-        <ul className="flex flex-col divide-y">
-          {offers.map((offer) => {
-            const action = offerAction(offer);
-            const key = `${offer.index} ${offer.id}`;
-            return (
-              <li key={key} className="flex items-center gap-3 py-2.5">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium">
-                    {offer.name}{" "}
-                    <span className="font-mono text-[11px] font-normal text-faint">
-                      {offerVersions(offer)} · {offer.publisher}
-                    </span>
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {offer.description}
-                  </p>
-                  {offer.parts && (
-                    <p className="font-mono text-[11px] text-faint">
-                      {offer.parts
-                        .map((part) => parts[part] ?? part)
-                        .join(" · ")}
-                    </p>
-                  )}
-                </div>
-                {action === "installed" ? (
-                  <Badge variant="outline">Installed</Badge>
-                ) : (
-                  owns && (
-                    <ConfirmButton
-                      title={
-                        installing === key
-                          ? "Installing…"
-                          : action === "update"
-                            ? "Update"
-                            : "Install"
-                      }
-                      tone="primary"
-                      confirm={offerWarning(offer)}
-                      busy={installing !== undefined}
-                      go={() => {
-                        setInstalling(key);
-                        setFailed("");
-                        installOffer(offer)
-                          .catch((problem: unknown) =>
-                            setFailed(errorMessage(problem)),
-                          )
-                          .finally(() => {
-                            setInstalling(undefined);
-                            installed();
-                          });
-                      }}
-                    />
-                  )
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {errors.map((unread) => (
-        <p key={unread.index} className="text-xs text-destructive">
-          {unread.error}
-        </p>
-      ))}
-      {(failed || error) && (
-        <p role="alert" className="text-sm text-destructive">
-          {failed || error}
-        </p>
-      )}
-    </Section>
+    <section aria-label={title} className="flex flex-col gap-2">
+      <h2 className="px-3.5 font-mono text-[11px] tracking-[0.06em] text-faint uppercase">
+        {title} <span className="ml-1">{children.length}</span>
+      </h2>
+      <ul className="flex flex-col">{children}</ul>
+    </section>
   );
 }
 
-/** An extension being written, from a folder on the kernel's computer. */
-function LoadFolder({ busy, perform }: { busy: boolean; perform: Perform }) {
-  const [folder, setFolder] = useState("");
-  return (
-    <Section title="Load from a folder">
-      <form
-        className="flex gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const path = folder.trim();
-          if (path)
-            void perform(async () => {
-              await loadExtensionFolder(path);
-            }).then((done) => done && setFolder(""));
-        }}
-      >
-        <Input
-          aria-label="Folder"
-          placeholder="/path/to/extension"
-          value={folder}
-          onChange={(event) => setFolder(event.target.value)}
-          className="font-mono text-[12.5px]"
-        />
-        <Button type="submit" disabled={busy || !folder.trim()}>
-          Load
-        </Button>
-      </form>
-    </Section>
-  );
-}
+const tab =
+  "relative inline-flex items-center gap-2 pb-2.5 text-[13.5px] font-medium text-muted-foreground transition-colors hover:text-foreground aria-[current=page]:text-foreground aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-0 aria-[current=page]:after:-bottom-px aria-[current=page]:after:h-0.5 aria-[current=page]:after:rounded-full aria-[current=page]:after:bg-foreground";
 
-/** The workspace's extensions: what each brings and whether it runs, its actions to run by hand, and for the owner enabling, settings and loading one being written. */
-export function ExtensionList({
+/** Installed and Proposals, side by side; the marketplace is a page of its own, a button away. */
+export function ExtensionsHome({
+  view,
   extensions,
   marketplace,
-  marketplaceError = "",
-  proposerOf = () => "an agent",
-  installed = () => {},
   error,
+  proposerOf,
+  owns,
+  busy,
+  act,
+  consent,
+}: {
+  view: "installed" | "proposals";
+  extensions: Extension[] | undefined;
+  marketplace?: Marketplace;
+  error: string;
+  proposerOf: (extension: Extension) => string;
+  owns: boolean;
+  busy: boolean;
+  act: Act;
+  consent: (consent: Consent) => void;
+}) {
+  const navigate = useNavigate();
+  const [query, setQuery] = useState("");
+  const offers = marketplace?.offers ?? [];
+  const typed = query.trim().toLowerCase();
+  const found = (extensions ?? []).filter(
+    (e) =>
+      !typed ||
+      [e.name, e.description, e.publisher, e.id].some((text) =>
+        text.toLowerCase().includes(typed),
+      ),
+  );
+  const groups = extensionGroups(found, offers);
+  const all = extensionGroups(extensions ?? [], offers);
+  const settled = (extensions?.length ?? 0) - all.proposals.length;
+  const row = (extension: Extension) => (
+    <Row
+      key={extension.id}
+      extension={extension}
+      offer={offerFor(extension, offers)}
+      owns={owns}
+      busy={busy}
+      act={act}
+      consent={consent}
+    />
+  );
+  return (
+    <div className="flex flex-col gap-6">
+      <header className="flex flex-wrap items-end gap-4 border-b">
+        <div className="flex flex-col gap-3.5">
+          <h1 className="text-2xl font-semibold tracking-tight">Extensions</h1>
+          <nav aria-label="Extensions" className="flex gap-5">
+            <NavLink to="/extensions" end className={tab}>
+              Installed
+              <span className="font-mono text-[11.5px] text-faint">
+                {settled}
+              </span>
+            </NavLink>
+            <NavLink to="/extensions/proposals" className={tab}>
+              Proposals
+              {all.proposals.length > 0 && (
+                <span className="min-w-4.5 rounded-full bg-agent px-1.5 text-center text-[11px] leading-4.5 font-semibold text-background">
+                  {all.proposals.length}
+                </span>
+              )}
+            </NavLink>
+          </nav>
+        </div>
+        <div className="mb-2.5 ml-auto flex items-center gap-2">
+          {view === "installed" && (
+            <label className="flex h-8.5 w-60 items-center gap-2 rounded-md border border-input bg-secondary px-2.5 text-faint focus-within:border-ring">
+              <SearchIcon className="size-4" />
+              <input
+                aria-label="Search installed"
+                placeholder="Search installed"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                className="w-full bg-transparent text-[13px] text-foreground outline-none placeholder:text-faint"
+              />
+            </label>
+          )}
+          <Link to="/extensions/marketplace" className={buttonVariants()}>
+            <StoreIcon data-icon="inline-start" />
+            Marketplace
+          </Link>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button variant="outline" size="icon" aria-label="More" />
+              }
+            >
+              <EllipsisIcon />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem
+                onClick={() => navigate("/extensions/marketplaces")}
+              >
+                <LibraryIcon />
+                Marketplaces
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => navigate("/extensions/develop")}>
+                <FlaskConicalIcon />
+                Develop
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </header>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {view === "installed" ? (
+        <>
+          {all.updates.length > 0 && (
+            <div className="flex items-center gap-3.5 rounded-lg border border-attention/35 bg-attention/5 px-3.5 py-3">
+              <ArrowUpCircleIcon className="size-4.5 shrink-0 text-attention" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold">
+                  {all.updates.length === 1
+                    ? "1 update available"
+                    : `${all.updates.length} updates available`}
+                </p>
+                <p className="truncate text-[12.5px] text-muted-foreground">
+                  {all.updates
+                    .map(({ extension }) => extension.name)
+                    .join(", ")}
+                </p>
+              </div>
+              {owns && all.updates.length === 1 && (
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    consent({
+                      offer: all.updates[0]!.offer,
+                      installed: all.updates[0]!.extension,
+                    })
+                  }
+                >
+                  Update
+                </Button>
+              )}
+            </div>
+          )}
+          <Group title="Active">{groups.active.map(row)}</Group>
+          <Group title="Disabled">{groups.disabled.map(row)}</Group>
+          <Group title="In development">{groups.development.map(row)}</Group>
+          {extensions && !settled && (
+            <p className="text-sm text-muted-foreground">No extensions.</p>
+          )}
+        </>
+      ) : (
+        <Proposals
+          proposals={all.proposals}
+          proposerOf={proposerOf}
+          owns={owns}
+          busy={busy}
+          act={act}
+          consent={consent}
+        />
+      )}
+    </div>
+  );
+}
+
+/** What agents proposed, waiting for the owner: nothing runs before they enable it. */
+function Proposals({
+  proposals,
+  proposerOf,
+  owns,
+  busy,
+  act,
+  consent,
+}: {
+  proposals: Extension[];
+  proposerOf: (extension: Extension) => string;
+  owns: boolean;
+  busy: boolean;
+  act: Act;
+  consent: (consent: Consent) => void;
+}) {
+  if (!proposals.length)
+    return <p className="text-sm text-muted-foreground">No proposals.</p>;
+  return (
+    <ul className="flex flex-col gap-3">
+      {proposals.map((proposal) => {
+        const agent = proposerOf(proposal);
+        return (
+          <li
+            key={proposal.id}
+            aria-label={proposal.name}
+            className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-4 rounded-xl border bg-card p-4.5"
+          >
+            <ExtensionIcon id={proposal.id} extension={proposal} />
+            <div className="flex min-w-0 flex-col gap-2">
+              <p className="flex flex-wrap items-baseline gap-2.5">
+                <Link
+                  to={`/extensions/${encodeURIComponent(proposal.id)}`}
+                  className="font-semibold hover:underline"
+                >
+                  {proposal.name}
+                </Link>
+                <span className="font-mono text-xs text-faint">
+                  {proposal.version}
+                </span>
+                <span className="text-[12.5px] text-agent">
+                  Proposed by {agent}
+                </span>
+              </p>
+              {proposal.description && (
+                <p className="text-[13px] text-muted-foreground">
+                  {proposal.description}
+                </p>
+              )}
+              <p className="flex flex-wrap gap-1.5">
+                {proposal.parts.map((part) => (
+                  <span
+                    key={part}
+                    className="rounded-full border px-2 text-[11.5px] text-muted-foreground"
+                  >
+                    {partNames[part] ?? part}
+                  </span>
+                ))}
+              </p>
+            </div>
+            {owns && (
+              <div className="flex flex-col items-stretch gap-2">
+                <Button size="sm" onClick={() => consent({ proposal, agent })}>
+                  Review and enable
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => act(() => removeExtension(proposal.id))}
+                >
+                  Remove
+                </Button>
+              </div>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** Extensions being written, from folders on the kernel's computer. */
+function Develop({
+  extensions,
   owns,
   busy,
   perform,
+  act,
 }: {
   extensions: Extension[] | undefined;
-  /** What the indexes offer. */
-  marketplace?: Marketplace;
-  marketplaceError?: string;
-  /** Who proposed an extension, by name. */
-  proposerOf?: (extension: Extension) => string;
-  /** An offer was installed or updated, or failed to be. */
-  installed?: () => void;
-  error: string;
   owns: boolean;
   busy: boolean;
   perform: Perform;
+  act: Act;
 }) {
-  const [shown, setShown] = useState<Open>();
-  const close = () => setShown(undefined);
-  const opened =
-    shown && "id" in shown
-      ? extensions?.find((extension) => extension.id === shown.id)
-      : undefined;
+  const [folder, setFolder] = useState("");
+  const loaded = (extensions ?? []).filter((e) => e.dev);
   return (
-    <Settings eyebrow="Workspace" title="Extensions">
-      {error && <p className="text-sm text-destructive">{error}</p>}
-      {extensions?.length === 0 && (
-        <p className="text-sm text-muted-foreground">No extensions.</p>
+    <div className="flex flex-col gap-6">
+      <nav
+        aria-label="Breadcrumb"
+        className="flex items-center gap-1.5 text-[12.5px] text-faint"
+      >
+        <Link
+          to="/extensions"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          Extensions
+        </Link>
+        <ChevronRightIcon className="size-3.5" />
+        <span>Develop</span>
+      </nav>
+      <h1 className="text-2xl font-semibold tracking-tight">Develop</h1>
+      {owns && (
+        <form
+          className="flex gap-2 rounded-xl border bg-card p-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const path = folder.trim();
+            if (path)
+              void perform(async () => {
+                await loadExtensionFolder(path);
+              }).then((done) => done && setFolder(""));
+          }}
+        >
+          <Input
+            aria-label="Folder"
+            placeholder="/path/to/extension"
+            value={folder}
+            onChange={(event) => setFolder(event.target.value)}
+            className="font-mono text-[12.5px]"
+          />
+          <Button type="submit" disabled={busy || !folder.trim()}>
+            Load
+          </Button>
+        </form>
       )}
-      {!!extensions?.length && (
-        <ul className="flex flex-col gap-4">
-          {extensions.map((extension) => (
-            <ExtensionItem
-              key={extension.id}
-              extension={extension}
-              proposer={proposerOf(extension)}
-              owns={owns}
-              busy={busy}
-              perform={perform}
-              open={setShown}
-            />
-          ))}
-        </ul>
+      {loaded.length > 0 && (
+        <section
+          aria-label="Loaded from folders"
+          className="flex flex-col gap-2"
+        >
+          <h2 className="font-mono text-[11px] tracking-[0.06em] text-faint uppercase">
+            Loaded from folders
+          </h2>
+          <ul className="flex flex-col divide-y rounded-xl border bg-card">
+            {loaded.map((extension) => (
+              <li
+                key={extension.id}
+                className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3.5 p-3.5"
+              >
+                <ExtensionIcon id={extension.id} extension={extension} />
+                <span className="min-w-0">
+                  <Link
+                    to={`/extensions/${encodeURIComponent(extension.id)}`}
+                    className="font-semibold hover:underline"
+                  >
+                    {extension.name}
+                  </Link>{" "}
+                  <span className="font-mono text-xs text-faint">
+                    {extension.version}
+                  </span>
+                  <span className="block truncate font-mono text-[12px] text-faint">
+                    {extension.source}
+                  </span>
+                  {extension.error && (
+                    <span
+                      role="alert"
+                      className="block text-xs text-destructive"
+                    >
+                      {extension.error}
+                    </span>
+                  )}
+                </span>
+                {owns && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() =>
+                      act(() => loadExtensionFolder(extension.source))
+                    }
+                  >
+                    <RotateCwIcon data-icon="inline-start" />
+                    Load again
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
-      <MarketplaceSection
-        marketplace={marketplace}
-        error={marketplaceError}
-        owns={owns}
-        installed={installed}
-      />
-      {owns && <LoadFolder busy={busy} perform={perform} />}
-      {shown?.kind === "action" && (
-        <ActionDialog action={shown.action} close={close} />
-      )}
-      {shown?.kind === "settings" && opened && (
-        <SettingsDialog
-          extension={opened}
-          close={close}
-          busy={busy}
-          perform={perform}
-        />
-      )}
-      {shown?.kind === "remove" && opened && (
-        <RemoveDialog
-          extension={opened}
-          close={close}
-          busy={busy}
-          perform={perform}
-        />
-      )}
-    </Settings>
+    </div>
   );
 }
 
+function Opened(props: Omit<Parameters<typeof ExtensionPage>[0], "id">) {
+  const { id = "" } = useParams();
+  return <ExtensionPage id={id} {...props} />;
+}
+
+/**
+ * The workspace's extensions: Installed and Proposals, the Marketplace a page of its own, each
+ * extension a page; installing, updating and enabling ask first, in one dialog.
+ */
 export function ExtensionsPage({
   sessions,
   owns,
@@ -693,24 +543,87 @@ export function ExtensionsPage({
     error: marketplaceError,
     reload: reloadMarketplace,
   } = useMarketplace();
-  // The list is read again after each change made here, done or refused, besides the
+  const [consent, setConsent] = useState<Consent>();
+  const reloadAll = () => {
+    void reload();
+    void reloadMarketplace();
+  };
+  // The lists are read again after each change made here, done or refused, besides the
   // kernel's notices of changes made anywhere.
-  const act: Perform = (operation) =>
-    perform(operation).finally(() => void reload());
-  return (
-    <ExtensionList
+  const performed: Perform = (operation) =>
+    perform(operation).finally(reloadAll);
+  const act: Act = (operation) =>
+    void performed(async () => {
+      await operation();
+    });
+  const home = (view: "installed" | "proposals") => (
+    <ExtensionsHome
+      view={view}
       extensions={extensions}
       marketplace={marketplace}
-      marketplaceError={marketplaceError}
-      proposerOf={(extension) => proposer(extension, actors, sessions)}
-      installed={() => {
-        void reload();
-        void reloadMarketplace();
-      }}
       error={error}
+      proposerOf={(extension) => proposer(extension, actors, sessions)}
       owns={owns}
       busy={busy}
-      perform={act}
+      act={act}
+      consent={setConsent}
     />
+  );
+  return (
+    <div className="flex flex-col">
+      <Routes>
+        <Route index element={home("installed")} />
+        <Route path="proposals" element={home("proposals")} />
+        <Route
+          path="marketplace"
+          element={
+            <MarketplacePage
+              marketplace={marketplace}
+              error={marketplaceError}
+              extensions={extensions}
+              owns={owns}
+              consent={setConsent}
+            />
+          }
+        />
+        <Route
+          path="marketplaces"
+          element={<MarketplacesPage marketplace={marketplace} />}
+        />
+        <Route
+          path="develop"
+          element={
+            <Develop
+              extensions={extensions}
+              owns={owns}
+              busy={busy}
+              perform={performed}
+              act={act}
+            />
+          }
+        />
+        <Route
+          path=":id"
+          element={
+            <Opened
+              extensions={extensions}
+              marketplace={marketplace}
+              owns={owns}
+              busy={busy}
+              perform={performed}
+              consent={setConsent}
+            />
+          }
+        />
+      </Routes>
+      {consent && (
+        <ConsentDialog
+          consent={consent}
+          marketplace={marketplace}
+          close={() => setConsent(undefined)}
+          done={reloadAll}
+        />
+      )}
+    </div>
   );
 }

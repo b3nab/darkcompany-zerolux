@@ -510,7 +510,7 @@ export function App({
                   }
                 />
                 <Route
-                  path="/extensions"
+                  path="/extensions/*"
                   element={
                     <Page>
                       <ExtensionsPage

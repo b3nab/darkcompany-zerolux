@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { JsonSchema } from "./action-form";
 import type { ChatSession } from "./chat";
 import type { UiPiece } from "./extension-ui";
-import { errorMessage, kernelUrl, request } from "./client";
+import { errorMessage, fetchKernel, kernelUrl, request } from "./client";
 import type { Actor } from "./client";
 
 /** A setting of an extension; a secret's value never comes back, only whether it has one. */
@@ -55,6 +55,77 @@ export interface ExtensionContributes {
   ui?: Omit<UiPiece, "extension">[];
 }
 
+/** A file of an extension's card, which the kernel gives at `url` only as its digest says. */
+export interface CardFile {
+  /** Its path in the package. */
+  name: string;
+  sha256: string;
+  size: number;
+  kind: "icon" | "image" | "video" | "text";
+  /** On the kernel, `/api/extensions/assets/<sha256>`. */
+  url: string;
+}
+
+/** What a marketplace shows of an extension: its card. */
+export interface ExtensionCard {
+  summary: string;
+  /** One or two of `extensionCategories`. */
+  categories: string[];
+  keywords: string[];
+  /** SPDX. */
+  license: string | null;
+  links: {
+    homepage?: string | null;
+    repository?: string | null;
+    issues?: string | null;
+    privacy?: string | null;
+  } | null;
+  icon: CardFile | null;
+  icon_dark: CardFile | null;
+  /** Its images and its video. */
+  media: CardFile[];
+  readme: CardFile | null;
+  changelog: CardFile | null;
+}
+
+/** What an extension is for in a workspace, as marketplaces group them; a Lucide icon each. */
+export const extensionCategories = [
+  { id: "files-storage", name: "Files & Storage", icon: "folder-closed" },
+  { id: "projects-tasks", name: "Projects & Tasks", icon: "square-kanban" },
+  { id: "communication", name: "Communication", icon: "message-circle" },
+  { id: "meetings-voice", name: "Meetings & Voice", icon: "audio-lines" },
+  { id: "agents-ai", name: "Agents & AI", icon: "sparkles" },
+  { id: "development", name: "Development", icon: "git-branch" },
+  { id: "knowledge", name: "Knowledge", icon: "book-open" },
+  { id: "data-analytics", name: "Data & Analytics", icon: "chart-column" },
+  { id: "automation", name: "Automation", icon: "workflow" },
+  { id: "calendar-time", name: "Calendar & Time", icon: "calendar-days" },
+  { id: "customers-business", name: "Customers & Business", icon: "briefcase" },
+  { id: "security-admin", name: "Security & Admin", icon: "shield-check" },
+  { id: "other", name: "Other", icon: "shapes" },
+] as const;
+
+/** A card's file where a client reads it: on the kernel. */
+export const cardFileUrl = (file: CardFile, kernel = kernelUrl()) =>
+  `${kernel}${file.url}`;
+
+/** A file a card's README shows, by its path in the package (`media/…`). */
+export const cardFileNamed = (card: ExtensionCard, name: string) =>
+  card.media.find((file) => file.name === name.replace(/^\.\//, ""));
+
+/** A card's README or CHANGELOG, as Markdown. */
+export const readCardText = (file: CardFile, kernel = kernelUrl()) =>
+  fetchKernel(cardFileUrl(file, kernel)).then((response) => {
+    if (!response.ok) throw new Error(`${file.name} could not be read`);
+    return response.text();
+  });
+
+/** A card's icon for the theme: the dark one in dark themes, when there is one. */
+export const cardIcon = (
+  card: ExtensionCard | null | undefined,
+  dark: boolean,
+) => (dark && card?.icon_dark) || card?.icon || undefined;
+
 /** An extension installed in the workspace, as people see it. */
 export interface Extension {
   id: string;
@@ -77,6 +148,8 @@ export interface Extension {
   updated_at: number;
   /** The agent that proposed it, until the owner enables it: its actor, or its session. */
   proposed_by?: string | null;
+  /** Its card, from its folder. */
+  card?: ExtensionCard | null;
 }
 
 /** Who proposed an extension, by name: its agent, or the session it came from. */
@@ -221,10 +294,14 @@ export interface MarketplaceOffer {
   current?: boolean | null;
   /** Its parts, where the index says: `kernel` runs inside the kernel. */
   parts?: string[];
+  /** Its card, where the index has one. */
+  card?: ExtensionCard | null;
 }
 
 export interface Marketplace {
   offers: MarketplaceOffer[];
+  /** Each index read, by its name, even one that offers nothing. */
+  marketplaces: { index: string; name: string }[];
   /** Indexes that could not be read, each with why. */
   errors: { index: string; error: string }[];
 }
@@ -233,9 +310,33 @@ const readMarketplace = (kernel: string) =>
   request<Partial<Marketplace>>(kernel, "/extensions/marketplace").then(
     (body): Marketplace => ({
       offers: body.offers ?? [],
+      marketplaces: body.marketplaces ?? [],
       errors: body.errors ?? [],
     }),
   );
+
+/** A marketplace by its name, or else by its host; a local one is on this computer. */
+export function marketplaceName(index: string, marketplace?: Marketplace) {
+  const named = marketplace?.marketplaces.find((m) => m.index === index)?.name;
+  if (named) return named;
+  try {
+    const url = new URL(index);
+    return url.protocol === "file:" ? "This computer" : url.host || index;
+  } catch {
+    return index;
+  }
+}
+
+/** Every index of the marketplace, read or not. */
+export const marketplaceIndexes = (marketplace?: Marketplace) => [
+  ...new Set(
+    [
+      ...(marketplace?.marketplaces ?? []),
+      ...(marketplace?.offers ?? []),
+      ...(marketplace?.errors ?? []),
+    ].map((source) => source.index),
+  ),
+];
 
 /** What the indexes offer, read again whenever extensions change. */
 export function useMarketplace(kernel = kernelUrl(), enabled = true) {
