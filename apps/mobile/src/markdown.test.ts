@@ -29,3 +29,26 @@ test("a Mermaid diagram is its own segment", () => {
     { kind: "markdown", text: "\nAfter" },
   ]);
 });
+
+test("an image on its own line shows where the reader says, and only there", () => {
+  const picture = (src: string) =>
+    src === "media/a.png" ? "http://192.0.2.4/a" : undefined;
+  expect(
+    segments(
+      "Intro\n\n![The board](media/a.png)\n\nMore ![b](media/a.png) and\n![c](x.png)",
+      picture,
+    ),
+  ).toEqual([
+    { kind: "markdown", text: "Intro\n" },
+    { kind: "image", text: "http://192.0.2.4/a", alt: "The board" },
+    {
+      kind: "markdown",
+      text: "\nMore [image: b] and\n[image: c]",
+    },
+  ]);
+  // In code it stays as written; without a reader every image is its alt text.
+  expect(segments("```\n![a](media/a.png)\n```", picture)).toEqual([
+    { kind: "markdown", text: "```\n![a](media/a.png)\n```" },
+  ]);
+  expect(markdown("![a](media/a.png)")).toBe("[image: a]");
+});

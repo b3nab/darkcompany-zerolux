@@ -76,7 +76,14 @@ function Navigator() {
         <Stack.Screen name="subagent/[id]" />
         <Stack.Screen name="accounts/[id]" />
         <Stack.Screen name="extensions" />
-        <Stack.Screen name="extension/[id]" />
+        <Stack.Screen
+          name="consent"
+          options={{
+            presentation: "formSheet",
+            sheetAllowedDetents: "fitToContents",
+            sheetGrabberVisible: true,
+          }}
+        />
         <Stack.Screen name="piece" />
         <Stack.Screen name="action" options={{ presentation: "modal" }} />
       </Stack.Protected>

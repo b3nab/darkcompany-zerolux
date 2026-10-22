@@ -1,8 +1,7 @@
 import { Redirect } from "expo-router";
-import { Platform } from "react-native";
 import { NativeTabs } from "expo-router/native-tabs";
 import { homeLabel, requestsFor, unreadIn, waitingChats } from "@zerolux/chat";
-import { useCSSVariable } from "uniwind";
+import { badge, useTabBarLook } from "@/components/tab-bar";
 import { useKernel, useSession } from "../../src/kernel";
 import { useMe } from "../../src/me";
 import { useProposalNotices, useSessionNotices } from "../../src/notices";
@@ -13,12 +12,6 @@ export default function TabsLayout() {
   return url ? <Connected /> : <Redirect href="/connect" />;
 }
 
-/** A count on a tab, as the system draws it; nothing when there is nothing. */
-const badge = (count: number) =>
-  count > 0 ? (
-    <NativeTabs.Trigger.Badge>{String(count)}</NativeTabs.Trigger.Badge>
-  ) : null;
-
 /**
  * The system's own tab bar (Liquid Glass on iOS, Material on Android): the home, the agents'
  * console, the chats, the organization, and the rest. What waits for you is counted on them.
@@ -28,24 +21,7 @@ function Connected() {
   const { me } = useMe();
   useSessionNotices();
   useProposalNotices();
-  const [tint, muted, bar, indicator] = useCSSVariable([
-    "--color-human-foreground",
-    "--color-muted-foreground",
-    "--color-card",
-    "--color-accent",
-  ]).map(String);
-  // Android draws Material Symbols white and only the selected label: the theme colors them,
-  // and every label shows, as on iOS. iOS keeps the system's own look.
-  const android =
-    Platform.OS === "android"
-      ? {
-          iconColor: { default: muted, selected: tint },
-          labelStyle: { default: { color: muted }, selected: { color: tint } },
-          labelVisibilityMode: "labeled" as const,
-          backgroundColor: bar,
-          indicatorColor: indicator,
-        }
-      : {};
+  const look = useTabBarLook();
   // The requests waiting for you: those of your sessions.
   const pending = requestsFor(chat, me?.id).length;
   const unread = chat.conversations.filter(
@@ -59,7 +35,7 @@ function Connected() {
   const home = homeLabel();
   const night = home === "Tonight";
   return (
-    <NativeTabs tintColor={tint} {...android}>
+    <NativeTabs {...look}>
       <NativeTabs.Trigger name="index">
         <NativeTabs.Trigger.Label>{home}</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon

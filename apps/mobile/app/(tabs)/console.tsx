@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Pressable, TextInput, View } from "react-native";
+import { Pressable, View } from "react-native";
 import { useRouter } from "expo-router";
-import { SearchIcon, SquarePenIcon, XIcon } from "lucide-react-native";
+import { SquarePenIcon } from "lucide-react-native";
 import { useCSSVariable } from "uniwind";
 import { LegendList } from "@legendapp/list/react-native";
 import {
@@ -19,6 +19,7 @@ import {
 } from "@zerolux/chat";
 import type { Attention } from "@zerolux/chat";
 import { Screen } from "@/components/screen";
+import { SearchField } from "@/components/search-field";
 import { SessionRow } from "@/components/session";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
@@ -59,7 +60,6 @@ export default function Console() {
   const starts = startsAnywhere(hosts.hosts, me?.id, owner);
   const router = useRouter();
   const ink = String(useCSSVariable("--color-foreground"));
-  const faint = String(useCSSVariable("--color-faint"));
   const [shown, setShown] = useState<Shown>("live");
   const [query, setQuery] = useState("");
   const seen = useSeen();
@@ -103,30 +103,12 @@ export default function Console() {
         ) : undefined
       }
     >
-      <View className="mx-5 mb-2.5 flex-row items-center gap-2 rounded-md bg-muted px-2.5">
-        <SearchIcon color={faint} size={16} strokeWidth={1.75} />
-        <TextInput
-          value={query}
-          onChangeText={setQuery}
-          placeholder="Search sessions"
-          placeholderTextColor={faint}
-          autoCorrect={false}
-          autoCapitalize="none"
-          returnKeyType="search"
-          accessibilityLabel="Search sessions"
-          className="flex-1 py-2 font-sans text-[15px] text-foreground"
-        />
-        {query ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Clear search"
-            onPress={() => setQuery("")}
-            hitSlop={8}
-          >
-            <XIcon color={faint} size={16} strokeWidth={1.75} />
-          </Pressable>
-        ) : null}
-      </View>
+      <SearchField
+        value={query}
+        onChange={setQuery}
+        label="Search sessions"
+        className="mx-5 mb-2.5"
+      />
       <View className="mx-5 mb-2 flex-row self-start rounded-sm border border-border bg-sidebar p-0.5">
         {(Object.keys(shownLabels) as Shown[]).map((value) => (
           <Pressable

@@ -90,7 +90,7 @@ export default function More() {
           <Row
             icon={PuzzleIcon}
             label="Extensions"
-            onPress={go("/extensions")}
+            onPress={go("/extensions/installed")}
             trailing={next}
           />
           {pages.map((piece) => (

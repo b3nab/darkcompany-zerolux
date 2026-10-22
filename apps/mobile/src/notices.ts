@@ -105,7 +105,7 @@ export function useSessionNotices() {
       const { session, extension } = data ?? {};
       if (typeof session === "string") router.push(`/session/${session}`);
       else if (typeof extension === "string")
-        router.push(`/extension/${extension}`);
+        router.push(`/extensions/proposals/${extension}`);
       else return;
       Notifications.clearLastNotificationResponse();
     };
@@ -131,11 +131,10 @@ export function useProposalNotices() {
     if (!extensions) return;
     const was = before.current?.url === url ? before.current : undefined;
     before.current = { url, extensions };
-    const proposals = newProposals(was?.extensions, extensions).filter(
-      (e) =>
-        AppState.currentState !== "active" ||
-        (pathname !== "/extensions" && pathname !== `/extension/${e.id}`),
-    );
+    // Not while Extensions is on screen, where they show.
+    const watched =
+      AppState.currentState === "active" && pathname.startsWith("/extensions");
+    const proposals = watched ? [] : newProposals(was?.extensions, extensions);
     if (!proposals.length || !noticeChoice.current().needs) return;
     void (async () => {
       if (!(await Notifications.getPermissionsAsync()).granted) return;

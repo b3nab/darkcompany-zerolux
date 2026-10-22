@@ -246,7 +246,8 @@
           "microphonePermission": "ZeroLux records your voice for dictation and voice messages."
         }
       ],
-      "expo-sharing"
+      "expo-sharing",
+      "expo-video"
     ]
   }
 }

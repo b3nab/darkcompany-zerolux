@@ -1,4 +1,4 @@
-import { Linking, View } from "react-native";
+import { Image, Linking, View } from "react-native";
 import { EnrichedMarkdownText } from "react-native-enriched-markdown";
 import type { MarkdownStyle } from "react-native-enriched-markdown";
 import { useCSSVariable } from "uniwind";
@@ -27,9 +27,16 @@ const lightCode = {
 
 /**
  * Chat text as the author wrote it: Markdown with tables, code, links and lists, and Mermaid
- * diagrams drawn. Links open as http(s) or mailto.
+ * diagrams drawn. Links open as http(s) or mailto. With `picture`, an image on a line of its
+ * own shows from where `picture` says, as a README's own files.
  */
-export function MessageBody({ text }: { text: string }) {
+export function MessageBody({
+  text,
+  picture,
+}: {
+  text: string;
+  picture?: (src: string) => string | undefined;
+}) {
   const { resolved } = useTheme();
   const [foreground, muted, link, card, border, accent, background] =
     useCSSVariable([
@@ -141,8 +148,16 @@ export function MessageBody({ text }: { text: string }) {
   };
   return (
     <View>
-      {segments(text).map((segment, index) =>
-        segment.kind === "mermaid" ? (
+      {segments(text, picture).map((segment, index) =>
+        segment.kind === "image" ? (
+          <Image
+            key={index}
+            source={{ uri: segment.text }}
+            accessibilityLabel={segment.alt}
+            resizeMode="contain"
+            className="my-2 aspect-[16/10] w-full rounded-lg bg-muted"
+          />
+        ) : segment.kind === "mermaid" ? (
           <Mermaid
             key={index}
             code={segment.text}
