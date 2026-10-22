@@ -76,19 +76,15 @@ export type Kernel = {
 };
 
 /**
- * The workspace's bar, as in Teams, ClickUp and VS Code: the workspace on top, one icon per
- * section, and at the bottom search, the theme, the kernel and you. The open section's icon
- * opens and closes its panel (`toggle` says whether there was one).
+ * The workspace's bar, as in Teams, ClickUp and VS Code: one icon per section, and at the
+ * bottom the theme. The open section's icon opens and closes its panel (`toggle` says whether
+ * there was one).
  */
 export function Sidebar({
   chat,
-  owner,
-  kernel,
   toggle,
 }: {
   chat: Chat;
-  owner: Actor;
-  kernel: Kernel;
   toggle: () => boolean;
 }) {
   // Pages the workspace's extensions bring, after ZeroLux's own sections.
@@ -141,8 +137,6 @@ export function Sidebar({
       />
       <div className="mt-auto flex flex-col items-center gap-1 pt-4">
         <ThemeSwitch />
-        <KernelStatus kernel={kernel} />
-        <UserMenu owner={owner} />
       </div>
     </nav>
   );
@@ -458,28 +452,29 @@ const light: Record<Tone, string> = {
   stopped: "bg-faint",
 };
 
-/** Which kernel this is, whether it answers, and its version: a light, with words on hover. */
-function KernelStatus({ kernel }: { kernel: Kernel }) {
-  const details = [
-    kernel.label,
-    kernel.host,
-    kernel.version && `v${kernel.version}`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+/**
+ * The window's status bar, as in VS Code's: whether ZeroLux answers and its version, with the
+ * computer it runs on on hover.
+ */
+export function StatusBar({ kernel }: { kernel: Kernel }) {
   return (
-    <span
+    <footer
       role="status"
       data-tone={kernel.tone}
-      title={details}
-      className="grid size-9 place-items-center"
+      title={kernel.host}
+      className="col-span-full flex h-6 shrink-0 items-center gap-3 border-t border-sidebar-border bg-sidebar px-3 text-[11.5px] text-muted-foreground"
     >
-      <span
-        aria-hidden
-        className={cn("size-2 rounded-full", light[kernel.tone])}
-      />
-      <span className="sr-only">{details}</span>
-    </span>
+      <span className="flex items-center gap-1.5">
+        <span
+          aria-hidden
+          className={cn("size-1.5 rounded-full", light[kernel.tone])}
+        />
+        {kernel.label}
+      </span>
+      {kernel.version && (
+        <span className="font-mono text-faint">ZeroLux {kernel.version}</span>
+      )}
+    </footer>
   );
 }
 
@@ -502,7 +497,7 @@ function ThemeSwitch() {
 }
 
 /** You: your profile, your settings, the workspace's administration, and signing out. */
-function UserMenu({ owner }: { owner: Actor }) {
+export function UserMenu({ owner }: { owner: Actor }) {
   const navigate = useNavigate();
   const authentication = useAuthentication();
   return (
@@ -513,13 +508,13 @@ function UserMenu({ owner }: { owner: Actor }) {
             type="button"
             aria-label={`${owner.name}, profile and settings`}
             title={owner.name}
-            className="mt-1 rounded-full transition-opacity hover:opacity-80"
+            className="ml-1 rounded-full transition-opacity hover:opacity-80"
           />
         }
       >
-        <ActorMark kind="human" name={owner.name} className="size-8" />
+        <ActorMark kind="human" name={owner.name} className="size-7" />
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="right" align="end" className="w-52">
+      <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuGroup>
           <DropdownMenuLabel className="flex flex-col gap-0.5">
             <span className="truncate text-[13px] font-medium text-foreground">

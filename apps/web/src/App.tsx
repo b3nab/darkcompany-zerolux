@@ -39,7 +39,13 @@ import { Meetings } from "./Meetings";
 import { useProposalNotices, useSessionNotices } from "./notices";
 import { OwnerOnboarding } from "./OwnerOnboarding";
 import { Organization } from "./Org";
-import { AgentList, Sidebar, WorkspaceMenu } from "./Sidebar";
+import {
+  AgentList,
+  Sidebar,
+  StatusBar,
+  UserMenu,
+  WorkspaceMenu,
+} from "./Sidebar";
 import type { Kernel } from "./Sidebar";
 import { AgentPage, Hire, Team } from "./Team";
 import { Tonight } from "./Tonight";
@@ -299,9 +305,7 @@ export function App({
       </Page>,
     );
   const shell = !!workspace && !!me && !needsOnboarding && chatReady;
-  const sidebar = shell && (
-    <Sidebar chat={chat} owner={me} kernel={kernel} toggle={toggle} />
-  );
+  const sidebar = shell && <Sidebar chat={chat} toggle={toggle} />;
   // In the macOS desktop app the header is the window's title bar: it spans the window,
   // with the native traffic lights in its first 92px, and the rail starts below it.
   const titleBar = useTrafficLightsInset();
@@ -309,7 +313,7 @@ export function App({
   return (
     <div
       data-rail={shell || undefined}
-      className="grid h-dvh grid-rows-[auto_minmax(0,1fr)] md:data-rail:grid-cols-[4.25rem_minmax(0,1fr)]"
+      className="grid h-dvh grid-rows-[auto_minmax(0,1fr)_auto] md:data-rail:grid-cols-[4.25rem_minmax(0,1fr)]"
     >
       {sidebar && (
         <aside
@@ -404,15 +408,8 @@ export function App({
                 {pending ? approvals : nothingWaits}
               </PopoverContent>
             </Popover>
-          ) : (
-            <span
-              role="status"
-              className="font-mono text-[11px] text-muted-foreground"
-            >
-              {kernel.label}
-              {kernel.version && ` · v${kernel.version}`}
-            </span>
-          )}
+          ) : null}
+          {shell && <UserMenu owner={me} />}
           <WindowControls />
         </div>
       </header>
@@ -657,6 +654,7 @@ export function App({
           )}
         </main>
       </div>
+      <StatusBar kernel={kernel} />
       {shell && (
         <>
           <Sheet open={rail} onOpenChange={setRail}>

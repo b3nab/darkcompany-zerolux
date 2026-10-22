@@ -239,7 +239,10 @@ test("a kernel without chat-v1 does not fall back to removed project controls", 
   expect(older).not.toContain('aria-label="Hire an agent"');
   expect(older).toContain("Update the kernel to use chats.");
   expect(older).not.toContain("Create draft");
-  expect(older).toContain("v0.1.0");
+  // The kernel's version is in the window's status bar.
+  expect(older).toMatch(
+    /<footer role="status"[\s\S]*0\.1\.0<\/span><\/footer>/,
+  );
   const current = at(
     "/chats",
     <App
@@ -250,8 +253,8 @@ test("a kernel without chat-v1 does not fall back to removed project controls", 
       }}
     />,
   );
-  // The kernel's version, in the rail.
-  expect(current).toContain("v0.0.1-dev");
+  // The kernel's version, in the window's status bar.
+  expect(current).toMatch(/<footer role="status"[\s\S]*ZeroLux 0\.0\.1-dev/);
 });
 
 /** The labels of the buttons that send a form; Base UI buttons default to type="button". */
