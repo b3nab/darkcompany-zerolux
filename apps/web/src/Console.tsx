@@ -568,8 +568,9 @@ export function SessionView({
   const compacting = useSessionCompacting(session.id, chat.live);
   // The owner's inputs waiting for the turn to end, as the harness queues them.
   const queue = useSessionQueue(session.id, chat.live);
-  // The owner's inputs on their way, until the record or the queue has them.
-  const sent = chat.sentInputs(session.id, blocks, queue);
+  // The owner's inputs on their way, until the record or the queue has them; one sent before
+  // the work shown is in the record above it.
+  const sent = chat.sentInputs(session.id, blocks, queue, events[0]?.at);
   // How full its context is and what it has used, as its harness last said.
   const usage = useSessionUsage(session.id, chat.live);
   const plan = latestPlan(blocks);

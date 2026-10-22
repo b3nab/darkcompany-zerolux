@@ -24,13 +24,16 @@ const words = (text: string) => text.replace(/\s+/g, " ").trim();
  * The inputs sent to a session that neither its record, from where each was sent, nor its
  * queue show yet, in order. Each input of the record or the queue answers one sent input:
  * those on their way first, then failed ones, which go too once the record shows they arrived
- * after all, as when the harness took one after reporting it lost.
+ * after all, as when the harness took one after reporting it lost. With `from`, where the
+ * events read start, one sent before it that they do not show was recorded before it: read
+ * from its end again, a record shows only its latest work.
  */
 export function unseenInputs(
   sent: SentInput[],
   sessionId: string,
   blocks: SessionBlock[],
   queue: QueuedInput[],
+  from?: number,
 ) {
   const recorded = new Set<string>();
   const queued = new Set<string>();
@@ -54,7 +57,7 @@ export function unseenInputs(
     const text = words(input.text);
     const item = queue.find((q) => !queued.has(q.id) && words(q.text) === text);
     if (item) queued.add(item.id);
-    return !item;
+    return !item && (from === undefined || input.after >= from);
   });
   return unseen.filter(
     (input) => input.status !== "failed" || !inRecord(input),

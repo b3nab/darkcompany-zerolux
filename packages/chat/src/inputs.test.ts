@@ -73,6 +73,18 @@ test("a failed input stays until the record shows it arrived after all", () => {
   );
 });
 
+test("read from its end again, a record's work shown starts after older inputs", () => {
+  const inputs = [sent("a", "go on", 100), sent("b", "then this", 900)];
+  // The view reopened at the record's last page, from 800: "go on" is above it.
+  expect(
+    unseenInputs(inputs, "s1", [], [], 800).map((input) => input.id),
+  ).toEqual(["b"]);
+  // A failed one still shows, wherever it was sent.
+  expect(
+    unseenInputs([sent("c", "go on", 100, "failed")], "s1", [], [], 800),
+  ).toHaveLength(1);
+});
+
 test("images alone answer to the first input after them", () => {
   const inputs = [sent("a", "", 50)];
   expect(

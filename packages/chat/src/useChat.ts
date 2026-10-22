@@ -532,12 +532,16 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
         after,
         status: "sending",
       }),
-    /** A session's inputs that neither its record nor its queue show yet, failed ones included. */
+    /**
+     * A session's inputs that neither its record nor its queue show yet, failed ones included;
+     * `from` is where the events shown start in its record.
+     */
     sentInputs: (
       sessionId: string,
       blocks: SessionBlock[],
       queue: QueuedInput[],
-    ) => unseenInputs(inputs, sessionId, blocks, queue),
+      from?: number,
+    ) => unseenInputs(inputs, sessionId, blocks, queue, from),
     /** Sends a failed input again, the same, where it was. */
     async retryInput(id: string) {
       const input = inputs.find((i) => i.id === id);
