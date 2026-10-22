@@ -128,6 +128,7 @@ import { Input } from "@/components/ui/input";
 import { LiveItemView, SessionRunView } from "@/components/session-blocks";
 import { PlanSteps } from "@/components/tool-call";
 import { ChatList } from "@/components/ui/native";
+import { ToLatest, useAway } from "@/components/to-latest";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { setDensity, useDensity } from "../../src/density";
@@ -240,6 +241,7 @@ export default function SessionPage() {
   const fresh = useArrivals(items);
   // Opened at a place in its history: earlier work is read until it is in, then shown once.
   const list = useRef<LegendListRef>(null);
+  const { away, onScroll } = useAway();
   const target = place === undefined ? undefined : Number(place);
   const [reached, setReached] = useState<number>();
   // The row it opened at, marked for a moment.
@@ -398,76 +400,80 @@ export default function SessionPage() {
       }
     >
       <SubagentLinks value={subagentLinks}>
-        <ChatList
-          ref={list}
-          data={rows}
-          extraData={drawn}
-          keyExtractor={(row) => (row as Row).key}
-          renderItem={({ item }) =>
-            (item as Row).kind === "live" ? (
-              <LiveItemView item={(item as LiveRow).item} />
-            ) : (item as Row).kind === "sent" ? (
-              <SentInputView input={(item as SentRow).input} />
-            ) : (
-              <View
-                className={cn(
-                  "rounded-md",
-                  marked === (item as Row).key && "bg-primary/10",
-                )}
+        <View className="flex-1">
+          <ChatList
+            ref={list}
+            data={rows}
+            extraData={drawn}
+            keyExtractor={(row) => (row as Row).key}
+            renderItem={({ item }) =>
+              (item as Row).kind === "live" ? (
+                <LiveItemView item={(item as LiveRow).item} />
+              ) : (item as Row).kind === "sent" ? (
+                <SentInputView input={(item as SentRow).input} />
+              ) : (
+                <View
+                  className={cn(
+                    "rounded-md",
+                    marked === (item as Row).key && "bg-primary/10",
+                  )}
+                >
+                  <SessionRunView
+                    run={item as BlockRun<Item>}
+                    fresh={fresh}
+                    chatTitle={chatTitle}
+                    inputMenu={access.read ? inputs.open : undefined}
+                    voice={voice}
+                    renderApproval={(approval: Approval) =>
+                      // Its requests are its person's to decide; others see them wait.
+                      approval.status === "pending" && access.mine ? (
+                        <ApprovalCard
+                          approval={approval}
+                          agent={name}
+                          busy={busy}
+                          decide={(decision, options) =>
+                            void act(() =>
+                              chat.decide(approval.id, decision, options),
+                            )
+                          }
+                          answer={(answer) =>
+                            void act(() => chat.answer(approval.id, answer))
+                          }
+                        />
+                      ) : (
+                        <ApprovalReceipt
+                          approval={approval}
+                          waitingFor={access.mine ? undefined : person}
+                        />
+                      )
+                    }
+                  />
+                </View>
+              )
+            }
+            contentContainerClassName="gap-3 px-3 pt-3 pb-3"
+            alignItemsAtEnd
+            initialScrollAtEnd
+            maintainScrollAtEnd
+            maintainVisibleContentPosition={{ data: true, size: true }}
+            // The latest work comes first; earlier work loads while scrolling up to it.
+            onStartReached={more ? earlier : undefined}
+            onStartReachedThreshold={0.4}
+            keyboardDismissMode="interactive"
+            keyboardOffset={insets.bottom}
+            onScroll={onScroll}
+            ListEmptyComponent={
+              <Text
+                className={
+                  readError ? "text-sm text-destructive" : "text-sm text-faint"
+                }
               >
-                <SessionRunView
-                  run={item as BlockRun<Item>}
-                  fresh={fresh}
-                  chatTitle={chatTitle}
-                  inputMenu={access.read ? inputs.open : undefined}
-                  voice={voice}
-                  renderApproval={(approval: Approval) =>
-                    // Its requests are its person's to decide; others see them wait.
-                    approval.status === "pending" && access.mine ? (
-                      <ApprovalCard
-                        approval={approval}
-                        agent={name}
-                        busy={busy}
-                        decide={(decision, options) =>
-                          void act(() =>
-                            chat.decide(approval.id, decision, options),
-                          )
-                        }
-                        answer={(answer) =>
-                          void act(() => chat.answer(approval.id, answer))
-                        }
-                      />
-                    ) : (
-                      <ApprovalReceipt
-                        approval={approval}
-                        waitingFor={access.mine ? undefined : person}
-                      />
-                    )
-                  }
-                />
-              </View>
-            )
-          }
-          contentContainerClassName="gap-3 px-3 pt-3 pb-3"
-          alignItemsAtEnd
-          initialScrollAtEnd
-          maintainScrollAtEnd
-          maintainVisibleContentPosition={{ data: true, size: true }}
-          // The latest work comes first; earlier work loads while scrolling up to it.
-          onStartReached={more ? earlier : undefined}
-          onStartReachedThreshold={0.4}
-          keyboardDismissMode="interactive"
-          keyboardOffset={insets.bottom}
-          ListEmptyComponent={
-            <Text
-              className={
-                readError ? "text-sm text-destructive" : "text-sm text-faint"
-              }
-            >
-              {readError || "Nothing recorded yet."}
-            </Text>
-          }
-        />
+                {readError || "Nothing recorded yet."}
+              </Text>
+            }
+          />
+          <ToLatest list={list} shown={away} label="Back to the latest work" />
+        </View>
       </SubagentLinks>
       <Composer
         session={session}

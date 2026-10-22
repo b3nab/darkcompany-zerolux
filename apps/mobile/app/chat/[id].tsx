@@ -8,7 +8,6 @@ import {
   useRouter,
 } from "expo-router";
 import {
-  ArrowDownIcon,
   MessagesSquareIcon,
   PanelRightIcon,
   PhoneIcon,
@@ -69,6 +68,7 @@ import { MessageContent } from "@/components/message-files";
 import { Screen } from "@/components/screen";
 import { Listen } from "@/components/listen";
 import { ChatList, GestureArea } from "@/components/ui/native";
+import { ToLatest, useAway } from "@/components/to-latest";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "../../src/kernel";
@@ -114,7 +114,7 @@ export default function ChatScreen() {
   const [chips, setChips] = useState<(Chip & { type?: string })[]>([]);
   const [picking, setPicking] = useState(false);
   // More than a screen above the latest messages: a button brings the reader back down.
-  const [away, setAway] = useState(false);
+  const { away, onScroll } = useAway();
   const list = useRef<LegendListRef>(null);
   const input = useRef<TextInputInstance>(null);
   const recorder = useRecorder();
@@ -716,25 +716,13 @@ export default function ChatScreen() {
           onStartReachedThreshold={0.4}
           keyboardDismissMode="interactive"
           keyboardOffset={insets.bottom}
-          onScroll={(e) => {
-            const { contentOffset, contentSize, layoutMeasurement } =
-              e.nativeEvent;
-            const below =
-              contentSize.height - layoutMeasurement.height - contentOffset.y;
-            setAway(below > layoutMeasurement.height);
-          }}
+          onScroll={onScroll}
         />
-        {away ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Back to the latest messages"
-            onPress={() => void list.current?.scrollToEnd({ animated: true })}
-            hitSlop={8}
-            className="absolute right-4 bottom-4 size-10 items-center justify-center rounded-full border border-border bg-card shadow-md active:bg-accent"
-          >
-            <ArrowDownIcon color={muted} size={20} strokeWidth={1.75} />
-          </Pressable>
-        ) : null}
+        <ToLatest
+          list={list}
+          shown={away}
+          label="Back to the latest messages"
+        />
       </GestureArea>
       {thread ? (
         <Text
