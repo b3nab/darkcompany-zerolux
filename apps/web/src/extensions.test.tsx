@@ -14,7 +14,8 @@ import {
 import type { Tab } from "./extension-page";
 import { MarketplacePage } from "./marketplace";
 import { Part } from "./extension-view";
-import { uiComponents } from "./native-ui";
+import { lucideIcon, uiComponents } from "./native-ui";
+import { PuzzleIcon } from "lucide-react";
 import { uiModule } from "@zerolux/ui/host";
 
 const schema: JsonSchema = {
@@ -493,4 +494,10 @@ test("the marketplace counts each category and shows the one chosen", () => {
   expect(html).toMatch(/aria-current="true"[^>]*>.*Knowledge.*1</);
   expect(html).toContain(">Notes</h2>");
   expect(html).not.toContain(">Drive</h2>");
+});
+
+test("a view's icons are Lucide's by name, renamed ones too; an unknown one is a puzzle", () => {
+  expect(lucideIcon("file-text")).not.toBe(PuzzleIcon);
+  expect(lucideIcon("file-video")).not.toBe(PuzzleIcon);
+  expect(lucideIcon("no-such-icon")).toBe(PuzzleIcon);
 });

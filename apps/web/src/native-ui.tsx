@@ -1,4 +1,5 @@
 import { createContext, useContext, useRef, useState } from "react";
+import * as lucide from "lucide-react";
 import { ChevronLeftIcon, icons, PuzzleIcon } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { Actor } from "@zerolux/chat";
@@ -34,13 +35,22 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 
-/** A Lucide icon by its name, as `kanban` or `file-text`; one this app lacks shows as a puzzle. */
+const named = lucide as unknown as Record<string, LucideIcon | undefined>;
+
+/**
+ * A Lucide icon by its name, as `kanban` or `file-text`, or a name Lucide renamed, as
+ * `file-video`; one this app lacks shows as a puzzle.
+ */
 export function lucideIcon(name?: string): LucideIcon {
   const pascal = name
     ?.split("-")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join("");
-  return (pascal && icons[pascal as keyof typeof icons]) || PuzzleIcon;
+  return (
+    (pascal &&
+      (icons[pascal as keyof typeof icons] ?? named[`${pascal}Icon`])) ||
+    PuzzleIcon
+  );
 }
 
 /** The workspace's people and agents, for the avatars extensions' views show. */
