@@ -12,13 +12,3 @@ license = "MIT"
 [process]
 command = ["uv", "run", "--quiet", "--script", "main.py"]
 start_seconds = 1800
-
-[settings.transcription]
-type = "choice"
-label = "Transcription model"
-default = "whisper"
-options = [
-  { value = "whisper", label = "Whisper large-v3 turbo" },
-  { value = "parakeet", label = "Parakeet v3" },
-  { value = "qwen3", label = "Qwen3-ASR 0.6B (Mac)" },
-]

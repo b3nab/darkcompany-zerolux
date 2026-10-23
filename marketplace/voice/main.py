@@ -8,13 +8,14 @@
 #   "lingua-language-detector",
 #   "sentencepiece",
 #   "pocket-tts==2.1.0",
+#   "faster-whisper>=1.2",
+#   "sherpa-onnx>=1.12",
 #   "mlx-audio>=0.5.8; sys_platform == 'darwin' and platform_machine == 'arm64'",
-#   "faster-whisper>=1.2; sys_platform != 'darwin' or platform_machine != 'arm64'",
-#   "onnx-asr[cpu,hub]; sys_platform != 'darwin' or platform_machine != 'arm64'",
 #   "voxcpm>=2.0.3; sys_platform != 'darwin' or platform_machine != 'arm64'",
 # ]
 # ///
-"""ZeroLux's voice: speech to text with the model the workspace chose, and each agent's own
+"""ZeroLux's voice: speech to text with the engine and model the workspace chose (whisper.cpp,
+faster-whisper or Parakeet, see `hearing`), and each agent's own
 voice, designed from a description and spoken with Pocket TTS."""
 
 import base64
@@ -29,8 +30,11 @@ from pathlib import Path
 
 import soundfile as sf
 
+import catalog
 from designing import Designer
-from hearing import MODELS, Ears, decode
+from downloads import Downloads
+from engines import EngineError
+from hearing import Config, Ears, Runtimes, decode
 from speaking import MODELS as LANGUAGES
 from speaking import Voices, sentences
 
@@ -40,14 +44,23 @@ CHOICES = [{"const": code, "title": NAMES[code]} for code in LANGUAGES]
 from zerolux import Extension
 
 extension = Extension()
-ears = Ears()
+ears: Ears | None = None
+downloads: Downloads | None = None
+
+
+def told() -> None:
+    """Voice's settings read again: a model, a download or a runtime changed."""
+    try:
+        extension.publish("changed")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def heard(audio, rate: int, language: str) -> str:
-    """What a take says, as Whisper hears it."""
+    """What a take says, as the chosen model hears it."""
     wav = io.BytesIO()
     sf.write(wav, audio, rate, format="WAV")
-    return ears.hear(decode(wav.getvalue()), "whisper", [], gate=False)["text"]
+    return ears.hear(decode(wav.getvalue()), [], language)["text"]
 
 
 designer = Designer(heard)
@@ -55,29 +68,61 @@ voices: Voices | None = None
 
 
 def start() -> None:
-    global voices
-    voices = Voices(Path(extension.folder))
+    global voices, ears, downloads
+    folder = Path(extension.folder)
+    voices = Voices(folder)
+    downloads = Downloads(folder / "models", told)
+    ears = Ears(folder, downloads, Runtimes(downloads), told)
+    # The kernel is asked once it has started Voice, not while it starts it.
+    threading.Thread(target=restore, name="restore", daemon=True).start()
+    threading.Thread(target=rest, name="rest", daemon=True).start()
+
+
+def restore() -> None:
+    """The workspace's choice, loaded; the first time, the model chosen for this computer
+    downloads by itself."""
+    kept = None
+    for _ in range(30):
+        try:
+            kept = extension.get_value("transcription")
+            break
+        except Exception:  # noqa: BLE001
+            time.sleep(1)
+    try:
+        ears.configure(Config.of(kept, ears.default()))
+    except ValueError:
+        pass
+    model = catalog.model(ears.config.model)
+    if downloads.ready(model.id, model.files):
+        prepare_now()
+    elif not kept:
+        downloads.start(model.id, model.files, done=prepare_now)
+
+
+def prepare_now() -> None:
+    """Loads the chosen model in the background, so that the next recording finds it loaded."""
+
+    def load() -> None:
+        try:
+            ears.ready()
+        except Exception as error:  # noqa: BLE001
+            print(f"The transcription model did not load: {error}", file=sys.stderr)
+
+    threading.Thread(target=load, name="prepare", daemon=True).start()
+
+
+def rest() -> None:
+    while True:
+        time.sleep(30)
+        ears.idle()
 
 
 extension.started.append(start)
 
 
-def warm() -> None:
-    """The chosen transcription model, loaded as the voice starts and when the choice changes,
-    not with the first recording: loading it takes seconds, up to a minute after hours idle."""
-    model = extension.settings.get("transcription") or "whisper"
-
-    def load() -> None:
-        try:
-            ears.ready(model)
-        except Exception as error:  # noqa: BLE001
-            print(f"The transcription model `{model}` did not load: {error}", file=sys.stderr)
-
-    threading.Thread(target=load, name="warm", daemon=True).start()
-
-
-extension.started.append(warm)
-extension.changed.append(warm)
+def person(caller: dict) -> None:
+    if caller.get("session_id") or caller.get("by"):
+        raise PermissionError("Only a person changes Voice's settings")
 
 
 def actors() -> dict:
@@ -111,8 +156,131 @@ def described(actor_id: str) -> dict | None:
 )
 def transcribe(input: dict, caller: dict) -> dict:
     audio = decode(base64.b64decode(input["audio"]))
-    model = extension.settings.get("transcription") or "whisper"
-    return ears.hear(audio, model, vocabulary() if model == "whisper" else [])
+    return ears.hear(audio, vocabulary())
+
+
+@extension.action("prepare", "Prepare", "Load the transcription model, as a microphone opens")
+def prepare(input: dict, caller: dict) -> dict:
+    prepare_now()
+    return ears.status()
+
+
+def model_shown(model: catalog.Model) -> dict:
+    return {"id": model.id, "engine": model.engine, "title": model.title, "variant": model.variant,
+            "languages": model.languages, "size": model.size, "memory": model.memory,
+            "licence": model.licence, "suggested": model.suggested, "vocabulary": model.vocabulary,
+            **downloads.state(model.id, model.files)}
+
+
+@extension.action("settings", "Settings", "Engines, models, what is loaded and how it is kept")
+def settings(input: dict, caller: dict) -> dict:
+    runtimes = ears.runtimes
+    return {
+        "config": ears.config.shown(),
+        "status": ears.status(),
+        "platform": runtimes.platform,
+        "engines": [{"id": engine.id, "title": engine.title, "description": engine.description,
+                     "backend": ears.backend(engine.id)} for engine in catalog.ENGINES],
+        "runtimes": runtimes.offered(),
+        "models": [model_shown(model) for model in catalog.MODELS],
+        "languages": [{"value": key, "label": label} for key, label in catalog.LANGUAGES.items()],
+    }
+
+
+@extension.action(
+    "configure", "Configure", "Choose the engine, model, language and how long the model stays loaded",
+    input={"type": "object", "properties": {
+        "model": {"type": "string"}, "language": {"type": "string"}, "vad": {"type": "boolean"},
+        "keep": {"type": "integer", "minimum": 0, "maximum": 1440},
+        "vocabulary": {"type": "array", "items": {"type": "string"}, "maxItems": 200},
+    }},
+    effects="write",
+)
+def configure(input: dict, caller: dict) -> dict:
+    person(caller)
+    changes = {key: input[key] for key in ("language", "vad", "keep") if key in input}
+    if "vocabulary" in input:
+        changes["vocabulary"] = tuple(word.strip() for word in input["vocabulary"] if word.strip())
+    if "model" in input:
+        model = catalog.model(input["model"])
+        changes.update(engine=model.engine, model=model.id)
+    if changes.get("language", "auto") not in catalog.LANGUAGES:
+        raise ValueError("No such language")
+    config = Config(**{**ears.config.__dict__, **changes})
+    ears.configure(config)
+    extension.set_value("transcription", config.shown())
+    model = catalog.model(config.model)
+    if downloads.ready(model.id, model.files):
+        prepare_now()
+    else:
+        downloads.start(model.id, model.files, done=prepare_now)
+    return settings({}, caller)
+
+
+@extension.action(
+    "download", "Download a model", "Download a transcription model",
+    input={"type": "object", "required": ["model"], "properties": {"model": {"type": "string"}}},
+    effects="write",
+)
+def download(input: dict, caller: dict) -> dict:
+    person(caller)
+    model = catalog.model(input["model"])
+    downloads.start(model.id, model.files)
+    return model_shown(model)
+
+
+@extension.action(
+    "cancel", "Cancel a download", "Stop a model's download",
+    input={"type": "object", "required": ["model"], "properties": {"model": {"type": "string"}}},
+    effects="write",
+)
+def cancel(input: dict, caller: dict) -> dict:
+    person(caller)
+    model = catalog.model(input["model"])
+    downloads.cancel(model.id)
+    return model_shown(model)
+
+
+@extension.action(
+    "delete_model", "Delete a model", "Remove a downloaded model from this computer",
+    input={"type": "object", "required": ["model"], "properties": {"model": {"type": "string"}}},
+    effects="destructive",
+)
+def delete_model(input: dict, caller: dict) -> dict:
+    person(caller)
+    model = catalog.model(input["model"])
+    if model.id == ears.config.model:
+        raise ValueError("Choose another model before deleting this one")
+    downloads.delete(model.id)
+    return model_shown(model)
+
+
+@extension.action(
+    "install_runtime", "Install whisper.cpp", "Download whisper.cpp built for this computer",
+    input={"type": "object", "required": ["backend"], "properties": {"backend": {"type": "string"}}},
+    effects="write",
+)
+def install_runtime(input: dict, caller: dict) -> dict:
+    person(caller)
+    ears.runtimes.install(input["backend"])
+    return {"runtimes": ears.runtimes.offered()}
+
+
+@extension.action("load", "Load", "Load the chosen model now", effects="write", seconds=300)
+def load(input: dict, caller: dict) -> dict:
+    person(caller)
+    try:
+        ears.ready()
+    except EngineError as error:
+        raise ValueError(str(error)) from error
+    return ears.status()
+
+
+@extension.action("unload", "Unload", "Free the memory the model takes", effects="write")
+def unload(input: dict, caller: dict) -> dict:
+    person(caller)
+    ears.unload()
+    return ears.status()
 
 
 @extension.action(
@@ -216,5 +384,6 @@ def forget(input: dict, caller: dict) -> dict:
 
 
 if __name__ == "__main__":
-    assert set(MODELS) == {"whisper", "parakeet", "qwen3"}
+    extension.ui("settings", "voice", "Voice", {"kind": "native", "entry": "ui/native/settings.js"},
+                 icon="audio-lines")
     extension.serve()
