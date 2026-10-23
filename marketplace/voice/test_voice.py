@@ -9,7 +9,7 @@ import unittest
 import numpy as np
 
 from designing import background_gap, cer, last_pause
-from hearing import agree, code
+from hearing import Ears, agree, code
 from italiano import words
 from speaking import sentences
 
@@ -52,3 +52,38 @@ class Voice(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Loaded(Ears):
+    """Ears whose models are names, loaded without their libraries."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.loads: list[str] = []
+
+    def _load(self, name, spec):
+        self.loads.append(name)
+        return name
+
+    def _hear(self, name, audio, vocabulary):
+        self._model(name)
+        return "aspen", None
+
+
+class Ready(unittest.TestCase):
+    def test_the_chosen_model_and_its_gate_are_loaded_ahead_and_once(self):
+        ears = Loaded()
+        ears.ready("whisper")
+        self.assertEqual(sorted(ears.models), ["parakeet", "whisper"])
+        ears.ready("whisper")
+        # The gate heard after Whisper keeps Whisper loaded.
+        ears.hear(np.full(16000, 0.5, dtype=np.float32), "whisper", [])
+        self.assertEqual(ears.loads, ["whisper", "parakeet"])
+
+    def test_choosing_another_model_frees_the_one_before_and_keeps_the_gate(self):
+        ears = Loaded()
+        ears.ready("whisper")
+        ears.ready("qwen3")
+        self.assertEqual(sorted(ears.models), ["parakeet", "qwen3"])
+        with self.assertRaises(ValueError):
+            ears.ready("unknown")

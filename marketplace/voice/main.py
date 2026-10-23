@@ -21,6 +21,8 @@ import base64
 import io
 import json
 import shutil
+import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -58,6 +60,24 @@ def start() -> None:
 
 
 extension.started.append(start)
+
+
+def warm() -> None:
+    """The chosen transcription model, loaded as the voice starts and when the choice changes,
+    not with the first recording: loading it takes seconds, up to a minute after hours idle."""
+    model = extension.settings.get("transcription") or "whisper"
+
+    def load() -> None:
+        try:
+            ears.ready(model)
+        except Exception as error:  # noqa: BLE001
+            print(f"The transcription model `{model}` did not load: {error}", file=sys.stderr)
+
+    threading.Thread(target=load, name="warm", daemon=True).start()
+
+
+extension.started.append(warm)
+extension.changed.append(warm)
 
 
 def actors() -> dict:

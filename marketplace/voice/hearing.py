@@ -64,34 +64,46 @@ def agree(a: str, b: str) -> bool:
 
 
 class Ears:
-    """The chosen model, loaded once it is used, and Parakeet as the gate; one at a time."""
+    """The chosen model, loaded ahead of the first recording or once it is used, and Parakeet
+    as the gate; one at a time."""
 
     def __init__(self) -> None:
         self.models: dict[str, object] = {}
         self.lock = threading.Lock()
+
+    def ready(self, name: str) -> None:
+        """Loads the chosen model, its libraries with it, and the gate beside Whisper, so that
+        the first recording finds them loaded."""
+        with self.lock:
+            self._model(name)
+            if name == "whisper":
+                self._model("parakeet")
+
+    def _load(self, name: str, spec: dict):
+        if APPLE:
+            from mlx_audio.stt.utils import load_model
+
+            return load_model(spec["mlx"])
+        if name == "whisper":
+            from faster_whisper import WhisperModel
+
+            return WhisperModel(spec["other"], device="auto", compute_type="default")
+        if name == "parakeet":
+            import onnx_asr
+
+            return onnx_asr.load_model(spec["other"])
+        raise ValueError("Qwen3-ASR runs only on a Mac with Apple silicon")
 
     def _model(self, name: str):
         if name not in self.models:
             spec = MODELS.get(name)
             if spec is None:
                 raise ValueError(f"No transcription model `{name}`")
-            # One model besides the gate: switching frees the other.
-            for other in [key for key in self.models if key not in (name, "parakeet")]:
-                del self.models[other]
-            if APPLE:
-                from mlx_audio.stt.utils import load_model
-
-                self.models[name] = load_model(spec["mlx"])
-            elif name == "whisper":
-                from faster_whisper import WhisperModel
-
-                self.models[name] = WhisperModel(spec["other"], device="auto", compute_type="default")
-            elif name == "parakeet":
-                import onnx_asr
-
-                self.models[name] = onnx_asr.load_model(spec["other"])
-            else:
-                raise ValueError("Qwen3-ASR runs only on a Mac with Apple silicon")
+            # One model besides the gate: switching frees the other, and the gate frees none.
+            if name != "parakeet":
+                for other in [key for key in self.models if key not in (name, "parakeet")]:
+                    del self.models[other]
+            self.models[name] = self._load(name, spec)
         return self.models[name]
 
     def _hear(self, name: str, audio: np.ndarray, vocabulary: list[str]) -> tuple[str, str | None]:
