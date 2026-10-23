@@ -1,3 +1,4 @@
+import { useTypeInto } from "./type-into";
 import { MenuEntries, WithMenu } from "./native-menus";
 import type { MenuEntry } from "@zerolux/ui";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
@@ -1539,6 +1540,8 @@ function SessionInput({
   };
   const box = useRef<HTMLTextAreaElement>(null);
   const open = owner && session.status === "connected";
+  // What you type anywhere in the session lands in its box, as in a chat.
+  useTypeInto(box, session.id, open);
   const tooLong = new TextEncoder().encode(text).length > MAX_TEXT;
   // Images going with the next input, shown by object URLs freed once they go.
   const [picked, setPicked] = useState<{ file: File; url: string }[]>([]);

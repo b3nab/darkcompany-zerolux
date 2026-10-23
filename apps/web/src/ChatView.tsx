@@ -1,3 +1,4 @@
+import { useTypeInto } from "./type-into";
 import { WithMenu } from "./native-menus";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { SubmitEvent } from "react";
@@ -947,37 +948,8 @@ function ChatComposer({
   useEffect(() => {
     saveDraft(conversation.id, text);
   }, [conversation.id, text]);
-  useEffect(() => {
-    // Opening a chat puts you in its box where a keyboard is at hand; a touch screen keeps its
-    // keyboard down until you tap.
-    if (!matchMedia("(pointer: fine)").matches) return;
-    box.current?.focus({ preventScroll: true });
-    // Clicks keep doing what they do, selecting text included. What you type or paste
-    // elsewhere in the chat lands in the box, as in Element and Mattermost: focus moves on
-    // keydown, before the character is written.
-    const keys = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.isComposing) return;
-      const paste =
-        (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v";
-      const typed =
-        (event.key.length === 1 || event.key === "Dead") &&
-        !event.metaKey &&
-        !event.ctrlKey;
-      if (!paste && !typed) return;
-      // Another field, or a dialog, keeps its keys; Space presses the control it is on.
-      const at = document.activeElement;
-      if (
-        at?.closest(
-          "input, textarea, select, [contenteditable=true], [role=dialog]",
-        ) ||
-        (event.key === " " && at?.closest("button, a, [role=button]"))
-      )
-        return;
-      box.current?.focus({ preventScroll: true });
-    };
-    document.addEventListener("keydown", keys);
-    return () => document.removeEventListener("keydown", keys);
-  }, []);
+  // What you type anywhere in the chat lands in its box.
+  useTypeInto(box, conversation.id);
   const tooLong = new TextEncoder().encode(text).length > MAX_TEXT;
   const write = (next: string) => {
     setText(next);
