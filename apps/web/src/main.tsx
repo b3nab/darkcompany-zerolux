@@ -7,6 +7,8 @@ import { preloadRenderer } from "./components/message-text";
 import { keepDraftsIn, lookWith, setKernelUrl } from "@zerolux/chat";
 import { kernelAddress } from "./desktop";
 import { startTheme } from "./theme";
+import { trayPanel } from "./tray";
+import { TrayPanel } from "./TrayPanel";
 
 startTheme();
 // In the desktop app the page is packaged and the kernel is wherever the workspace says.
@@ -44,13 +46,19 @@ lookWith(
   (changed) => document.addEventListener("visibilitychange", changed),
 );
 
+// The desktop's tray panel is a page of its own: it hears every open workspace.
+if (trayPanel()) document.documentElement.dataset.tray = "";
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <BrowserRouter>
-      <AuthGate>
-        <App />
-      </AuthGate>
-    </BrowserRouter>
+    {trayPanel() ? (
+      <TrayPanel />
+    ) : (
+      <BrowserRouter>
+        <AuthGate>
+          <App />
+        </AuthGate>
+      </BrowserRouter>
+    )}
   </StrictMode>,
 );
 

@@ -84,6 +84,11 @@ fn caller(window: &WebviewWindow) -> Result<String, String> {
         .ok_or_else(|| "A sign-in belongs to its packaged workspace view only".to_owned())
 }
 
+/// A saved connection's sign-in, for the tray's panel, which hears every open workspace.
+pub fn read_saved(profile: &str, workspace_id: &str) -> Option<String> {
+    read(&System, profile, workspace_id)
+}
+
 #[tauri::command]
 pub async fn read_workspace_credential(
     window: WebviewWindow,

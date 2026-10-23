@@ -9,6 +9,7 @@ mod credentials;
 mod extension_ui;
 mod local;
 mod preferences;
+mod tray;
 
 fn main() -> anyhow::Result<()> {
     // Before starting Tokio or Tauri threads. Never source the user's shell configuration.

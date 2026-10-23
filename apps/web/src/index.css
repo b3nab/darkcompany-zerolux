@@ -86,6 +86,11 @@
     background-image: var(--background-image);
     background-attachment: fixed;
   }
+  /* The tray's panel draws its own rounded surface on a clear window. */
+  html[data-tray],
+  html[data-tray] body {
+    background: transparent;
+  }
   /* Surfaces over the page: a theme may let what is behind them show through. */
   [data-slot="card"],
   [data-slot="popover-content"],

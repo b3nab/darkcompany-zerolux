@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicU8, Ordering},
     },
     time::Duration,
 };
@@ -27,10 +27,10 @@ use zerolux::{
 const MANAGER: &str = "manager";
 
 #[derive(Clone, Default, Serialize)]
-struct View {
+pub(crate) struct View {
     revision: u64,
-    profiles: Vec<ProfileView>,
-    active: Option<String>,
+    pub(crate) profiles: Vec<ProfileView>,
+    pub(crate) active: Option<String>,
     /// Other workspaces this computer joined, to run their person's sessions here.
     computers: Vec<LinkView>,
     ready: bool,
@@ -39,15 +39,15 @@ struct View {
 }
 
 #[derive(Clone, Serialize)]
-struct ProfileView {
+pub(crate) struct ProfileView {
     #[serde(flatten)]
-    profile: Profile,
+    pub(crate) profile: Profile,
     running: bool,
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-enum Action {
+pub(crate) enum Action {
     List,
     Open {
         id: String,
@@ -85,9 +85,9 @@ enum Action {
 }
 
 type Reply = oneshot::Sender<Result<View, String>>;
-struct Commands {
-    send: mpsc::Sender<(Action, Reply)>,
-    view: Arc<Mutex<View>>,
+pub(crate) struct Commands {
+    pub(crate) send: mpsc::Sender<(Action, Reply)>,
+    pub(crate) view: Arc<Mutex<View>>,
 }
 
 // Only the trusted, packaged manager can read or change the connection registry.
@@ -129,12 +129,10 @@ struct LocalRuntime {
 
 struct WorkspaceView {
     window: WebviewWindow,
-    closing: Arc<AtomicBool>,
 }
 
 impl WorkspaceView {
     fn close(&self) -> Result<()> {
-        self.closing.store(true, Ordering::Release);
         self.window.close().context("Close the workspace view")
     }
 }
@@ -161,7 +159,7 @@ struct Host {
     computers: Links,
 }
 
-fn open_external(handle: &tauri::AppHandle, url: &tauri::Url) {
+pub(crate) fn open_external(handle: &tauri::AppHandle, url: &tauri::Url) {
     if local::external_link(url)
         && let Err(error) = handle.opener().open_url(url.as_str(), None::<&str>)
     {
@@ -223,13 +221,32 @@ fn profile_of(label: &str) -> Option<&str> {
         .map(|(id, _)| id)
 }
 
+/// The workspace in front.
+pub(crate) fn active_profile<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<String> {
+    app.state::<Commands>()
+        .view
+        .lock()
+        .expect("desktop view lock")
+        .active
+        .clone()
+}
+
+/// Which of a workspace's windows came later, from the same label.
+pub(crate) fn generation_of(label: &str) -> u64 {
+    label
+        .rsplit('-')
+        .next()
+        .and_then(|part| part.parse().ok())
+        .unwrap_or(0)
+}
+
 /// Asks the desktop for something from its menu or the Dock, without waiting for its answer.
-fn ask(app: &tauri::AppHandle, action: Action) {
+pub(crate) fn ask(app: &tauri::AppHandle, action: Action) {
     let (reply, _) = oneshot::channel();
     let _ = app.state::<Commands>().send.try_send((action, reply));
 }
 
-fn show_manager(app: &tauri::AppHandle, profile: Option<&str>) {
+pub(crate) fn show_manager(app: &tauri::AppHandle, profile: Option<&str>) {
     if let Some(window) = app.get_webview_window(MANAGER) {
         let _ = window.show();
         let _ = window.set_focus();
@@ -241,6 +258,7 @@ fn show_manager(app: &tauri::AppHandle, profile: Option<&str>) {
 }
 
 fn render(app: &tauri::AppHandle, view: &View) {
+    crate::tray::changed(app);
     if let Some(window) = app.get_webview_window(MANAGER)
         && window.url().ok().as_ref().is_some_and(local::boot_page)
     {
@@ -604,8 +622,6 @@ impl Host {
         let popup = self.app.clone();
         let profile_id = profile.id.clone();
         let popup_id = profile.id.clone();
-        let closing = Arc::new(AtomicBool::new(false));
-        let close_flag = closing.clone();
         let context = serde_json::json!({"profileId":profile.id,"workspaceId":profile.workspace_id,"managed":matches!(profile.source, Source::Local { .. }),"kernelUrl":url.as_str(),"platform":std::env::consts::OS});
         let restore = match saved.and_then(|saved| saved.drafts.as_ref()) {
             Some(drafts) => {
@@ -683,24 +699,9 @@ impl Host {
             .browser_store(builder, profile, false)?
             .build()
             .context("Open the workspace view")?;
-        // Closing a window closes it alone, as in VS Code. The app quits with the last one, but
-        // on macOS it stays in the Dock, its kernels at work, until it is quit.
-        let handle = self.app.clone();
-        let own = window.label().to_owned();
-        window.on_window_event(move |event| {
-            if let tauri::WindowEvent::Destroyed = event
-                && !close_flag.load(Ordering::Acquire)
-                && cfg!(not(target_os = "macos"))
-                && !handle.webview_windows().iter().any(|(label, window)| {
-                    label != &own
-                        && (label.starts_with("workspace-")
-                            || (label == MANAGER && window.is_visible().unwrap_or(false)))
-                })
-            {
-                handle.exit(0);
-            }
-        });
-        let view = WorkspaceView { window, closing };
+        // Closing a window closes it alone, as in VS Code. The app stays in the tray, its
+        // kernels at work, until it is quit.
+        let view = WorkspaceView { window };
         let result = async {
             tokio::time::timeout(Duration::from_secs(10), ready)
                 .await
@@ -1002,7 +1003,14 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             choose_folder,
             crate::chrome::window_control,
             crate::credentials::read_workspace_credential,
-            crate::credentials::write_workspace_credential
+            crate::credentials::write_workspace_credential,
+            crate::tray::tray_workspaces,
+            crate::tray::tray_credential,
+            crate::tray::tray_report,
+            crate::tray::tray_resize,
+            crate::tray::tray_hide,
+            crate::tray::tray_open,
+            crate::tray::tray_new_window
         ])
         .on_menu_event(|app, event| match event.id().as_ref() {
             "workspaces" => show_manager(app, None),
@@ -1052,23 +1060,22 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                         .active
                         .clone();
                     // The active workspace's latest window comes back, else any one's; with
-                    // none the app quits, but on macOS it stays in the Dock.
+                    // none the app stays in the tray.
                     let back = handle
                         .webview_windows()
                         .into_values()
                         .filter_map(|window| {
                             let profile = profile_of(window.label())?;
-                            let generation =
-                                window.label().rsplit('-').next()?.parse::<u64>().ok()?;
-                            Some((active.as_deref() == Some(profile), generation, window))
+                            Some((
+                                active.as_deref() == Some(profile),
+                                generation_of(window.label()),
+                                window,
+                            ))
                         })
                         .max_by_key(|(front, generation, _)| (*front, *generation));
                     if let Some((_, _, window)) = back {
                         let _ = window.show();
                         let _ = window.set_focus();
-                    } else if cfg!(not(target_os = "macos")) {
-                        handle.exit(0);
-                        return;
                     }
                     if let Some(manager) = handle.get_webview_window(MANAGER) {
                         let _ = manager.hide();
@@ -1098,6 +1105,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                 &[&window, &item],
             )?)?;
             app.set_menu(menu)?;
+            crate::tray::install(app.handle())?;
             let data = std::env::var_os("ZEROLUX_DESKTOP_DATA_DIR")
                 .map(PathBuf::from)
                 .map(Ok)

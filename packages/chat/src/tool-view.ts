@@ -334,9 +334,11 @@ export function changeCount(changes: TextChange[]) {
   );
 }
 
-/** How many lines a patch adds and removes. */
+/** How many lines a patch adds and removes, its files' `---`/`+++` headers apart. */
 export function patchCount(patch: string) {
-  const rows = patch.split("\n");
+  const rows = patch
+    .split("\n")
+    .filter((row) => !/^(?:\+\+\+|---)(?: |$)/.test(row));
   return {
     added: rows.filter((row) => row.startsWith("+")).length,
     removed: rows.filter((row) => row.startsWith("-")).length,

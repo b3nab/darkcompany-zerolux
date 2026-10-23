@@ -7,6 +7,13 @@ fn main() {
             "window_control",
             "read_workspace_credential",
             "write_workspace_credential",
+            "tray_workspaces",
+            "tray_credential",
+            "tray_report",
+            "tray_resize",
+            "tray_hide",
+            "tray_open",
+            "tray_new_window",
         ]),
     ))
     .expect("build desktop permissions");

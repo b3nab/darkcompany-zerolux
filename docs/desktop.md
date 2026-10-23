@@ -31,7 +31,7 @@ The desktop loads its packaged interface and calls the selected kernel's HTTP AP
 
 ## Windows, drafts and closing
 
-Each workspace opens in its own window, beside the others' as in VS Code. **New Window** (⌘N, Ctrl+N) opens another window of the workspace in front. Closing a window closes only it; opened local kernels keep running. The app quits with its last window, except on macOS, where it stays in the Dock until you quit it and its icon brings back the workspace last in front. Saved workspaces are not all started at app launch.
+Each workspace opens in its own window, beside the others' as in VS Code. **New Window** (⌘N, Ctrl+N) opens another window of the workspace in front. Closing a window closes only it; opened local kernels keep running. With its last window closed the app stays in the tray until you quit it, and on macOS in the Dock, whose icon brings back the workspace last in front. Saved workspaces are not all started at app launch.
 
 Changing the address of an open connection or forgetting it checks for pending sends. Pending messages block that change. An address change preserves drafts only after verifying the same workspace; it does not transfer kernel cookies or arbitrary browser storage.
 
@@ -44,6 +44,18 @@ On Quit:
 - Kernel shutdown is not the same as pressing Stop on a native agent; native work may continue independently.
 
 Finish sending before closing a window or quitting: pending sends live in their window, and are not kept across a close, an app exit or a crash.
+
+## Tray
+
+ZeroLux's mark sits in the menu bar on macOS, the notification area on Windows and the tray on Linux (GNOME shows it with the AppIndicator extension). On macOS the number beside it counts the requests waiting for you; elsewhere a badge says something waits. The mark has no lit point while no workspace's kernel answers.
+
+A click on the mark opens a panel under it, over full-screen apps too, with what every workspace opened since the app started asks of you:
+
+- **Needs you:** each permission as it would act (the whole command, the files with the lines it adds and removes, the address), to allow once, for the session or always as its harness offers, or deny; a question with one answer among its options, answered with a tap; anything else opens its chat or session in the app. Arrows move between requests, Return allows once, Backspace denies, Escape closes the panel.
+- **Subscriptions:** each plan of the person on the kernel's computer, with its main limit; a click shows the others, a week's pace (when it runs out at this rate), extra usage, credits and earned resets to use.
+- **Extensions' rows** from the workspace in front, such as the next meeting.
+
+The panel reads each workspace with that workspace's own sign-in, kept by the desktop; a workspace not signed in says so. The right click opens a menu with Open ZeroLux, New Window, the workspaces and Quit. Linux's trays open only a menu, so there the menu also holds the requests, each with its choices, and the plans' main lines.
 
 ## Data and migration
 

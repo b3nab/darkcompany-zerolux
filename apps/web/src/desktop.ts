@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { currentDrafts } from "@zerolux/chat";
 
 /** Optional desktop context. No native API or other workspace's configuration is exposed. */
@@ -93,6 +93,31 @@ export function extensionUiAddress(url: string) {
   return desktop.platform === "windows"
     ? `http://zerolux-ui.localhost/${file}`
     : `zerolux-ui://localhost/${file}`;
+}
+
+/** The page the desktop sends this window to, from the tray's panel: a request's chat or session. */
+export function useDesktopOpen(open: (path: string) => void) {
+  const latest = useRef(open);
+  latest.current = open;
+  useEffect(() => {
+    if (!desktopConnection()) return;
+    let live = true;
+    let stop: (() => void) | undefined;
+    void import("@tauri-apps/api/webviewWindow").then(
+      async ({ getCurrentWebviewWindow }) => {
+        const unlisten = await getCurrentWebviewWindow().listen<string>(
+          "zerolux-open",
+          (event) => latest.current(event.payload),
+        );
+        if (live) stop = unlisten;
+        else unlisten();
+      },
+    );
+    return () => {
+      live = false;
+      stop?.();
+    };
+  }, []);
 }
 
 /** The desktop draws no title bar: these elements move the window; buttons inside keep working. */

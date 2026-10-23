@@ -85,14 +85,24 @@ test("registry commands are restricted to the packaged manager, not workspace pa
   const config = await Bun.file(
     new URL("./src-tauri/tauri.conf.json", import.meta.url),
   ).json();
-  const capabilities = config.app.security.capabilities;
-  expect(capabilities).toHaveLength(2);
-  expect(capabilities[0].windows).toEqual(["manager"]);
-  expect(capabilities[0].permissions).toEqual(["allow-workspace-action"]);
-  expect(capabilities[0].remote).toBeUndefined();
-  expect(capabilities[1].local).toBe(true);
-  expect(capabilities[1].windows).toEqual(["workspace-*"]);
-  expect(capabilities[1].permissions).toEqual([
+  const capabilities = config.app.security.capabilities as {
+    windows: string[];
+    permissions: string[];
+    local?: boolean;
+    remote?: unknown;
+  }[];
+  const of = (window: string) =>
+    capabilities.find((capability) => capability.windows.includes(window))!;
+  expect(capabilities).toHaveLength(3);
+  expect(
+    capabilities.every((capability) => capability.windows.length === 1),
+  ).toBe(true);
+  expect(
+    capabilities.every((capability) => capability.remote === undefined),
+  ).toBe(true);
+  expect(of("manager").permissions).toEqual(["allow-workspace-action"]);
+  expect(of("workspace-*").local).toBe(true);
+  expect(of("workspace-*").permissions).toEqual([
     "allow-window-control",
     // Web links only, to the system browser: extensions' pages open them too.
     "allow-open-link",
@@ -111,6 +121,23 @@ test("registry commands are restricted to the packaged manager, not workspace pa
     "notification:allow-request-permission",
     "notification:allow-notify",
   ]);
-  expect(capabilities[1].remote).toBeUndefined();
+  // The tray's panel hears every open workspace: their sign-ins are read, never written, and
+  // it has no registry or window controls.
+  expect(of("tray").local).toBe(true);
+  expect(of("tray").permissions).toEqual([
+    "allow-tray-workspaces",
+    "allow-tray-credential",
+    "allow-tray-report",
+    "allow-tray-resize",
+    "allow-tray-hide",
+    "allow-tray-open",
+    "allow-tray-new-window",
+    "allow-open-link",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "notification:allow-is-permission-granted",
+    "notification:allow-request-permission",
+    "notification:allow-notify",
+  ]);
   expect(config.bundle.macOS.minimumSystemVersion).toBe("14.0");
 });

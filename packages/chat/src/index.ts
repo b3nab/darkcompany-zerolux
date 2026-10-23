@@ -17,6 +17,7 @@ export * from "./reading";
 export * from "./folders";
 export * from "./devices";
 export * from "./requests";
+export * from "./subscriptions";
 export * from "./capabilities";
 export * from "./session-events";
 export * from "./live";

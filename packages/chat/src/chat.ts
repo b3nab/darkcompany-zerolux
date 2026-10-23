@@ -10,6 +10,7 @@ import type {
 import type { LiveNotice } from "./live";
 import type { ExtensionsNotice } from "./extensions";
 import type { BackgroundNotice } from "./background";
+import type { Subscription } from "./subscriptions";
 import type { UiNotice } from "./extension-ui";
 import type { TerminalNotice } from "./terminals";
 
@@ -207,6 +208,7 @@ export type ChatEvent = { event_id: string } & (
   | { type: "session.changed"; session_id: string }
   | { type: "delivery.changed"; conversation_id: string; message_id: string }
   | { type: "approval.changed"; approval_id: string }
+  | { type: "subscriptions.changed"; subscriptions: Subscription[] }
   | ReadNotice
   | ({
       type: "session.output";
@@ -538,6 +540,7 @@ const eventTypes = new Set<string>([
   "session.changed",
   "delivery.changed",
   "approval.changed",
+  "subscriptions.changed",
   "read.changed",
   "session.output",
   "session.live",

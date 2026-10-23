@@ -19,6 +19,10 @@ impl Kernels {
             .expect("kernels lock")
             .insert(profile.to_owned(), kernel.clone());
     }
+
+    pub fn all(&self) -> HashMap<String, tauri::Url> {
+        self.0.lock().expect("kernels lock").clone()
+    }
 }
 
 /// Whether a view may open this address in itself: an extension's page.
@@ -72,14 +76,21 @@ async fn fetch<R: Runtime>(
     path: &str,
 ) -> Result<http::Response<Vec<u8>>> {
     let view = app.get_webview_window(label).context("No such view")?;
-    let profile =
-        crate::chrome::workspace_profile(label, &view.url()?).context("Not a workspace view")?;
+    let url = view.url()?;
+    // The tray's panel shows the rows of the workspace in front.
+    let profile = if label == crate::tray::PANEL && crate::local::app_page(&url) {
+        crate::app::active_profile(app).context("No workspace in front")?
+    } else {
+        crate::chrome::workspace_profile(label, &url)
+            .context("Not a workspace view")?
+            .to_owned()
+    };
     let kernel = app
         .state::<Kernels>()
         .0
         .lock()
         .expect("kernels lock")
-        .get(profile)
+        .get(&profile)
         .cloned()
         .context("No kernel for this view")?;
     let address = kernel.join(&kernel_path(path).context("Not an extension's file")?)?;

@@ -1,3 +1,4 @@
+import { changeCount, patchCount, toolView } from "./tool-view";
 import type {
   Approval,
   ApprovalScope,
@@ -121,4 +122,134 @@ export function answerSummary(approval: Approval): string {
   if (answer.action !== "accept")
     return answer.action === "decline" ? "Declined" : "Cancelled";
   return formOf(approval).mode === "url" ? "Done" : "Sent";
+}
+
+/** A file a permission would change, with the lines it adds and removes where they are known. */
+export interface ChangedFile {
+  path: string;
+  added?: number;
+  removed?: number;
+}
+
+/**
+ * What a permission asks, as a person reads it rather than as its harness sends it: what it
+ * wants to do, and the command, files or address it would do it with.
+ */
+export interface PermissionShown {
+  /** "wants to run", "wants to edit 3 files"… after the agent's name. */
+  wants: string;
+  command?: string;
+  /** Where the command would run. */
+  cwd?: string;
+  files?: ChangedFile[];
+  /** Anything else it says: an address, a search, a reason. */
+  text?: string;
+}
+
+const said = (value: unknown) =>
+  typeof value === "string" && value.trim() ? value : undefined;
+const fieldsOf = (value: unknown) =>
+  typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : {};
+const editing = (count: number) =>
+  count === 1 ? "wants to edit a file" : `wants to edit ${count} files`;
+
+/** What a tool would do, from its name and input, as the Console draws it. */
+function toolShown(name: string, input: unknown): PermissionShown {
+  const view = toolView(name, input);
+  switch (view.kind) {
+    case "command":
+      return {
+        wants: "wants to run",
+        command: view.script ?? view.commands.join("\n"),
+        text: view.description,
+      };
+    case "edit":
+      return {
+        wants: "wants to edit a file",
+        files: [{ path: view.path, ...changeCount(view.changes) }],
+      };
+    case "write":
+      return {
+        wants: "wants to write a file",
+        files: [
+          {
+            path: view.path,
+            ...changeCount([{ before: "", after: view.text }]),
+          },
+        ],
+      };
+    case "patch":
+      return {
+        wants: editing(view.files.length),
+        files: view.files.map((path) => ({ path })),
+      };
+    case "read":
+      return { wants: "wants to read", files: [{ path: view.path }] };
+    case "search":
+      return { wants: "wants to search for", text: view.pattern };
+    case "web":
+      return view.url
+        ? { wants: "wants to open", text: view.url }
+        : { wants: "wants to search the web for", text: view.query };
+    case "mcp":
+      return {
+        wants: `wants to use ${view.server}: ${view.tool}`,
+        text: JSON.stringify(view.args),
+      };
+    default:
+      return {
+        wants: `wants to use ${name}`,
+        text: typeof input === "string" ? input : JSON.stringify(input),
+      };
+  }
+}
+
+/** A permission's request, read from what Claude Code, Codex or pi sent. */
+export function permissionShown(approval: Approval): PermissionShown {
+  const details = approval.details;
+  // Claude Code: the tool and its input.
+  if (typeof details.tool === "string")
+    return toolShown(details.tool, details.input);
+  // Codex: the item it would run or change, and its request.
+  const item = fieldsOf(details.item);
+  const params = fieldsOf(details.params);
+  switch (details.method) {
+    case "item/commandExecution/requestApproval": {
+      const command = item.command ?? params.command;
+      return {
+        wants: "wants to run",
+        command: Array.isArray(command) ? command.join(" ") : said(command),
+        cwd: said(item.cwd) ?? said(params.cwd),
+        text: said(params.reason),
+      };
+    }
+    case "item/fileChange/requestApproval": {
+      const files = (Array.isArray(item.changes) ? item.changes : [])
+        .map(fieldsOf)
+        .filter((change) => typeof change.path === "string")
+        .map((change) => ({
+          path: change.path as string,
+          ...(typeof change.diff === "string" ? patchCount(change.diff) : {}),
+        }));
+      return {
+        wants: files.length ? editing(files.length) : "wants to change files",
+        files,
+        text: said(params.reason),
+      };
+    }
+    case "item/permissions/requestApproval":
+      return { wants: "asks for more permissions", text: said(params.reason) };
+    // pi: a confirmation, with its title and message.
+    case "confirm":
+      return {
+        wants: "asks you to confirm",
+        text:
+          [said(details.title), said(details.message)]
+            .filter(Boolean)
+            .join(": ") || undefined,
+      };
+  }
+  return { wants: "asks your permission", text: approval.summary };
 }

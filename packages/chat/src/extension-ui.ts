@@ -5,7 +5,14 @@ import { runAction, useActions, useExtensions } from "./extensions";
 import type { Extension, ExtensionAction } from "./extensions";
 
 /** Where in the clients an extension's piece of interface shows. */
-export type UiSpace = "page" | "session" | "chat" | "message" | "settings";
+export type UiSpace =
+  | "page"
+  | "session"
+  | "chat"
+  | "message"
+  | "settings"
+  /** A row in the desktop's tray panel. */
+  | "tray";
 
 /** An action a view runs, with its input. */
 export interface UiAction {

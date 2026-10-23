@@ -261,6 +261,7 @@ const spaces: Record<UiSpace, string> = {
   chat: "Beside a chat",
   message: "In a message's menu",
   settings: "In settings",
+  tray: "In the tray's panel",
 };
 
 const effects = {

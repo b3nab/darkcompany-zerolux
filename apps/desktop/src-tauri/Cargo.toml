@@ -10,7 +10,7 @@ zerolux = { path = "../../../crates/zerolux" }
 anyhow.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-tauri = { version = "2.12.1", features = [] }
+tauri = { version = "2.12.1", features = ["macos-private-api", "tray-icon"] }
 fs2 = "0.4"
 tauri-plugin-opener = "2"
 serde.workspace = true
@@ -30,3 +30,13 @@ tempfile = "3"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+
+[target."cfg(windows)".dependencies]
+windows-registry = "0.6.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "NSWindow",
+  "NSResponder",
+] }

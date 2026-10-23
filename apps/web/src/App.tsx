@@ -20,6 +20,7 @@ import {
 import type { Conversation } from "@zerolux/chat";
 import { activeActors, api, errorMessage } from "./api";
 import {
+  useDesktopOpen,
   useTrafficLightsInset,
   windowDragProps,
   workspaceNavigationGuard,
@@ -92,6 +93,7 @@ export function App({
     return true;
   }, [side]);
   const navigate = useNavigate();
+  useDesktopOpen(navigate);
   const { pathname } = useLocation();
   const chatId = useMatch("/chats/:id")?.params.id;
   const agentId = useMatch("/team/:id")?.params.id;
