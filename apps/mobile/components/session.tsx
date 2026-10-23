@@ -5,6 +5,7 @@ import { ChevronRightIcon, PinIcon, UsersIcon } from "lucide-react-native";
 import { useCSSVariable } from "uniwind";
 import {
   ago,
+  briefAgo,
   delegatedBy,
   delegatedTo,
   errorMessage,
@@ -17,6 +18,7 @@ import {
   shareChoice,
   sharedAs,
   shareLabels,
+  useModelLabels,
 } from "@zerolux/chat";
 import type {
   Actor,
@@ -55,8 +57,8 @@ export function useOrganize(session: ChatSession) {
 
 /**
  * One session as the Console's inbox lists it, like a chat in the list of chats: its agent
- * (or its title, without one) and harness, when it last wrote, then what it asks of you,
- * what it does while it works, why it stopped, else its latest in a line; a dot while it has
+ * (or its title, without one) whole and when it last wrote; what it runs on; then what it asks
+ * of you, what it does while it works, why it stopped, else its latest; a dot while it has
  * written what you have not seen. Held, one's own is renamed, pinned, archived or forked: the
  * system's menu over its preview on iOS, the app's sheet on Android.
  */
@@ -73,7 +75,8 @@ export function SessionRow({
   asks?: Approval;
 }) {
   const organize = useOrganize(session);
-  const { workspace, chat, hosts } = useSession();
+  const { workspace, chat, hosts, url } = useSession();
+  const modelLabel = useModelLabels(url);
   // On a joined computer, the row says which.
   const computer = sessionComputer(session, hosts.hosts);
   const faint = String(useCSSVariable("--color-faint"));
@@ -152,32 +155,40 @@ export function SessionRow({
           >
             {agent?.name ?? title}
           </Text>
-          <Text
-            numberOfLines={1}
-            className="shrink font-mono text-[11px] text-faint"
-          >
-            {harnessLabels[session.harness] ?? session.harness}
-            {computer ? ` · on ${computer.name}` : ""}
-            {person ? ` · by ${person}` : ""}
-          </Text>
           <View className="ml-auto flex-row items-center gap-1">
-            {session.shared ? (
-              <UsersIcon
-                accessibilityLabel={`Shared to ${session.shared}`}
-                color={faint}
-                size={11}
-                strokeWidth={2}
-              />
-            ) : null}
             {organize.pinned ? (
               <PinIcon color={faint} size={11} strokeWidth={2} />
             ) : null}
             {session.output_at ? (
-              <Text className="font-mono text-[11px] text-faint">
-                {ago(session.output_at)}
+              <Text
+                accessibilityLabel={ago(session.output_at)}
+                className="font-mono text-[11px] text-faint"
+              >
+                {briefAgo(session.output_at)}
               </Text>
             ) : null}
           </View>
+        </View>
+        {/* What it runs on: its model, the harness, the computer, and whose it is. */}
+        <View className="flex-row items-center gap-1.5">
+          <Text numberOfLines={1} className="shrink text-xs text-faint">
+            {[
+              agent?.model && modelLabel(session.harness, agent.model),
+              harnessLabels[session.harness] ?? session.harness,
+              computer && `on ${computer.name}`,
+              person && `by ${person}`,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </Text>
+          {session.shared ? (
+            <UsersIcon
+              accessibilityLabel={`Shared to ${session.shared}`}
+              color={faint}
+              size={11}
+              strokeWidth={2}
+            />
+          ) : null}
         </View>
         <View className="flex-row items-center gap-1.5">
           {unseen ? (

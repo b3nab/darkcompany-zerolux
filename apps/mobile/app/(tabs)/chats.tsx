@@ -11,6 +11,7 @@ import {
   listChats,
   listTime,
   unreadIn,
+  useModelLabels,
   waitingChats,
 } from "@zerolux/chat";
 import type { ChatFilter } from "@zerolux/chat";
@@ -24,7 +25,8 @@ import { useSession } from "../../src/kernel";
 
 /** Every chat, the newest activity first; the ones waiting for you are marked. */
 export default function Chats() {
-  const { chat, actors, name } = useSession();
+  const { chat, actors, name, url } = useSession();
+  const modelLabel = useModelLabels(url);
   const router = useRouter();
   const [filter, setFilter] = useState<ChatFilter>("all");
   const ink = String(useCSSVariable("--color-foreground"));
@@ -146,17 +148,23 @@ export default function Chats() {
                   >
                     {c.title}
                   </Text>
-                  {agent?.harness ? (
-                    <Text className="font-mono text-[11px] text-faint">
-                      {harnessLabels[agent.harness]}
-                    </Text>
-                  ) : null}
                   {last ? (
                     <Text className="ml-auto font-mono text-[11px] text-faint">
                       {listTime(last.created_at)}
                     </Text>
                   ) : null}
                 </View>
+                {/* An agent's chat says what it runs on: its model, then the harness. */}
+                {agent?.harness ? (
+                  <Text numberOfLines={1} className="text-xs text-faint">
+                    {[
+                      agent.model && modelLabel(agent.harness, agent.model),
+                      harnessLabels[agent.harness],
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </Text>
+                ) : null}
                 <View className="flex-row items-center gap-2">
                   <Text
                     className={cn(
