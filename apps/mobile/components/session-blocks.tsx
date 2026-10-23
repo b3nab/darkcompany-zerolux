@@ -1,6 +1,10 @@
 import type { ReactNode } from "react";
 import { Pressable, View } from "react-native";
-import { ChevronRightIcon, CircleAlertIcon } from "lucide-react-native";
+import {
+  ChevronRightIcon,
+  CircleAlertIcon,
+  InfoIcon,
+} from "lucide-react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { useCSSVariable } from "uniwind";
 import {
@@ -180,6 +184,7 @@ function Block({
   voice?: Voice;
 }) {
   const destructive = String(useCSSVariable("--color-destructive"));
+  const faint = String(useCSSVariable("--color-faint"));
   switch (block.kind) {
     case "input":
       // With a menu, a long press opens it, and Copy is there; else the text is selectable.
@@ -273,6 +278,18 @@ function Block({
           </View>
           <Text selectable className="flex-1 text-sm text-destructive">
             {block.message}
+          </Text>
+        </View>
+      );
+    case "notice":
+      // What the harness says by itself, as a background task's end: no one's message.
+      return (
+        <View className="flex-row items-start gap-2">
+          <View className="mt-0.5">
+            <InfoIcon color={faint} size={14} />
+          </View>
+          <Text selectable className="flex-1 text-[12.5px] text-faint">
+            {block.text}
           </Text>
         </View>
       );
