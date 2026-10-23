@@ -166,6 +166,20 @@ function scripted(
   }
   return Object.assign(stream(), {
     initializationResult: async () => ({}),
+    accountInfo: async () => ({
+      email: "fixture@example.com",
+      subscriptionType: "max",
+      apiProvider: "firstParty",
+    }),
+    usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => ({
+      subscription_type: "max",
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 31, resets_at: "2026-10-23T14:00:00Z" },
+        seven_day: { utilization: 12, resets_at: null },
+      },
+      behaviors: null,
+    }),
     getSettings: async () => ({
       applied: { model, effort },
       effective: { env: { PRIVATE_FIXTURE_VALUE: "must-not-be-published" } },

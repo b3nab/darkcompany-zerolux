@@ -185,7 +185,7 @@ impl ChatRuntime {
     ) -> Result<Option<Option<Subscription>>> {
         let mut failed = None;
         for session in self.store.sessions(who).await? {
-            if session.harness != "claude"
+            if session.harness != crate::harness::Harness::ClaudeCode.id()
                 || session.stopped_at.is_some()
                 || session.status != "connected"
                 || session.host_id.as_deref() != self.store.host()
