@@ -575,10 +575,16 @@ pub fn tray_credential(
     Ok(credentials::read_saved(&profile, &workspace))
 }
 
-/// What waits for you, for the mark and the menu.
+/// What waits for you, for the mark and the menu; the notifications of the rest go.
 #[tauri::command]
 pub fn tray_report(window: WebviewWindow, report: Report) -> Result<(), String> {
     panel_only(&window)?;
+    let waiting = report
+        .requests
+        .iter()
+        .map(|request| format!("{}|{}", request.profile, request.id))
+        .collect();
+    crate::notify::keep_only(window.app_handle(), &waiting);
     window
         .app_handle()
         .state::<Mutex<State>>()
@@ -658,4 +664,12 @@ pub async fn tray_new_window(window: WebviewWindow, profile: String) -> Result<(
     panel_only(&window)?;
     let _ = window.hide();
     act(window.app_handle(), Action::NewWindow { id: Some(profile) }).await
+}
+
+/// A new request, as a system notification.
+#[tauri::command]
+pub fn tray_notify(window: WebviewWindow, ask: crate::notify::Ask) -> Result<(), String> {
+    panel_only(&window)?;
+    crate::notify::show(window.app_handle(), ask);
+    Ok(())
 }

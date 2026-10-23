@@ -44,6 +44,16 @@ export const trayHide = () => call("tray_hide");
 export const trayOpen = (profile: string, path?: string) =>
   call("tray_open", { profile, path });
 
+/** A new request, as a system notification answered from it. */
+export const trayNotify = (ask: {
+  profile: string;
+  id: string;
+  title: string;
+  subtitle: string;
+  body: string;
+  choices: boolean;
+}) => call("tray_notify", { ask });
+
 /** Another window of a workspace. */
 export const trayNewWindow = (profile: string) =>
   call("tray_new_window", { profile });

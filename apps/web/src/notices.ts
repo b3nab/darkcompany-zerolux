@@ -9,6 +9,7 @@ import {
 } from "@zerolux/chat";
 import type { Attention, Chat, ChatSession, Extension } from "@zerolux/chat";
 import type { Actor } from "./api";
+import { desktopConnection } from "./desktop";
 import { stored } from "./stored";
 
 /** Which notices this device shows: a session needing you or failing, a session finishing. */
@@ -53,6 +54,8 @@ export function useSessionNotices(
     const choice = noticeChoice.current();
     for (const { id, notice } of sessionNotices(was, attentions)) {
       if (!(notice === "finished" ? choice.finished : choice.needs)) continue;
+      // In the desktop app the tray tells each request, with its answers.
+      if (notice === "approval" && desktopConnection()) continue;
       const watched =
         id === looking &&
         document.visibilityState === "visible" &&

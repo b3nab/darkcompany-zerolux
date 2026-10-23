@@ -8,6 +8,7 @@ mod connection;
 mod credentials;
 mod extension_ui;
 mod local;
+mod notify;
 mod preferences;
 mod tray;
 

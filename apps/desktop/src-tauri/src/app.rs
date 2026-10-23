@@ -1010,7 +1010,8 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             crate::tray::tray_resize,
             crate::tray::tray_hide,
             crate::tray::tray_open,
-            crate::tray::tray_new_window
+            crate::tray::tray_new_window,
+            crate::tray::tray_notify
         ])
         .on_menu_event(|app, event| match event.id().as_ref() {
             "workspaces" => show_manager(app, None),
@@ -1105,6 +1106,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                 &[&window, &item],
             )?)?;
             app.set_menu(menu)?;
+            crate::notify::install(app.handle());
             crate::tray::install(app.handle())?;
             let data = std::env::var_os("ZEROLUX_DESKTOP_DATA_DIR")
                 .map(PathBuf::from)

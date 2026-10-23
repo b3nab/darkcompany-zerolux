@@ -55,7 +55,7 @@ A click on the mark opens a panel under it, over full-screen apps too, with what
 - **Subscriptions:** each plan of the person on the kernel's computer, with its main limit; a click shows the others, a week's pace (when it runs out at this rate), extra usage, credits and earned resets to use.
 - **Extensions' rows** from the workspace in front, such as the next meeting.
 
-The panel reads each workspace with that workspace's own sign-in, kept by the desktop; a workspace not signed in says so. The right click opens a menu with Open ZeroLux, New Window, the workspaces and Quit. Linux's trays open only a menu, so there the menu also holds the requests, each with its choices, and the plans' main lines.
+A request that comes while the panel is closed is also a system notification: a permission is allowed once or denied from it, and a click opens the request in the app. The workspace windows then leave requests to the tray. On macOS the app asks once whether it may notify; a build run from source, with no app bundle, shows none of these. The panel reads each workspace with that workspace's own sign-in, kept by the desktop; a workspace not signed in says so. The right click opens a menu with Open ZeroLux, New Window, the workspaces and Quit. Linux's trays open only a menu, so there the menu also holds the requests, each with its choices, and the plans' main lines.
 
 ## Data and migration
 

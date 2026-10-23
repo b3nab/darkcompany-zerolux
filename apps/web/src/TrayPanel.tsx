@@ -48,6 +48,7 @@ import {
   trayCredential,
   trayHide,
   trayNewWindow,
+  trayNotify,
   trayOpen,
   trayReport,
   trayResize,
@@ -652,7 +653,47 @@ export function TrayPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reported]);
 
-  // Answers chosen in Linux's menu, and requests opened from it.
+  // A request that comes while the panel is closed is also a notification, answered from it.
+  // What already waits when a workspace is first heard is not news.
+  const known = useRef(new Map<string, Set<string>>());
+  useEffect(() => {
+    for (const workspace of ordered) {
+      const state = heard[workspace.profile];
+      if (!state || state.error) continue;
+      const before = known.current.get(workspace.profile);
+      known.current.set(
+        workspace.profile,
+        new Set(state.approvals.map((approval) => approval.id)),
+      );
+      if (!before || document.hasFocus()) continue;
+      for (const item of waiting) {
+        if (item.workspace !== workspace || before.has(item.approval.id))
+          continue;
+        const { approval } = item;
+        const shown =
+          approval.kind === "permission"
+            ? permissionShown(approval)
+            : undefined;
+        const body =
+          shown?.command ??
+          shown?.files?.map((file) => file.path).join("\n") ??
+          shown?.text ??
+          (questionsOf(approval)[0]?.question || approval.summary);
+        void trayNotify({
+          profile: workspace.profile,
+          id: approval.id,
+          title: `${item.agent} ${shown?.wants ?? "asks"}`,
+          subtitle: workspace.name,
+          body,
+          choices: approval.kind === "permission",
+        }).catch(() => {});
+      }
+    }
+    // What was heard decides.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heard]);
+
+  // Answers chosen in Linux's menu or a notification, and requests opened from them.
   const latest = useRef(waiting);
   latest.current = waiting;
   const latestHeard = useRef(heard);
