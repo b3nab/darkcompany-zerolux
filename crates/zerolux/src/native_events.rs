@@ -55,6 +55,11 @@ pub enum Event {
     Command {
         text: String,
     },
+    /// What the harness told the agent by itself, as a background task that ended: its
+    /// summary, not anyone's input.
+    Notice {
+        text: String,
+    },
 }
 
 /// How a session's record ends, for the Console's inbox.
@@ -299,6 +304,38 @@ fn compact_command(instructions: &str) -> Event {
     }
 }
 
+/// A background task's notice, as Claude Code gives it to the model:
+/// `<task-notification>…<summary>Background command "…" completed</summary>…`. Its summary,
+/// or its text without tags.
+fn task_notice(text: &str) -> Option<Event> {
+    let text = text.trim_start();
+    if !text.starts_with("<task-notification>") {
+        return None;
+    }
+    let summary = text
+        .find("<summary>")
+        .map(|start| &text[start + "<summary>".len()..])
+        .and_then(|rest| {
+            rest.find("</summary>")
+                .map(|end| rest[..end].trim().to_owned())
+        })
+        .filter(|summary| !summary.is_empty());
+    let text = summary.unwrap_or_else(|| {
+        let mut plain = String::new();
+        let mut inside = false;
+        for c in text.chars() {
+            match c {
+                '<' => inside = true,
+                '>' => inside = false,
+                c if !inside => plain.push(c),
+                _ => {}
+            }
+        }
+        plain.split_whitespace().collect::<Vec<_>>().join(" ")
+    });
+    Some(Event::Notice { text })
+}
+
 /// A command typed in Claude Code, as it records it:
 /// `<command-name>/compact</command-name> … <command-args>keep the plan</command-args>`.
 fn claude_command(text: &str) -> Option<Event> {
@@ -335,6 +372,8 @@ fn claude(record: &Value) -> Vec<Event> {
             let text = text_of(content, &["text"]);
             if let Some(command) = claude_command(&text) {
                 events.push(command);
+            } else if let Some(notice) = task_notice(&text) {
+                events.push(notice);
             // Claude Code writes an interruption as the user's line.
             } else if text.starts_with("[Request interrupted by user") {
                 events.push(Event::TurnEnded {
@@ -393,8 +432,17 @@ fn claude(record: &Value) -> Vec<Event> {
                 .collect()
         }
         Some("attachment") if record["attachment"]["type"] == "queued_command" => {
-            match record["attachment"]["prompt"].as_str() {
-                Some(prompt) => vec![input(prompt.to_owned())],
+            let attachment = &record["attachment"];
+            match attachment["prompt"].as_str() {
+                Some(prompt) => vec![task_notice(prompt).unwrap_or_else(|| {
+                    if attachment["commandMode"] == "task-notification" {
+                        Event::Notice {
+                            text: prompt.trim().to_owned(),
+                        }
+                    } else {
+                        input(prompt.to_owned())
+                    }
+                })],
                 None => Vec::new(),
             }
         }
@@ -607,6 +655,40 @@ mod tests {
                 },
                 Event::Command {
                     text: "/compact".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_background_tasks_notice_is_the_harness_telling_not_anyones_input() {
+        let notice = "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>Background command \"cargo test\" completed (exit code 0)</summary>\n</task-notification>";
+        assert_eq!(
+            events(
+                "claude-code",
+                vec![
+                    // Absorbed into a running turn.
+                    json!({"type":"attachment","attachment":{"type":"queued_command","prompt":notice,
+                    "commandMode":"task-notification","origin":{"kind":"task-notification","producer":"session-task"}}}),
+                    // Opening a turn of its own.
+                    json!({"type":"user","message":{"content":notice}}),
+                    // Without a summary: its text, without tags.
+                    json!({"type":"attachment","attachment":{"type":"queued_command","prompt":"<task-notification><status>killed</status></task-notification>","commandMode":"task-notification"}}),
+                    json!({"type":"attachment","attachment":{"type":"queued_command","prompt":"Task ended","commandMode":"task-notification"}}),
+                ]
+            ),
+            vec![
+                Event::Notice {
+                    text: "Background command \"cargo test\" completed (exit code 0)".into()
+                },
+                Event::Notice {
+                    text: "Background command \"cargo test\" completed (exit code 0)".into()
+                },
+                Event::Notice {
+                    text: "killed".into()
+                },
+                Event::Notice {
+                    text: "Task ended".into()
                 },
             ]
         );

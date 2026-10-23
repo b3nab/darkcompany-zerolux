@@ -412,12 +412,32 @@ async fn read_tail(path: &Path, harness: &str) -> Tail {
     tail(&project(harness, &records), output_at)
 }
 
+/// Queued inputs a Claude Code record says the running turn took: `queue-operation` removes
+/// with `absorbed_mid_turn`, by the ID their sender gave them.
+pub fn absorbed(records: &[Record]) -> Vec<String> {
+    records
+        .iter()
+        .filter(|record| {
+            record.record["type"] == "queue-operation"
+                && record.record["operation"] == "remove"
+                && record.record["reason"] == "absorbed_mid_turn"
+        })
+        .filter_map(|record| record.record["commandUuid"].as_str().map(str::to_owned))
+        .collect()
+}
+
 /// Tells the people in the workspace when an agent's native record grows, with how it now
-/// ends; clients read the new records over HTTP.
-pub async fn run_watcher(store: Store, livekit: Arc<LiveKit>, mut stop: watch::Receiver<bool>) {
+/// ends; clients read the new records over HTTP. What a Claude Code record says its running
+/// turn took from the queue goes to `taken`, by session.
+pub async fn run_watcher(
+    store: Store,
+    livekit: Arc<LiveKit>,
+    taken: tokio::sync::mpsc::UnboundedSender<(String, Vec<String>)>,
+    mut stop: watch::Receiver<bool>,
+) {
     let mut sizes = HashMap::new();
     while !*stop.borrow() {
-        if let Err(error) = watch_once(&store, &livekit, &mut sizes).await {
+        if let Err(error) = watch_once(&store, &livekit, &taken, &mut sizes).await {
             tracing::debug!(error = format!("{error:#}"), "Native output watch failed");
         }
         tokio::select! {
@@ -430,6 +450,7 @@ pub async fn run_watcher(store: Store, livekit: Arc<LiveKit>, mut stop: watch::R
 async fn watch_once(
     store: &Store,
     livekit: &LiveKit,
+    taken: &tokio::sync::mpsc::UnboundedSender<(String, Vec<String>)>,
     sizes: &mut HashMap<String, u64>,
 ) -> anyhow::Result<()> {
     let sessions = {
@@ -464,6 +485,15 @@ async fn watch_once(
             // Read again only when the record grew, or at first sight.
             _ => read_tail(&path, &session.harness).await,
         };
+        if session.harness == "claude-code"
+            && let Some(last) = last.filter(|last| *last < end)
+            && let Ok((records, ..)) = read(&path, last).await
+        {
+            let ids = absorbed(&records);
+            if !ids.is_empty() {
+                let _ = taken.send((session.id.clone(), ids));
+            }
+        }
         // Grown, or first seen since the kernel started: a client that read before then hears it.
         if last != Some(end) {
             let mut notice = serde_json::to_value(&ending)?;
@@ -487,6 +517,24 @@ async fn watch_once(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_claude_record_says_which_queued_inputs_its_turn_took() {
+        let records: Vec<Record> = [
+            json!({"type":"queue-operation","operation":"enqueue","content":"x"}),
+            json!({"type":"queue-operation","operation":"remove","reason":"absorbed_mid_turn","commandUuid":"u1"}),
+            json!({"type":"queue-operation","operation":"remove","reason":"cancelled","commandUuid":"u2"}),
+            json!({"type":"attachment","attachment":{"type":"queued_command","prompt":"x","source_uuid":"u1"}}),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(at, record)| Record {
+            at: at as u64,
+            record,
+        })
+        .collect();
+        assert_eq!(absorbed(&records), ["u1"]);
+    }
 
     #[tokio::test]
     async fn reads_whole_native_records_and_leaves_a_partial_line() {

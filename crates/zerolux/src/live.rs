@@ -135,6 +135,10 @@ pub struct State {
     pub goal: Option<Goal>,
     /// The harness is compacting its context; the end of a turn does not end it.
     pub compacting: bool,
+    /// Queued inputs the native record says the running turn already took, before the
+    /// integration knows: kept out of its queue until it drops them itself.
+    #[serde(skip)]
+    pub absorbed: std::collections::HashSet<String>,
 }
 
 /// Changes as they were applied, numbered from `first`.
@@ -181,14 +185,14 @@ impl Live {
         {
             return Err(Error::Invalid("Invalid live changes".into()));
         }
-        let changes = pieces(changes);
+        let mut changes = pieces(changes);
         let mut sessions = self.sessions.lock().expect("live state");
         let state = sessions.entry(session.to_owned()).or_default();
         let first = state.seq + 1;
-        for change in &changes {
+        for change in &mut changes {
+            let whole = matches!(change, Change::Set { .. });
             match change {
                 Change::Append { item, kind, text } | Change::Set { item, kind, text } => {
-                    let whole = matches!(change, Change::Set { .. });
                     match state.items.iter_mut().find(|open| &open.id == item) {
                         Some(open) if whole => open.text.clone_from(text),
                         Some(open) => open.text.push_str(text),
@@ -217,6 +221,10 @@ impl Live {
                 Change::Clear => state.items.clear(),
                 Change::Queue { items } => {
                     tracing::info!(session, waiting = items.len(), "Queue reported");
+                    state
+                        .absorbed
+                        .retain(|id| items.iter().any(|queued| &queued.id == id));
+                    items.retain(|queued| !state.absorbed.contains(&queued.id));
                     state.queue.clone_from(items);
                 }
                 Change::Usage(usage) => state.usage = Some(usage.clone()),
@@ -226,6 +234,32 @@ impl Live {
             state.seq += 1;
         }
         Ok(Applied { first, changes })
+    }
+
+    /// Queued inputs the running turn took, as its native record says: out of the queue now,
+    /// and out of what the integration reports until it drops them too. The change, when the
+    /// queue held any of them.
+    pub fn absorb(&self, session: &str, ids: &[String]) -> Option<Applied> {
+        let mut sessions = self.sessions.lock().expect("live state");
+        let state = sessions.get_mut(session)?;
+        let held: Vec<String> = ids
+            .iter()
+            .filter(|id| state.queue.iter().any(|queued| &&queued.id == id))
+            .cloned()
+            .collect();
+        if held.is_empty() {
+            return None;
+        }
+        state.absorbed.extend(held);
+        let absorbed = &state.absorbed;
+        state.queue.retain(|queued| !absorbed.contains(&queued.id));
+        state.seq += 1;
+        Some(Applied {
+            first: state.seq,
+            changes: vec![Change::Queue {
+                items: state.queue.clone(),
+            }],
+        })
     }
 
     /// The session no longer runs here.
@@ -424,6 +458,62 @@ mod tests {
         live.apply("s", vec![Change::Queue { items: vec![] }])
             .unwrap();
         assert!(live.state("s").queue.is_empty());
+    }
+
+    #[test]
+    fn an_input_the_turn_took_leaves_the_queue_until_the_integration_drops_it_too() {
+        let live = Live::default();
+        let queued = |id: &str| Queued {
+            id: id.into(),
+            text: id.into(),
+            changeable: false,
+        };
+        live.apply(
+            "s",
+            vec![Change::Queue {
+                items: vec![queued("q1"), queued("q2")],
+            }],
+        )
+        .unwrap();
+        // The native record says the running turn took q1.
+        let applied = live
+            .absorb("s", &["q1".into(), "elsewhere".into()])
+            .unwrap();
+        assert_eq!(
+            applied.changes,
+            [Change::Queue {
+                items: vec![queued("q2")]
+            }]
+        );
+        assert_eq!(applied.first, live.state("s").seq);
+        assert!(live.absorb("s", &["q1".into()]).is_none());
+        // The integration still lists it: kept out.
+        let reported = live
+            .apply(
+                "s",
+                vec![Change::Queue {
+                    items: vec![queued("q1"), queued("q2"), queued("q3")],
+                }],
+            )
+            .unwrap();
+        assert_eq!(
+            reported.changes,
+            [Change::Queue {
+                items: vec![queued("q2"), queued("q3")]
+            }]
+        );
+        // Once it drops it, the same ID would show again: it is no longer kept out.
+        live.apply("s", vec![Change::Queue { items: vec![] }])
+            .unwrap();
+        live.apply(
+            "s",
+            vec![Change::Queue {
+                items: vec![queued("q1")],
+            }],
+        )
+        .unwrap();
+        assert_eq!(live.state("s").queue, vec![queued("q1")]);
+        assert!(live.absorb("unknown", &["q1".into()]).is_none());
     }
 
     #[test]

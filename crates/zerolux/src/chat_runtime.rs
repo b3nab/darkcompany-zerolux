@@ -372,9 +372,11 @@ impl ChatRuntime {
             wake.clone(),
             stopped.clone(),
         ));
+        let (taken, mut absorbed) = mpsc::unbounded_channel();
         let watcher = tokio::spawn(crate::native_output::run_watcher(
             store.clone(),
             livekit.clone(),
+            taken,
             stopped,
         ));
         let program = program.unwrap_or_default();
@@ -429,6 +431,18 @@ impl ChatRuntime {
         });
         runtime.extensions.serve_runtime(Arc::downgrade(&runtime));
         Self::watch_plans(Arc::downgrade(&runtime));
+        // What a native record says a running turn took leaves the session's queue at once.
+        let weak = Arc::downgrade(&runtime);
+        tokio::spawn(async move {
+            while let Some((session, ids)) = absorbed.recv().await {
+                let Some(runtime) = weak.upgrade() else {
+                    return;
+                };
+                if let Some(applied) = runtime.live.absorb(&session, &ids) {
+                    runtime.publish_live(&session, applied).await;
+                }
+            }
+        });
         Ok(runtime)
     }
 
@@ -449,7 +463,15 @@ impl ChatRuntime {
         if used {
             self.plans_after_turn(id).await;
         }
-        let people = self.store.readers(id).await?;
+        self.publish_live(id, applied).await;
+        Ok(self.live.state(id).seq)
+    }
+
+    /// Live changes applied, sent to whoever may read the session as `session.live` notices.
+    async fn publish_live(&self, id: &str, applied: crate::live::Applied) {
+        let Ok(people) = self.store.readers(id).await else {
+            return;
+        };
         for notice in applied.notices() {
             let payload = serde_json::json!({"type":"session.live","session_id":id,
                 "first":notice.first,"changes":notice.changes});
@@ -457,7 +479,6 @@ impl ChatRuntime {
                 tracing::debug!(error = format!("{error:#}"), "Live notice not sent");
             }
         }
-        Ok(self.live.state(id).seq)
     }
 
     /// At its budget, a session's work stops: the turn in progress is interrupted and the
