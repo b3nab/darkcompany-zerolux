@@ -134,6 +134,19 @@ function fixture() {
         totalTokens: 42_000,
         maxTokens: 200_000,
       }),
+      accountInfo: async () => ({
+        email: "ines@example.com",
+        subscriptionType: "max",
+        apiProvider: "firstParty",
+      }),
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async (opts: {
+        skipBehaviors?: boolean;
+      }) => ({
+        subscription_type: "max",
+        rate_limits_available: true,
+        rate_limits: { five_hour: { utilization: 31, resets_at: null } },
+        behaviors: opts.skipBehaviors ? null : { scanned: true },
+      }),
       supportedCommands: async () => [
         {
           name: "review",
@@ -683,6 +696,31 @@ test("images go with the owner's input as the harness's own image blocks", async
   await tick();
   expect(f.inputs.length).toBe(before);
   await rm(dir, { recursive: true, force: true });
+});
+
+test("the plan's usage is read from the session, without scanning transcripts, with the last rate-limit event", async () => {
+  const f = fixture();
+  await f.start();
+  f.emitRaw({
+    type: "rate_limit_event",
+    rate_limit_info: { status: "allowed_warning", rateLimitType: "five_hour" },
+    uuid: crypto.randomUUID(),
+    session_id: "native",
+  });
+  await tick();
+  const read = await f.agent.usage();
+  expect(read.account).toEqual({
+    email: "ines@example.com",
+    subscriptionType: "max",
+    apiProvider: "firstParty",
+  });
+  expect(read.usage).toMatchObject({
+    subscription_type: "max",
+    behaviors: null,
+  });
+  expect(read.rate_limit).toMatchObject({
+    rate_limit_info: { status: "allowed_warning" },
+  });
 });
 
 test("the harness's commands and skills are offered as the owner types them", async () => {

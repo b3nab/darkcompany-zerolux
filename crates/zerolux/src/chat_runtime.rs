@@ -302,6 +302,8 @@ pub struct ChatRuntime {
     /// What those computers tell, to publish to whoever may read it.
     pub host_notices: mpsc::UnboundedSender<(String, Value)>,
     host_notice_task: Mutex<Option<JoinHandle<()>>>,
+    /// The harness subscriptions people asked about; see `plans`.
+    plans: plans::Plans,
 }
 
 impl ChatRuntime {
@@ -423,8 +425,10 @@ impl ChatRuntime {
             ),
             host_notices,
             host_notice_task: Mutex::new(Some(host_notice_task)),
+            plans: plans::Plans::default(),
         });
         runtime.extensions.serve_runtime(Arc::downgrade(&runtime));
+        Self::watch_plans(Arc::downgrade(&runtime));
         Ok(runtime)
     }
 
@@ -435,9 +439,15 @@ impl ChatRuntime {
             crate::live::Change::Usage(usage) => usage.cost_usd,
             _ => None,
         });
+        let used = changes
+            .iter()
+            .any(|change| matches!(change, crate::live::Change::Usage(_)));
         let applied = self.live.apply(id, changes)?;
         if let Some(cost) = cost {
             self.check_budget(id, cost).await;
+        }
+        if used {
+            self.plans_after_turn(id).await;
         }
         let people = self.store.readers(id).await?;
         for notice in applied.notices() {
@@ -1860,6 +1870,7 @@ pub(crate) use control::localize_images;
 pub mod background;
 mod fork;
 mod owned;
+mod plans;
 mod remote;
 mod settings;
 mod subagents;

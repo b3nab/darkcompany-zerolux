@@ -42,6 +42,8 @@ pub(crate) struct NativeState {
     pub(crate) fresh: Vec<String>,
     /// The ID of the thread the next `thread/start` creates, instead of `STARTED`.
     pub(crate) next_start: Option<&'static str>,
+    /// Earned resets of the ChatGPT plan used so far; the plan has one.
+    pub(crate) resets_used: usize,
     cwd: Option<String>,
     thread_settings: HashMap<String, Value>,
 }
@@ -194,6 +196,26 @@ fn native_response(state: &mut NativeState, request: &Value) -> Option<Value> {
     }
     Some(match method {
         "initialize" => json!({"userAgent":"fixture/0.159.0"}),
+        "account/read" => {
+            json!({"account":{"type":"chatgpt","email":"ines@example.com","planType":"pro"},"requiresOpenaiAuth":true})
+        }
+        "account/rateLimits/read" => {
+            let available = 1 - state.resets_used.min(1) as i64;
+            json!({"accountId":"acct-1","ordinaryUsageAllowed":true,
+                "rateLimits":{"limitId":"codex","planType":"pro",
+                    "primary":{"usedPercent":if available == 1 { 80 } else { 0 },"windowDurationMins":300,"resetsAt":1_800_000_000},
+                    "secondary":{"usedPercent":20,"windowDurationMins":10080,"resetsAt":1_800_500_000},
+                    "credits":{"hasCredits":false,"unlimited":false,"balance":null}},
+                "rateLimitResetCredits":{"availableCount":available,"credits":[]}})
+        }
+        "account/rateLimitResetCredit/consume" => {
+            if state.resets_used == 0 {
+                state.resets_used += 1;
+                json!({"outcome":"reset"})
+            } else {
+                json!({"outcome":"noCredit"})
+            }
+        }
         "model/list" if request["params"]["cursor"].is_null() => {
             json!({"data":[{"model":"fixture-model","displayName":"Fixture model","supportedReasoningEfforts":[{"reasoningEffort":"medium"},{"reasoningEffort":"high"}]}],"nextCursor":"second"})
         }

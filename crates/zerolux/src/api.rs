@@ -331,6 +331,8 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/chat/deliveries/{id}/receipt", post(delivery_receipt))
         .route("/hosts", get(list_hosts))
         .route("/folders", get(list_folders))
+        .route("/subscriptions", get(list_subscriptions))
+        .route("/subscriptions/{id}/reset", post(reset_subscription))
         .route("/hosts/link", post(link_host))
         .route(
             "/hosts/{id}",
@@ -603,6 +605,46 @@ async fn host_person(state: &AppState, who: &ChatIdentity) -> Result<(), ApiFail
             "The sessions on this computer are its person's",
         )),
     }
+}
+
+#[derive(Deserialize)]
+struct SubscriptionsQuery {
+    #[serde(default)]
+    refresh: bool,
+}
+
+/// What the person's harness subscriptions have left, read now with `refresh`.
+async fn list_subscriptions(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Query(query): Query<SubscriptionsQuery>,
+) -> Result<Json<Value>, ApiFailure> {
+    let plans = runtime(&state)?
+        .subscriptions(&who, query.refresh)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "subscriptions": plans })))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ResetInput {
+    #[serde(default)]
+    credit_id: Option<String>,
+}
+
+/// Uses one of a plan's earned resets.
+async fn reset_subscription(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<ResetInput>,
+) -> Result<Json<Value>, ApiFailure> {
+    let outcome = runtime(&state)?
+        .reset_subscription(&who, &id, input.credit_id.as_deref())
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({ "outcome": outcome })))
 }
 
 #[derive(Deserialize)]

@@ -41,6 +41,7 @@ pub mod schedules;
 pub mod server;
 pub mod sessions;
 pub mod store;
+pub mod subscriptions;
 pub mod terminals;
 pub mod triggers;
 pub mod workspace_files;

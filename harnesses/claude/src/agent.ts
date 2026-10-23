@@ -114,6 +114,8 @@ export class ClaudeAgent {
   readonly bridge: ChatBridge;
   private readonly input = new Input();
   private query?: Query;
+  /** The last rate-limit event of the session's account. */
+  private rateLimit?: SDKMessage;
   private dispatchEnabled = true;
   readonly settings = new ClaudeSettings(() => this.query);
   private state: "idle" | "running" | "requires_action" = "idle";
@@ -304,6 +306,21 @@ export class ClaudeAgent {
     return this.query.rewindFiles(messageId, { dryRun });
   }
 
+  /**
+   * The account's plan, as this session's Claude Code reads it: who it is, the plan's usage
+   * windows (without scanning local transcripts) and the last rate-limit event it heard.
+   */
+  async usage() {
+    if (!this.query) throw new Error("The session is not running");
+    const [account, usage] = await Promise.all([
+      this.query.accountInfo(),
+      this.query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({
+        skipBehaviors: true,
+      }),
+    ]);
+    return { account, usage, rate_limit: this.rateLimit ?? null };
+  }
+
   /** Claude Code's commands and skills, as the owner types them. */
   async commands() {
     if (!this.query) return [];
@@ -387,6 +404,7 @@ export class ClaudeAgent {
 
   private handle(message: SDKMessage) {
     this.settings.observe(message);
+    if (message.type === "rate_limit_event") this.rateLimit = message;
     this.stream(message);
     if (message.type === "result") this.cost = message.total_cost_usd;
     // Compacting, by itself or as asked, until Claude Code reports another status.

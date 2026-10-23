@@ -117,6 +117,7 @@ export class Runner {
         "input-v1",
         "input-v2",
         "commands-v1",
+        "usage-v1",
         "images-v1",
         "rewind-files-v1",
         ...(this.config.managed && this.deps.code && this.deps.execution
@@ -245,6 +246,11 @@ export class Runner {
       if (this.stopRequested || !this.transport.bound)
         throw new Error("The session is not connected");
       return { commands: await this.agent.commands() };
+    }
+    if (method === "usage") {
+      if (this.stopRequested || !this.transport.bound)
+        throw new Error("The session is not connected");
+      return await this.agent.usage();
     }
     if (method === "interrupt") {
       if (this.stopRequested || !this.transport.bound)
