@@ -85,6 +85,7 @@ An extension shows pieces of its interface in the clients' spaces, each `{space,
 | `chat`     | A section in a chat's About                                                | `{conversation_id}`             |
 | `message`  | An item in a message's menu, which runs `view.action` and shows its result | `{conversation_id, message_id}` |
 | `settings` | A section in the workspace's settings                                      | `{}`                            |
+| `tray`     | A row in the desktop app's tray panel, as the next meeting                 | `{}`                            |
 
 A piece's `view` says how it is drawn:
 

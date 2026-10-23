@@ -145,7 +145,7 @@ export interface Implementation {
 
 /** A piece of its interface in one of the clients' spaces. */
 export interface UiPiece {
-  space: "page" | "session" | "chat" | "message" | "settings";
+  space: "page" | "session" | "chat" | "message" | "settings" | "tray";
   name: string;
   title: string;
   /** The name of one of the clients' icons. */

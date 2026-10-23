@@ -108,7 +108,7 @@ class Extension:
 
     def ui(self, space: str, name: str, title: str, view: dict, icon: str | None = None) -> None:
         """Shows a piece of its interface in one of the clients' spaces (`page`, `session`,
-        `chat`, `message` or `settings`), drawn as `view` says: `{"kind": "native"}`,
+        `chat`, `message`, `settings` or `tray`), drawn as `view` says: `{"kind": "native"}`,
         `{"kind": "described", "action": …, "refresh_on": […]}`, `{"kind": "remote", "action": …}`,
         `{"kind": "web", "entry": "ui/…"}` or, on a message, `{"kind": "action", "action": …}`."""
         self.pieces.append({"space": space, "name": name, "title": title, "view": view,

@@ -554,10 +554,10 @@ impl Contributes {
             }
             if !matches!(
                 piece.space.as_str(),
-                "page" | "session" | "chat" | "message" | "settings"
+                "page" | "session" | "chat" | "message" | "settings" | "tray"
             ) {
                 return Err(invalid(format!(
-                    "`{}` goes in a page, session, chat, message or settings",
+                    "`{}` goes in a page, session, chat, message, settings or the tray",
                     piece.name
                 )));
             }
@@ -738,6 +738,7 @@ token = { type = "secret", label = "Token" }
             {"space": "settings", "name": "page", "title": "Board", "view": {"kind": "web", "entry": "ui/index.html"}},
             {"space": "chat", "name": "files", "title": "Files", "view": {"kind": "native"}},
             {"space": "message", "name": "save", "title": "Save", "view": {"kind": "action", "action": "board"}},
+            {"space": "tray", "name": "next", "title": "Next", "view": {"kind": "native"}},
         ]))
         .unwrap();
         for wrong in [
