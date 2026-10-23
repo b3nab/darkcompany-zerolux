@@ -109,6 +109,20 @@ test("a session's events become blocks: a tool joins its result, a turn's start 
   expect(second).toBeUndefined();
 });
 
+test("a harness's own notice is a line of its own, not the owner's input, and starts no turn's time", () => {
+  const blocks = sessionBlocks([
+    at(
+      { type: "notice", text: 'Background command "Build" completed' },
+      0,
+      "t0",
+    ),
+    at({ type: "text", text: "It built." }, 10, "t1"),
+    at({ type: "turn_ended", status: "completed" }, 20, "t2"),
+  ]);
+  expect(blocks.map((block) => block.kind)).toEqual(["notice", "text", "turn"]);
+  expect(blocks[2]).toMatchObject({ kind: "turn", since: "t1" });
+});
+
 test("a tool reads as one line of what it was given, and its values as text", () => {
   expect(toolLine({ command: "bun test", description: "Run" })).toBe(
     "bun test",

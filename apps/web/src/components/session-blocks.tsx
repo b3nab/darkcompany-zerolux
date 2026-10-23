@@ -1,7 +1,7 @@
 import { useId } from "react";
 import type { ReactNode } from "react";
 import { cn } from "cn";
-import { ChevronRightIcon, CircleAlertIcon } from "lucide-react";
+import { ChevronRightIcon, CircleAlertIcon, InfoIcon } from "lucide-react";
 import {
   blockRuns,
   isSubagent,
@@ -277,6 +277,13 @@ function Block({
         <p className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           <CircleAlertIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
           {block.message}
+        </p>
+      );
+    case "notice":
+      return (
+        <p className="flex items-start gap-2 text-[12.5px] text-faint">
+          <InfoIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+          {block.text}
         </p>
       );
     case "compacted":

@@ -33,6 +33,8 @@ export type SessionEvent = {
   | { type: "compacted"; summary: string | null }
   /** A command of the owner's to the harness, as `/compact`: it opens no turn. */
   | { type: "command"; text: string }
+  /** What the harness tells the session by itself, as a background task's end: no one's input. */
+  | { type: "notice"; text: string }
 );
 
 export interface SessionEventPage {
@@ -90,14 +92,16 @@ export type SessionBlock = {
   | { kind: "error"; message: string }
   | { kind: "compacted"; summary: string | null }
   | { kind: "command"; text: string }
+  | { kind: "notice"; text: string }
 );
 export type ToolBlock = Extract<SessionBlock, { kind: "tool" }>;
 
-/** Events that can come between turns: the owner's commands, compactions, errors. */
+/** Events that can come between turns: the owner's commands, compactions, errors, notices. */
 const between = new Set<SessionEvent["type"]>([
   "command",
   "compacted",
   "error",
+  "notice",
 ]);
 
 /** The blocks of a session, in order: each tool result joins its call; a turn's start draws nothing. */
@@ -135,6 +139,9 @@ export function sessionBlocks(events: SessionEvent[]): SessionBlock[] {
         break;
       case "command":
         blocks.push({ key, time, kind: "command", text: event.text });
+        break;
+      case "notice":
+        blocks.push({ key, time, kind: "notice", text: event.text });
         break;
       case "thinking":
         thought = { key, time, kind: "thinking", text: event.text };
