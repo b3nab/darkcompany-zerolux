@@ -75,6 +75,13 @@ enum Action {
     Leave {
         id: String,
     },
+    /// Another window of a workspace: the one named, else the one in front or last opened.
+    NewWindow {
+        #[serde(default)]
+        id: Option<String>,
+    },
+    /// The app was brought back with no window open: its workspace comes back.
+    Reopen,
 }
 
 type Reply = oneshot::Sender<Result<View, String>>;
@@ -145,7 +152,8 @@ struct Host {
     root: Arc<LocalWorkspace>,
     catalog: Catalog,
     runtimes: HashMap<String, LocalRuntime>,
-    windows: HashMap<String, WorkspaceView>,
+    /// Each workspace's open windows, the one last opened at the end.
+    windows: HashMap<String, Vec<WorkspaceView>>,
     active: Option<String>,
     generation: u64,
     view: Arc<Mutex<View>>,
@@ -205,6 +213,20 @@ fn manager_request(url: &tauri::Url) -> bool {
         && url.password().is_none()
         && url.query().is_none()
         && url.fragment().is_none()
+}
+
+/// The workspace a window shows, from its label `workspace-<profile>-<generation>`.
+fn profile_of(label: &str) -> Option<&str> {
+    label
+        .strip_prefix("workspace-")?
+        .rsplit_once('-')
+        .map(|(id, _)| id)
+}
+
+/// Asks the desktop for something from its menu or the Dock, without waiting for its answer.
+fn ask(app: &tauri::AppHandle, action: Action) {
+    let (reply, _) = oneshot::channel();
+    let _ = app.state::<Commands>().send.try_send((action, reply));
 }
 
 fn show_manager(app: &tauri::AppHandle, profile: Option<&str>) {
@@ -342,12 +364,27 @@ impl Host {
         Ok(url)
     }
 
+    /// Where a workspace's kernel answers: its address, or its local kernel, started if need be.
+    async fn kernel_url(&mut self, profile: &Profile) -> Result<tauri::Url> {
+        match &profile.source {
+            Source::Existing { url } => connection::kernel_url(url),
+            Source::Local { .. } => self.local_url(profile).await,
+        }
+    }
+
+    /// Forgets the windows their person closed.
+    fn prune(&mut self) {
+        let open = self.app.webview_windows();
+        for views in self.windows.values_mut() {
+            views.retain(|view| open.contains_key(view.window.label()));
+        }
+        self.windows.retain(|_, views| !views.is_empty());
+    }
+
     async fn open(&mut self, id: &str) -> Result<()> {
+        self.prune();
         let mut profile = self.catalog.profile(id)?.clone();
-        let url = match &profile.source {
-            Source::Existing { url } => connection::kernel_url(url)?,
-            Source::Local { .. } => self.local_url(&profile).await?,
-        };
+        let url = self.kernel_url(&profile).await?;
         // Retry initialization if its reply was lost. Existing/legacy workspaces are
         // never renamed during startup; names use the same HTTP API as other clients.
         if profile.workspace_id.is_none()
@@ -368,7 +405,7 @@ impl Host {
         let verified = connection::verify(url.as_str(), profile.workspace_id.as_deref()).await?;
         profile.observe(&verified)?;
         ensure!(!*self.stopped.borrow(), "The desktop is closing");
-        if let Some(view) = self.windows.get(id) {
+        for view in self.windows.get(id).into_iter().flatten() {
             view.window.set_title(&profile.name)?;
         }
         if !self.windows.contains_key(id) {
@@ -384,7 +421,7 @@ impl Host {
             let window = self
                 .build_view(&profile, &verified.url, saved.as_ref())
                 .await?;
-            self.windows.insert(id.to_owned(), window);
+            self.windows.insert(id.to_owned(), vec![window]);
         }
         profile.app_ui = true;
         let mut catalog = self.catalog.clone();
@@ -394,19 +431,76 @@ impl Host {
         self.activate(id)
     }
 
+    /// A workspace's latest window comes forward; other workspaces' windows stay as they are,
+    /// side by side as in VS Code.
     fn activate(&mut self, id: &str) -> Result<()> {
         self.active = Some(id.to_owned());
-        for (other, view) in &self.windows {
-            if other == id {
-                view.window.show()?;
-                view.window.set_focus()?;
-            } else {
-                view.window.hide()?;
-            }
+        if let Some(view) = self.windows.get(id).and_then(|views| views.last()) {
+            view.window.show()?;
+            view.window.unminimize()?;
+            view.window.set_focus()?;
         }
         if let Some(manager) = self.app.get_webview_window(MANAGER) {
             manager.hide()?;
         }
+        Ok(())
+    }
+
+    /// Another window of a workspace, a little below and to the right of the one before, as
+    /// the system's own windows open; the first opens it.
+    async fn new_window(&mut self, id: Option<String>) -> Result<()> {
+        self.prune();
+        let focused = self.app.webview_windows().into_values().find_map(|window| {
+            window
+                .is_focused()
+                .unwrap_or(false)
+                .then(|| profile_of(window.label()).map(str::to_owned))
+                .flatten()
+        });
+        let Some(id) = id
+            .or(focused)
+            .or_else(|| self.active.clone())
+            .or_else(|| self.catalog.selected.clone())
+        else {
+            show_manager(&self.app, None);
+            return Ok(());
+        };
+        if !self.windows.contains_key(&id) {
+            return self.open(&id).await;
+        }
+        let profile = self.catalog.profile(&id)?.clone();
+        let url = self.kernel_url(&profile).await?;
+        let verified = connection::verify(url.as_str(), profile.workspace_id.as_deref()).await?;
+        let view = self.build_view(&profile, &verified.url, None).await?;
+        if let Some(position) = self
+            .windows
+            .get(&id)
+            .and_then(|views| views.last())
+            .and_then(|last| last.window.outer_position().ok())
+        {
+            let step = (28.0 * view.window.scale_factor()?) as i32;
+            view.window.set_position(tauri::PhysicalPosition::new(
+                position.x + step,
+                position.y + step,
+            ))?;
+        }
+        self.windows.entry(id.clone()).or_default().push(view);
+        self.activate(&id)
+    }
+
+    /// Back from the Dock with no window: the workspace last in front, else the one last
+    /// opened, else the choice of workspaces.
+    async fn reopen(&mut self) -> Result<()> {
+        self.prune();
+        if let Some(id) = self
+            .active
+            .clone()
+            .filter(|id| self.windows.contains_key(id))
+            .or_else(|| self.catalog.selected.clone())
+        {
+            return self.open(&id).await;
+        }
+        show_manager(&self.app, None);
         Ok(())
     }
 
@@ -589,12 +683,20 @@ impl Host {
             .browser_store(builder, profile, false)?
             .build()
             .context("Open the workspace view")?;
+        // Closing a window closes it alone, as in VS Code. The app quits with the last one, but
+        // on macOS it stays in the Dock, its kernels at work, until it is quit.
         let handle = self.app.clone();
+        let own = window.label().to_owned();
         window.on_window_event(move |event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+            if let tauri::WindowEvent::Destroyed = event
                 && !close_flag.load(Ordering::Acquire)
+                && cfg!(not(target_os = "macos"))
+                && !handle.webview_windows().iter().any(|(label, window)| {
+                    label != &own
+                        && (label.starts_with("workspace-")
+                            || (label == MANAGER && window.is_visible().unwrap_or(false)))
+                })
             {
-                api.prevent_close();
                 handle.exit(0);
             }
         });
@@ -628,10 +730,17 @@ impl Host {
         Ok(view)
     }
 
-    async fn prepare_view(&self, id: &str) -> Result<Option<SavedView>> {
-        let Some(view) = self.windows.get(id) else {
-            return Ok(None);
-        };
+    /// Each of a workspace's windows, with its drafts and place, once nothing waits to be sent in
+    /// any; their input stays frozen meanwhile.
+    async fn prepare_views(&self, id: &str) -> Result<Vec<SavedView>> {
+        let mut saved = Vec::new();
+        for view in self.windows.get(id).into_iter().flatten() {
+            saved.push(Self::prepare_view(view).await?);
+        }
+        Ok(saved)
+    }
+
+    async fn prepare_view(view: &WorkspaceView) -> Result<SavedView> {
         let (send, receive) = oneshot::channel();
         let send = Mutex::new(Some(send));
         // Freeze user input in the same JS turn as the synchronous outbox check. Only
@@ -663,11 +772,11 @@ impl Host {
             saved.can_leave == Some(true),
             "This workspace has messages waiting to be sent"
         );
-        Ok(Some(saved))
+        Ok(saved)
     }
 
     fn unfreeze(&self, id: &str) {
-        if let Some(view) = self.windows.get(id) {
+        for view in self.windows.get(id).into_iter().flatten() {
             let _ = view.window.eval("document.body.inert = false");
         }
     }
@@ -689,28 +798,42 @@ impl Host {
             profile.app_ui,
             "Open this workspace once before changing its address"
         );
-        let prepared = self.prepare_view(id).await;
+        self.prune();
+        let prepared = self.prepare_views(id).await;
         let result: Result<()> = async {
             let saved = prepared?;
             profile.observe(&verified)?;
-            let replacement = if self.windows.contains_key(id) {
-                Some(
-                    self.build_view(&profile, &verified.url, saved.as_ref())
-                        .await?,
-                )
-            } else {
-                None
-            };
+            // Each window again at the new address, where it was, with its drafts.
+            let mut replacements = Vec::new();
+            for one in &saved {
+                match self.build_view(&profile, &verified.url, Some(one)).await {
+                    Ok(view) => replacements.push(view),
+                    Err(error) => {
+                        for view in &replacements {
+                            let _ = view.close();
+                        }
+                        return Err(error);
+                    }
+                }
+            }
             let mut catalog = self.catalog.clone();
             *catalog.profile_mut(id)? = profile;
             if let Err(error) = self.save(catalog) {
-                if let Some(view) = replacement {
+                for view in &replacements {
                     let _ = view.close();
                 }
                 return Err(error);
             }
-            if let Some(replacement) = replacement {
-                if let Some(previous) = self.windows.insert(id.to_owned(), replacement) {
+            if !replacements.is_empty() {
+                for view in &replacements {
+                    view.window.show()?;
+                }
+                for previous in self
+                    .windows
+                    .insert(id.to_owned(), replacements)
+                    .into_iter()
+                    .flatten()
+                {
                     previous.close()?;
                 }
                 if self.active.as_deref() == Some(id) {
@@ -747,6 +870,8 @@ impl Host {
                 self.computers.join(&url, &code, &name, program).await?;
             }
             Action::Leave { id } => self.computers.leave(&id).await?,
+            Action::NewWindow { id } => self.new_window(id).await?,
+            Action::Reopen => self.reopen().await?,
             Action::Forget { id } => {
                 ensure!(
                     !self
@@ -755,7 +880,8 @@ impl Host {
                         .is_some_and(|runtime| !runtime.task.is_finished()),
                     "This local kernel is still running"
                 );
-                if let Err(error) = self.prepare_view(&id).await {
+                self.prune();
+                if let Err(error) = self.prepare_views(&id).await {
                     self.unfreeze(&id);
                     return Err(error);
                 }
@@ -766,7 +892,7 @@ impl Host {
                     return Err(error);
                 }
                 crate::credentials::forget(&id);
-                if let Some(view) = self.windows.remove(&id) {
+                for view in self.windows.remove(&id).into_iter().flatten() {
                     view.close()?;
                 }
                 if self.active.as_deref() == Some(&id) {
@@ -878,10 +1004,10 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             crate::credentials::read_workspace_credential,
             crate::credentials::write_workspace_credential
         ])
-        .on_menu_event(|app, event| {
-            if event.id().as_ref() == "workspaces" {
-                show_manager(app, None);
-            }
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "workspaces" => show_manager(app, None),
+            "new-window" => ask(app, Action::NewWindow { id: None }),
+            _ => {}
         })
         .setup(move |app| {
             let view = Arc::new(Mutex::new(View::default()));
@@ -925,33 +1051,39 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                         .expect("desktop view lock")
                         .active
                         .clone();
-                    if let Some(active) = active {
-                        let prefix = format!("workspace-{active}-");
-                        if let Some(window) = handle
-                            .webview_windows()
-                            .into_values()
-                            .filter(|window| window.label().starts_with(&prefix))
-                            .max_by_key(|window| {
-                                window
-                                    .label()
-                                    .rsplit('-')
-                                    .next()
-                                    .and_then(|part| part.parse::<u64>().ok())
-                                    .unwrap_or(0)
-                            })
-                        {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                            if let Some(manager) = handle.get_webview_window(MANAGER) {
-                                let _ = manager.hide();
-                            }
-                            return;
-                        }
+                    // The active workspace's latest window comes back, else any one's; with
+                    // none the app quits, but on macOS it stays in the Dock.
+                    let back = handle
+                        .webview_windows()
+                        .into_values()
+                        .filter_map(|window| {
+                            let profile = profile_of(window.label())?;
+                            let generation =
+                                window.label().rsplit('-').next()?.parse::<u64>().ok()?;
+                            Some((active.as_deref() == Some(profile), generation, window))
+                        })
+                        .max_by_key(|(front, generation, _)| (*front, *generation));
+                    if let Some((_, _, window)) = back {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    } else if cfg!(not(target_os = "macos")) {
+                        handle.exit(0);
+                        return;
                     }
-                    handle.exit(0);
+                    if let Some(manager) = handle.get_webview_window(MANAGER) {
+                        let _ = manager.hide();
+                    }
                 }
             });
             let menu = tauri::menu::Menu::default(app.handle())?;
+            // ⌘N opens another window, as in Finder and Safari: ⇧⌘N stays a new folder.
+            let window = tauri::menu::MenuItem::with_id(
+                app,
+                "new-window",
+                "New Window",
+                true,
+                Some("CmdOrCtrl+N"),
+            )?;
             let item = tauri::menu::MenuItem::with_id(
                 app,
                 "workspaces",
@@ -963,7 +1095,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                 app,
                 "Workspace",
                 true,
-                &[&item],
+                &[&window, &item],
             )?)?;
             app.set_menu(menu)?;
             let data = std::env::var_os("ZEROLUX_DESKTOP_DATA_DIR")
@@ -1081,6 +1213,16 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
         })
         .build(tauri::generate_context!())?;
     app.run(|handle, event| {
+        // The Dock's icon pressed with no window open: a workspace comes back.
+        #[cfg(target_os = "macos")]
+        if let RunEvent::Reopen {
+            has_visible_windows: false,
+            ..
+        } = event
+        {
+            ask(handle, Action::Reopen);
+            return;
+        }
         if let RunEvent::ExitRequested { api, .. } = event {
             let Some(state) = handle.try_state::<Lifecycle>() else {
                 return;
@@ -1117,6 +1259,16 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_window_names_its_workspace() {
+        assert_eq!(
+            profile_of("workspace-6f0c1d2e-aaaa-bbbb-cccc-0123456789ab-7"),
+            Some("6f0c1d2e-aaaa-bbbb-cccc-0123456789ab")
+        );
+        assert_eq!(profile_of("manager"), None);
+        assert_eq!(profile_of("draft-import-x-1"), None);
+    }
+
     #[test]
     fn workspace_navigation_only_opens_the_manager_without_arguments() {
         assert!(manager_request(&"zerolux://workspaces".parse().unwrap()));

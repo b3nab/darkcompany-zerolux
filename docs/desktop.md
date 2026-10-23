@@ -29,9 +29,9 @@ The workspace's **name is shared** with everyone using it. Renaming does not cha
 
 The desktop loads its packaged interface and calls the selected kernel's HTTP API. Each workspace window keeps its own verified kernel address. Browser clients still load the interface served by their kernel. The desktop uses what the kernel declares in `/api/health` (`capabilities`); sign-in is offered when the kernel declares `auth-v1`, and an older kernel is used as it is. The sign-in of each saved connection is kept in the system's credential store (Keychain, Credential Manager or Secret Service) and deleted on sign-out or when the connection is forgotten. Without a credential store, it lasts until the app closes. On macOS, an unsigned build asks once to allow access to it. macOS uses an overlay title bar with native traffic lights; Windows and Linux use window controls drawn in the interface.
 
-## Switching, drafts and closing
+## Windows, drafts and closing
 
-Switching hides the previous workspace view rather than destroying it. Opened local kernels keep running, and each workspace retains its in-memory drafts and pending sends. Saved workspaces are not all started at app launch.
+Each workspace opens in its own window, beside the others' as in VS Code. **New Window** (⌘N, Ctrl+N) opens another window of the workspace in front. Closing a window closes only it; opened local kernels keep running. The app quits with its last window, except on macOS, where it stays in the Dock until you quit it and its icon brings back the workspace last in front. Saved workspaces are not all started at app launch.
 
 Changing the address of an open connection or forgetting it checks for pending sends. Pending messages block that change. An address change preserves drafts only after verifying the same workspace; it does not transfer kernel cookies or arbitrary browser storage.
 
@@ -43,7 +43,7 @@ On Quit:
 - The app waits for its own kernels and managed LiveKit services to shut down.
 - Kernel shutdown is not the same as pressing Stop on a native agent; native work may continue independently.
 
-Finish sending before quitting. Retaining an open view during a switch is not a persistent-outbox guarantee across app exit or a crash.
+Finish sending before closing a window or quitting: pending sends live in their window, and are not kept across a close, an app exit or a crash.
 
 ## Data and migration
 
