@@ -189,14 +189,12 @@ export function App({
   const showChat = (c: Conversation) => navigate(`/chats/${c.id}`);
   const kernel: Kernel = {
     ...(connectionError
-      ? { tone: "attention", label: "Kernel offline" }
-      : !workspace
+      ? { tone: "attention", label: "Offline" }
+      : !workspace || needsOnboarding || chat.realtime === "connecting"
         ? { tone: "connecting", label: "Connecting…" }
         : chat.realtime === "live"
-          ? { tone: "connected", label: "Kernel · live" }
-          : needsOnboarding || chat.realtime === "connecting"
-            ? { tone: "connecting", label: "Kernel" }
-            : { tone: "stopped", label: "Kernel · realtime offline" }),
+          ? { tone: "connected", label: "Live" }
+          : { tone: "stopped", label: "Not live" }),
     host: globalThis.location?.host ?? "",
     version: health?.version,
   };

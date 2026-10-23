@@ -472,7 +472,7 @@ export function StatusBar({ kernel }: { kernel: Kernel }) {
         {kernel.label}
       </span>
       {kernel.version && (
-        <span className="font-mono text-faint">ZeroLux {kernel.version}</span>
+        <span className="font-mono text-faint">v{kernel.version}</span>
       )}
     </footer>
   );

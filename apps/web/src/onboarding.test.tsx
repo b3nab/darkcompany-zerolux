@@ -254,7 +254,7 @@ test("a kernel without chat-v1 does not fall back to removed project controls", 
     />,
   );
   // The kernel's version, in the window's status bar.
-  expect(current).toMatch(/<footer role="status"[\s\S]*ZeroLux 0\.0\.1-dev/);
+  expect(current).toMatch(/<footer role="status"[\s\S]*v0\.0\.1-dev/);
 });
 
 /** The labels of the buttons that send a form; Base UI buttons default to type="button". */
