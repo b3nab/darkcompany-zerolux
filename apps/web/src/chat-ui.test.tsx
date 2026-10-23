@@ -543,6 +543,22 @@ test("hiring a stopped session again defaults to its previous agent", () => {
   expect(fresh).toMatch(/<option[^>]*selected=""[^>]*>A new agent<\/option>/);
 });
 
+test("an agent's chat says its model and harness on a line of their own, the name whole", () => {
+  const html = renderToStaticMarkup(
+    <ChatList
+      chat={fakeChat({ conversations: [dm] })}
+      actors={[
+        ...actors.filter((a) => a.id !== ASPEN),
+        { ...agent(ASPEN, "aspen"), model: "fixture-model" },
+      ]}
+      perform={async () => true}
+    />,
+  );
+  expect(html).toMatch(
+    />aspen<\/span>[\s\S]*>fixture-model · Claude Code<\/span>/,
+  );
+});
+
 test("the chat list shows the last author, escaped text and timestamp, with no time for empty chats", () => {
   const created_at = Date.UTC(2026, 9, 6, 9, 30);
   const latest = {

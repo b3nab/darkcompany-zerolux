@@ -1,5 +1,11 @@
-import { useEffect, useRef, useState } from "react";
-import { errorMessage, kernelUrl, request, type Actor } from "./client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  errorMessage,
+  harnessLabels,
+  kernelUrl,
+  request,
+  type Actor,
+} from "./client";
 import type {
   AgentModelOption,
   AgentSettings,
@@ -140,4 +146,52 @@ export function useSessionSettings(
       return confirmed;
     },
   };
+}
+
+// Each kernel's catalog of a harness, read once: the names its models go by change rarely.
+const catalogs = new Map<string, Promise<AgentModelOption[]>>();
+
+/**
+ * The names models go by, as each harness's catalog gives them, for lists that show which
+ * model an agent works with: a model's label, else the model as it is written.
+ */
+export function useModelLabels(kernel = kernelUrl()) {
+  const [labels, setLabels] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let live = true;
+    for (const harness of Object.keys(harnessLabels)) {
+      const key = `${kernel}\n${harness}`;
+      let catalog = catalogs.get(key);
+      if (!catalog) {
+        catalog = request<{ models: AgentModelOption[] }>(
+          kernel,
+          `/sessions/catalog?harness=${encodeURIComponent(harness)}`,
+        ).then(({ models }) => models);
+        catalogs.set(key, catalog);
+        // An unread catalog is asked for again next time.
+        catalog.catch(() => catalogs.delete(key));
+      }
+      catalog.then(
+        (models) =>
+          live &&
+          setLabels((all) => ({
+            ...all,
+            ...Object.fromEntries(
+              models.map((model) => [
+                `${harness}\n${model.value}`,
+                model.label,
+              ]),
+            ),
+          })),
+        () => {},
+      );
+    }
+    return () => {
+      live = false;
+    };
+  }, [kernel]);
+  return useCallback(
+    (harness: string, model: string) => labels[`${harness}\n${model}`] ?? model,
+    [labels],
+  );
 }

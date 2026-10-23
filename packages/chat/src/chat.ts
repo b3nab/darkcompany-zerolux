@@ -814,6 +814,24 @@ export const directChat = (
     (c) => c.kind === "dm" && sameMembers(c, [ownerId, agentId]),
   );
 
+/** When, in a list's few characters: now, 39m, 3h, a weekday within the week, else the day. */
+export function briefAgo(time: number, now = Date.now()): string {
+  const minutes = Math.floor((now - time) / 60_000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 60 * 24) return `${Math.floor(minutes / 60)}h`;
+  const date = new Date(time);
+  if (minutes < 60 * 24 * 7)
+    return date.toLocaleDateString(undefined, { weekday: "short" });
+  return date.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    ...(date.getFullYear() !== new Date(now).getFullYear() && {
+      year: "numeric",
+    }),
+  });
+}
+
 export function ago(time: number, now = Date.now()): string {
   const minutes = Math.round((time - now) / 60_000);
   const [value, unit] =

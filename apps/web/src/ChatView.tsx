@@ -23,10 +23,11 @@ import {
   clockTime,
   dayLabel,
   deliveryLabels,
-  draftOf,
   directChat,
+  draftOf,
   harnessLabels,
   isThread,
+  linkedFiles,
   listChats,
   listTime,
   liveSessions,
@@ -38,16 +39,16 @@ import {
   sessionAccess,
   threadsOf,
   unreadIn,
-  waitingChats,
-  workingLabel,
-  workingSessions,
   useArrivals,
   useChatWork,
-  useVoice,
-  useUiPieces,
-  linkedFiles,
+  useModelLabels,
   useSharedFiles,
+  useUiPieces,
+  useVoice,
+  waitingChats,
   withFiles,
+  workingLabel,
+  workingSessions,
 } from "@zerolux/chat";
 import type {
   Chat,
@@ -101,6 +102,7 @@ export function ChatList({
   actors: Actor[];
   perform: Perform;
 }) {
+  const modelLabel = useModelLabels();
   const navigate = useNavigate();
   const [filter, setFilter] = useState<ChatFilter>("all");
   const name = (id: string) =>
@@ -196,11 +198,6 @@ export function ChatList({
                   <span className="truncate text-sm font-medium">
                     {c.title}
                   </span>
-                  {agent?.harness && (
-                    <span className="shrink-0 font-mono text-[11px] text-faint">
-                      {harnessLabels[agent.harness]}
-                    </span>
-                  )}
                   {last && (
                     <time
                       dateTime={new Date(last.created_at).toISOString()}
@@ -210,6 +207,17 @@ export function ChatList({
                     </time>
                   )}
                 </span>
+                {/* An agent's chat says what it runs on: its model, then the harness. */}
+                {agent?.harness && (
+                  <span className="truncate text-[11.5px] text-faint">
+                    {[
+                      agent.model && modelLabel(agent.harness, agent.model),
+                      harnessLabels[agent.harness],
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                )}
                 <span className="flex items-center gap-2">
                   <span
                     data-working={preview.working || undefined}

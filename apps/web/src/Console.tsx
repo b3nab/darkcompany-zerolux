@@ -23,63 +23,65 @@ import {
   XIcon,
 } from "lucide-react";
 import {
+  accountReady,
   agentSettingFields,
-  planMode,
   ago,
   attentionInbox,
   attentionLabels,
+  briefAgo,
   commandsFor,
   consoleSessions,
+  contextShare,
+  delegatedBy,
+  delegatedTo,
   densityLabels,
   draftOf,
   folderName,
   harnessLabels,
-  inputImageTypes,
+  hitKindLabels,
   inputImagesError,
+  inputImageTypes,
+  isLooking,
   latestPlan,
+  matchParts,
+  mentionAt,
+  ownComputers,
+  percent,
   placeApprovals,
   plainLine,
+  planMode,
   recentFolders,
   saveDraft,
+  sessionAccess,
   sessionBlocks,
   sessionCommand,
-  hitKindLabels,
-  accountReady,
-  useHostAccounts,
-  useSessionSubagents,
-  matchParts,
-  useHistorySearch,
-  sessionAccess,
-  sessionMatches,
-  ownComputers,
   sessionComputer,
+  sessionMatches,
   sessionName,
-  shareChoice,
-  shareLabels,
-  sharedAs,
-  delegatedBy,
-  delegatedTo,
   sessionOutputAt,
   sessionState,
-  isLooking,
-  whenLooking,
-  mentionAt,
+  shareChoice,
+  sharedAs,
+  shareLabels,
+  tokenCount,
+  useBackgroundCommands,
+  useHistorySearch,
+  useHostAccounts,
+  useModelLabels,
   useSessionCommands,
+  useSessionCompacting,
   useSessionEvents,
   useSessionFiles,
-  useSessionCompacting,
+  useSessionGit,
   useSessionLive,
   useSessionQueue,
-  useSessionUsage,
-  useSessionGit,
-  withMention,
-  contextShare,
-  percent,
-  tokenCount,
   useSessionSettings,
-  useBackgroundCommands,
+  useSessionSubagents,
+  useSessionUsage,
   useUiPieces,
   useVoice,
+  whenLooking,
+  withMention,
 } from "@zerolux/chat";
 import type {
   AgentSettings,
@@ -352,6 +354,7 @@ export function ConsoleList({
   const { accounts: guestAccounts } = useHostAccounts(guestOn);
   // Every word typed is in the session's title, agent, folder, harness or latest line.
   const [query, setQuery] = useState("");
+  const modelLabel = useModelLabels();
   const navigate = useNavigate();
   const sessions = consoleSessions(
     query.trim()
@@ -519,32 +522,37 @@ export function ConsoleList({
                     >
                       {sessionName(session, actors)}
                     </span>
-                    <span className="shrink-0 font-mono text-[11px] text-faint">
-                      {harnessLabels[session.harness] ?? session.harness}
+                    {session.output_at && (
+                      <time
+                        dateTime={new Date(session.output_at).toISOString()}
+                        title={ago(session.output_at)}
+                        className="ml-auto shrink-0 font-mono text-[11px] text-faint"
+                      >
+                        {briefAgo(session.output_at)}
+                      </time>
+                    )}
+                  </span>
+                  {/* What it runs on: its model, the harness, the computer, and whose it is. */}
+                  <span className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-faint">
+                    <span className="truncate">
+                      {[
+                        agent?.model &&
+                          modelLabel(session.harness, agent.model),
+                        harnessLabels[session.harness] ?? session.harness,
+                        sessionComputer(session, hosts) &&
+                          `on ${sessionComputer(session, hosts)!.name}`,
+                        session.owner_id !== me?.id &&
+                          `by ${actors.find((a) => a.id === session.owner_id)?.name ?? "someone"}`,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </span>
-                    {/* Shared: with everyone, to read or to work in; someone else's, by whom. */}
+                    {/* Shared: with everyone, to read or to work in. */}
                     {session.shared && (
                       <UsersIcon
                         aria-label={`Shared to ${session.shared}`}
-                        className="size-3 shrink-0 text-faint"
+                        className="size-3 shrink-0"
                       />
-                    )}
-                    {sessionComputer(session, hosts) && (
-                      <span className="truncate font-mono text-[11px] text-faint">
-                        on {sessionComputer(session, hosts)!.name}
-                      </span>
-                    )}
-                    {session.owner_id !== me?.id && (
-                      <span className="truncate font-mono text-[11px] text-faint">
-                        by{" "}
-                        {actors.find((a) => a.id === session.owner_id)?.name ??
-                          "someone"}
-                      </span>
-                    )}
-                    {session.output_at && (
-                      <span className="ml-auto shrink-0 font-mono text-[11px] text-faint">
-                        {ago(session.output_at)}
-                      </span>
                     )}
                   </span>
                   <span
