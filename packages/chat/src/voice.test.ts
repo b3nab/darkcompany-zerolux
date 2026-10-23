@@ -7,6 +7,7 @@ import {
   designVoice,
   forgetVoice,
   endsOnRelease,
+  prepareVoice,
   readAloud,
   spoken,
   transcribe,
@@ -38,6 +39,16 @@ test("a recording goes to the voice extension in base64, and its text comes back
   );
   expect(said).toBe("Hello, aspen");
   expect(asked).toEqual([{ name: "transcribe", input: { audio: "AAEC+v8=" } }]);
+});
+
+test("a microphone opening asks the model to load, and a refusal is not a failure", async () => {
+  const asked = fake(() => ({ preparing: true }));
+  await prepareVoice(kernel);
+  expect(asked).toEqual([{ name: "prepare", input: {} }]);
+  setKernelFetch(async () =>
+    Response.json({ error: "Unknown action" }, { status: 404 }),
+  );
+  expect(await prepareVoice(kernel)).toBeUndefined();
 });
 
 test("a text is read aloud piece by piece, the next asked for before the last plays", async () => {

@@ -88,6 +88,16 @@ export const transcribe = async (audio: Blob, kernel = kernelUrl()) =>
     )
   ).text;
 
+/**
+ * The workspace's transcription model, loaded while someone speaks: asked as a microphone
+ * opens, and nothing waits on it or fails with it.
+ */
+export const prepareVoice = (kernel = kernelUrl()) =>
+  voice("prepare", {}, kernel).then(
+    () => undefined,
+    () => undefined,
+  );
+
 /** A microphone as a client records with it: one recording at a time. */
 export interface Recorder {
   start(): Promise<void>;
@@ -186,6 +196,8 @@ export function useVoiceInput(
     setError("");
     recording.current = "starting";
     ending.current = false;
+    // The model loads while the person speaks.
+    if (targets.transcription) void prepareVoice(kernel);
     try {
       await recorder.start();
     } catch (e) {
