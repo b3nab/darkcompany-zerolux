@@ -1,0 +1,229 @@
+name: whisper-server
+
+# A `whisper.cpp-v<version>` tag, pushed by the owner: whisper.cpp's `whisper-server` at that
+# version, built for each system and acceleration Voice runs on, each a zip holding it and the
+# libraries it needs, with its SHA-256 beside it. The release is published once every pack is in;
+# a build that fails leaves it a draft. Run by hand, it only builds them, as the run's artifacts.
+on:
+  push:
+    tags: ["whisper.cpp-v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: whisper.cpp version
+        required: true
+        default: "1.9.5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: whisper-server-${{ github.ref }}
+
+jobs:
+  draft:
+    name: Draft
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Read the version
+        id: version
+        env:
+          INPUT: ${{ inputs.version }}
+        run: |
+          version="${INPUT:-${GITHUB_REF_NAME#whisper.cpp-v}}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Not a whisper.cpp version: $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Draft the release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          commit=$(git ls-remote https://github.com/ggml-org/whisper.cpp "refs/tags/v$VERSION^{}" | cut -f1)
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+            --title "whisper.cpp $VERSION" \
+            --notes "\`whisper-server\` from [whisper.cpp v$VERSION](https://github.com/ggml-org/whisper.cpp/tree/$commit), built for Voice: one zip for each system and acceleration, with its SHA-256."
+
+  build:
+    name: ${{ matrix.platform }} ${{ matrix.backend }}
+    needs: draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-aarch64
+            backend: metal
+            os: macos-26
+            flags: -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON
+          - {
+              platform: macos-aarch64,
+              backend: cpu,
+              os: macos-26,
+              flags: -DGGML_METAL=OFF,
+            }
+          # Built in NVIDIA's image of the oldest supported Ubuntu, so it runs with older glibc too.
+          - platform: linux-x86_64
+            backend: cuda
+            os: ubuntu-22.04
+            container: nvidia/cuda:12.9.1-devel-ubuntu22.04
+            flags: -DGGML_CUDA=ON
+          - {
+              platform: linux-x86_64,
+              backend: vulkan,
+              os: ubuntu-22.04,
+              flags: -DGGML_VULKAN=ON,
+            }
+          - { platform: linux-x86_64, backend: cpu, os: ubuntu-22.04 }
+          - platform: linux-aarch64
+            backend: cpu
+            os: ubuntu-22.04-arm
+            flags: -DGGML_CPU_ARM_ARCH=armv8-a
+          - {
+              platform: windows-x86_64,
+              backend: cuda,
+              os: windows-2022,
+              flags: -DGGML_CUDA=ON,
+            }
+          - {
+              platform: windows-x86_64,
+              backend: vulkan,
+              os: windows-2022,
+              flags: -DGGML_VULKAN=ON,
+            }
+          - { platform: windows-x86_64, backend: cpu, os: windows-2022 }
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.draft.outputs.version }}
+      PACK: whisper-server-${{ needs.draft.outputs.version }}-${{ matrix.platform }}-${{ matrix.backend }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ggml-org/whisper.cpp
+          ref: v${{ needs.draft.outputs.version }}
+          path: whisper.cpp
+      - name: Set up the build tools
+        if: matrix.container
+        run: apt-get update && apt-get install -y --no-install-recommends cmake zip
+      - name: Set up Vulkan
+        if: matrix.backend == 'vulkan' && runner.os == 'Linux'
+        run: |
+          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo apt-get update && sudo apt-get install -y vulkan-sdk
+      - name: Set up Vulkan
+        if: matrix.backend == 'vulkan' && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VULKAN_VERSION: 1.4.357.0
+        run: |
+          curl.exe -fsSL -o "$env:RUNNER_TEMP\vulkan-sdk.exe" "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_VERSION.exe"
+          & "$env:RUNNER_TEMP\vulkan-sdk.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_VERSION"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$env:VULKAN_VERSION\bin"
+      - name: Set up CUDA
+        if: matrix.backend == 'cuda' && runner.os == 'Windows'
+        uses: Jimver/cuda-toolkit@6008063726ffe3309d1b22e413d9e88fed91a2f2 # v0.2.29
+        with:
+          cuda: 12.9.1
+          method: network
+          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "thrust", "visual_studio_integration"]'
+          log-file-suffix: ${{ matrix.platform }}-${{ matrix.backend }}.txt
+      - name: Build
+        run: |
+          # Statically linked, for any CPU of its architecture rather than the runner's own.
+          flags=(-DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF
+            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=ON ${{ matrix.flags }})
+          case "$RUNNER_OS" in
+            # The macOS the desktop app runs on.
+            macOS) flags+=(-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0) ;;
+            # Its libraries are found beside it, and the C++ runtime is inside.
+            Linux) flags+=(-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON '-DCMAKE_INSTALL_RPATH=$ORIGIN'
+              '-DCMAKE_EXE_LINKER_FLAGS=-static-libstdc++ -static-libgcc') ;;
+          esac
+          cmake -S whisper.cpp -B build "${flags[@]}"
+          cmake --build build --config Release --target whisper-server --parallel
+      - name: Pack it with the libraries it needs
+        run: |
+          mkdir pack
+          fail() { echo "::error::$1"; exit 1; }
+          case "$RUNNER_OS" in
+            macOS)
+              cp build/bin/whisper-server pack/
+              # Only the system's own libraries.
+              otool -L pack/whisper-server
+              if otool -L pack/whisper-server | tail -n +2 | grep -vE '^\s+(/System/Library/|/usr/lib/)'; then
+                fail "It needs a library macOS does not have"
+              fi
+              ;;
+            Linux)
+              cp build/bin/whisper-server pack/
+              # OpenMP's runtime and, for CUDA, its runtime and cuBLAS; the graphics driver brings
+              # the rest (libcuda, libvulkan).
+              ldd build/bin/whisper-server | awk '$3 ~ /^\// { print $3 }' |
+                { grep -E '/lib(gomp|cudart|cublas|cublasLt)\.so' || true; } | xargs -r cp -L -t pack/
+              ldd pack/whisper-server
+              if ldd pack/whisper-server | grep 'not found'; then fail "A library it needs is missing"; fi
+              ;;
+            Windows)
+              cp build/bin/Release/whisper-server.exe pack/
+              # The C++ and OpenMP runtimes, and CUDA's runtime and cuBLAS; the graphics driver
+              # brings the rest (nvcuda, vulkan-1).
+              for dll in msvcp140 vcruntime140 vcruntime140_1 vcomp140; do
+                cp "/c/Windows/System32/$dll.dll" pack/
+              done
+              if [[ "${{ matrix.backend }}" == cuda ]]; then
+                cp "$CUDA_PATH"/bin/{cudart64_12,cublas64_12,cublasLt64_12}.dll pack/
+              fi
+              # Every DLL it loads is in the pack, or one Windows always has.
+              vs=$("/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath)
+              dumpbin=$(ls "$(cygpath -u "$vs")"/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe | tail -1)
+              for dll in $("$dumpbin" -nologo -dependents pack/whisper-server.exe pack/*.dll | tr -d '\r' | grep -ioE '^\s+\S+\.dll$'); do
+                # In the pack, or one of Windows' API sets, which are no files.
+                [[ -f "pack/$dll" || "${dll,,}" =~ ^(api|ext)-ms-win- ]] && continue
+                [[ "${dll,,}" =~ ^(msvcp|vcruntime|vcomp|cudart|cublas) ]] && fail "$dll is not in the pack"
+                [[ "${dll,,}" == vulkan-1.dll || -f "/c/Windows/System32/$dll" ]] || fail "$dll is not in the pack"
+              done
+              ;;
+          esac
+          ls -l pack
+      - name: Check that it starts
+        run: pack/whisper-server --help
+      - name: Zip it, with its SHA-256
+        run: |
+          cd pack
+          if [[ "$RUNNER_OS" == Windows ]]; then 7z a -tzip -mx=9 "../$PACK.zip" . ; else zip -9 -r "../$PACK.zip" . ; fi
+          cd ..
+          if command -v sha256sum >/dev/null; then sha256sum "$PACK.zip"; else shasum -a 256 "$PACK.zip"; fi > "$PACK.zip.sha256"
+          cat "$PACK.zip.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACK }}
+          path: |
+            ${{ env.PACK }}.zip
+            ${{ env.PACK }}.zip.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: whisper-server-*
+          merge-multiple: true
+      - name: Upload every pack and publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat whisper-server-*.zip.sha256 > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" whisper-server-* SHA256SUMS
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
