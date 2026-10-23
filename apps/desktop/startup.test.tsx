@@ -133,6 +133,7 @@ test("registry commands are restricted to the packaged manager, not workspace pa
     "allow-tray-open",
     "allow-tray-new-window",
     "allow-tray-notify",
+    "allow-tray-release",
     "allow-open-link",
     "core:event:allow-listen",
     "core:event:allow-unlisten",

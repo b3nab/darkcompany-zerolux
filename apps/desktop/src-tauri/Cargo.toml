@@ -21,6 +21,7 @@ uuid.workspace = true
 tauri-plugin-notification = "2"
 keyring = "4"
 tauri-plugin-dialog = "2"
+semver = "1.0.28"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

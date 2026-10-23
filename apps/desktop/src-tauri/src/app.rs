@@ -1011,7 +1011,8 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             crate::tray::tray_hide,
             crate::tray::tray_open,
             crate::tray::tray_new_window,
-            crate::tray::tray_notify
+            crate::tray::tray_notify,
+            crate::tray::tray_release
         ])
         .on_menu_event(|app, event| match event.id().as_ref() {
             "workspaces" => show_manager(app, None),

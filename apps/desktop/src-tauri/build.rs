@@ -15,6 +15,7 @@ fn main() {
             "tray_open",
             "tray_new_window",
             "tray_notify",
+            "tray_release",
         ]),
     ))
     .expect("build desktop permissions");

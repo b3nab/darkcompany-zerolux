@@ -54,6 +54,12 @@ export const trayNotify = (ask: {
   choices: boolean;
 }) => call("tray_notify", { ask });
 
+/** A newer release of the app, when there is one. */
+export const trayRelease = () =>
+  call<{ version: string; url: string } | null>("tray_release");
+/** A web address, in the system browser. */
+export const trayLink = (url: string) => call("open_link", { url });
+
 /** Another window of a workspace. */
 export const trayNewWindow = (profile: string) =>
   call("tray_new_window", { profile });
