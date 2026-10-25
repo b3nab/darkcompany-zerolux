@@ -204,6 +204,7 @@ function fakeChat(overrides: Partial<Chat> = {}): Chat {
     messages: [],
     unsent: [],
     canLeave: () => true,
+    leaveReason: () => undefined,
     markSeen: () => {},
     realtime: "live",
     error: "",

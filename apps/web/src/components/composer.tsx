@@ -22,6 +22,7 @@ import {
 import type { VoiceTargets, VoiceUse } from "@zerolux/chat";
 import { cn } from "cn";
 import { useRecorder } from "../recorder";
+import { useNavigationGuard } from "../navigation-guard";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -117,6 +118,15 @@ export function Composer({
     ...voice,
     write: (said) => setText(dictated(text, said)),
   });
+  useNavigationGuard(() =>
+    speech.pending()
+      ? "Voice input is still recording or processing."
+      : extra
+        ? "Send or remove the attached files before leaving this workspace."
+        : busy
+          ? "Wait for the current action to finish."
+          : undefined,
+  );
   const [holding, setHolding] = useState(false);
   const menuHold = useRef<ReturnType<typeof setTimeout>>(undefined);
   const opened = useRef(false);

@@ -74,6 +74,8 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
   const [unsent, setUnsent] = useState<Outgoing[]>([]);
   // The owner's inputs to sessions, until their records or queues show them.
   const [inputs, setInputs] = useState<SentInput[]>([]);
+  // Synchronous: the desktop can ask to restart before React renders a send or its failure.
+  const waitingInputs = useRef(new Map<string, SentInput>());
   const [outgoing] = useState(() =>
     outbox(post, setUnsent, (e) => setError(errorMessage(e))),
   );
@@ -110,7 +112,9 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
 
   async function sendInput(input: SentInput) {
     // In place, in the order they were sent.
-    const now = (status: SentInput["status"], error?: string) =>
+    const now = (status: SentInput["status"], error?: string) => {
+      if (status === "sent") waitingInputs.current.delete(input.id);
+      else waitingInputs.current.set(input.id, { ...input, status, error });
       setInputs((all) =>
         all.some((i) => i.id === input.id)
           ? all.map((i) =>
@@ -118,6 +122,7 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
             )
           : [...all, { ...input, status, error }],
       );
+    };
     now("sending");
     try {
       await api(`/sessions/${input.session_id}/input`, {
@@ -407,7 +412,17 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
         await page(id, pageBefore(first - 1), Math.min(PAGE, first - 1));
     },
     unsent,
-    canLeave: () => !outgoing.pending(),
+    canLeave: () => !outgoing.pending() && !waitingInputs.current.size,
+    leaveReason: () =>
+      waitingInputs.current.size
+        ? [...waitingInputs.current.values()].some(
+            (i) => i.status === "sending",
+          )
+          ? "Wait for the Console input to finish sending."
+          : "Retry or remove the failed Console input."
+        : outgoing.pending()
+          ? "Messages are waiting to be sent."
+          : undefined,
     send: (conversation: Conversation, draft: { id: string; text: string }) =>
       outgoing.send({ conversation_id: conversation.id, ...draft }),
     async pause(conversation: Conversation, paused: boolean) {
@@ -595,14 +610,27 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       blocks: SessionBlock[],
       queue: QueuedInput[],
       from?: number,
-    ) => unseenInputs(inputs, sessionId, blocks, queue, from),
+    ) => {
+      const unseen = unseenInputs(inputs, sessionId, blocks, queue, from);
+      // A late native record can prove that an input reported as failed did arrive.
+      for (const input of inputs) {
+        if (
+          input.session_id === sessionId &&
+          input.status === "failed" &&
+          !unseen.some((i) => i.id === input.id)
+        )
+          waitingInputs.current.delete(input.id);
+      }
+      return unseen;
+    },
     /** Sends a failed input again, the same, where it was. */
     async retryInput(id: string) {
-      const input = inputs.find((i) => i.id === id);
+      const input = waitingInputs.current.get(id);
       if (input) await sendInput(input);
     },
     /** Lets a failed input go. */
     dropInput(id: string) {
+      waitingInputs.current.delete(id);
       setInputs((all) => all.filter((i) => i.id !== id));
     },
     /**

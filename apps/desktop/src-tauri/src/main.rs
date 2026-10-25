@@ -11,6 +11,7 @@ mod local;
 mod notify;
 mod preferences;
 mod tray;
+mod updates;
 
 fn main() -> anyhow::Result<()> {
     // Before starting Tokio or Tauri threads. Never source the user's shell configuration.

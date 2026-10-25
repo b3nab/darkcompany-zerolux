@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { currentDrafts } from "@zerolux/chat";
+import { navigationBlock } from "./navigation-guard";
 
 /** Optional desktop context. No native API or other workspace's configuration is exposed. */
 declare global {
@@ -13,6 +14,7 @@ declare global {
     }>;
     zeroluxWorkspaceState?: () => {
       canLeave: boolean;
+      reason?: string;
       drafts: Record<string, string>;
     };
     zeroluxRestoredDrafts?: Record<string, string>;
@@ -170,9 +172,19 @@ export async function windowControl(
 }
 
 /** The host reads this before replacing a view, never to steer or resend a message. */
-export function workspaceNavigationGuard(canLeave: () => boolean) {
+export function workspaceNavigationGuard(
+  canLeave: () => boolean,
+  leaveReason?: () => string | undefined,
+) {
   if (!desktopConnection()) return () => {};
-  const state = () => ({ canLeave: canLeave(), drafts: currentDrafts() });
+  const state = () => {
+    const reason =
+      navigationBlock() ??
+      (canLeave()
+        ? undefined
+        : (leaveReason?.() ?? "Messages are waiting to be sent."));
+    return { canLeave: !reason, reason, drafts: currentDrafts() };
+  };
   window.zeroluxWorkspaceState = state;
   return () => {
     if (window.zeroluxWorkspaceState === state)

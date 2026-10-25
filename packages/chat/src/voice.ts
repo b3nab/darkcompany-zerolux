@@ -174,6 +174,10 @@ export const endsOnRelease = (
   now = Date.now(),
 ) => press.recording || now - press.at >= HOLD_MS;
 
+let processingVoiceInputs = 0;
+/** Processing may outlive its composer when the person opens another chat. */
+export const voiceInputProcessing = () => processingVoiceInputs > 0;
+
 /**
  * Speaking into a composer, Dictate or Record: what it records for, `transcribing` until
  * the text comes (seconds the first time), and what went wrong, in a sentence. A tap starts
@@ -189,6 +193,7 @@ export function useVoiceInput(
   const [error, setError] = useState("");
   // What records now, for a release that comes before the next render.
   const recording = useRef<VoiceUse | "starting">(undefined);
+  const processing = useRef(0);
   const pressed = useRef({ at: 0, recording: false });
   // Ended while the microphone was still starting: it ends as soon as it records.
   const ending = useRef(false);
@@ -216,6 +221,8 @@ export function useVoiceInput(
     if (now === "starting") ending.current = true;
     if (!now || now === "starting") return;
     recording.current = undefined;
+    processing.current++;
+    processingVoiceInputs++;
     setUse(undefined);
     setTranscribing(targets.transcription);
     try {
@@ -224,6 +231,8 @@ export function useVoiceInput(
     } catch (e) {
       setError(errorMessage(e));
     } finally {
+      processing.current--;
+      processingVoiceInputs--;
       setTranscribing(false);
     }
   };
@@ -231,6 +240,8 @@ export function useVoiceInput(
     use,
     transcribing,
     error,
+    /** Includes opening the microphone, saving audio and sending without transcription. */
+    pending: () => !!recording.current || processing.current > 0,
     start,
     finish,
     discard() {

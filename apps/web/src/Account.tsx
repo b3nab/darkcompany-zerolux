@@ -32,6 +32,7 @@ import { Connection, WorkspaceSettings } from "@/components/workspace-settings";
 import { HostAccounts } from "./HostAccounts";
 import { onlyHere } from "./Invite";
 import { Copy } from "@/components/tool-call";
+import { UpdateSettings } from "./Updates";
 
 /** A page of settings: what it is about, and its sections. */
 export function Settings({
@@ -247,6 +248,7 @@ export function MySettingsPage({
         <Appearance />
         <Connection />
       </Section>
+      <UpdateSettings />
     </Settings>
   );
 }

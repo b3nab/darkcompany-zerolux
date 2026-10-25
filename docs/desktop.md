@@ -2,7 +2,7 @@
 
 The ZeroLux desktop app keeps a list of workspace connections on this device. Each workspace has its own kernel and database; the desktop uses the same interface and HTTP API as the browser client.
 
-The app runs on macOS **14 or later** (for each workspace's own browser storage), Linux and Windows. It does not update itself: install a new release over it.
+The app runs on macOS **14 or later** (for each workspace's own browser storage), Linux and Windows. Signed builds check for updates automatically; choose their release channel in **Account settings › Updates**.
 
 ## Run from source
 
@@ -54,7 +54,7 @@ A click on the mark opens a panel under it, over full-screen apps too, with what
 - **Needs you:** each permission as it would act (the whole command, the files with the lines it adds and removes, the address), to allow once, for the session or always as its harness offers, or deny; a question with one answer among its options, answered with a tap; anything else opens its chat or session in the app. Arrows move between requests, Return allows once, Backspace denies, Escape closes the panel.
 - **Subscriptions:** each plan of the person on the kernel's computer, with its main limit; a click shows the others, a week's pace (when it runs out at this rate), extra usage, credits and earned resets to use.
 - **Extensions' rows** from the workspace in front, such as the next meeting.
-- **A newer ZeroLux**, when a release newer than this app is published, with its download page.
+- **A newer ZeroLux**, with its download progress and the action to install it and restart.
 
 A request that comes while the panel is closed is also a system notification: a permission is allowed once or denied from it, and a click opens the request in the app. The workspace windows then leave requests to the tray. On macOS the app asks once whether it may notify; a build run from source, with no app bundle, shows none of these. The panel reads each workspace with that workspace's own sign-in, kept by the desktop; a workspace not signed in says so. The right click opens a menu with Open ZeroLux, New Window, the workspaces and Quit. Linux's trays open only a menu, so there the menu also holds the requests, each with its choices, and the plans' main lines.
 
@@ -65,6 +65,18 @@ Connections are stored in `workspaces.json` in the operating system's applicatio
 On first launch after upgrading from the single-connection desktop, the app imports the previous connection and retains any previous local workspace as a separate entry. Importing the connection list does not open, copy, migrate or reset a database. When upgrading from kernel-served desktop pages, first opening a saved connection imports only its validated drafts into its isolated packaged-page store. The old stores remain untouched, and import completion is recorded only after the new store confirms persistence. The previous address must be available for this one-time import; open the connection before changing its address. Invalid settings are reported rather than reset.
 
 Only one kernel runtime may serve a database. Connect to its address rather than starting another kernel against the same data.
+
+## Updates
+
+Choose **Nightly**, **Beta** (including release candidates) or **Stable** in Account settings. The app checks at startup and every six hours, then downloads and verifies a newer compatible release. **Update** beside the bell, or in the tray, shows its progress; **Restart to update** installs it. Switching channels never installs an older version. See [release versions and signing](releases.md).
+
+Restart checks every open workspace window. Pending or failed sends, recording, transcription and attachments must be resolved first. Text drafts and open views are saved for the restart. An unavailable remote workspace keeps its saved drafts until it can open again.
+
+Before replacing the app, the desktop stops its own kernels, holds their database locks, and creates verified SQLite snapshots in `backups/update-<id>` under its application-data directory. External kernels and native agents are not stopped. If backup or installation fails, the original local kernels restart and the windows become usable again. Backups are never restored automatically over subsequent writes.
+
+The current pre-release still has a mutable `0001_bootstrap` schema. Automatic installation requires the release's signed schema fingerprint to match the running build when local databases exist. A different fingerprint stops the update before download and is checked again before installation. Supporting future schema changes requires an immutable migration history and an explicit upgrade path; a backup alone does not make such an upgrade or downgrade safe.
+
+The feed and its signature are published separately. A check that catches them between uploads fails safely; **Check for updates** in settings retries it. Source builds without `ZEROLUX_UPDATE_PUBLIC_KEY` report that updates are unconfigured and make no update request. Updates apply to the desktop and its embedded kernels; they do not replace independently running kernels, mobile apps or separately installed extensions.
 
 ## Services
 
@@ -88,8 +100,12 @@ The package includes the web assets, Bun, the LiveKit server, uv, the ZeroLux Cl
 
 The host and client-owned catalog live in [`apps/desktop`](../apps/desktop). The kernel's shared lifecycle is in [`server.rs`](../crates/zerolux/src/server.rs), independently of Tauri. See [architecture](architecture.md) for component boundaries.
 
+Creating a local workspace supplies its initial name during kernel startup, under the database lease and before authentication starts. Existing connections do not supply an initial name; after an owner claims the workspace, startup cannot rename it. Later name changes use the authenticated workspace API.
+
 Only the packaged manager can call the connection-registry command. Both its capability and actual window URL are checked. Workspace pages have no registry, file or process privileges; a narrowly intercepted `zerolux://workspaces` navigation can open the manager but returns no registry data. Other HTTP/HTTPS links open in the system browser.
 
 `ZEROLUX_DESKTOP_DATA_DIR` selects an absolute, isolated desktop data directory for development and tests. It is not a database-attachment shortcut. Tests use temporary data and fake harnesses, never personal sessions.
+
+Debug builds can compile `ZEROLUX_UPDATE_TEST_FEEDS=http://127.0.0.1:<port>/feeds` to exercise signed updates from a local fixture server. Use a temporary signing key, an isolated app bundle and desktop data directory; feed and package signatures remain mandatory. Release builds ignore this variable and use the production feeds.
 
 Run `bun run check` from the repository root before submitting changes. To keep a running kernel's web assets unchanged during checks, set `ZEROLUX_WEB_OUTDIR` to an isolated output directory.

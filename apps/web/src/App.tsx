@@ -37,6 +37,8 @@ import { CommandMenu } from "./CommandMenu";
 import { ConsoleHome, ConsoleList, SessionView } from "./Console";
 import { MD, useMedia } from "./media";
 import { Meetings } from "./Meetings";
+import { UpdateButton } from "./Updates";
+import { navigationBlock, useNavigationGuard } from "./navigation-guard";
 import { useProposalNotices, useSessionNotices } from "./notices";
 import { OwnerOnboarding } from "./OwnerOnboarding";
 import { Organization } from "./Org";
@@ -79,6 +81,10 @@ export function App({
   const [error, setError] = useState("");
   const [connectionError, setConnectionError] = useState("");
   const [busy, setBusy] = useState(false);
+  const operations = useRef(0);
+  useNavigationGuard(() =>
+    operations.current ? "Wait for the current action to finish." : undefined,
+  );
   const [health, setHealth] = useState(initialHealth);
   const [menu, setMenu] = useState(false);
   const [rail, setRail] = useState(false);
@@ -168,10 +174,13 @@ export function App({
   const chat = useChat(!!workspace && !needsOnboarding && chatReady);
   const authentication = useAuthentication();
   useEffect(
-    () => authentication?.guard(chat.canLeave),
+    () => authentication?.guard(() => chat.canLeave() && !navigationBlock()),
     [authentication?.guard, chat.canLeave],
   );
-  useEffect(() => workspaceNavigationGuard(chat.canLeave), [chat.canLeave]);
+  useEffect(
+    () => workspaceNavigationGuard(chat.canLeave, chat.leaveReason),
+    [chat.canLeave, chat.leaveReason],
+  );
   // Files shared in chats are kept by the Storage extension, where it is enabled.
   const storage = useStorage();
   const conversation = chat.conversations.find((c) => c.id === chatId);
@@ -202,6 +211,7 @@ export function App({
   };
 
   async function perform(operation: () => Promise<void>): Promise<boolean> {
+    operations.current++;
     setBusy(true);
     setError("");
     try {
@@ -213,7 +223,8 @@ export function App({
       setError(errorMessage(error));
       return false;
     } finally {
-      setBusy(false);
+      operations.current--;
+      setBusy(operations.current > 0);
     }
   }
 
@@ -381,6 +392,7 @@ export function App({
               <SearchIcon />
             </Button>
           )}
+          <UpdateButton />
           {shell ? (
             <Popover>
               <PopoverTrigger

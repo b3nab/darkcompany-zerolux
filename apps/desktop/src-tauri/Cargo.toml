@@ -22,11 +22,17 @@ tauri-plugin-notification = "2"
 keyring = "4"
 tauri-plugin-dialog = "2"
 semver = "1.0.28"
+tauri-plugin-updater = "=2.13.2"
+minisign-verify = "0.2.5"
+base64 = "0.22"
+sqlx.workspace = true
+chrono = "0.4"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dev-dependencies]
+ed25519-dalek = "2"
 tempfile = "3"
 
 [features]

@@ -82,6 +82,9 @@ pub(crate) enum Action {
     },
     /// The app was brought back with no window open: its workspace comes back.
     Reopen,
+    /// Internal only: package activation is requested by the authenticated updater.
+    #[serde(skip)]
+    InstallUpdate(Box<crate::updates::Pending>),
 }
 
 type Reply = oneshot::Sender<Result<View, String>>;
@@ -137,12 +140,60 @@ impl WorkspaceView {
     }
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 struct SavedView {
     #[serde(rename = "canLeave")]
     can_leave: Option<bool>,
+    reason: Option<String>,
     drafts: Option<HashMap<String, String>>,
     path: Option<String>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct UpdateViews {
+    version: String,
+    views: HashMap<String, Vec<SavedView>>,
+}
+
+impl UpdateViews {
+    fn merge(
+        previous: Option<&Self>,
+        version: String,
+        live: HashMap<String, Vec<SavedView>>,
+    ) -> Self {
+        let mut views = previous
+            .map(|saved| saved.views.clone())
+            .unwrap_or_default();
+        views.extend(live);
+        Self { version, views }
+    }
+
+    fn persist(root: &Path, saved: Option<&Self>) -> Result<()> {
+        if let Some(saved) = saved.filter(|saved| !saved.views.is_empty()) {
+            crate::preferences::write_json(root, "update-views.json", saved)
+        } else {
+            match std::fs::remove_file(root.join("update-views.json")) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error.into()),
+            }
+        }
+    }
+}
+
+pub(crate) async fn install_update(
+    app: &tauri::AppHandle,
+    pending: crate::updates::Pending,
+) -> Result<(), String> {
+    let (send, receive) = oneshot::channel();
+    app.state::<Commands>()
+        .send
+        .try_send((Action::InstallUpdate(Box::new(pending)), send))
+        .map_err(|_| "The desktop is busy or closing".to_owned())?;
+    receive
+        .await
+        .map_err(|_| "The desktop is closing".to_owned())??;
+    Ok(())
 }
 
 struct Host {
@@ -347,6 +398,9 @@ impl Host {
                 .context("The workspace database has a directory")?
                 .to_path_buf(),
             database: zerolux::db::Location::Sqlite(database),
+            initial_workspace_name: (profile.workspace_id.is_none()
+                && matches!(profile.source, Source::Local { legacy: false }))
+            .then(|| profile.name.clone()),
             web_dir: resources.join("web"),
             livekit: None,
             runner: Some(RunnerProgram::bundled(&resources)),
@@ -403,23 +457,6 @@ impl Host {
         self.prune();
         let mut profile = self.catalog.profile(id)?.clone();
         let url = self.kernel_url(&profile).await?;
-        // Retry initialization if its reply was lost. Existing/legacy workspaces are
-        // never renamed during startup; names use the same HTTP API as other clients.
-        if profile.workspace_id.is_none()
-            && matches!(profile.source, Source::Local { legacy: false })
-        {
-            reqwest::Client::builder()
-                .no_proxy()
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(Duration::from_secs(5))
-                .build()?
-                .post(url.join("api/workspace")?)
-                .json(&serde_json::json!({"name":profile.name}))
-                .send()
-                .await?
-                .error_for_status()
-                .context("Set the new workspace's name")?;
-        }
         let verified = connection::verify(url.as_str(), profile.workspace_id.as_deref()).await?;
         profile.observe(&verified)?;
         ensure!(!*self.stopped.borrow(), "The desktop is closing");
@@ -427,11 +464,15 @@ impl Host {
             view.window.set_title(&profile.name)?;
         }
         if !self.windows.contains_key(id) {
+            self.restore_profile_views(&profile, &verified.url).await?;
+        }
+        if !self.windows.contains_key(id) {
             let saved = if profile.app_ui {
                 None
             } else {
                 Some(SavedView {
                     can_leave: Some(true),
+                    reason: None,
                     drafts: Some(self.legacy_drafts(&profile, &verified.url).await?),
                     path: None,
                 })
@@ -749,7 +790,7 @@ impl Host {
         // cookies and unrelated local storage are never copied.
         view.window.eval_with_callback(r#"(() => {
             const state = typeof window.zeroluxWorkspaceState === 'function' ? window.zeroluxWorkspaceState() : {canLeave:null};
-            if (state.canLeave !== true) return {canLeave:state.canLeave};
+            if (state.canLeave !== true) return {canLeave:state.canLeave, reason:state.reason};
             const saved = {...state, path: location.pathname + location.search + location.hash};
             document.body.inert = true;
             return saved;
@@ -771,7 +812,11 @@ impl Host {
         );
         ensure!(
             saved.can_leave == Some(true),
-            "This workspace has messages waiting to be sent"
+            "{}",
+            saved
+                .reason
+                .as_deref()
+                .unwrap_or("This workspace has messages waiting to be sent")
         );
         Ok(saved)
     }
@@ -873,6 +918,7 @@ impl Host {
             Action::Leave { id } => self.computers.leave(&id).await?,
             Action::NewWindow { id } => self.new_window(id).await?,
             Action::Reopen => self.reopen().await?,
+            Action::InstallUpdate(pending) => self.install_update(*pending).await?,
             Action::Forget { id } => {
                 ensure!(
                     !self
@@ -907,6 +953,13 @@ impl Host {
     }
 
     async fn initial(&mut self, launch: LaunchOptions) -> Result<()> {
+        let restored = self.restore_update_views().await;
+        let opened = self.initial_workspace(launch).await;
+        opened?;
+        restored
+    }
+
+    async fn initial_workspace(&mut self, launch: LaunchOptions) -> Result<()> {
         if launch.choose_workspace {
             return Ok(());
         }
@@ -943,6 +996,226 @@ impl Host {
             self.open(&id).await?;
         }
         Ok(())
+    }
+
+    /// Restore every window's drafts and route after an update, including background workspaces.
+    async fn restore_update_views(&mut self) -> Result<()> {
+        let file = self.root.root.join("update-views.json");
+        let saved = match std::fs::read(&file) {
+            Ok(bytes) => serde_json::from_slice::<UpdateViews>(&bytes)
+                .context("Read the windows saved before the update")?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        // A failed installation must never restore an old snapshot over drafts edited later.
+        if saved.version != zerolux::build::version() {
+            std::fs::remove_file(file)?;
+            return Ok(());
+        }
+        let selected = self.catalog.selected.clone();
+        let mut deferred = Vec::new();
+        for id in saved.views.keys() {
+            if let Err(error) = self.open(id).await {
+                deferred.push(format!("{id}: {error:#}"));
+            }
+        }
+        let mut catalog = self.catalog.clone();
+        catalog.selected = selected;
+        self.save(catalog)?;
+        ensure!(
+            deferred.is_empty(),
+            "Some windows could not reopen; their drafts are kept until you open them: {}",
+            deferred.join("; ")
+        );
+        Ok(())
+    }
+
+    /// An offline workspace keeps its snapshots until its next successful open. A successful
+    /// profile is removed atomically, so another unavailable profile cannot duplicate its views.
+    async fn restore_profile_views(&mut self, profile: &Profile, url: &tauri::Url) -> Result<()> {
+        let file = self.root.root.join("update-views.json");
+        let mut saved: UpdateViews = match std::fs::read(&file) {
+            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        if saved.version != zerolux::build::version() {
+            return Ok(());
+        }
+        let Some(states) = saved.views.remove(&profile.id) else {
+            return Ok(());
+        };
+        if states.is_empty() {
+            return UpdateViews::persist(&self.root.root, Some(&saved));
+        }
+        let mut views = Vec::new();
+        let prepared: Result<()> = async {
+            for state in states {
+                views.push(self.build_view(profile, url, Some(&state)).await?);
+            }
+            UpdateViews::persist(&self.root.root, Some(&saved))?;
+            Ok(())
+        }
+        .await;
+        if let Err(error) = prepared {
+            for view in views {
+                let _ = view.close();
+            }
+            return Err(error);
+        }
+        for view in &views {
+            view.window.show()?;
+        }
+        self.windows.insert(profile.id.clone(), views);
+        Ok(())
+    }
+
+    async fn install_update(&mut self, pending: crate::updates::Pending) -> Result<()> {
+        let databases: Vec<_> = self
+            .catalog
+            .profiles
+            .iter()
+            .filter(|profile| matches!(profile.source, Source::Local { .. }))
+            .map(|profile| Ok((profile.id.clone(), profile.database(&self.root.root)?)))
+            .collect::<Result<_>>()?;
+        let databases: Vec<_> = databases
+            .into_iter()
+            .filter(|(_, path)| path.is_file())
+            .collect();
+        ensure!(
+            databases.is_empty() || pending.schema == zerolux::build::schema(),
+            "This update changes the workspace schema; this pre-release cannot install it automatically"
+        );
+        let previous_views: Option<UpdateViews> =
+            match std::fs::read(self.root.root.join("update-views.json")) {
+                Ok(bytes) => Some(serde_json::from_slice(&bytes)?),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+        self.app
+            .state::<Lifecycle>()
+            .phase
+            .compare_exchange(0, 3, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| anyhow::anyhow!("The desktop is already closing"))?;
+        self.prune();
+        let running: Vec<_> = self.runtimes.keys().cloned().collect();
+        let mut leases = Vec::new();
+        let mut stopped = false;
+        let mut computers_stopped = false;
+        let result: Result<()> = async {
+            let mut saved = HashMap::new();
+            for id in self.windows.keys() {
+                saved.insert(id.clone(), self.prepare_views(id).await?);
+            }
+            let checkpoint = UpdateViews::merge(
+                previous_views.as_ref(),
+                pending.update.version.clone(),
+                saved,
+            );
+            UpdateViews::persist(&self.root.root, Some(&checkpoint))?;
+            // Freeze is only a browser-input guard. The snapshot is taken after the kernels
+            // have stopped, while their database leases prevent another writer starting.
+            for runtime in self.runtimes.values() {
+                runtime.stop.send_replace(true);
+            }
+            stopped = true;
+            let mut shutdown_error = None;
+            for (_, runtime) in self.runtimes.drain() {
+                if let Err(error) = runtime.task.await.unwrap_or_else(|error| Err(error.into())) {
+                    shutdown_error.get_or_insert(error);
+                }
+            }
+            if let Some(error) = shutdown_error {
+                return Err(error.context("Stop the local kernels before updating"));
+            }
+            for (_, database) in &databases {
+                leases.push(zerolux::lease::Lease::acquire(
+                    &zerolux::db::Location::Sqlite(database.clone()),
+                )?);
+            }
+            let directory = self
+                .root
+                .root
+                .join("backups")
+                .join(format!("update-{}", uuid::Uuid::new_v4()));
+            if !databases.is_empty() {
+                std::fs::create_dir_all(&directory)?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))?;
+                }
+                for (id, database) in &databases {
+                    crate::updates::backup(database, &directory.join(format!("{id}.db"))).await?;
+                }
+                crate::preferences::write_json(
+                    &directory,
+                    "update.json",
+                    &serde_json::json!({
+                        "from": zerolux::build::info(), "to": pending.update.version,
+                        "databases": databases, "schema": pending.schema,
+                    }),
+                )?;
+            }
+            // Joined computers stop their links cooperatively, never the remote kernel or
+            // native agents. Their carried resources are kept in versioned directories.
+            let empty = Links::new(self.root.root.join("computer"));
+            std::mem::replace(&mut self.computers, empty)
+                .shutdown()
+                .await;
+            computers_stopped = true;
+            let install = pending.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                install.update.install(install.bytes.as_slice())
+            })
+            .await??;
+            self.app
+                .state::<Lifecycle>()
+                .phase
+                .store(2, Ordering::Release);
+            self.app.restart();
+        }
+        .await;
+        // An installer or backup failure leaves the old installation usable. No database
+        // restore is attempted: the original database has never been replaced.
+        drop(leases);
+        let mut recovery = Vec::new();
+        if let Err(error) = UpdateViews::persist(&self.root.root, previous_views.as_ref()) {
+            recovery.push(format!(
+                "The saved update windows could not be recovered: {error}"
+            ));
+        }
+        if stopped {
+            for id in running {
+                if let Ok(profile) = self.catalog.profile(&id).cloned()
+                    && let Err(error) = self.local_url(&profile).await
+                {
+                    recovery.push(format!("{}: {error:#}", profile.name));
+                }
+            }
+            if computers_stopped && let Ok(resources) = self.resources() {
+                self.computers = Links::start(
+                    self.root.root.join("computer"),
+                    &RunnerProgram::bundled(&resources),
+                );
+            }
+        }
+        for id in self.windows.keys() {
+            self.unfreeze(id);
+        }
+        self.app
+            .state::<Lifecycle>()
+            .phase
+            .store(0, Ordering::Release);
+        if recovery.is_empty() {
+            result
+        } else {
+            Err(anyhow::anyhow!(
+                "{}; some local kernels could not restart: {}",
+                result.unwrap_err(),
+                recovery.join("; ")
+            ))
+        }
     }
 
     async fn shutdown(self) {
@@ -982,6 +1255,8 @@ fn supported_platform() -> Result<()> {
 
 pub fn run(launch: LaunchOptions) -> Result<()> {
     supported_platform()?;
+    let mut context = tauri::generate_context!();
+    context.package_info_mut().version = zerolux::build::version().parse()?;
     let app = tauri::Builder::default()
         .plugin(
             tauri_plugin_opener::Builder::new()
@@ -992,6 +1267,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
         .plugin(tauri_plugin_notification::init())
         // Only `choose_folder` opens it: pages are given no dialog of their own.
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(crate::extension_ui::Kernels::default())
         .register_asynchronous_uri_scheme_protocol(
             crate::extension_ui::SCHEME,
@@ -1012,7 +1288,11 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             crate::tray::tray_open,
             crate::tray::tray_new_window,
             crate::tray::tray_notify,
-            crate::tray::tray_release
+            crate::updates::update_status,
+            crate::updates::update_check,
+            crate::updates::update_channel,
+            crate::updates::update_download,
+            crate::updates::update_install
         ])
         .on_menu_event(|app, event| match event.id().as_ref() {
             "workspaces" => show_manager(app, None),
@@ -1139,6 +1419,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                         return;
                     }
                 };
+                crate::updates::initialize(&task_handle, root.root.clone());
                 // The workspaces this computer joined connect again with the app.
                 let computers = carried(&root.root).map(|resources| {
                     Links::start(
@@ -1222,7 +1503,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             });
             Ok(())
         })
-        .build(tauri::generate_context!())?;
+        .build(context)?;
     app.run(|handle, event| {
         // The Dock's icon pressed with no window open: a workspace comes back.
         #[cfg(target_os = "macos")]
@@ -1270,6 +1551,61 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn draft(text: &str) -> Vec<SavedView> {
+        vec![SavedView {
+            can_leave: Some(true),
+            reason: None,
+            drafts: Some(HashMap::from([("chat".into(), text.into())])),
+            path: Some("/chats".into()),
+        }]
+    }
+
+    #[test]
+    fn another_update_keeps_offline_drafts_and_a_failed_install_restores_its_previous_checkpoint() {
+        let root = tempfile::tempdir().unwrap();
+        let previous = UpdateViews {
+            version: "0.0.1-beta.1".into(),
+            views: HashMap::from([
+                ("offline".into(), draft("deferred")),
+                ("open".into(), draft("old")),
+            ]),
+        };
+        UpdateViews::persist(root.path(), Some(&previous)).unwrap();
+        let next = UpdateViews::merge(
+            Some(&previous),
+            "0.0.1-rc.1".into(),
+            HashMap::from([("open".into(), draft("new"))]),
+        );
+        UpdateViews::persist(root.path(), Some(&next)).unwrap();
+        let read = || {
+            serde_json::from_slice::<UpdateViews>(
+                &std::fs::read(root.path().join("update-views.json")).unwrap(),
+            )
+            .unwrap()
+        };
+        let saved = read();
+        assert_eq!(
+            saved.views["offline"][0].drafts.as_ref().unwrap()["chat"],
+            "deferred"
+        );
+        assert_eq!(
+            saved.views["open"][0].drafts.as_ref().unwrap()["chat"],
+            "new"
+        );
+        // Installation fails: restore only the pre-existing deferred checkpoint.
+        UpdateViews::persist(root.path(), Some(&previous)).unwrap();
+        assert_eq!(read().version, "0.0.1-beta.1");
+        // A successful profile does not repeat because another profile stays offline.
+        let mut remaining = read();
+        remaining.views.remove("open");
+        UpdateViews::persist(root.path(), Some(&remaining)).unwrap();
+        assert_eq!(read().views.len(), 1);
+        assert!(read().views.contains_key("offline"));
+        UpdateViews::persist(root.path(), None).unwrap();
+        assert!(!root.path().join("update-views.json").exists());
+    }
+
     #[test]
     fn a_window_names_its_workspace() {
         assert_eq!(

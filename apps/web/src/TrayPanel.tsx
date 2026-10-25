@@ -47,11 +47,9 @@ import {
   onTray,
   trayCredential,
   trayHide,
-  trayLink,
   trayNewWindow,
   trayNotify,
   trayOpen,
-  trayRelease,
   trayReport,
   trayResize,
   trayWorkspaces,
@@ -68,6 +66,7 @@ import {
   DropdownMenuTrigger,
 } from "./components/ui/dropdown-menu";
 import { Kbd } from "./components/ui/kbd";
+import { TrayUpdate } from "./Updates";
 
 /** A workspace as the panel hears it. */
 interface Heard {
@@ -90,7 +89,6 @@ export interface Waiting {
 }
 
 const SUBSCRIPTIONS_EVERY = 5 * 60_000;
-const RELEASES_EVERY = 6 * 3_600_000;
 const notFound = (error: unknown) =>
   error instanceof ApiError && error.status === 404;
 
@@ -537,10 +535,6 @@ export function TrayPanel() {
   const [attempts, setAttempts] = useState<Record<string, number>>({});
   const [error, setError] = useState("");
   const [now, setNow] = useState(Date.now());
-  const [release, setRelease] = useState<{
-    version: string;
-    url: string;
-  } | null>(null);
   const panel = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
 
@@ -550,14 +544,9 @@ export function TrayPanel() {
         setError(errorMessage(e)),
       );
     void read();
-    // A newer app, read now and a few times a day; a failed read offers nothing.
-    const newer = () => trayRelease().then(setRelease, () => {});
-    void newer();
-    const releases = setInterval(() => void newer(), RELEASES_EVERY);
     const ticking = setInterval(() => setNow(Date.now()), 30_000);
     const stop = onTray("zerolux-tray-workspaces", () => void read());
     return () => {
-      clearInterval(releases);
       clearInterval(ticking);
       stop();
     };
@@ -928,20 +917,7 @@ export function TrayPanel() {
             </>
           )}
           {active && <TrayRows key={active.kernel} kernel={active.kernel} />}
-          {release && (
-            <div className="mx-2 mb-1.5 flex items-center gap-2 rounded-[10px] border bg-card px-3 py-2 text-[12.5px]">
-              <span className="min-w-0 flex-1 truncate">
-                ZeroLux {release.version} is available
-              </span>
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => void trayLink(release.url)}
-              >
-                Download
-              </Button>
-            </div>
-          )}
+          <TrayUpdate />
         </div>
       </div>
       <footer className="flex shrink-0 items-center gap-0.5 border-t px-2 py-1.5 text-[12.5px]">

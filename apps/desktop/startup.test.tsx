@@ -120,6 +120,11 @@ test("registry commands are restricted to the packaged manager, not workspace pa
     "notification:allow-is-permission-granted",
     "notification:allow-request-permission",
     "notification:allow-notify",
+    "allow-update-status",
+    "allow-update-check",
+    "allow-update-channel",
+    "allow-update-download",
+    "allow-update-install",
   ]);
   // The tray's panel hears every open workspace: their sign-ins are read, never written, and
   // it has no registry or window controls.
@@ -133,13 +138,17 @@ test("registry commands are restricted to the packaged manager, not workspace pa
     "allow-tray-open",
     "allow-tray-new-window",
     "allow-tray-notify",
-    "allow-tray-release",
     "allow-open-link",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "notification:allow-is-permission-granted",
     "notification:allow-request-permission",
     "notification:allow-notify",
+    "allow-update-status",
+    "allow-update-check",
+    "allow-update-channel",
+    "allow-update-download",
+    "allow-update-install",
   ]);
   expect(config.bundle.macOS.minimumSystemVersion).toBe("14.0");
 });
