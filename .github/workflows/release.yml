@@ -1,37 +1,80 @@
 name: Release
 
-# A version tag, made by `bun run release <version>` and pushed by the owner: its release is
-# drafted with its changelog, then gets the kernel, a single file, and the desktop app for
-# macOS, Linux and Windows, each carrying the Bun and the LiveKit server it starts, and the
-# Android app. It is published once every build is in; a build that fails leaves it a draft.
+# Tags publish beta/RC and stable releases. Scheduled or manual builds publish a nightly.
+# Every artifact is signed; the channel feed moves only after all checks and builds succeed.
 on:
   push:
     tags: ["v*"]
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  # Reserve nightly numbers and update channel pointers in one publication at a time.
+  group: release
+  cancel-in-progress: false
 
 jobs:
+  checks:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
   draft:
     name: Draft
+    needs: checks
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.build.outputs.version }}
+      tag: ${{ steps.build.outputs.tag }}
+      channel: ${{ steps.build.outputs.channel }}
+      commit: ${{ steps.build.outputs.commit }}
+      built_at: ${{ steps.build.outputs.built_at }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: Require update signing configuration
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          PUBLIC_KEY: ${{ vars.ZEROLUX_UPDATE_PUBLIC_KEY }}
+        run: test -n "$SIGNING_KEY" && test -n "$PUBLIC_KEY"
+      - name: Identify this build
+        id: build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun scripts/release-ci.ts prepare
       - name: Draft the release with its changelog
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.build.outputs.version }}
+          TAG: ${{ steps.build.outputs.tag }}
+          CHANNEL: ${{ steps.build.outputs.channel }}
+          COMMIT: ${{ steps.build.outputs.commit }}
+          RESUME: ${{ steps.build.outputs.resume }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          # Its section of CHANGELOG.md, without the heading the release's title repeats.
-          awk -v heading="## $version " 'index($0, heading) == 1 { found = 1; next } /^## / && found { exit } found' CHANGELOG.md > notes.md
-          test -s notes.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
+          notes="$RUNNER_TEMP/notes.md"
+          if [[ "$CHANNEL" == nightly ]]; then
+            printf 'Nightly build from commit `%s`.\n' "$COMMIT" > "$notes"
+          else
+            awk -v heading="## $VERSION " 'index($0, heading) == 1 { found = 1; next } /^## / && found { exit } found' CHANGELOG.md > "$notes"
+            test -s "$notes" || { echo "CHANGELOG.md has no section for $VERSION"; exit 1; }
+          fi
+          printf '\n<!-- zerolux-run:%s -->\n' "$GITHUB_RUN_ID" >> "$notes"
           prerelease=""
-          [[ "$version" == *-* ]] && prerelease="--prerelease"
-          gh release create "$GITHUB_REF_NAME" --verify-tag --draft $prerelease \
-            --title "ZeroLux $version" --notes-file notes.md
+          [[ "$CHANNEL" != stable ]] && prerelease="--prerelease"
+          if [[ "$RESUME" != true ]]; then
+            gh release create "$TAG" --target "$COMMIT" --draft $prerelease \
+              --title "ZeroLux $VERSION" --notes-file "$notes"
+          fi
+          cp "$RUNNER_TEMP/zerolux-build.json" "$RUNNER_TEMP/build.json"
+          gh release upload "$TAG" "$RUNNER_TEMP/build.json" --clobber
 
   kernel:
     name: Kernel (${{ matrix.name }})
@@ -54,6 +97,12 @@ jobs:
               target: x86_64-pc-windows-msvc,
             }
     runs-on: ${{ matrix.os }}
+    env:
+      ZEROLUX_BUILD_VERSION: ${{ needs.draft.outputs.version }}
+      ZEROLUX_BUILD_CHANNEL: ${{ needs.draft.outputs.channel }}
+      ZEROLUX_BUILD_COMMIT: ${{ needs.draft.outputs.commit }}
+      ZEROLUX_BUILD_BUILT_AT: ${{ needs.draft.outputs.built_at }}
+      ZEROLUX_UPDATE_PUBLIC_KEY: ${{ vars.ZEROLUX_UPDATE_PUBLIC_KEY }}
     steps:
       - uses: actions/checkout@v4
       - name: Set up (Bun, Rust, uv, LiveKit)
@@ -68,16 +117,21 @@ jobs:
         env:
           ZEROLUX_CARRY: ${{ github.workspace }}/apps/desktop/dist
         run: cargo build --release --locked -p zerolux
-      - name: Upload it
+      - name: Sign and upload it
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.draft.outputs.tag }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           extension=""
           [[ "$RUNNER_OS" == Windows ]] && extension=".exe"
-          file="zerolux-$GITHUB_REF_NAME-${{ matrix.target }}$extension"
+          file="$GITHUB_WORKSPACE/zerolux-$TAG-${{ matrix.target }}$extension"
           cp "target/release/zerolux$extension" "$file"
-          gh release upload "$GITHUB_REF_NAME" "$file"
+          cd apps/desktop
+          bun x --bun tauri signer sign --app-version "$ZEROLUX_BUILD_VERSION" "$file"
+          gh release upload "$TAG" "$file" "$file.sig" --clobber
 
   desktop:
     name: Desktop (${{ matrix.name }})
@@ -91,6 +145,14 @@ jobs:
           - { name: Linux x64, os: ubuntu-22.04 }
           - { name: Windows x64, os: windows-2025 }
     runs-on: ${{ matrix.os }}
+    env:
+      ZEROLUX_BUILD_VERSION: ${{ needs.draft.outputs.version }}
+      ZEROLUX_BUILD_CHANNEL: ${{ needs.draft.outputs.channel }}
+      ZEROLUX_BUILD_COMMIT: ${{ needs.draft.outputs.commit }}
+      ZEROLUX_BUILD_BUILT_AT: ${{ needs.draft.outputs.built_at }}
+      ZEROLUX_UPDATE_PUBLIC_KEY: ${{ vars.ZEROLUX_UPDATE_PUBLIC_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - name: Set up (Bun, Rust, uv, LiveKit)
@@ -118,14 +180,18 @@ jobs:
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
             echo "$name=${!name}" >> "$GITHUB_ENV"
           done
+      - name: Configure the version and updater bundles
+        run: bun scripts/release-ci.ts config "${{ runner.temp }}/zerolux-tauri.json"
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           projectPath: apps/desktop
           tauriScript: bun x --bun tauri
-          tagName: ${{ github.ref_name }}
+          tagName: ${{ needs.draft.outputs.tag }}
           releaseDraft: true
+          args: --config ${{ runner.temp }}/zerolux-tauri.json
+          updaterJsonPreferNsis: true
 
   # The mobile app for Android, as an APK for 64-bit ARM phones. Signed with the release key
   # when its secrets are set; otherwise with the debug key, which installs but cannot be
@@ -134,6 +200,11 @@ jobs:
     name: Android
     needs: draft
     runs-on: ubuntu-24.04
+    env:
+      ZEROLUX_BUILD_VERSION: ${{ needs.draft.outputs.version }}
+      ZEROLUX_BUILD_CHANNEL: ${{ needs.draft.outputs.channel }}
+      ZEROLUX_BUILD_COMMIT: ${{ needs.draft.outputs.commit }}
+      ZEROLUX_BUILD_BUILT_AT: ${{ needs.draft.outputs.built_at }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -164,8 +235,9 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          TAG: ${{ needs.draft.outputs.tag }}
         run: |
-          apk="zerolux-$GITHUB_REF_NAME-android-arm64.apk"
+          apk="zerolux-$TAG-android-arm64.apk"
           cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk "$apk"
           if [[ -n "$ANDROID_KEYSTORE" ]]; then
             echo "$ANDROID_KEYSTORE" | base64 --decode > release.keystore
@@ -175,14 +247,78 @@ jobs:
             rm release.keystore
             "$apksigner" verify "$apk"
           fi
-          gh release upload "$GITHUB_REF_NAME" "$apk"
+          gh release upload "$TAG" "$apk" --clobber
 
   publish:
     name: Publish
-    needs: [kernel, desktop, android]
+    needs: [draft, kernel, desktop, android]
     runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ needs.draft.outputs.tag }}
+      CHANNEL: ${{ needs.draft.outputs.channel }}
+      VERSION: ${{ needs.draft.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      ZEROLUX_UPDATE_PUBLIC_KEY: ${{ vars.ZEROLUX_UPDATE_PUBLIC_KEY }}
     steps:
-      - name: Publish the release
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile
+      - name: Install the signature verifier
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends minisign
+      - name: Read the release and current channel pointers
+        id: release
+        run: |
+          mkdir -p "$RUNNER_TEMP/feed/previous"
+          draft="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+          echo "draft=$draft" >> "$GITHUB_OUTPUT"
+          releases="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq '.[].tag_name')"
+          if [[ $'\n'$releases$'\n' == *$'\nupdates\n'* ]]; then
+            assets="$(gh release view updates --json assets --jq '.assets[].name | select(. == "nightly.json" or . == "beta.json" or . == "stable.json")')"
+            while IFS= read -r asset; do
+              [[ -z "$asset" ]] || gh release download updates --pattern "$asset" --dir "$RUNNER_TEMP/feed/previous"
+            done <<< "$assets"
+          fi
+      - name: Assemble and sign the channel feed
+        if: steps.release.outputs.draft == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          gh release download "$TAG" --pattern build.json --pattern latest.json --pattern 'zerolux-*.sig' --dir "$RUNNER_TEMP/feed"
+          gh release view "$TAG" --json body --jq .body > "$RUNNER_TEMP/feed/notes.md"
+          bun scripts/release-ci.ts feed "$RUNNER_TEMP/feed"
+          cd apps/desktop
+          bun x --bun tauri signer sign --app-version "$VERSION" "$RUNNER_TEMP/feed/release.json"
+          bun ../../scripts/release-ci.ts verify "$RUNNER_TEMP/feed/release.json"
+          gh release upload "$TAG" "$RUNNER_TEMP/feed/release.json" "$RUNNER_TEMP/feed/release.json.sig" --clobber
+          while IFS= read -r channel; do
+            bun x --bun tauri signer sign --app-version "$VERSION" "$RUNNER_TEMP/feed/$channel.json"
+            bun ../../scripts/release-ci.ts verify "$RUNNER_TEMP/feed/$channel.json"
+            gh release upload "$TAG" "$RUNNER_TEMP/feed/$channel.json" "$RUNNER_TEMP/feed/$channel.json.sig" --clobber
+          done < "$RUNNER_TEMP/feed/channels"
+      - name: Recover pointers from the published release
+        if: steps.release.outputs.draft != 'true'
+        run: |
+          gh release download "$TAG" --pattern '*.json' --pattern '*.json.sig' --dir "$RUNNER_TEMP/feed"
+          bun scripts/release-ci.ts verify "$RUNNER_TEMP/feed/release.json"
+          for channel in nightly beta stable; do
+            if [[ -f "$RUNNER_TEMP/feed/$channel.json" ]]; then
+              bun scripts/release-ci.ts verify "$RUNNER_TEMP/feed/$channel.json"
+            fi
+          done
+          bun scripts/release-ci.ts restore "$RUNNER_TEMP/feed"
+      - name: Publish immutable artifacts, then advance the channel
+        env:
+          DRAFT: ${{ steps.release.outputs.draft }}
+        run: |
+          if [[ "$DRAFT" == true ]]; then
+            gh release edit "$TAG" --draft=false
+          fi
+          if ! gh release view updates >/dev/null 2>&1; then
+            gh release create updates --target "${{ needs.draft.outputs.commit }}" --prerelease --latest=false --title "Update channels" --notes "Signed update feeds for Nightly, Beta and Stable."
+          fi
+          while IFS= read -r channel; do
+            gh release upload updates "$RUNNER_TEMP/feed/$channel.json" "$RUNNER_TEMP/feed/$channel.json.sig" --clobber
+          done < "$RUNNER_TEMP/feed/channels"

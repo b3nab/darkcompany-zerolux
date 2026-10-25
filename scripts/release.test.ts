@@ -18,10 +18,26 @@ test("only the workspace's version changes in Cargo.toml", () => {
   expect(next).toContain('serde = { version = "1" }');
 });
 
-test("a release version is semver, its pre-release a number", () => {
+test("release stages are ordered independently of their three channels", () => {
   expect(semver.test("0.0.1")).toBe(true);
-  expect(semver.test("0.1.0-1")).toBe(true);
-  expect(semver.test("0.1.0-rc.1")).toBe(false);
+  expect(semver.test("0.0.1-alpha.20261023.1")).toBe(true);
+  expect(semver.test("0.0.1-beta.2")).toBe(true);
+  expect(semver.test("0.0.1-rc.1")).toBe(true);
+  expect(semver.test("0.0.1-alpha.20261023.0")).toBe(false);
+  expect(semver.test("0.1.0-1")).toBe(false);
   expect(semver.test("0.1")).toBe(false);
   expect(semver.test("latest")).toBe(false);
+});
+
+test("mobile store versions remain numeric while desktop keeps the release stage", () => {
+  expect(
+    withVersion("apps/mobile/app.json", '{"version": "0.0.1"}', "0.0.1-rc.2"),
+  ).toBe('{"version": "0.0.1"}');
+  expect(
+    withVersion(
+      "apps/desktop/src-tauri/tauri.conf.json",
+      '{"version": "0.0.1"}',
+      "0.0.1-rc.2",
+    ),
+  ).toBe('{"version": "0.0.1-rc.2"}');
 });

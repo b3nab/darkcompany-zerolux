@@ -3,6 +3,7 @@
 // owner's call, never this script's.
 import { $ } from "bun";
 import { join } from "node:path";
+import { baseVersion, releaseVersion } from "./build-info";
 
 const root = join(import.meta.dir, "..");
 
@@ -14,21 +15,23 @@ export const versioned: [string, RegExp][] = [
   ["apps/mobile/app.json", /("version": ")([^"]+)"/],
 ];
 
-// A pre-release is a number, such as 0.0.1-1: the Windows installer (MSI) takes no other.
-export const semver = /^\d+\.\d+\.\d+(-\d+)?$/;
+export const semver = releaseVersion;
 
 /** The text with its version set, or an error when the file no longer says where it is. */
 export function withVersion(file: string, text: string, version: string) {
   const pattern = versioned.find(([path]) => path === file)?.[1];
   if (!pattern?.test(text)) throw new Error(`${file} has no version to set`);
-  return text.replace(pattern, `$1${version}"`);
+  const value = file.startsWith("apps/mobile/")
+    ? baseVersion(version)
+    : version;
+  return text.replace(pattern, `$1${value}"`);
 }
 
 if (import.meta.main) {
   const version = process.argv[2]?.replace(/^v/, "") ?? "";
   if (!semver.test(version))
     throw new Error(
-      "Usage: bun run release <version>, for example 0.0.1 or 0.0.1-1",
+      "Usage: bun run release <version>, for example 0.0.1-beta.1, 0.0.1-rc.1 or 0.0.1",
     );
   const tag = `v${version}`;
   $.cwd(root);
