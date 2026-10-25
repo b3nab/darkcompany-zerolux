@@ -76,6 +76,7 @@
     "uniwind": "^1.13.0"
   },
   "devDependencies": {
+    "@types/node": "^26.6.5",
     "@types/react": "~19.3.0",
     "typescript": "~6.0.3"
   }
