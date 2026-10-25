@@ -7,7 +7,7 @@ use std::{
 };
 
 #[derive(Parser)]
-#[command(name = "zerolux", version, about = "ZeroLux — dark company OS")]
+#[command(name = "zerolux", version = crate::build::version(), about = "ZeroLux — dark company OS")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -243,6 +243,7 @@ pub async fn run() -> anyhow::Result<()> {
                 expose,
                 data_dir,
                 database,
+                initial_workspace_name: None,
                 web_dir,
                 livekit: None,
                 public: match public_origin {

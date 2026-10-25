@@ -24,6 +24,7 @@ const CARRIED: [&str; 10] = [
 ];
 
 fn main() {
+    build_identity();
     println!("cargo::rustc-check-cfg=cfg(zerolux_carry)");
     println!("cargo::rerun-if-env-changed=ZEROLUX_CARRY");
     let Some(folder) = std::env::var_os("ZEROLUX_CARRY") else {
@@ -84,6 +85,78 @@ fn main() {
         archive.display()
     );
     println!("cargo::rustc-env=ZEROLUX_CARRY_SHA256={digest}");
+}
+
+/// Keep the source identity in the executable, without rewriting release manifests.
+fn build_identity() {
+    use std::{process::Command, time::SystemTime};
+    let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    };
+    // Source changes, commits and checkouts must all invalidate a cached identity.
+    if let Some(files) = git(&[
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+    ]) {
+        for path in files.split('\0').filter(|path| !path.is_empty()) {
+            println!("cargo::rerun-if-changed={}", root.join(path).display());
+        }
+    }
+    for name in ["HEAD", "index", "packed-refs"] {
+        if let Some(path) = git(&["rev-parse", "--git-path", name]) {
+            let path = root.join(path);
+            if path.exists() {
+                println!("cargo::rerun-if-changed={}", path.display());
+            }
+        }
+    }
+    if let Some(reference) = git(&["symbolic-ref", "-q", "HEAD"])
+        && let Some(path) = git(&["rev-parse", "--git-path", &reference])
+    {
+        let path = root.join(path);
+        // A packed branch has no loose ref yet. Watch its nearest existing directory so a
+        // commit creating that ref invalidates the identity without watching a missing file.
+        if let Some(watched) = path.ancestors().find(|path| path.exists()) {
+            println!("cargo::rerun-if-changed={}", watched.display());
+        }
+    }
+    for name in ["VERSION", "CHANNEL", "COMMIT", "BUILT_AT"] {
+        let key = format!("ZEROLUX_BUILD_{name}");
+        println!("cargo::rerun-if-env-changed={key}");
+        let value = std::env::var(&key).unwrap_or_default();
+        println!("cargo::rustc-env={key}={value}");
+    }
+    let commit = git(&["rev-parse", "HEAD"]).unwrap_or_default();
+    let dirty = git(&["status", "--porcelain", "--untracked-files=normal"])
+        .is_some_and(|status| !status.is_empty());
+    let seconds = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("build date")
+        .as_secs();
+    println!("cargo::rustc-env=ZEROLUX_SOURCE_COMMIT={commit}");
+    println!("cargo::rustc-env=ZEROLUX_SOURCE_DIRTY={dirty}");
+    println!("cargo::rustc-env=ZEROLUX_BUILD_UNIX={seconds}");
+    let mut schema = Sha256::new();
+    for provider in ["sqlite", "postgres"] {
+        let path = root.join(format!(
+            "crates/zerolux/migrations/{provider}/0001_bootstrap.sql"
+        ));
+        schema.update(std::fs::read(path).expect("bootstrap schema"));
+    }
+    println!(
+        "cargo::rustc-env=ZEROLUX_BUILD_SCHEMA={:x}",
+        schema.finalize()
+    );
 }
 
 /// Every file under `dir`, with its name relative to `root` in `/` form.

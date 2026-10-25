@@ -26,6 +26,9 @@ pub struct ServerOptions {
     pub data_dir: PathBuf,
     /// The workspace's data: a SQLite file (usually in `data_dir`) or a PostgreSQL server.
     pub database: Location,
+    /// An embedder's name for a new workspace, before its first account is bound.
+    /// Existing workspace connections leave this unset.
+    pub initial_workspace_name: Option<String>,
     pub web_dir: PathBuf,
     /// An explicit configuration avoids inheriting service credentials in embedders/tests.
     /// `None` retains the CLI's LIVEKIT_* environment configuration.
@@ -84,6 +87,14 @@ impl Server {
         let store = Store::open_at(&options.database)
             .await
             .context("Open the database")?;
+        if let Some(name) = options.initial_workspace_name
+            && !store.owner_bound().await?
+        {
+            store
+                .set_workspace_name(crate::model::SetWorkspaceName { name })
+                .await
+                .context("Name the new workspace")?;
+        }
         // This kernel's host: the agent sessions it starts live here, and only it links them.
         let host_id = host_id(&data_dir).await?;
         let store = store.hosted(host_id).with_people(data_dir.join("people"));

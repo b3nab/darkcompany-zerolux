@@ -2111,7 +2111,8 @@ async fn a_computer_joins_as_a_host_and_answers_over_its_channel() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     let pong = runtime.hosts.call(&host, "ping", json!({})).await.unwrap();
-    assert_eq!(pong["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(pong["version"], zerolux::build::version());
+    assert_eq!(pong["build"]["commit"], zerolux::build::commit());
     let unknown = runtime
         .hosts
         .call(&host, "nothing", json!({}))

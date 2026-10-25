@@ -2787,7 +2787,8 @@ async fn health(State(state): State<AppState>) -> Result<Json<Value>, Error> {
     };
     Ok(Json(json!({
         "name": "zerolux",
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": crate::build::version(),
+        "build": crate::build::info(),
         "api_version": API_VERSION,
         "capabilities": capabilities,
         "workspace": workspace,

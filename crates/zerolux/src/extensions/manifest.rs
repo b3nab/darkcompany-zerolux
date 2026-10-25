@@ -148,10 +148,11 @@ pub fn parts_of(manifest: &Manifest, folder: &std::path::Path) -> Vec<&'static s
 }
 
 /// This kernel's version as extensions' ranges are matched against it: a build before a
-/// release, such as `0.0.1-dev`, counts as that release.
+/// release, such as `0.0.1-alpha.20261023.1`, counts as that release.
 pub fn kernel_version() -> semver::Version {
-    let mut version = semver::Version::parse(env!("CARGO_PKG_VERSION")).expect("a version");
+    let mut version = semver::Version::parse(crate::build::version()).expect("a version");
     version.pre = semver::Prerelease::EMPTY;
+    version.build = semver::BuildMetadata::EMPTY;
     version
 }
 

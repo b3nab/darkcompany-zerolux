@@ -917,7 +917,7 @@ impl Extensions {
                 .request_within(
                     "initialize",
                     json!({"extension": {"id": id, "version": manifest.extension.version},
-                        "kernel": {"version": env!("CARGO_PKG_VERSION"), "api": manifest::API},
+                        "kernel": {"version": crate::build::version(), "api": manifest::API},
                         "settings": settings, "folder": folder, "storage": storage}),
                     std::time::Duration::from_secs(seconds),
                 )

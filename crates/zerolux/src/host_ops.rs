@@ -185,7 +185,7 @@ pub async fn folder(op: &str, folder: &Path, params: &Value) -> Result<Value> {
 /// What a joined computer answers when the kernel asks.
 pub async fn answer(op: &str, params: Value) -> Result<Value> {
     match op {
-        "ping" => Ok(json!({"version": env!("CARGO_PKG_VERSION")})),
+        "ping" => Ok(json!({"version": crate::build::version(), "build": crate::build::info()})),
         "record" => {
             let record: RecordRef =
                 serde_json::from_value(params["record"].clone()).context("Invalid session")?;

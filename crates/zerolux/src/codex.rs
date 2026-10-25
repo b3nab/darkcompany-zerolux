@@ -205,7 +205,7 @@ impl CodexRpc {
         let rpc: Self = tokio::time::timeout(timeout, connection)
             .await
             .context("Codex connection timed out")??;
-        rpc.request("initialize", json!({"clientInfo":{"name":"zerolux","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}})).await?;
+        rpc.request("initialize", json!({"clientInfo":{"name":"zerolux","version":crate::build::version()},"capabilities":{"experimentalApi":true}})).await?;
         rpc.send(json!({"method":"initialized","params":{}}))
             .await?;
         Ok(rpc)

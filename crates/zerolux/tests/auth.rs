@@ -28,6 +28,7 @@ fn options(dir: &Path, database: Location) -> ServerOptions {
         expose: None,
         data_dir: dir.join("data"),
         database,
+        initial_workspace_name: None,
         web_dir: dir.join("web"),
         livekit: Some(LiveKitConfig {
             url: None,
@@ -49,7 +50,16 @@ struct Kernel {
 
 impl Kernel {
     async fn start(dir: &Path, database: Location) -> Self {
-        let server = Server::start(options(dir, database)).await.unwrap();
+        Self::start_named(dir, database, None).await
+    }
+
+    async fn start_named(dir: &Path, database: Location, name: Option<&str>) -> Self {
+        let server = Server::start(ServerOptions {
+            initial_workspace_name: name.map(str::to_owned),
+            ..options(dir, database)
+        })
+        .await
+        .unwrap();
         let url = server.url();
         Self {
             server,
@@ -157,8 +167,14 @@ async fn the_first_account_becomes_the_owner_and_signs_in_after_restart() {
     }
     let dir = tempfile::tempdir().unwrap();
     let database = db::TestDatabase::new(dir.path().join("data/zerolux.db")).await;
-    let kernel = Kernel::start(dir.path(), database.location().clone()).await;
+    let kernel = Kernel::start_named(
+        dir.path(),
+        database.location().clone(),
+        Some("Desktop fixture"),
+    )
+    .await;
     let health = kernel.health().await;
+    assert_eq!(health["workspace"]["name"], "Desktop fixture");
     assert_eq!(health["api_version"], 2);
     assert!(
         health["capabilities"]
@@ -178,6 +194,17 @@ async fn the_first_account_becomes_the_owner_and_signs_in_after_restart() {
     // Nobody is the owner without credentials any more.
     assert_eq!(
         kernel.get("/api/workspace", None).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        kernel
+            .post(
+                "/api/workspace",
+                None,
+                json!({ "name": "Unauthenticated rename" })
+            )
+            .await
+            .status(),
         StatusCode::UNAUTHORIZED
     );
     // A name the owner may not have is refused before an account exists; the kernel's own
@@ -289,7 +316,16 @@ async fn the_first_account_becomes_the_owner_and_signs_in_after_restart() {
         "the service and the kernel are gone"
     );
     // After a restart the account, its sessions and the binding are still there.
-    let kernel = Kernel::start(dir.path(), database.location().clone()).await;
+    let kernel = Kernel::start_named(
+        dir.path(),
+        database.location().clone(),
+        Some("Must not replace the claimed workspace's name"),
+    )
+    .await;
+    assert_eq!(
+        kernel.health().await["workspace"]["name"],
+        "Desktop fixture"
+    );
     assert_eq!(kernel.health().await["auth"]["setup_required"], false);
     assert_eq!(
         kernel.get("/api/workspace", Some(&token)).await.status(),

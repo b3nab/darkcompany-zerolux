@@ -1713,6 +1713,27 @@ async fn token_service() -> (String, Arc<std::sync::Mutex<Vec<Value>>>) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_extension_keeps_secrets_and_signs_in_to_another_service() {
+    // Inspect the persisted value directly on either backend, including SQLite's WAL.
+    async fn stored_secret(database: &db::TestDatabase, key: &str) -> String {
+        use sea_orm::{ConnectionTrait, Statement};
+        let store = database.open().await;
+        let db = store.db();
+        let raw: String = db
+            .query_one_raw(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT value_json FROM extension_values WHERE extension_id = $1 AND kind = 'secret' AND key = $2",
+                ["zerolux.account".into(), key.into()],
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get_by_index(0)
+            .unwrap();
+        let sealed: String = serde_json::from_str(&raw).expect("a secret is stored sealed");
+        assert!(sealed.starts_with("sealed:v1:"));
+        sealed
+    }
+
     for program in ["livekit-server", "bun"] {
         if std::process::Command::new(program)
             .arg("--version")
@@ -1754,9 +1775,11 @@ async fn an_extension_keeps_secrets_and_signs_in_to_another_service() {
     assert_eq!(recalled["result"], json!({"kept": true, "length": 11}));
     let (_, left) = run("forget", json!({"name": "home"})).await;
     assert_eq!(left["result"]["names"], json!(["key:work"]));
-    let stored = std::fs::read(dir.path().join("kernel.db")).unwrap();
-    let plain = |needle: &str| stored.windows(needle.len()).any(|w| w == needle.as_bytes());
-    assert!(!plain("key-of-work"), "secrets are not kept in the clear");
+    let stored = stored_secret(&database, "vault/key:work").await;
+    assert!(
+        !stored.contains("key-of-work"),
+        "secrets are not kept in the clear"
+    );
 
     // A sign-in: the person opens the service's page, which sends them back to the kernel.
     let (service, sent) = token_service().await;
@@ -1809,9 +1832,8 @@ async fn an_extension_keeps_secrets_and_signs_in_to_another_service() {
     let (_, token) = run("token", json!({})).await;
     assert_eq!(token["result"]["access_token"], "access-2");
     assert_eq!(sent.lock().unwrap().len(), 2, "renewed once");
-    let stored = std::fs::read(dir.path().join("kernel.db")).unwrap();
-    let plain = |needle: &str| stored.windows(needle.len()).any(|w| w == needle.as_bytes());
-    assert!(!plain("refresh-1") && !plain("access-2"));
+    let stored = stored_secret(&database, "vault/account:main").await;
+    assert!(!stored.contains("refresh-1") && !stored.contains("access-2"));
     drop(database);
     runtime.shutdown().await.unwrap();
     server.abort();

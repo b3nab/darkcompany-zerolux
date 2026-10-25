@@ -25,6 +25,7 @@ fn options(dir: &std::path::Path, address: SocketAddr) -> ServerOptions {
         expose: None,
         data_dir: dir.join("data"),
         database: zerolux::db::Location::Sqlite(dir.join("data/zerolux.db")),
+        initial_workspace_name: None,
         web_dir: dir.join("web"),
         // Always the managed local LiveKit, whatever LIVEKIT_* is set in the environment.
         livekit: Some(LiveKitConfig {
