@@ -19,6 +19,197 @@ mod support {
     }
 }
 
+async fn handoff_info(
+    directory: &std::path::Path,
+    different: Option<&str>,
+) -> zerolux::handoff::Info {
+    for _ in 0..200 {
+        if let Ok(info) = zerolux::handoff::describe(directory).await
+            && different.is_none_or(|instance| instance != info.instance)
+        {
+            return info;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("The temporary CLI did not expose its handoff channel");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_commits_the_same_files_host_and_port_without_releasing_the_backup_lease() {
+    if !support::installed() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("separate-db")).unwrap();
+    std::fs::create_dir_all(dir.path().join("data/storage")).unwrap();
+    std::fs::write(dir.path().join("data/storage/kept.txt"), "same files").unwrap();
+    let mut config = options(dir.path(), "127.0.0.1:0".parse().unwrap());
+    config.database = zerolux::db::Location::Sqlite(dir.path().join("separate-db/company.sqlite"));
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let original = config.clone();
+    let cli = tokio::spawn(zerolux::server::serve_cli_until(original, async {
+        let _ = stopped.await;
+    }));
+    let info = handoff_info(&config.data_dir, None).await;
+    let profile = uuid::Uuid::new_v4().to_string();
+    assert_eq!(
+        info.database,
+        dunce::canonicalize(dir.path().join("separate-db/company.sqlite")).unwrap()
+    );
+    let transfer = zerolux::handoff::Transfer::begin(&info, &profile)
+        .await
+        .unwrap();
+    let lease = zerolux::lease::Lease::acquire(&config.database).unwrap();
+    assert!(zerolux::lease::Lease::acquire(&config.database).is_err());
+    config.address = info.network.address();
+    let embedded = Server::start_with_lease(config.clone(), lease)
+        .await
+        .unwrap();
+    assert!(zerolux::lease::Lease::acquire(&config.database).is_err());
+    transfer.finish(true).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), cli)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    drop(stop);
+    let health: Value = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .get(format!("{}/api/health", embedded.url()))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(health["workspace"]["id"], info.workspace_id);
+    assert_eq!(embedded.address(), info.network.address());
+    assert_eq!(
+        std::fs::read_to_string(config.data_dir.join("host-id"))
+            .unwrap()
+            .trim(),
+        info.host_id
+    );
+    assert_eq!(
+        std::fs::read_to_string(config.data_dir.join("storage/kept.txt")).unwrap(),
+        "same files"
+    );
+    assert!(
+        zerolux::handoff::describe(&config.data_dir).await.is_err(),
+        "A desktop-owned server cannot be stolen by another desktop"
+    );
+    embedded.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_disconnect_resumes_the_cli_and_stale_descriptions_cannot_stop_it() {
+    if !support::installed() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let config = options(dir.path(), "127.0.0.1:0".parse().unwrap());
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let cli = tokio::spawn(zerolux::server::serve_cli_until(config.clone(), async {
+        let _ = stopped.await;
+    }));
+    let info = handoff_info(&config.data_dir, None).await;
+    let profile = uuid::Uuid::new_v4().to_string();
+    let mut wrong = info.clone();
+    wrong.workspace_id = "another-workspace".into();
+    assert!(
+        zerolux::handoff::Transfer::begin(&wrong, &profile)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        handoff_info(&config.data_dir, None).await.instance,
+        info.instance
+    );
+    let transfer = zerolux::handoff::Transfer::begin(&info, &profile)
+        .await
+        .unwrap();
+    drop(transfer);
+    let resumed = handoff_info(&config.data_dir, Some(&info.instance)).await;
+    assert_eq!(resumed.workspace_id, info.workspace_id);
+    assert_eq!(resumed.host_id, info.host_id);
+    assert_eq!(resumed.network, info.network);
+    let transfer = zerolux::handoff::Transfer::begin(&resumed, &profile)
+        .await
+        .unwrap();
+    transfer.finish(false).await.unwrap();
+    let again = handoff_info(&config.data_dir, Some(&resumed.instance)).await;
+    assert_eq!(again.workspace_id, info.workspace_id);
+    stop.send(()).unwrap();
+    cli.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handoff_commit_survives_a_lost_acknowledgement_and_its_receipt_is_profile_bound() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    if !support::installed() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = options(dir.path(), "127.0.0.1:0".parse().unwrap());
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let cli = tokio::spawn(zerolux::server::serve_cli_until(config.clone(), async {
+        let _ = stopped.await;
+    }));
+    let info = handoff_info(&config.data_dir, None).await;
+    let profile = uuid::Uuid::new_v4().to_string();
+    let stream = zerolux::platform::Local::connect(
+        &zerolux::local_control::endpoint_of(&config.data_dir).unwrap(),
+    )
+    .await
+    .unwrap();
+    let (read, mut write) = tokio::io::split(stream);
+    let mut lines = tokio::io::BufReader::new(read).lines();
+    write.write_all(format!("{}\n", serde_json::json!({"method": "kernel.handoff", "params": {"kernel": info, "profile": profile}})).as_bytes()).await.unwrap();
+    let ready: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert!(ready["result"]["info"].is_object());
+    let lease = zerolux::lease::Lease::acquire(&config.database).unwrap();
+    config.address = info.network.address();
+    let embedded = Server::start_with_lease(config, lease).await.unwrap();
+    write.write_all(format!("{}\n", serde_json::json!({"method": "kernel.commit", "params": {"instance": info.instance, "profile": profile}})).as_bytes()).await.unwrap();
+    write.flush().await.unwrap();
+    drop(write);
+    drop(lines); // the decision reaches the CLI; its acknowledgement cannot reach us
+    tokio::time::timeout(std::time::Duration::from_secs(5), cli)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    drop(stop);
+    let decision = zerolux::handoff::Decision::read(&info, &profile)
+        .await
+        .unwrap();
+    assert!(decision.committed);
+    drop(decision);
+    assert!(
+        zerolux::handoff::Decision::read(&info, &uuid::Uuid::new_v4().to_string())
+            .await
+            .is_err()
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(
+                info.directory
+                    .join(format!("handoff-{}.json", info.instance))
+            )
+            .unwrap()
+            .permissions()
+            .mode()
+                & 0o777,
+            0o600
+        );
+    }
+    embedded.shutdown().await.unwrap();
+}
+
 fn options(dir: &std::path::Path, address: SocketAddr) -> ServerOptions {
     ServerOptions {
         address,

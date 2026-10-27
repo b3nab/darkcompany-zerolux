@@ -1,5 +1,5 @@
 //! Shared CLI entrypoint, including the private helpers used by attached harnesses.
-use crate::server::{Server, ServerOptions};
+use crate::server::ServerOptions;
 use clap::{Parser, Subcommand};
 use std::{
     net::{IpAddr, SocketAddr},
@@ -238,7 +238,7 @@ pub async fn run() -> anyhow::Result<()> {
                 Some(resources) => resources.join("auth/server.js"),
                 None => "services/auth/src/server.ts".into(),
             });
-            Server::start(ServerOptions {
+            crate::server::serve_cli(ServerOptions {
                 address: SocketAddr::new(host, port),
                 expose,
                 data_dir,
@@ -258,8 +258,6 @@ pub async fn run() -> anyhow::Result<()> {
                     entry: auth_entry,
                 }),
             })
-            .await?
-            .run_until(crate::server::shutdown_signal())
             .await?;
         }
         Command::AgentLink => crate::agent_link::cli().await?,
