@@ -146,6 +146,8 @@ jobs:
           - { name: Windows x64, os: windows-2025 }
     runs-on: ${{ matrix.os }}
     env:
+      # Tauri names the installed binary zerolux; keep its output separate from the CLI.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/desktop
       ZEROLUX_BUILD_VERSION: ${{ needs.draft.outputs.version }}
       ZEROLUX_BUILD_CHANNEL: ${{ needs.draft.outputs.channel }}
       ZEROLUX_BUILD_COMMIT: ${{ needs.draft.outputs.commit }}
@@ -158,7 +160,8 @@ jobs:
       - name: Set up (Bun, Rust, uv, LiveKit)
         uses: ./.github/actions/setup
         with:
-          cache-key: release
+          cache-key: release-desktop
+          cache-target: target/desktop
           livekit: "true"
       # Signed and notarized with the Apple Developer ID when its secrets are set; otherwise
       # signed ad hoc, which Apple Silicon needs to open it at all.

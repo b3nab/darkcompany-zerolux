@@ -5,6 +5,9 @@ inputs:
   cache-key:
     description: What the Rust build cache is kept under, beside the runner's system.
     default: build
+  cache-target:
+    description: Cargo output directory relative to the repository root.
+    default: target
   livekit:
     description: Also build the LiveKit server, first on the PATH.
     default: "false"
@@ -42,6 +45,7 @@ runs:
     - uses: Swatinem/rust-cache@v2
       with:
         key: ${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-key }}
+        workspaces: . -> ${{ inputs.cache-target }}
     - uses: oven-sh/setup-bun@v2
       with:
         bun-version: "1.4.2"
