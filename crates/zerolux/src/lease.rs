@@ -10,18 +10,35 @@ use anyhow::{Context, Result};
 use crate::db::Location;
 
 /// Held for the kernel's lifetime; dropping it releases the workspace.
-pub struct Lease(#[allow(dead_code)] Option<std::fs::File>);
+pub struct Lease(
+    #[allow(dead_code)] Option<std::fs::File>,
+    Option<std::path::PathBuf>,
+);
 
 impl Lease {
     pub fn acquire(location: &Location) -> Result<Self> {
         match location {
-            Location::Sqlite(path) => file(path).map(|file| Self(Some(file))),
-            Location::Postgres(_) => Ok(Self(None)),
+            Location::Sqlite(path) => {
+                let (file, path) = file(path)?;
+                Ok(Self(Some(file), Some(path)))
+            }
+            Location::Postgres(_) => Ok(Self(None, None)),
         }
+    }
+
+    pub fn ensure_for(&self, location: &Location) -> Result<()> {
+        anyhow::ensure!(
+            match location {
+                Location::Sqlite(path) => self.1.as_ref() == Some(&dunce::canonicalize(path)?),
+                Location::Postgres(_) => self.1.is_none(),
+            },
+            "The database lease belongs to a different workspace"
+        );
+        Ok(())
     }
 }
 
-fn file(database: &Path) -> Result<std::fs::File> {
+fn file(database: &Path) -> Result<(std::fs::File, std::path::PathBuf)> {
     // The directory exists by now; the database may not yet. Resolve the directory, keep the
     // file name: a symlinked database still maps to one lease.
     let directory = database
@@ -74,5 +91,5 @@ fn file(database: &Path) -> Result<std::fs::File> {
             database.display()
         )
     })?;
-    Ok(file)
+    Ok((file, real))
 }
