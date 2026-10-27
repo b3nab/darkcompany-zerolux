@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { basename } from "node:path";
 import type {
   Options,
   Query,
@@ -25,6 +26,7 @@ function fixture(
     managed?: boolean;
     initial?: { model: string; effort: string };
     appliedModel?: string;
+    subscriberStart?: (executable: string) => void;
   } = {},
 ) {
   const session = {
@@ -178,7 +180,8 @@ function fixture(
       },
       execution: options.execution,
       subscriber: () => ({
-        start: async (_executable, _base, token) => {
+        start: async (executable, _base, token) => {
+          options.subscriberStart?.(executable);
           if (failStart > 0) {
             failStart--;
             throw new Error("subscriber failed");
@@ -195,11 +198,11 @@ function fixture(
       }),
     },
   );
-  const bind = (token: string, resume = false) =>
+  const bind = (token: string, resume = false, executable = "/bin/zerolux") =>
     runner.handle("bind", {
       base_url: "http://127.0.0.1:4310",
       token,
-      executable: "/bin/zerolux",
+      executable,
       resume,
     }) as Promise<{ link_id: string }>;
   return {
@@ -401,6 +404,61 @@ test("a new token takes over the same link only after prepare; the session goes 
   // Nothing went out with the old token after prepare answered.
   expect(f.calls.slice(before).every((c) => c.token === "t2")).toBe(true);
   expect(f.subscribers).toEqual({ started: ["t1", "t2"], stopped: 1 });
+});
+
+test("a surviving legacy subscriber can recover with the desktop's compatible executable without restarting or resending", async () => {
+  const f = fixture(false, {
+    managed: true,
+    subscriberStart: (executable) => {
+      // The already running bridge retains the earlier executable-name contract.
+      if (basename(executable) !== "zerolux")
+        throw new Error("Expected the installed ZeroLux executable");
+    },
+  });
+  try {
+    const { link_id } = await f.bind("cli");
+    f.message("in-flight", "work already sent");
+    await f.runner.agent.refresh();
+    f.state("running");
+    await tick();
+    expect(f.inputs).toHaveLength(1);
+    expect(f.inbox.deliveries[0]?.status).toBe("uncertain");
+    const inputs = structuredClone(f.inputs);
+
+    await f.runner.handle("prepare", { link_id });
+    await expect(
+      f.bind(
+        "failed-desktop",
+        true,
+        "/Applications/ZeroLux.app/Contents/MacOS/zerolux-desktop",
+      ),
+    ).rejects.toThrow("Expected the installed ZeroLux executable");
+    expect(f.runner.describe()).toMatchObject({ started: true, bound: false });
+
+    expect(
+      await f.bind(
+        "desktop",
+        true,
+        "/Applications/ZeroLux.app/Contents/MacOS/zerolux",
+      ),
+    ).toEqual({ link_id });
+    await f.runner.agent.refresh();
+    await tick();
+    expect(f.runner.describe()).toMatchObject({
+      native_session_id: "native",
+      started: true,
+      bound: true,
+    });
+    expect(f.starts).toHaveLength(1);
+    expect(f.interrupts() + f.closes()).toBe(0);
+    expect(f.inputs).toEqual(inputs);
+    expect(f.subscribers.started).toEqual(["cli", "desktop"]);
+    expect(
+      f.calls.filter((call) => call.path.endsWith("/dispatch")),
+    ).toHaveLength(1);
+  } finally {
+    f.runner.agent.close();
+  }
 });
 
 test("prepare answers only once requests in flight have ended", async () => {

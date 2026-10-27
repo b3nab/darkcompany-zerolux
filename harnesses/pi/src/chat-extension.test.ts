@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import {
+  copyFile,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -188,12 +190,18 @@ printf 'closed' > "$HOME/subscriber-closed"
   15000,
 );
 
-unixTest.each([false, true])(
-  "a kernel relink with a new token replaces the live link and closes the old subscriber (pi busy: %p)",
-  async (busy) => {
+unixTest.each([
+  ["zerolux", false],
+  ["zerolux", true],
+  ["zerolux-desktop", false],
+  ["zerolux-desktop", true],
+] as const)(
+  "a CLI-to-desktop %s relink preserves the native session (pi busy: %p)",
+  async (binary, busy) => {
     const root = await mkdtemp(join(tmpdir(), "zpr-"));
     const workspace = await realpath(root),
-      executable = join(root, "zerolux");
+      executable = join(root, "zerolux"),
+      desktopExecutable = join(root, "desktop", binary);
     // Each subscriber records its token on join and its exit on stdin EOF.
     await writeFile(
       executable,
@@ -206,6 +214,8 @@ printf 'closed' > "$HOME/$name-closed"
 `,
       { mode: 0o700 },
     );
+    await mkdir(join(root, "desktop"));
+    await copyFile(executable, desktopExecutable);
     const statuses: string[] = [];
     const server = Bun.serve({
       hostname: "127.0.0.1",
@@ -285,7 +295,7 @@ printf 'closed' > "$HOME/$name-closed"
           ...(workspace_id === null ? {} : { workspace_id }),
           base_url: server.url.origin,
           token,
-          executable,
+          executable: token === "TOKEN_2" ? desktopExecutable : executable,
         });
       const first = await pair("TOKEN_1");
       expect(first.ok).toBe(true);
@@ -306,14 +316,13 @@ printf 'closed' > "$HOME/$name-closed"
       expect(
         await readFile(join(root, "second-closed"), "utf8").catch(() => null),
       ).toBe(null);
-      expect(
-        (
-          await rpc(record.endpoint, {
-            nonce: record.nonce,
-            method: "describe",
-          })
-        ).paired,
-      ).toBe(true);
+      const described = await rpc(record.endpoint, {
+        nonce: record.nonce,
+        method: "describe",
+      });
+      expect(described.paired).toBe(true);
+      expect(described.native_session_id).toBe(record.native_session_id);
+      expect(described.instance_id).toBe(record.instance_id);
       // The live pi also lists the machine's pi sessions through its SDK, in-process.
       const listed = await rpc(record.endpoint, {
         nonce: record.nonce,
