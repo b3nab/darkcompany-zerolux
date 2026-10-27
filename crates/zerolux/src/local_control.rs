@@ -56,7 +56,16 @@ fn endpoint_for(data_dir: &Path) -> Result<String> {
 
 /// Listens until the kernel stops, answering each connection's requests as the owner.
 pub async fn serve(data_dir: &Path, runtime: Arc<ChatRuntime>) -> Result<()> {
+    serve_with_handoff(data_dir, runtime, None).await
+}
+
+pub(crate) async fn serve_with_handoff(
+    data_dir: &Path,
+    runtime: Arc<ChatRuntime>,
+    handoff: Option<crate::handoff::Control>,
+) -> Result<()> {
     let endpoint = endpoint_for(data_dir)?;
+    let mut connections = tokio::task::JoinSet::new();
     #[cfg(unix)]
     {
         let _ = std::fs::remove_file(&endpoint);
@@ -69,7 +78,8 @@ pub async fn serve(data_dir: &Path, runtime: Arc<ChatRuntime>) -> Result<()> {
         std::fs::write(data_dir.join(ENDPOINT_FILE), &endpoint)?;
         loop {
             let (stream, _) = listener.accept().await?;
-            tokio::spawn(connection(stream, runtime.clone()));
+            while connections.try_join_next().is_some() {}
+            connections.spawn(connection(stream, runtime.clone(), handoff.clone()));
         }
     }
     #[cfg(windows)]
@@ -87,15 +97,75 @@ pub async fn serve(data_dir: &Path, runtime: Arc<ChatRuntime>) -> Result<()> {
             server = ServerOptions::new()
                 .reject_remote_clients(true)
                 .create(&endpoint)?;
-            tokio::spawn(connection(connected, runtime.clone()));
+            while connections.try_join_next().is_some() {}
+            connections.spawn(connection(connected, runtime.clone(), handoff.clone()));
         }
     }
 }
 
-async fn connection<S: AsyncRead + AsyncWrite + Unpin>(stream: S, runtime: Arc<ChatRuntime>) {
+async fn connection<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    stream: S,
+    runtime: Arc<ChatRuntime>,
+    handoff: Option<crate::handoff::Control>,
+) {
     let (read, mut write) = tokio::io::split(stream);
     let mut lines = BufReader::new(read).lines();
     while let Ok(Some(line)) = lines.next_line().await {
+        if let Ok(request) = serde_json::from_str::<Value>(&line)
+            && matches!(
+                request["method"].as_str(),
+                Some("kernel.describe" | "kernel.handoff")
+            )
+        {
+            if request["method"] == "kernel.handoff"
+                && let Some(control) = handoff.clone()
+            {
+                // This transaction outlives the runtime it stops. It retains no runtime or
+                // database handle; every other local request is cancelled with the listener.
+                tokio::spawn(async move {
+                    if let Err(error) = control.exchange(&request, &mut lines, &mut write).await {
+                        let _ = crate::handoff::write_answer(
+                            &mut write,
+                            json!({"error": format!("{error:#}")}),
+                        )
+                        .await;
+                    }
+                });
+                return;
+            }
+            let result = match handoff.as_ref() {
+                Some(control) if request["method"] == "kernel.describe" => {
+                    crate::handoff::write_answer(
+                        &mut write,
+                        json!({"result": control.configuration.info}),
+                    )
+                    .await
+                }
+                Some(control) => control.exchange(&request, &mut lines, &mut write).await,
+                None => Err(anyhow::anyhow!(
+                    "This kernel is not a CLI workspace available for adoption"
+                )),
+            };
+            if let Err(error) = result {
+                let _ = crate::handoff::write_answer(
+                    &mut write,
+                    json!({"error": format!("{error:#}")}),
+                )
+                .await;
+            }
+            return;
+        }
+        if handoff
+            .as_ref()
+            .is_some_and(|control| control.busy.load(std::sync::atomic::Ordering::Acquire))
+        {
+            let _ = crate::handoff::write_answer(
+                &mut write,
+                json!({"error": "The kernel is handing this workspace to the desktop"}),
+            )
+            .await;
+            return;
+        }
         let answer = match serde_json::from_str::<Value>(&line) {
             Ok(request) => match answer(&runtime, &request).await {
                 Ok(result) => json!({"result": result}),

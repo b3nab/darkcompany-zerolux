@@ -19,6 +19,7 @@ use crate::{
     store::Store,
 };
 
+#[derive(Clone)]
 pub struct ServerOptions {
     pub address: SocketAddr,
     pub expose: Option<IpAddr>,
@@ -52,6 +53,20 @@ pub struct Server {
 
 impl Server {
     pub async fn start(options: ServerOptions) -> Result<Self> {
+        Self::start_inner(options, None, None).await
+    }
+
+    /// Continue ownership without releasing the lease between an offline backup and start.
+    pub async fn start_with_lease(options: ServerOptions, lease: Lease) -> Result<Self> {
+        lease.ensure_for(&options.database)?;
+        Self::start_inner(options, Some(lease), None).await
+    }
+
+    async fn start_inner(
+        options: ServerOptions,
+        lease: Option<Lease>,
+        handoff: Option<tokio::sync::mpsc::Sender<crate::handoff::Request>>,
+    ) -> Result<Self> {
         if !options.address.ip().is_loopback() {
             bail!("The kernel listens on this computer; use --expose for other devices");
         }
@@ -83,7 +98,10 @@ impl Server {
             .context("Create the data directory")?;
         // One running kernel per SQLite workspace: the lease comes before migrations and
         // before anything is started for the workspace. Held until cleanup ends.
-        let lease = Lease::acquire(&options.database)?;
+        let lease = match lease {
+            Some(lease) => lease,
+            None => Lease::acquire(&options.database)?,
+        };
         let store = Store::open_at(&options.database)
             .await
             .context("Open the database")?;
@@ -97,10 +115,50 @@ impl Server {
         }
         // This kernel's host: the agent sessions it starts live here, and only it links them.
         let host_id = host_id(&data_dir).await?;
-        let store = store.hosted(host_id).with_people(data_dir.join("people"));
+        let store = store
+            .hosted(host_id.clone())
+            .with_people(data_dir.join("people"));
         store.register_host().await?;
         store.adopt_read_positions().await?;
         let workspace = store.workspace_info().await?;
+        let livekit_config = options
+            .livekit
+            .unwrap_or_else(|| LiveKitConfig::from_env(data_dir.clone()));
+        let handoff = match (handoff, &options.database) {
+            (Some(send), Location::Sqlite(database)) => Some(crate::handoff::Control {
+                configuration: crate::handoff::Configuration {
+                    info: crate::handoff::Info {
+                        instance: uuid::Uuid::new_v4().to_string(),
+                        workspace_id: workspace.id.clone(),
+                        workspace_name: workspace.name.clone(),
+                        host_id,
+                        version: crate::build::version().to_owned(),
+                        schema: crate::build::schema().to_owned(),
+                        directory: dunce::canonicalize(&data_dir)?,
+                        database: dunce::canonicalize(database)?,
+                        network: crate::handoff::Network {
+                            listen: address.ip(),
+                            port: address.port(),
+                            expose: options.expose,
+                            public_origin: options
+                                .public
+                                .as_ref()
+                                .map(|public| public.origin().to_owned()),
+                            public_livekit_url: options
+                                .public
+                                .as_ref()
+                                .and_then(|public| public.livekit_url().map(str::to_owned)),
+                        },
+                        external_livekit: livekit_config.url.is_some(),
+                        authenticated: options.auth.is_some(),
+                    },
+                    livekit: livekit_config.clone(),
+                },
+                send,
+                busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            }),
+            _ => None,
+        };
         let base_url = format!("http://{address}");
         let auth = match &options.auth {
             Some(entry) => {
@@ -146,14 +204,9 @@ impl Server {
             None => None,
         };
         let livekit = Arc::new(
-            LiveKit::start_exposed(
-                options
-                    .livekit
-                    .unwrap_or_else(|| LiveKitConfig::from_env(data_dir.clone())),
-                options.expose,
-            )
-            .await?
-            .for_workspace(&workspace.id),
+            LiveKit::start_exposed(livekit_config, options.expose)
+                .await?
+                .for_workspace(&workspace.id),
         );
         let links = std::path::absolute(data_dir.join("links"))?;
         let started = match options.runner {
@@ -259,7 +312,9 @@ impl Server {
             let control = {
                 let (data_dir, runtime) = (std::path::absolute(&data_dir)?, runtime.clone());
                 tokio::spawn(async move {
-                    if let Err(error) = crate::local_control::serve(&data_dir, runtime).await {
+                    if let Err(error) =
+                        crate::local_control::serve_with_handoff(&data_dir, runtime, handoff).await
+                    {
                         tracing::warn!(error = format!("{error:#}"), "Local channel stopped");
                     }
                 })
@@ -379,6 +434,92 @@ impl Drop for Server {
 
 async fn stopping(mut stopped: watch::Receiver<bool>) {
     let _ = stopped.wait_for(|stop| *stop).await;
+}
+
+/// The terminal remains the recovery owner until an embedder commits the handoff.
+/// A lost acknowledgement never authorizes killing the new owner or restoring a database.
+pub async fn serve_cli(options: ServerOptions) -> Result<()> {
+    use std::io::IsTerminal;
+    // An interactive CLI may relinquish its workspace. A service manager may restart a
+    // non-interactive process after it exits, so it gets no adoption capability.
+    if !std::io::stdin().is_terminal() {
+        return Server::start(options)
+            .await?
+            .run_until(shutdown_signal())
+            .await;
+    }
+    serve_cli_until(options, shutdown_signal()).await
+}
+
+/// The same supervisor with an explicit shutdown request, including temporary tests.
+pub async fn serve_cli_until(
+    mut options: ServerOptions,
+    signal: impl Future<Output = ()>,
+) -> Result<()> {
+    options.data_dir = std::path::absolute(&options.data_dir)?;
+    if let Location::Sqlite(path) = &mut options.database {
+        *path = std::path::absolute(&*path)?;
+    }
+    options.livekit = Some(
+        options
+            .livekit
+            .take()
+            .unwrap_or_else(|| LiveKitConfig::from_env(options.data_dir.clone())),
+    );
+    let (send, mut requests) = tokio::sync::mpsc::channel::<crate::handoff::Request>(1);
+    tokio::pin!(signal);
+    let mut recovering = false;
+    loop {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        let mut server = loop {
+            match Server::start_inner(options.clone(), None, Some(send.clone())).await {
+                Ok(server) => break server,
+                Err(error)
+                    if recovering
+                        && tokio::time::Instant::now() < deadline
+                        && (error.chain().any(|cause| {
+                            cause
+                                .downcast_ref::<std::io::Error>()
+                                .is_some_and(|error| error.kind() == std::io::ErrorKind::AddrInUse)
+                        }) || format!("{error:#}")
+                            .contains("Another ZeroLux kernel already serves")) =>
+                {
+                    tokio::select! { _ = &mut signal => return Ok(()), _ = tokio::time::sleep(Duration::from_millis(250)) => {} }
+                }
+                Err(error) => {
+                    return Err(error.context(
+                        "The CLI could not resume; another owner is never stopped automatically",
+                    ));
+                }
+            }
+        };
+        // `--port 0` chooses once; a cancelled transfer resumes the same origin.
+        options.address = server.address();
+        let mut task = server.task.take().expect("CLI owns the lifecycle");
+        let request = tokio::select! {
+            result = &mut task => return result.context("Kernel lifecycle task failed")?,
+            _ = &mut signal => { server.stop.send_replace(true); return task.await.context("Kernel lifecycle task failed")?; },
+            request = requests.recv() => request.context("The handoff channel closed")?,
+        };
+        server.stop.send_replace(true);
+        let stopped = task.await.context("Kernel lifecycle task failed")?;
+        if let Err(error) = stopped {
+            let message = format!("The kernel could not finish stopping: {error:#}");
+            let _ = request.ready.send(Err(message));
+            recovering = true;
+            continue;
+        }
+        let ready = request.ready.send(Ok(request.configuration));
+        let committed = ready.is_ok()
+            && matches!(
+                tokio::time::timeout(Duration::from_secs(610), request.decision).await,
+                Ok(Ok(true))
+            );
+        if committed {
+            return Ok(());
+        }
+        recovering = true;
+    }
 }
 
 /// The identity of this kernel host, made once in its data directory.
