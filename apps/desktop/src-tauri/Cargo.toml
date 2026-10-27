@@ -39,6 +39,7 @@ tempfile = "3"
 custom-protocol = ["tauri/custom-protocol"]
 
 [target."cfg(windows)".dependencies]
+auto-launch = "=0.6.0"
 tauri-winrt-notification = "0.7.3"
 windows-registry = "0.6.1"
 
@@ -47,6 +48,10 @@ block2 = "0.6.2"
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
   "std",
+  "block2",
+  "NSApplication",
+  "NSOpenPanel",
+  "NSSavePanel",
   "NSWindow",
   "NSResponder",
 ] }
@@ -57,7 +62,9 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
   "NSSet",
   "NSBundle",
   "NSObject",
+  "NSProcessInfo",
   "NSError",
+  "NSURL",
 ] }
 objc2-user-notifications = { version = "0.3.2", default-features = false, features = [
   "std",
@@ -73,6 +80,11 @@ objc2-user-notifications = { version = "0.3.2", default-features = false, featur
   "UNNotificationSound",
   "UNNotificationTrigger",
 ] }
+plist = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 notify-rust = "4.17.0"
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
