@@ -86,6 +86,10 @@ impl PublicOrigin {
         &self.origin
     }
 
+    pub fn livekit_url(&self) -> Option<&str> {
+        self.livekit_url.as_deref()
+    }
+
     fn serves(&self, host: Option<&str>) -> bool {
         host.is_some_and(|h| h.eq_ignore_ascii_case(&self.authority))
     }

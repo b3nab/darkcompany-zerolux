@@ -61,6 +61,7 @@ const OUTBOX_BATCH: i64 = 100;
 
 /// `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`: all three select an external
 /// server or LiveKit Cloud, none lets ZeroLux run LiveKit itself, anything else is an error.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct LiveKitConfig {
     pub url: Option<String>,
     pub api_key: Option<String>,
