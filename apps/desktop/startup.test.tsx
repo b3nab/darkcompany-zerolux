@@ -12,6 +12,11 @@ const state: DesktopState = {
       name: "Studio",
       source: { kind: "existing", url: "https://studio.example/" },
       running: false,
+      start_on_launch: false,
+      dataDirectory: null,
+      database: null,
+      network: null,
+      localUrl: null,
     },
     {
       id: "profile-b",
@@ -19,6 +24,17 @@ const state: DesktopState = {
       name: "Local",
       source: { kind: "local", legacy: false },
       running: true,
+      start_on_launch: true,
+      dataDirectory: "/tmp/studio",
+      database: "/tmp/studio/zerolux.db",
+      network: {
+        listen: "127.0.0.1",
+        port: 4311,
+        expose: null,
+        publicOrigin: null,
+        publicLivekitUrl: null,
+      },
+      localUrl: "http://127.0.0.1:4311",
     },
   ],
   active: "profile-a",
@@ -100,7 +116,13 @@ test("registry commands are restricted to the packaged manager, not workspace pa
   expect(
     capabilities.every((capability) => capability.remote === undefined),
   ).toBe(true);
-  expect(of("manager").permissions).toEqual(["allow-workspace-action"]);
+  expect(of("manager").permissions).toEqual([
+    "allow-workspace-action",
+    "allow-workspace-adoption-preview",
+    "allow-choose-folder",
+    "allow-autostart-status",
+    "allow-autostart-set",
+  ]);
   expect(of("workspace-*").local).toBe(true);
   expect(of("workspace-*").permissions).toEqual([
     "allow-window-control",
@@ -111,6 +133,8 @@ test("registry commands are restricted to the packaged manager, not workspace pa
     // Its own sign-in only: the desktop finds the connection from the calling window.
     "allow-read-workspace-credential",
     "allow-write-workspace-credential",
+    "allow-autostart-status",
+    "allow-autostart-set",
     "core:window:allow-start-dragging",
     "core:window:allow-internal-toggle-maximize",
     "core:window:allow-is-fullscreen",

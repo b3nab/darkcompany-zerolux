@@ -4,7 +4,14 @@ import { createRoot } from "react-dom/client";
 import { Button } from "../web/src/components/ui/button";
 import { Input } from "../web/src/components/ui/input";
 import { Label } from "../web/src/components/ui/label";
+import { Checkbox } from "../web/src/components/ui/checkbox";
 import { startTheme } from "../web/src/theme";
+import {
+  AdoptionForm,
+  NetworkForm,
+  networkAddress,
+} from "./workspace-settings";
+import type { Network } from "./workspace-settings";
 
 export type Profile = {
   id: string;
@@ -14,6 +21,11 @@ export type Profile = {
     | { kind: "local"; legacy: boolean }
     | { kind: "existing"; url: string };
   running: boolean;
+  start_on_launch: boolean;
+  dataDirectory: string | null;
+  database: string | null;
+  network: Network | null;
+  localUrl: string | null;
 };
 /** A workspace this computer joined, to run its person's sessions here. */
 export type JoinedWorkspace = {
@@ -42,6 +54,9 @@ type Action =
   | { action: "add"; url: string }
   | { action: "create"; name: string }
   | { action: "edit"; id: string; url: string }
+  | { action: "adopt"; id: string; directory: string }
+  | { action: "network"; id: string; network: Network }
+  | { action: "startup"; id: string; enabled: boolean }
   | { action: "join"; url: string; code: string; name: string }
   | { action: "leave"; id: string };
 const initial: DesktopState = {
@@ -87,7 +102,10 @@ export function WorkspaceManager({
   const [forgetting, setForgetting] = useState<string | null>(null);
   const [joining, setJoining] = useState({ url: "", code: "", name: "" });
   const [leaving, setLeaving] = useState<string | null>(null);
-  const disabled = !state.ready || state.busy || pending;
+  const [adopting, setAdopting] = useState<string | null>(null);
+  const [networking, setNetworking] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const disabled = !state.ready || state.busy || pending || previewing;
   const edited = state.profiles.find((profile) => profile.id === editing);
 
   async function act(action: Action) {
@@ -110,6 +128,8 @@ export function WorkspaceManager({
   }
   function edit(profile: Profile) {
     setForgetting(null);
+    setAdopting(null);
+    setNetworking(null);
     if (profile.source.kind === "existing") {
       setEditing(profile.id);
       setAddress(profile.source.url);
@@ -130,6 +150,7 @@ export function WorkspaceManager({
   useEffect(() => {
     window.zeroluxDesktopFocus = (id) => {
       // Opening the manager must not overwrite an address the owner is editing.
+      if (adopting || networking || previewing) return;
       if (
         address &&
         (edited?.source.kind !== "existing" || address !== edited.source.url)
@@ -141,7 +162,7 @@ export function WorkspaceManager({
     return () => {
       delete window.zeroluxDesktopFocus;
     };
-  }, [state.profiles, address, edited]);
+  }, [state.profiles, address, edited, adopting, networking, previewing]);
 
   return (
     <main className="mx-auto flex max-w-2xl flex-col gap-7 p-8">
@@ -152,9 +173,9 @@ export function WorkspaceManager({
         <h1 className="text-2xl font-semibold tracking-tight">Workspaces</h1>
       </header>
       <div aria-live="polite">
-        {(state.busy || pending) && (
+        {(state.busy || pending || previewing) && (
           <p role="status" className="text-sm text-muted-foreground">
-            Connecting…
+            Working…
           </p>
         )}
         {!state.ready && !state.error && (
@@ -193,6 +214,16 @@ export function WorkspaceManager({
                       {profile.workspace_id}
                     </p>
                   )}
+                  {profile.dataDirectory && (
+                    <p className="break-all text-xs text-muted-foreground">
+                      {profile.dataDirectory}
+                    </p>
+                  )}
+                  {profile.network && profile.network.port > 0 && (
+                    <p className="break-all text-xs text-muted-foreground">
+                      {networkAddress(profile.network)}
+                    </p>
+                  )}
                 </div>
                 <Button
                   disabled={disabled}
@@ -202,7 +233,7 @@ export function WorkspaceManager({
                   {state.active === profile.id ? "Return" : "Open"}
                 </Button>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {profile.source.kind === "existing" && (
                   <Button
                     size="sm"
@@ -213,6 +244,36 @@ export function WorkspaceManager({
                     Change address
                   </Button>
                 )}
+                {profile.source.kind === "existing" && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={disabled}
+                    onClick={() => {
+                      cancelEdit();
+                      setForgetting(null);
+                      setNetworking(null);
+                      setAdopting(profile.id);
+                    }}
+                  >
+                    Run with this app
+                  </Button>
+                )}
+                {profile.source.kind === "local" && profile.network && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={disabled}
+                    onClick={() => {
+                      cancelEdit();
+                      setForgetting(null);
+                      setAdopting(null);
+                      setNetworking(profile.id);
+                    }}
+                  >
+                    Network settings
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="ghost"
@@ -220,11 +281,65 @@ export function WorkspaceManager({
                   onClick={() => {
                     setForgetting(profile.id);
                     cancelEdit();
+                    setAdopting(null);
+                    setNetworking(null);
                   }}
                 >
                   Forget connection
                 </Button>
               </div>
+              {profile.source.kind === "local" && (
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id={`startup-${profile.id}`}
+                    checked={profile.start_on_launch}
+                    disabled={disabled}
+                    onCheckedChange={(enabled) =>
+                      void act({
+                        action: "startup",
+                        id: profile.id,
+                        enabled: !!enabled,
+                      })
+                    }
+                  />
+                  <Label htmlFor={`startup-${profile.id}`}>
+                    Start when ZeroLux opens
+                  </Label>
+                </div>
+              )}
+              {adopting === profile.id &&
+                profile.source.kind === "existing" && (
+                  <AdoptionForm
+                    id={profile.id}
+                    disabled={disabled}
+                    busy={setPreviewing}
+                    cancel={() => setAdopting(null)}
+                    adopt={async (directory) => {
+                      if (
+                        await act({
+                          action: "adopt",
+                          id: profile.id,
+                          directory,
+                        })
+                      )
+                        setAdopting(null);
+                    }}
+                  />
+                )}
+              {networking === profile.id && profile.network && (
+                <NetworkForm
+                  id={profile.id}
+                  network={profile.network}
+                  disabled={disabled}
+                  cancel={() => setNetworking(null)}
+                  save={async (network) => {
+                    if (
+                      await act({ action: "network", id: profile.id, network })
+                    )
+                      setNetworking(null);
+                  }}
+                />
+              )}
               {forgetting === profile.id && (
                 <div className="space-y-3 border-t pt-3">
                   <p className="text-sm text-muted-foreground">
