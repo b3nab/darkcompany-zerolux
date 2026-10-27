@@ -13,6 +13,25 @@ pub struct LocalWorkspace {
     _lock: File,
 }
 
+/// An updater child must not contact the single-instance plugin before its parent exits.
+/// This only waits for the existing lock; it never creates a workspace or changes its data.
+pub fn wait_for_previous(root: &std::path::Path, timeout: std::time::Duration) -> Result<()> {
+    let path = root.join("desktop.lock");
+    let file = match OpenOptions::new().read(true).write(true).open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("Read the previous desktop's lock"),
+    };
+    let until = std::time::Instant::now() + timeout;
+    loop {
+        match file.try_lock_exclusive() {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < until => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(error) => return Err(error).context("The previous ZeroLux app has not closed; the update did not open another workspace"),
+        }
+    }
+}
+
 impl LocalWorkspace {
     pub fn open(root: PathBuf) -> Result<Self> {
         ensure!(
@@ -45,7 +64,11 @@ impl LocalWorkspace {
 
     /// First launch lets the OS allocate a port; subsequent launches retain the webview origin.
     pub fn port(&self) -> Result<u16> {
-        let path = self.root.join("port");
+        Self::port_at(&self.root)
+    }
+
+    pub fn port_at(root: &std::path::Path) -> Result<u16> {
+        let path = root.join("port");
         match fs::read_to_string(&path) {
             Ok(text) => {
                 let port: u16 = text.trim().parse().context("Invalid desktop port file")?;
@@ -160,6 +183,26 @@ pub fn same_origin(expected: &tauri::Url, requested: &tauri::Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restart_wait_does_not_open_or_create_another_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        wait_for_previous(&missing, std::time::Duration::ZERO).unwrap();
+        assert!(!missing.exists());
+        let parent = LocalWorkspace::open(dir.path().into()).unwrap();
+        parent.remember_port(4310).unwrap();
+        assert!(wait_for_previous(dir.path(), std::time::Duration::ZERO).is_err());
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            drop(parent);
+        });
+        wait_for_previous(dir.path(), std::time::Duration::from_secs(2)).unwrap();
+        release.join().unwrap();
+        let replacement = LocalWorkspace::open(dir.path().into()).unwrap();
+        assert_eq!(replacement.port().unwrap(), 4310);
+        assert!(!dir.path().join("zerolux.db").exists());
+    }
     #[test]
     fn lock_is_exclusive_and_released_without_deleting_its_file() {
         let dir = tempfile::tempdir().unwrap();

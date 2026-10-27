@@ -54,6 +54,12 @@ pub fn save(root: &Path, value: &SavedConnection) -> Result<()> {
 #[derive(Debug, Parser)]
 #[command(name = "zerolux-desktop", about = "Open a ZeroLux workspace", group(clap::ArgGroup::new("workspace").args(["connect", "local", "choose_workspace"]).multiple(false)))]
 pub struct LaunchOptions {
+    /// Start only the workspaces explicitly enabled for background startup.
+    #[arg(long, hide = true)]
+    pub autostart: bool,
+    /// An updater child waits for the previous app to release its desktop lock.
+    #[arg(long, hide = true)]
+    pub wait_for_parent: bool,
     /// Open a saved connection at this address, or verify and add a new connection.
     #[arg(long)]
     pub connect: Option<String>,
