@@ -33,6 +33,7 @@ import { HostAccounts } from "./HostAccounts";
 import { onlyHere } from "./Invite";
 import { Copy } from "@/components/tool-call";
 import { UpdateSettings } from "./Updates";
+import { DesktopSettings } from "./DesktopSettings";
 
 /** A page of settings: what it is about, and its sections. */
 export function Settings({
@@ -248,6 +249,7 @@ export function MySettingsPage({
         <Appearance />
         <Connection />
       </Section>
+      <DesktopSettings />
       <UpdateSettings />
     </Settings>
   );
