@@ -1,3 +1,7 @@
+[build]
+# Tauri renames the packaged executable to `zerolux`; keep the standalone CLI intact.
+target-dir = "../../../target/desktop"
+
 # Every build of the app carries the kernel's files (`bun run desktop:build` prepares them).
 [env]
 ZEROLUX_CARRY = { value = "../dist", relative = true }
