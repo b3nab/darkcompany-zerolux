@@ -1,4 +1,6 @@
 /target/
+/zerolux-updater.key
+/zerolux-updater.key.pub
 node_modules/
 **/dist/
 .zerolux/
