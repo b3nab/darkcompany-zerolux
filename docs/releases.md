@@ -38,9 +38,11 @@ published feeds and restores the pointers without changing the release or replac
 
 ## Signing and publishing
 
-Configure repository secret `TAURI_SIGNING_PRIVATE_KEY`, secret
-`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` and variable `ZEROLUX_UPDATE_PUBLIC_KEY` with the
-matching Tauri updater keys. The build refuses to publish without the private and public key.
+Configure repository secret `TAURI_SIGNING_PRIVATE_KEY` and variable
+`ZEROLUX_UPDATE_PUBLIC_KEY` with the matching Tauri updater keys. Set the optional secret
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` only when the private key is password-protected; otherwise
+leave it unset. The same key pair signs all three channels and their kernel and desktop updates.
+The build refuses to publish without the private and public key.
 The completed feeds are verified against the public key with Minisign before publication, so
 a mismatched key pair cannot advance a channel. These keys are separate from platform signing
 certificates and the Android keystore.
@@ -48,6 +50,11 @@ certificates and the Android keystore.
 The workflow runs the full CI checks, then builds the kernels, desktop installers and Android
 app. Windows MSI keeps a separate numeric version; the update feed compares the full release
 version. Kernel binaries and desktop update bundles are signed with their release version.
+
+Desktop release builds use `target/desktop/release`, separately from the CLI's
+`target/release`. Tauri packages the desktop's main executable as `zerolux` and discovers
+its installers and updater artifacts in that desktop target directory. The CI cache follows
+the same split; `CARGO_TARGET_DIR` can select another absolute desktop output directory.
 
 Each version has immutable artifacts on its GitHub release. Once every build succeeds, the
 workflow publishes the release and advances signed `nightly.json`, `beta.json` and
