@@ -1,6 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "ZeroLux",
+  "mainBinaryName": "zerolux",
   "version": "0.0.1-dev",
   "identifier": "com.darkcompany.zerolux",
   "build": {
@@ -18,7 +19,13 @@
           "description": "Choose a workspace from the packaged startup page only; no remote kernel UI permission",
           "local": true,
           "windows": ["manager"],
-          "permissions": ["allow-workspace-action"]
+          "permissions": [
+            "allow-workspace-action",
+            "allow-workspace-adoption-preview",
+            "allow-choose-folder",
+            "allow-autostart-status",
+            "allow-autostart-set"
+          ]
         },
         {
           "identifier": "tray-panel",
@@ -58,6 +65,8 @@
             "allow-choose-folder",
             "allow-read-workspace-credential",
             "allow-write-workspace-credential",
+            "allow-autostart-status",
+            "allow-autostart-set",
             "core:window:allow-start-dragging",
             "core:window:allow-internal-toggle-maximize",
             "core:window:allow-is-fullscreen",

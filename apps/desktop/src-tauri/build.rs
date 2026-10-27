@@ -4,6 +4,7 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "workspace_action",
+            "workspace_adoption_preview",
             "open_link",
             "choose_folder",
             "window_control",
@@ -22,6 +23,8 @@ fn main() {
             "update_channel",
             "update_download",
             "update_install",
+            "autostart_status",
+            "autostart_set",
         ]),
     ))
     .expect("build desktop permissions");
