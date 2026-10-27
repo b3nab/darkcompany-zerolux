@@ -5,11 +5,16 @@ import { join } from "node:path";
 import { AgentLinkChild } from "./agent-link.ts";
 
 const unixTest = process.platform === "win32" ? test.skip : test;
-unixTest(
-  "agent-link fixture receives token only on private stdin and exits on EOF",
-  async () => {
+unixTest.each([
+  "zerolux",
+  "zerolux.exe",
+  "zerolux-desktop",
+  "zerolux-desktop.exe",
+])(
+  "%s subscriber receives token only on private stdin and exits on EOF",
+  async (binary) => {
     const root = await mkdtemp(join(tmpdir(), "zl-link-fixture-"));
-    const executable = join(root, "zerolux");
+    const executable = join(root, binary);
     await writeFile(
       executable,
       `#!/bin/sh
@@ -87,6 +92,12 @@ test("subscriber executable must be an absolute ZeroLux binary, not a shell comm
   ).rejects.toThrow();
   await expect(
     child.start("/bin/sh", "http://127.0.0.1", "SECRET"),
+  ).rejects.toThrow();
+  await expect(
+    child.start("/tmp/zerolux-desktop --other", "http://127.0.0.1", "SECRET"),
+  ).rejects.toThrow();
+  await expect(
+    child.start("/tmp/zerolux-preview", "http://127.0.0.1", "SECRET"),
   ).rejects.toThrow();
   await child.stop();
 });

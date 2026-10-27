@@ -18,10 +18,16 @@ export class AgentLinkChild {
       throw new Error("LiveKit subscriber already started or closed");
     if (
       !isAbsolute(executable) ||
-      !["zerolux", "zerolux.exe"].includes(basename(executable))
+      ![
+        "zerolux",
+        "zerolux.exe",
+        "zerolux-desktop",
+        "zerolux-desktop.exe",
+      ].includes(basename(executable))
     )
       throw new Error("Expected the installed ZeroLux executable");
-    // Private pairing supplies the known kernel binary; never shell/task data or harness argv.
+    // Both installed hosts dispatch agent-link without starting a kernel or desktop UI.
+    // Private pairing supplies that host binary; never shell/task data or harness argv.
     const child = spawn(executable, ["agent-link"], {
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
