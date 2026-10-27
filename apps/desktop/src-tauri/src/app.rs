@@ -1,5 +1,5 @@
 use crate::{
-    catalog::{Catalog, Profile, Source},
+    catalog::{AdoptionJournal, Catalog, Managed, NetworkJournal, Profile, Source},
     computer::{LinkView, Links},
     connection,
     local::{self, LocalWorkspace},
@@ -43,6 +43,12 @@ pub(crate) struct ProfileView {
     #[serde(flatten)]
     pub(crate) profile: Profile,
     running: bool,
+    #[serde(rename = "dataDirectory")]
+    data_directory: Option<PathBuf>,
+    database: Option<PathBuf>,
+    network: Option<zerolux::handoff::Network>,
+    #[serde(rename = "localUrl")]
+    local_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +67,18 @@ pub(crate) enum Action {
     Edit {
         id: String,
         url: String,
+    },
+    Adopt {
+        id: String,
+        directory: String,
+    },
+    Network {
+        id: String,
+        network: zerolux::handoff::Network,
+    },
+    Startup {
+        id: String,
+        enabled: bool,
     },
     Forget {
         id: String,
@@ -118,6 +136,73 @@ async fn workspace_action(
         .map_err(|_| "The desktop is closing".to_owned())?
 }
 
+#[derive(Serialize)]
+struct AdoptionPreview {
+    id: String,
+    #[serde(flatten)]
+    info: zerolux::handoff::Info,
+}
+
+async fn adoption_info(profile: &Profile, directory: &Path) -> Result<zerolux::handoff::Info> {
+    let url = profile
+        .existing_url()
+        .context("Only an existing CLI workspace can be adopted")?;
+    ensure!(
+        profile.app_ui,
+        "Open this workspace once before adopting it, to preserve its previous drafts"
+    );
+    let workspace_id = profile
+        .workspace_id
+        .as_deref()
+        .context("The connection has no verified workspace identity")?;
+    let info = zerolux::handoff::describe(directory).await?;
+    info.validate(directory, workspace_id)?;
+    let expected = connection::kernel_url(url)?;
+    let mut addresses = vec![format!("http://{}", info.network.address())];
+    if let Some(expose) = info.network.expose {
+        addresses.push(format!(
+            "http://{}",
+            std::net::SocketAddr::new(expose, info.network.port)
+        ));
+    }
+    if let Some(public) = &info.network.public_origin {
+        addresses.push(public.clone());
+    }
+    ensure!(
+        addresses
+            .iter()
+            .any(|address| connection::kernel_url(address).is_ok_and(|url| url == expected)),
+        "The chosen kernel does not serve this connection's address"
+    );
+    connection::verify(url, Some(workspace_id)).await?;
+    Ok(info)
+}
+
+#[tauri::command]
+async fn workspace_adoption_preview(
+    window: WebviewWindow,
+    commands: tauri::State<'_, Commands>,
+    id: String,
+    directory: String,
+) -> Result<AdoptionPreview, String> {
+    if window.label() != MANAGER || !window.url().ok().as_ref().is_some_and(local::boot_page) {
+        return Err("Adoption is available only in Manage Workspaces".into());
+    }
+    let profile = commands
+        .view
+        .lock()
+        .expect("desktop view lock")
+        .profiles
+        .iter()
+        .find(|entry| entry.profile.id == id)
+        .map(|entry| entry.profile.clone())
+        .ok_or("This connection is no longer saved")?;
+    adoption_info(&profile, Path::new(&directory))
+        .await
+        .map(|info| AdoptionPreview { id, info })
+        .map_err(|error| format!("{error:#}"))
+}
+
 struct Lifecycle {
     stop: watch::Sender<bool>,
     task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
@@ -126,12 +211,42 @@ struct Lifecycle {
 
 struct LocalRuntime {
     url: tauri::Url,
+    network: zerolux::handoff::Network,
     stop: watch::Sender<bool>,
     task: tokio::task::JoinHandle<Result<()>>,
 }
 
 struct WorkspaceView {
     window: WebviewWindow,
+}
+
+fn replace_tracked<T>(
+    current: &mut Vec<T>,
+    next: Vec<T>,
+    show: impl Fn(&T) -> Result<()>,
+    close: impl Fn(&T) -> Result<()>,
+) -> Result<()> {
+    let previous = std::mem::replace(current, next);
+    let mut error = None;
+    for view in current.iter() {
+        if let Err(failed) = show(view) {
+            error.get_or_insert(failed);
+        }
+    }
+    if error.is_some() {
+        current.extend(previous);
+    } else {
+        for view in previous {
+            if let Err(failed) = close(&view) {
+                error.get_or_insert(failed);
+                current.push(view);
+            }
+        }
+    }
+    match error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 impl WorkspaceView {
@@ -208,6 +323,7 @@ struct Host {
     view: Arc<Mutex<View>>,
     stopped: watch::Receiver<bool>,
     computers: Links,
+    startup_retry: HashMap<String, (u32, tokio::time::Instant)>,
 }
 
 pub(crate) fn open_external(handle: &tauri::AppHandle, url: &tauri::Url) {
@@ -238,20 +354,79 @@ async fn choose_folder(
     window: tauri::Window,
     start: Option<String>,
 ) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
-    let mut panel = app.dialog().file().set_parent(&window);
-    if let Some(start) = start.filter(|start| std::path::Path::new(start).is_dir()) {
-        panel = panel.set_directory(start);
-    }
-    panel
-        .blocking_pick_folder()
-        .map(|chosen| {
-            chosen
-                .into_path()
-                .map(|path| path.to_string_lossy().into_owned())
-                .map_err(|error| error.to_string())
+    #[cfg(target_os = "macos")]
+    {
+        use block2::RcBlock;
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::{NSModalResponseCancel, NSModalResponseOK, NSOpenPanel, NSWindow};
+        use objc2_foundation::{NSString, NSURL};
+        use std::cell::RefCell;
+
+        let start = start.filter(|start| Path::new(start).is_dir());
+        let (send, receive) = oneshot::channel();
+        app.run_on_main_thread(move || {
+            let parent = match window.ns_window() {
+                Ok(parent) => parent,
+                Err(error) => {
+                    let _ = send.send(Err(error.to_string()));
+                    return;
+                }
+            };
+            let panel = NSOpenPanel::openPanel(MainThreadMarker::new().expect("Tauri main thread"));
+            panel.setCanChooseDirectories(true);
+            panel.setCanChooseFiles(false);
+            panel.setAllowsMultipleSelection(false);
+            panel.setShowsHiddenFiles(true);
+            if let Some(start) = start {
+                panel.setDirectoryURL(Some(&NSURL::fileURLWithPath_isDirectory(
+                    &NSString::from_str(&start),
+                    true,
+                )));
+            }
+            let selected = panel.clone();
+            let send = RefCell::new(Some(send));
+            let complete = RcBlock::new(move |response| {
+                let result = if response == NSModalResponseOK {
+                    selected
+                        .URL()
+                        .and_then(|url| url.path())
+                        .map(|path| Some(path.to_string()))
+                        .ok_or_else(|| "The selected folder has no local path".to_owned())
+                } else if response == NSModalResponseCancel {
+                    Ok(None)
+                } else {
+                    Err("The folder chooser could not open".to_owned())
+                };
+                if let Some(send) = send.borrow_mut().take() {
+                    let _ = send.send(result);
+                }
+            });
+            // Tauri owns this NSWindow; AppKit is called only on its main thread.
+            panel.beginSheetModalForWindow_completionHandler(
+                unsafe { &*parent.cast::<NSWindow>() },
+                &complete,
+            );
         })
-        .transpose()
+        .map_err(|error| error.to_string())?;
+        receive.await.map_err(|error| error.to_string())?
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        use tauri_plugin_dialog::DialogExt;
+        let mut panel = app.dialog().file().set_parent(&window);
+        if let Some(start) = start.filter(|start| std::path::Path::new(start).is_dir()) {
+            panel = panel.set_directory(start);
+        }
+        panel
+            .blocking_pick_folder()
+            .map(|chosen| {
+                chosen
+                    .into_path()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .map_err(|error| error.to_string())
+            })
+            .transpose()
+    }
 }
 
 fn manager_request(url: &tauri::Url) -> bool {
@@ -339,6 +514,17 @@ impl Host {
                 .iter()
                 .map(|profile| ProfileView {
                     profile: profile.clone(),
+                    data_directory: profile.directory(&self.root.root),
+                    database: profile.database(&self.root.root).ok(),
+                    network: self
+                        .runtimes
+                        .get(&profile.id)
+                        .map(|runtime| runtime.network.clone())
+                        .or_else(|| profile.network(&self.root.root).ok().flatten()),
+                    local_url: self
+                        .runtimes
+                        .get(&profile.id)
+                        .map(|runtime| runtime.url.to_string()),
                     running: self
                         .runtimes
                         .get(&profile.id)
@@ -365,12 +551,26 @@ impl Host {
     }
 
     fn save(&mut self, catalog: Catalog) -> Result<()> {
-        catalog.save(&self.root.root)?;
+        if let Err(error) = catalog.save(&self.root.root) {
+            // Atomic rename may have committed even if its following fsync failed.
+            if let Ok(observed) = Catalog::load(&self.root.root) {
+                self.catalog = observed;
+            }
+            return Err(error);
+        }
         self.catalog = catalog;
         Ok(())
     }
 
     async fn local_url(&mut self, profile: &Profile) -> Result<tauri::Url> {
+        self.local_url_with_lease(profile, None).await
+    }
+
+    async fn local_url_with_lease(
+        &mut self,
+        profile: &Profile,
+        lease: Option<zerolux::lease::Lease>,
+    ) -> Result<tauri::Url> {
         if let Some(runtime) = self.runtimes.get(&profile.id)
             && !runtime.task.is_finished()
         {
@@ -389,36 +589,80 @@ impl Host {
             Arc::new(LocalWorkspace::open(directory)?)
         };
         let resources = self.resources()?;
-        let server = Server::start(ServerOptions {
-            address: ([127, 0, 0, 1], workspace.port()?).into(),
-            expose: None,
-            public: None,
-            data_dir: database
-                .parent()
-                .context("The workspace database has a directory")?
-                .to_path_buf(),
+        let network = profile
+            .network(&self.root.root)?
+            .context("This workspace has no local network settings")?;
+        if let Some(managed) = &profile.managed {
+            ensure!(
+                std::fs::read_to_string(workspace.root.join("host-id"))?.trim() == managed.host_id,
+                "This workspace's host identity changed; its data was not opened"
+            );
+        }
+        let livekit = match std::fs::read(
+            self.root.root.join(format!("runtime-{}.json", profile.id)),
+        ) {
+            Ok(bytes) => Some(
+                serde_json::from_slice::<zerolux::livekit::LiveKitConfig>(&bytes)
+                    .context("Read this workspace's private service settings")?,
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                ensure!(
+                    !profile
+                        .managed
+                        .as_ref()
+                        .is_some_and(|managed| managed.private_services),
+                    "This adopted workspace's private service settings are missing; its services were not replaced"
+                );
+                None
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let options = ServerOptions {
+            address: network.address(),
+            expose: network.expose,
+            public: network
+                .public_origin
+                .as_ref()
+                .map(|origin| {
+                    zerolux::api::PublicOrigin::new(origin, network.public_livekit_url.clone())
+                })
+                .transpose()?,
+            data_dir: workspace.root.clone(),
             database: zerolux::db::Location::Sqlite(database),
             initial_workspace_name: (profile.workspace_id.is_none()
                 && matches!(profile.source, Source::Local { legacy: false }))
             .then(|| profile.name.clone()),
             web_dir: resources.join("web"),
-            livekit: None,
+            livekit,
             runner: Some(RunnerProgram::bundled(&resources)),
             auth: Some(zerolux::auth::AuthEntry {
                 bun: executable("bun"),
                 entry: resources.join("auth/server.js"),
             }),
-        })
-        .await
+        };
+        #[cfg(target_os = "macos")]
+        let activity = crate::activity::LocalKernel::new();
+        let server = match lease {
+            Some(lease) => Server::start_with_lease(options, lease).await,
+            None => Server::start(options).await,
+        }
         .context("Start this workspace's local kernel")?;
-        if let Err(error) = workspace.remember_port(server.address().port()) {
+        if profile.managed.is_none()
+            && let Err(error) = workspace.remember_port(server.address().port())
+        {
             server.shutdown().await?;
             return Err(error);
         }
         let url: tauri::Url = server.url().parse().expect("bound kernel URL");
+        let network = zerolux::handoff::Network {
+            port: server.address().port(),
+            ..network
+        };
         let (stop, mut stopped) = watch::channel(false);
         let task = tokio::spawn(async move {
             let _workspace = workspace;
+            #[cfg(target_os = "macos")]
+            let _activity = activity;
             server
                 .run_until(async {
                     let _ = stopped.wait_for(|stopped| *stopped).await;
@@ -429,6 +673,7 @@ impl Host {
             profile.id.clone(),
             LocalRuntime {
                 url: url.clone(),
+                network,
                 stop,
                 task,
             },
@@ -893,6 +1138,307 @@ impl Host {
         result
     }
 
+    async fn stop_local(&mut self, id: &str) -> Result<()> {
+        if let Some(runtime) = self.runtimes.remove(id) {
+            runtime.stop.send_replace(true);
+            runtime
+                .task
+                .await
+                .context("Wait for the local kernel to stop")??;
+        }
+        Ok(())
+    }
+
+    async fn replacement_views(
+        &mut self,
+        profile: &Profile,
+        url: &tauri::Url,
+        saved: &[SavedView],
+    ) -> Result<Vec<WorkspaceView>> {
+        let mut views = Vec::new();
+        for state in saved {
+            match self.build_view(profile, url, Some(state)).await {
+                Ok(view) => views.push(view),
+                Err(error) => {
+                    for view in views {
+                        let _ = view.close();
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        Ok(views)
+    }
+
+    fn replace_views(&mut self, id: &str, views: Vec<WorkspaceView>) -> Result<()> {
+        let current = self.windows.entry(id.to_owned()).or_default();
+        // Keep every window tracked even when the OS refuses a show or close. The caller
+        // can then unfreeze all surviving views after a committed ownership change.
+        replace_tracked(
+            current,
+            views,
+            |view| view.window.show().map_err(Into::into),
+            WorkspaceView::close,
+        )
+        .context("The workspace changed ownership, but some windows could not be replaced")
+    }
+
+    async fn adopt(&mut self, id: &str, directory: &Path) -> Result<()> {
+        for journal in Catalog::pending_adoptions(&self.root.root)? {
+            ensure!(
+                !self
+                    .runtimes
+                    .get(&journal.previous.id)
+                    .is_some_and(|runtime| !runtime.task.is_finished()),
+                "An ownership transfer is still being reconciled; restart the app before another transfer"
+            );
+        }
+        self.catalog.recover_adoptions(&self.root.root).await?;
+        let previous = self.catalog.profile(id)?.clone();
+        let info = adoption_info(&previous, directory).await?;
+        ensure!(
+            !self
+                .catalog
+                .profiles
+                .iter()
+                .filter(|profile| profile.id != id)
+                .any(|profile| {
+                    profile.directory(&self.root.root).as_ref() == Some(&info.directory)
+                        || profile.database(&self.root.root).ok().as_ref() == Some(&info.database)
+                }),
+            "These files are already managed by another saved connection"
+        );
+        self.resources()?;
+        self.prune();
+        let result = self.adopt_prepared(&previous, info).await;
+        self.unfreeze(id);
+        result
+    }
+
+    async fn adopt_prepared(
+        &mut self,
+        previous: &Profile,
+        info: zerolux::handoff::Info,
+    ) -> Result<()> {
+        let saved = self.prepare_views(&previous.id).await?;
+        let private_name = format!("runtime-{}.json", previous.id);
+        let private_path = self.root.root.join(&private_name);
+        let private_before = match std::fs::read(&private_path) {
+            Ok(bytes) => Some(serde_json::from_slice::<serde_json::Value>(&bytes)?),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        let journal = AdoptionJournal {
+            previous: previous.clone(),
+            info: info.clone(),
+            private_before,
+        };
+        journal.save(&self.root.root)?;
+        let transfer = zerolux::handoff::Transfer::begin(&info, &previous.id).await?;
+        let result: Result<Vec<WorkspaceView>> = async {
+            let lease = zerolux::lease::Lease::acquire(&zerolux::db::Location::Sqlite(
+                info.database.clone(),
+            ))?;
+            info.validate(
+                &info.directory,
+                previous.workspace_id.as_deref().unwrap_or_default(),
+            )?;
+            let backup = self
+                .root
+                .root
+                .join("backups")
+                .join(format!("adoption-{}", uuid::Uuid::new_v4()));
+            zerolux::platform::private_dir(&backup)?;
+            crate::updates::backup(&info.database, &backup.join("workspace.db")).await?;
+            for (source, name) in [
+                (info.directory.join("host-id"), "host-id"),
+                (info.directory.join("extensions/vault.key"), "vault.key"),
+            ] {
+                if source.is_file() {
+                    let target = backup.join(name);
+                    std::fs::copy(source, &target)?;
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(target)?
+                        .sync_all()?;
+                }
+            }
+            crate::preferences::write_json(
+                &backup,
+                "adoption.json",
+                &serde_json::json!({"previous": previous, "kernel": info}),
+            )?;
+            crate::preferences::write_json(
+                &self.root.root,
+                &private_name,
+                &transfer.configuration.livekit,
+            )?;
+            let mut profile = previous.adopted(&info)?;
+            let url = self.local_url_with_lease(&profile, Some(lease)).await?;
+            let verified =
+                connection::verify(url.as_str(), profile.workspace_id.as_deref()).await?;
+            profile.observe(&verified)?;
+            let views = self.replacement_views(&profile, &url, &saved).await?;
+            let mut catalog = self.catalog.clone();
+            *catalog.profile_mut(&previous.id)? = profile;
+            if let Err(error) = self.save(catalog) {
+                for view in views {
+                    let _ = view.close();
+                }
+                return Err(error);
+            }
+            Ok(views)
+        }
+        .await;
+        match result {
+            Ok(views) => {
+                // After ownership is persisted, a lost IPC acknowledgement is indeterminate,
+                // never permission to stop this kernel and let the CLI race it.
+                let acknowledgement = transfer.finish(true).await;
+                let decision = match zerolux::handoff::Decision::read(&info, &previous.id).await {
+                    Ok(decision) => decision,
+                    Err(error) => {
+                        self.replace_views(&previous.id, views)?;
+                        return Err(error.context("Ownership is still being reconciled; the desktop keeps this workspace running"));
+                    }
+                };
+                let committed = decision.committed;
+                drop(decision);
+                if committed {
+                    let recovered = journal.recover(&self.root.root, &mut self.catalog).await;
+                    let replaced = self.replace_views(&previous.id, views);
+                    recovered?;
+                    replaced?;
+                    // The durable receipt resolves an ACK lost after the CLI committed.
+                    Ok(())
+                } else {
+                    for view in views {
+                        let _ = view.close();
+                    }
+                    self.stop_local(&previous.id).await?;
+                    journal.recover(&self.root.root, &mut self.catalog).await?;
+                    if let Some(url) = previous
+                        .existing_url()
+                        .and_then(|url| connection::kernel_url(url).ok())
+                    {
+                        self.app
+                            .state::<crate::extension_ui::Kernels>()
+                            .set(&previous.id, &url);
+                    }
+                    acknowledgement
+                        .context("The transfer was not committed; the CLI retains this workspace")
+                }
+            }
+            Err(error) => {
+                let mut recovery = Vec::new();
+                if let Err(stopped) = self.stop_local(&previous.id).await {
+                    recovery.push(format!("Stop the attempted embedded kernel: {stopped:#}"));
+                }
+                if let Some(url) = previous
+                    .existing_url()
+                    .and_then(|url| connection::kernel_url(url).ok())
+                {
+                    self.app
+                        .state::<crate::extension_ui::Kernels>()
+                        .set(&previous.id, &url);
+                }
+                if let Err(cancelled) = transfer.finish(false).await {
+                    recovery.push(format!("The CLI was asked to resume: {cancelled:#}"));
+                }
+                if let Err(restored) = journal.recover(&self.root.root, &mut self.catalog).await {
+                    recovery.push(format!("Recover the previous connection: {restored:#}"));
+                }
+                if recovery.is_empty() {
+                    Err(error)
+                } else {
+                    anyhow::bail!("{error:#}; {}", recovery.join("; "))
+                }
+            }
+        }
+    }
+
+    async fn change_network(&mut self, id: &str, network: zerolux::handoff::Network) -> Result<()> {
+        self.catalog.recover_networks(&self.root.root)?;
+        network.validate()?;
+        ensure!(network.port != 0, "Choose a port from 1 to 65535");
+        let previous = self.catalog.profile(id)?.clone();
+        if previous.network(&self.root.root)?.as_ref() == Some(&network)
+            && self
+                .runtimes
+                .get(id)
+                .is_none_or(|runtime| runtime.network == network)
+        {
+            return Ok(());
+        }
+        let directory = previous
+            .directory(&self.root.root)
+            .context("Only an app-managed workspace has local network settings")?;
+        let mut profile = previous.clone();
+        profile.managed = Some(Managed {
+            database: previous.database(&self.root.root)?,
+            directory: directory.clone(),
+            host_id: std::fs::read_to_string(directory.join("host-id"))?
+                .trim()
+                .to_owned(),
+            network,
+            private_services: previous
+                .managed
+                .as_ref()
+                .is_some_and(|managed| managed.private_services),
+        });
+        self.prune();
+        let result: Result<()> = async {
+            let saved = self.prepare_views(id).await?;
+            let journal = NetworkJournal {
+                previous: previous.clone(),
+            };
+            journal.save(&self.root.root)?;
+            if let Err(error) = self.stop_local(id).await {
+                let recovered = self.local_url(&previous).await;
+                journal.recover(&self.root.root, &mut self.catalog)?;
+                recovered?;
+                return Err(error);
+            }
+            let started: Result<Vec<WorkspaceView>> = async {
+                let url = self.local_url(&profile).await?;
+                connection::verify(url.as_str(), profile.workspace_id.as_deref()).await?;
+                let views = self.replacement_views(&profile, &url, &saved).await?;
+                let mut catalog = self.catalog.clone();
+                *catalog.profile_mut(id)? = profile;
+                if let Err(error) = self.save(catalog) {
+                    for view in views {
+                        let _ = view.close();
+                    }
+                    return Err(error);
+                }
+                Ok(views)
+            }
+            .await;
+            match started {
+                Ok(views) => {
+                    let replaced = self.replace_views(id, views);
+                    journal.finish(&self.root.root)?;
+                    replaced
+                }
+                Err(error) => {
+                    self.stop_local(id).await?;
+                    journal.recover(&self.root.root, &mut self.catalog)?;
+                    let url = self
+                        .local_url(&previous)
+                        .await
+                        .context("The previous network settings could not restart")?;
+                    self.app
+                        .state::<crate::extension_ui::Kernels>()
+                        .set(id, &url);
+                    Err(error)
+                }
+            }
+        }
+        .await;
+        self.unfreeze(id);
+        result
+    }
+
     async fn perform(&mut self, action: Action) -> Result<()> {
         match action {
             Action::List => {}
@@ -911,6 +1457,18 @@ impl Host {
                 self.open(&id).await?;
             }
             Action::Edit { id, url } => self.edit(&id, &url).await?,
+            Action::Adopt { id, directory } => self.adopt(&id, Path::new(&directory)).await?,
+            Action::Network { id, network } => self.change_network(&id, network).await?,
+            Action::Startup { id, enabled } => {
+                let mut catalog = self.catalog.clone();
+                let profile = catalog.profile_mut(&id)?;
+                ensure!(
+                    matches!(profile.source, Source::Local { .. }),
+                    "Only an app-managed workspace can start with the app"
+                );
+                profile.start_on_launch = enabled;
+                self.save(catalog)?;
+            }
             Action::Join { url, code, name } => {
                 let program = RunnerProgram::bundled(&self.resources()?);
                 self.computers.join(&url, &code, &name, program).await?;
@@ -953,10 +1511,86 @@ impl Host {
     }
 
     async fn initial(&mut self, launch: LaunchOptions) -> Result<()> {
+        self.catalog.recover_networks(&self.root.root)?;
+        let resumed = self.catalog.recover_adoptions(&self.root.root).await?;
+        let mut startup_errors: Vec<_> = resumed.into_iter().map(|name| format!("{name}: the previous CLI kept ownership after an interrupted transfer; retry Run with this app")).collect();
+        let profiles: Vec<_> = self
+            .catalog
+            .profiles
+            .iter()
+            .filter(|profile| profile.start_on_launch)
+            .cloned()
+            .collect();
+        for profile in profiles {
+            if let Err(error) = self.local_url(&profile).await {
+                self.startup_retry.insert(
+                    profile.id.clone(),
+                    (1, tokio::time::Instant::now() + Duration::from_secs(2)),
+                );
+                startup_errors.push(format!("{}: {error:#}", profile.name));
+            }
+        }
         let restored = self.restore_update_views().await;
+        if launch.autostart {
+            restored?;
+            ensure!(
+                startup_errors.is_empty(),
+                "Workspace startup: {}",
+                startup_errors.join("; ")
+            );
+            return Ok(());
+        }
         let opened = self.initial_workspace(launch).await;
         opened?;
-        restored
+        restored?;
+        ensure!(
+            startup_errors.is_empty(),
+            "Workspace startup: {}",
+            startup_errors.join("; ")
+        );
+        Ok(())
+    }
+
+    async fn retry_startups(&mut self) {
+        let due: Vec<_> = self
+            .startup_retry
+            .iter()
+            .filter(|(_, (_, when))| *when <= tokio::time::Instant::now())
+            .map(|(id, (attempt, _))| (id.clone(), *attempt))
+            .collect();
+        if due.is_empty() {
+            return;
+        }
+        let mut errors = Vec::new();
+        for (id, attempt) in due {
+            self.startup_retry.remove(&id);
+            let Ok(profile) = self.catalog.profile(&id).cloned() else {
+                continue;
+            };
+            if !profile.start_on_launch {
+                continue;
+            }
+            if let Err(error) = self.local_url(&profile).await {
+                if attempt < 6 {
+                    self.startup_retry.insert(
+                        id,
+                        (
+                            attempt + 1,
+                            tokio::time::Instant::now()
+                                + Duration::from_secs(2u64.pow(attempt + 1).min(60)),
+                        ),
+                    );
+                }
+                errors.push(format!("{}: {error:#}", profile.name));
+            }
+        }
+        let previous = self.view.lock().expect("desktop view lock").error.clone();
+        let error = if errors.is_empty() {
+            previous.filter(|error| !error.starts_with("Workspace startup:"))
+        } else {
+            Some(format!("Workspace startup: {}", errors.join("; ")))
+        };
+        self.publish(false, error);
     }
 
     async fn initial_workspace(&mut self, launch: LaunchOptions) -> Result<()> {
@@ -1169,13 +1803,22 @@ impl Host {
                 install.update.install(install.bytes.as_slice())
             })
             .await??;
+            #[cfg(not(windows))]
+            crate::restart::restart(&self.app)?;
             self.app
                 .state::<Lifecycle>()
                 .phase
                 .store(2, Ordering::Release);
+            #[cfg(not(windows))]
+            self.app.exit(0);
+            #[cfg(windows)]
             self.app.restart();
+            Ok(())
         }
         .await;
+        if result.is_ok() {
+            return Ok(());
+        }
         // An installer or backup failure leaves the old installation usable. No database
         // restore is attempted: the original database has never been replaced.
         drop(leases);
@@ -1257,7 +1900,32 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
     supported_platform()?;
     let mut context = tauri::generate_context!();
     context.package_info_mut().version = zerolux::build::version().parse()?;
-    let app = tauri::Builder::default()
+    let wait_for_parent = launch.wait_for_parent;
+    let mut builder = tauri::Builder::default().plugin(
+        tauri::plugin::Builder::<tauri::Wry>::new("previous-instance")
+            .setup(move |app, _| {
+                if wait_for_parent {
+                    let root = std::env::var_os("ZEROLUX_DESKTOP_DATA_DIR")
+                        .map(PathBuf::from)
+                        .map(Ok)
+                        .unwrap_or_else(|| app.path().app_data_dir());
+                    local::wait_for_previous(&root?, Duration::from_secs(30))?;
+                }
+                Ok(())
+            })
+            .build(),
+    );
+    // A test's data-root override must never forward to the personal installation.
+    if std::env::var_os("ZEROLUX_DESKTOP_DATA_DIR").is_none() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            if !args.iter().any(|arg| arg == "--autostart") && app.try_state::<Commands>().is_some()
+            {
+                ask(app, Action::Reopen);
+            }
+        }));
+    }
+    let app = builder
+        .plugin(crate::autostart::plugin())
         .plugin(
             tauri_plugin_opener::Builder::new()
                 .open_js_links_on_click(false)
@@ -1275,6 +1943,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
         )
         .invoke_handler(tauri::generate_handler![
             workspace_action,
+            workspace_adoption_preview,
             open_link,
             choose_folder,
             crate::chrome::window_control,
@@ -1292,7 +1961,9 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             crate::updates::update_check,
             crate::updates::update_channel,
             crate::updates::update_download,
-            crate::updates::update_install
+            crate::updates::update_install,
+            crate::autostart::autostart_status,
+            crate::autostart::autostart_set
         ])
         .on_menu_event(|app, event| match event.id().as_ref() {
             "workspaces" => show_manager(app, None),
@@ -1300,6 +1971,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             _ => {}
         })
         .setup(move |app| {
+            crate::autostart::refresh(app.handle());
             let view = Arc::new(Mutex::new(View::default()));
             let page_view = view.clone();
             let (send, mut commands) = mpsc::channel(4);
@@ -1311,6 +1983,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             let popup = app.handle().clone();
             let manager =
                 WebviewWindowBuilder::new(app, MANAGER, WebviewUrl::App("desktop.html".into()))
+                    .visible(!launch.autostart)
                     .title("ZeroLux — Workspaces")
                     .inner_size(760.0, 720.0)
                     .min_inner_size(600.0, 520.0)
@@ -1446,23 +2119,27 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                     view,
                     stopped: stopped.clone(),
                     computers,
+                    startup_retry: HashMap::new(),
                 };
                 host.publish(true, None);
+                let background = launch.autostart;
                 let error = host
                     .initial(launch)
                     .await
                     .err()
                     .map(|error| format!("{error:#}"));
                 host.publish(false, error.clone());
-                if error.is_some() {
+                if error.is_some() && !background {
                     show_manager(&host.app, None);
                 }
+                let mut startup_tick = tokio::time::interval(Duration::from_secs(2));
                 loop {
                     if *stopped.borrow() {
                         break;
                     }
                     let command = tokio::select! {
-                        _=stopped.wait_for(|stop| *stop)=>break,
+                        _=async { let _ = stopped.wait_for(|stop| *stop).await; }=>break,
+                        _=startup_tick.tick()=>{ host.retry_startups().await; continue; },
                         // A joined workspace connected, broke or stopped: shown as it is,
                         // keeping what the last action said.
                         _=host.computers.changed()=>{
@@ -1551,6 +2228,40 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_window_replacement_keeps_every_survivor_tracked_for_unfreeze() {
+        let mut current = vec![1, 2];
+        assert!(
+            replace_tracked(
+                &mut current,
+                vec![3, 4],
+                |id| {
+                    ensure!(*id != 4, "fixture show failure");
+                    Ok(())
+                },
+                |_| Ok(())
+            )
+            .is_err()
+        );
+        assert_eq!(current, vec![3, 4, 1, 2]);
+        let mut current = vec![1, 2];
+        assert!(
+            replace_tracked(
+                &mut current,
+                vec![3],
+                |_| Ok(()),
+                |id| {
+                    ensure!(*id != 2, "fixture close failure");
+                    Ok(())
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(current, vec![3, 2]);
+        replace_tracked(&mut current, vec![4], |_| Ok(()), |_| Ok(())).unwrap();
+        assert_eq!(current, vec![4]);
+    }
 
     fn draft(text: &str) -> Vec<SavedView> {
         vec![SavedView {

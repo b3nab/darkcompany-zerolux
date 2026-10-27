@@ -1,6 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_os = "macos")]
+mod activity;
 mod app;
+mod autostart;
 mod catalog;
 mod chrome;
 mod computer;
@@ -10,6 +13,8 @@ mod extension_ui;
 mod local;
 mod notify;
 mod preferences;
+#[cfg(not(windows))]
+mod restart;
 mod tray;
 mod updates;
 
