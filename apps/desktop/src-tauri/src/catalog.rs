@@ -17,6 +17,129 @@ use crate::{
 const FILE: &str = "workspaces.json";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Managed {
+    pub directory: PathBuf,
+    pub database: PathBuf,
+    pub host_id: String,
+    pub network: zerolux::handoff::Network,
+    #[serde(default)]
+    pub private_services: bool,
+}
+
+/// Private recovery state, written before the CLI stops. Its profile keeps browser storage
+/// and Keychain identity; the kernel's receipt resolves crashes around catalog persistence.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct AdoptionJournal {
+    pub previous: Profile,
+    pub info: zerolux::handoff::Info,
+    pub private_before: Option<serde_json::Value>,
+}
+
+fn confirmed_save(root: &Path, catalog: &Catalog, result: Result<()>) -> Result<()> {
+    if let Err(error) = result {
+        let observed = Catalog::load(root)?;
+        ensure!(
+            observed == *catalog,
+            "The recovered connection was not persisted: {error:#}"
+        );
+        catalog
+            .save(root)
+            .context("Confirm the recovered connection after a persistence error")?;
+    }
+    Ok(())
+}
+
+fn remove_journal(root: &Path, filename: &str) -> Result<()> {
+    std::fs::remove_file(root.join(filename))?;
+    #[cfg(unix)]
+    std::fs::File::open(root)?.sync_all()?;
+    Ok(())
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct NetworkJournal {
+    pub previous: Profile,
+}
+
+impl NetworkJournal {
+    fn filename(&self) -> Result<String> {
+        Ok(format!(
+            "network-{}.json",
+            Uuid::parse_str(&self.previous.id)?
+        ))
+    }
+    pub fn save(&self, root: &Path) -> Result<()> {
+        preferences::write_json(root, &self.filename()?, self)
+    }
+    pub fn finish(&self, root: &Path) -> Result<()> {
+        remove_journal(root, &self.filename()?)
+    }
+    pub fn recover(&self, root: &Path, catalog: &mut Catalog) -> Result<()> {
+        let current = catalog.profile(&self.previous.id)?;
+        ensure!(
+            current.workspace_id == self.previous.workspace_id
+                && current.directory(root) == self.previous.directory(root)
+                && current.database(root)? == self.previous.database(root)?,
+            "An interrupted network change belongs to different workspace files"
+        );
+        *catalog.profile_mut(&self.previous.id)? = self.previous.clone();
+        confirmed_save(root, catalog, catalog.save(root))?;
+        self.finish(root)
+    }
+}
+
+impl AdoptionJournal {
+    fn filename(&self) -> Result<String> {
+        let id = Uuid::parse_str(&self.previous.id)?;
+        Ok(format!("adoption-{id}.json"))
+    }
+
+    pub fn save(&self, root: &Path) -> Result<()> {
+        preferences::write_json(root, &self.filename()?, self)
+    }
+
+    pub async fn recover(&self, root: &Path, catalog: &mut Catalog) -> Result<bool> {
+        let decision = zerolux::handoff::Decision::read(&self.info, &self.previous.id).await?;
+        self.reconcile(root, catalog, decision.committed)?;
+        Ok(decision.committed)
+    }
+
+    fn reconcile(&self, root: &Path, catalog: &mut Catalog, committed: bool) -> Result<()> {
+        let current = catalog.profile(&self.previous.id)?;
+        let adopted = self.previous.adopted(&self.info)?;
+        ensure!(
+            current.workspace_id == self.previous.workspace_id
+                && (current.source == self.previous.source || current.managed == adopted.managed),
+            "An unfinished transfer conflicts with this connection; its files were not changed"
+        );
+        if !committed {
+            let file = format!("runtime-{}.json", self.previous.id);
+            match &self.private_before {
+                Some(value) => preferences::write_json(root, &file, value)?,
+                None => match std::fs::remove_file(root.join(file)) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                },
+            }
+        }
+        *catalog.profile_mut(&self.previous.id)? = if committed {
+            adopted
+        } else {
+            self.previous.clone()
+        };
+        // A rename can succeed before directory fsync fails. Read what is actually there;
+        // never assume an error left the old catalog on disk. Keep the journal on failure.
+        confirmed_save(root, catalog, catalog.save(root))?;
+        remove_journal(root, &self.filename()?)?;
+        // The tiny, private kernel receipt remains as evidence. Deleting it before the
+        // journal deletion is durable could turn a committed transfer into a rollback.
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Source {
     /// The earlier desktop kept its one local database directly in app-data.
@@ -43,10 +166,55 @@ pub struct Profile {
     /// False until drafts have been imported from the old kernel-origin browser store.
     #[serde(default)]
     pub app_ui: bool,
+    /// Explicitly adopted data stays in place, including its runtime identity and files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed: Option<Managed>,
+    #[serde(default)]
+    pub start_on_launch: bool,
 }
 
 impl Profile {
+    pub fn adopted(&self, info: &zerolux::handoff::Info) -> Result<Self> {
+        ensure!(
+            matches!(self.source, Source::Existing { .. }),
+            "Only an existing connection can be adopted"
+        );
+        ensure!(
+            self.workspace_id.as_deref() == Some(info.workspace_id.as_str()),
+            "The adopted files belong to a different workspace"
+        );
+        let mut profile = self.clone();
+        profile.source = Source::Local { legacy: false };
+        profile.managed = Some(Managed {
+            directory: info.directory.clone(),
+            database: info.database.clone(),
+            host_id: info.host_id.clone(),
+            network: info.network.clone(),
+            private_services: true,
+        });
+        profile.start_on_launch = true;
+        profile.name = info.workspace_name.clone();
+        Ok(profile)
+    }
+
+    pub fn network(&self, root: &Path) -> Result<Option<zerolux::handoff::Network>> {
+        let Some(directory) = self.directory(root) else {
+            return Ok(None);
+        };
+        if let Some(managed) = &self.managed {
+            return Ok(Some(managed.network.clone()));
+        }
+        Ok(Some(zerolux::handoff::Network::local(
+            crate::local::LocalWorkspace::port_at(&directory)?,
+        )))
+    }
+
     pub fn directory(&self, root: &Path) -> Option<PathBuf> {
+        if matches!(self.source, Source::Local { .. })
+            && let Some(managed) = &self.managed
+        {
+            return Some(managed.directory.clone());
+        }
         match self.source {
             Source::Local { legacy: true } => Some(root.to_owned()),
             Source::Local { legacy: false } => Some(root.join("workspaces").join(&self.id)),
@@ -55,10 +223,13 @@ impl Profile {
     }
 
     pub fn database(&self, root: &Path) -> Result<PathBuf> {
-        let database = self
-            .directory(root)
-            .context("This is not an app-managed workspace")?
-            .join("zerolux.db");
+        let database = match &self.managed {
+            Some(managed) => managed.database.clone(),
+            None => self
+                .directory(root)
+                .context("This is not an app-managed workspace")?
+                .join("zerolux.db"),
+        };
         ensure!(
             self.workspace_id.is_none() || database.is_file(),
             "This local workspace's database is missing"
@@ -108,6 +279,54 @@ impl Default for Catalog {
 }
 
 impl Catalog {
+    pub fn recover_networks(&mut self, root: &Path) -> Result<()> {
+        for entry in std::fs::read_dir(root)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("network-") || !name.ends_with(".json") {
+                continue;
+            }
+            let journal: NetworkJournal = serde_json::from_slice(&std::fs::read(entry.path())?)?;
+            ensure!(
+                name == journal.filename()?,
+                "The network journal names a different connection"
+            );
+            journal.recover(root, self)?;
+        }
+        Ok(())
+    }
+
+    pub fn pending_adoptions(root: &Path) -> Result<Vec<AdoptionJournal>> {
+        let mut pending = Vec::new();
+        for entry in std::fs::read_dir(root)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("adoption-") || !name.ends_with(".json") {
+                continue;
+            }
+            let journal: AdoptionJournal = serde_json::from_slice(&std::fs::read(entry.path())?)
+                .context("Read the interrupted workspace transfer")?;
+            ensure!(
+                name == journal.filename()?,
+                "The transfer journal names a different connection"
+            );
+            pending.push(journal);
+        }
+        Ok(pending)
+    }
+
+    pub async fn recover_adoptions(&mut self, root: &Path) -> Result<Vec<String>> {
+        let mut resumed = Vec::new();
+        for journal in Self::pending_adoptions(root)? {
+            if !journal.recover(root, self).await? {
+                resumed.push(journal.previous.name);
+            }
+        }
+        Ok(resumed)
+    }
+
     pub fn load(root: &Path) -> Result<Self> {
         let mut catalog: Self = match std::fs::read(root.join(FILE)) {
             Ok(bytes) => serde_json::from_slice(&bytes).context("Invalid workspace connections")?,
@@ -134,6 +353,8 @@ impl Catalog {
                 source: Source::Existing { url: url.clone() },
                 legacy_browser: true,
                 app_ui: false,
+                managed: None,
+                start_on_launch: false,
             };
             catalog.selected = Some(profile.id.clone());
             catalog.profiles.push(profile);
@@ -148,6 +369,8 @@ impl Catalog {
                 source: Source::Local { legacy: true },
                 legacy_browser: selected || previous.is_none(),
                 app_ui: false,
+                managed: None,
+                start_on_launch: false,
             };
             if selected {
                 catalog.selected = Some(profile.id.clone());
@@ -193,6 +416,8 @@ impl Catalog {
             },
             legacy_browser: false,
             app_ui: true,
+            managed: None,
+            start_on_launch: false,
         };
         profile.observe(verified)?;
         let id = profile.id.clone();
@@ -214,6 +439,8 @@ impl Catalog {
             source: Source::Local { legacy: false },
             legacy_browser: false,
             app_ui: true,
+            managed: None,
+            start_on_launch: false,
         });
         Ok(id)
     }
@@ -251,6 +478,10 @@ impl Catalog {
             match &profile.source {
                 Source::Existing { url } => {
                     ensure!(
+                        profile.managed.is_none() && !profile.start_on_launch,
+                        "External connections cannot own local runtime settings"
+                    );
+                    ensure!(
                         kernel_url(url)?.as_str() == url,
                         "Saved address must be canonical"
                     );
@@ -261,6 +492,19 @@ impl Catalog {
                 }
                 Source::Local { legacy: true } => legacy_local += 1,
                 Source::Local { .. } => {}
+            }
+            if let Some(managed) = &profile.managed {
+                ensure!(
+                    managed.directory.is_absolute()
+                        && managed.database.is_absolute()
+                        && !managed.host_id.trim().is_empty(),
+                    "Managed workspace paths and host identity are required"
+                );
+                managed.network.validate()?;
+                ensure!(
+                    managed.network.port != 0,
+                    "A managed workspace keeps its listening port"
+                );
             }
             legacy_browser += usize::from(profile.legacy_browser);
         }
@@ -279,6 +523,167 @@ impl Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn journals_reconcile_crashes_on_both_sides_of_commit_and_post_rename_errors() {
+        for committed in [false, true] {
+            let app = tempfile::tempdir().unwrap();
+            let data = tempfile::tempdir().unwrap();
+            let database = data.path().join("company.sqlite");
+            std::fs::write(&database, b"do not restore database").unwrap();
+            let mut catalog = Catalog::default();
+            let id = catalog
+                .add_existing(&verified("http://127.0.0.1:4310", "kept", "Company"))
+                .unwrap();
+            let previous = catalog.profile(&id).unwrap().clone();
+            let info = zerolux::handoff::Info {
+                instance: Uuid::new_v4().to_string(),
+                workspace_id: "kept".into(),
+                workspace_name: "Company".into(),
+                host_id: "host".into(),
+                version: "0.0.1".into(),
+                schema: zerolux::build::schema().into(),
+                directory: data.path().into(),
+                database: database.clone(),
+                network: zerolux::handoff::Network::local(4310),
+                external_livekit: false,
+                authenticated: true,
+            };
+            let journal = AdoptionJournal {
+                previous: previous.clone(),
+                info: info.clone(),
+                private_before: Some(serde_json::json!({"fixture": "old-private-config"})),
+            };
+            journal.save(app.path()).unwrap();
+            let adopted = previous.adopted(&info).unwrap();
+            *catalog.profile_mut(&id).unwrap() = adopted.clone();
+            catalog.save(app.path()).unwrap(); // crash after rename, before IPC commit
+            preferences::write_json(
+                app.path(),
+                &format!("runtime-{id}.json"),
+                &serde_json::json!({"fixture": "new-private-config"}),
+            )
+            .unwrap();
+            journal
+                .reconcile(app.path(), &mut catalog, committed)
+                .unwrap();
+            let recovered = Catalog::load(app.path()).unwrap();
+            assert_eq!(
+                recovered.profile(&id).unwrap(),
+                if committed { &adopted } else { &previous }
+            );
+            assert!(!app.path().join(journal.filename().unwrap()).exists());
+            assert_eq!(
+                std::fs::read(&database).unwrap(),
+                b"do not restore database"
+            );
+            if !committed {
+                let private: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(app.path().join(format!("runtime-{id}.json"))).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(private["fixture"], "old-private-config");
+            }
+            // A post-rename fsync failure has already put this catalog on disk. A pre-rename
+            // failure has not: recovery must distinguish them by reading the actual file.
+            confirmed_save(
+                app.path(),
+                &recovered,
+                Err(anyhow::anyhow!("fixture: fsync after rename")),
+            )
+            .unwrap();
+            let mut other = recovered.clone();
+            other.profile_mut(&id).unwrap().name = "not persisted".into();
+            assert!(
+                confirmed_save(
+                    app.path(),
+                    &other,
+                    Err(anyhow::anyhow!("fixture: rename failed"))
+                )
+                .is_err()
+            );
+            if committed {
+                let network = NetworkJournal {
+                    previous: adopted.clone(),
+                };
+                network.save(app.path()).unwrap();
+                catalog
+                    .profile_mut(&id)
+                    .unwrap()
+                    .managed
+                    .as_mut()
+                    .unwrap()
+                    .network
+                    .port = 5432;
+                catalog.save(app.path()).unwrap();
+                catalog.recover_networks(app.path()).unwrap();
+                assert_eq!(catalog.profile(&id).unwrap(), &adopted);
+            }
+        }
+    }
+
+    #[test]
+    fn adoption_preserves_profile_storage_and_external_files_and_rejects_other_identities() {
+        let app = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let database = data.path().join("company.sqlite");
+        std::fs::write(&database, b"existing database is not opened by the catalog").unwrap();
+        std::fs::write(data.path().join("host-id"), "host-kept").unwrap();
+        std::fs::write(data.path().join("storage-file"), "kept").unwrap();
+        let mut catalog = Catalog::default();
+        let id = catalog
+            .add_existing(&verified(
+                "http://127.0.0.1:4310",
+                "workspace-kept",
+                "Company",
+            ))
+            .unwrap();
+        catalog.selected = Some(id.clone());
+        let previous = catalog.profile(&id).unwrap().clone();
+        let mut info = zerolux::handoff::Info {
+            instance: "instance".into(),
+            workspace_id: "different-workspace".into(),
+            workspace_name: "Company".into(),
+            host_id: "host-kept".into(),
+            version: "0.0.1".into(),
+            schema: zerolux::build::schema().into(),
+            directory: data.path().to_owned(),
+            database: database.clone(),
+            network: zerolux::handoff::Network::local(4310),
+            external_livekit: false,
+            authenticated: true,
+        };
+        assert!(previous.adopted(&info).is_err());
+        info.workspace_id = "workspace-kept".into();
+        let adopted = previous.adopted(&info).unwrap();
+        assert_eq!(adopted.id, previous.id);
+        assert_eq!(adopted.workspace_id, previous.workspace_id);
+        assert_eq!(adopted.legacy_browser, previous.legacy_browser);
+        assert_eq!(adopted.app_ui, previous.app_ui);
+        assert!(adopted.start_on_launch);
+        assert_eq!(adopted.directory(app.path()).unwrap(), data.path());
+        assert_eq!(adopted.database(app.path()).unwrap(), database);
+        *catalog.profile_mut(&id).unwrap() = adopted;
+        catalog.save(app.path()).unwrap();
+        assert_eq!(Catalog::load(app.path()).unwrap(), catalog);
+        assert_eq!(
+            std::fs::read(database).unwrap(),
+            b"existing database is not opened by the catalog"
+        );
+        assert_eq!(
+            std::fs::read_to_string(data.path().join("storage-file")).unwrap(),
+            "kept"
+        );
+        assert!(!app.path().join("workspaces").exists());
+        let wire = serde_json::to_value(info.network).unwrap();
+        assert!(wire.get("publicOrigin").is_some() && wire.get("publicLivekitUrl").is_some());
+        assert!(
+            serde_json::to_value(catalog.profile(&id).unwrap())
+                .unwrap()
+                .get("start_on_launch")
+                .is_some()
+        );
+    }
 
     fn verified(url: &str, id: &str, name: &str) -> VerifiedWorkspace {
         VerifiedWorkspace {
