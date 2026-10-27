@@ -703,5 +703,30 @@ mod tests {
             .unwrap();
         assert_eq!(count, 2);
         source.close().await.unwrap();
+
+        // Installation closes the kernel first, so SQLite's WAL and shared memory are gone.
+        assert!(!root.path().join("workspace.db-wal").exists());
+        assert!(!root.path().join("workspace.db-shm").exists());
+        let closed_target = root.path().join("closed-backup.db");
+        backup(&database, &closed_target).await.unwrap();
+        let mut snapshot = SqliteConnection::connect_with(
+            &SqliteConnectOptions::new()
+                .filename(&closed_target)
+                .read_only(true),
+        )
+        .await
+        .unwrap();
+        let bodies: Vec<String> = sqlx::query_scalar("SELECT body FROM messages ORDER BY rowid")
+            .fetch_all(&mut snapshot)
+            .await
+            .unwrap();
+        assert_eq!(bodies, ["kept", "after failure"]);
+        snapshot.close().await.unwrap();
+        let saved = std::fs::read(&closed_target).unwrap();
+        assert!(
+            backup(&database, &closed_target).await.is_err(),
+            "A closed-database backup is never overwritten"
+        );
+        assert_eq!(std::fs::read(&closed_target).unwrap(), saved);
     }
 }
