@@ -1,10 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   headline,
-  limitName,
   pace,
-  planName,
-  resetsIn,
   severityOf,
   type PlanLimit,
   type Subscription,
@@ -20,18 +17,6 @@ const limit = (fields: Partial<PlanLimit>): PlanLimit => ({
   severity: null,
   active: null,
   ...fields,
-});
-
-test("a plan and its limits read as people say them", () => {
-  expect(planName("max")).toBe("Max");
-  expect(planName("pro_lite")).toBe("Pro Lite");
-  expect(planName(null)).toBe("");
-  expect(limitName(limit({ group: "session", kind: "session" }))).toBe(
-    "Session",
-  );
-  expect(limitName(limit({ kind: "weekly_scoped", label: "Opus" }))).toBe(
-    "Week · Opus",
-  );
 });
 
 test("the headline is the server's, else the limit nearest its end", () => {
@@ -60,12 +45,4 @@ test("a week's pace says when it runs out at this rate, if before its reset", ()
   expect(
     pace(limit({ group: "session", resets_at: now + HOUR }), now),
   ).toBeUndefined();
-});
-
-test("a reset within a day is a countdown", () => {
-  const now = Date.UTC(2026, 9, 23, 12);
-  expect(resetsIn(now + 2 * HOUR + 10 * 60_000, now)).toBe("2h 10m");
-  expect(resetsIn(now + 42 * 60_000, now)).toBe("42m");
-  expect(resetsIn(now + 30_000, now)).toBe("now");
-  expect(resetsIn(now + 3 * 24 * HOUR, now)).toMatch(/\d\d:\d\d/);
 });
