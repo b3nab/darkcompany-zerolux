@@ -216,19 +216,19 @@ if (import.meta.main) {
       }),
     ) as {
       tagName: string;
-      assets: { apiUrl: string; url: string }[];
+      assets: { name: string; apiUrl: string; url: string }[];
     };
     if (release.tagName !== tag)
       throw new Error("Desktop assets belong to another release");
     const prefix = `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}/`;
-    // Tauri Action uses API asset URLs; publish the same assets at their versioned URLs.
+    // Draft asset URLs use a temporary tag; publish the verified assets at the final tag.
     for (const [platform, artifact] of Object.entries(desktop.platforms)) {
       const asset = release.assets.find(
         (asset) => artifact.url === asset.apiUrl || artifact.url === asset.url,
       );
-      if (!asset || !asset.url.startsWith(prefix))
+      if (!asset)
         throw new Error(`Desktop artifact is not in this release: ${platform}`);
-      artifact.url = asset.url;
+      artifact.url = `${prefix}${encodeURIComponent(asset.name)}`;
     }
     const kernels: Record<string, Artifact> = {};
     for (const target of kernelTargets) {
