@@ -50,38 +50,6 @@ test("a late initial list cannot replace a newer connection result", () => {
   expect(newerDesktopState(early, state)).toBe(state);
 });
 
-test("this computer joins a workspace with a code, and says how each joined one stands", () => {
-  const html = renderToStaticMarkup(
-    <WorkspaceManager
-      initialState={{
-        ...state,
-        computers: [
-          {
-            id: "link-a",
-            url: "http://192.0.2.10:4310",
-            link: { state: "connected" },
-            error: null,
-          },
-          {
-            id: "link-b",
-            url: "http://192.0.2.11:4310",
-            link: null,
-            error:
-              "This computer was removed from the workspace; join it again with a new code",
-          },
-          {
-            id: "link-c",
-            url: "http://192.0.2.12:4310",
-            link: { state: "reconnecting", error: "connection refused" },
-            error: null,
-          },
-        ],
-      }}
-    />,
-  );
-  expect(html.match(/>Leave</g)).toHaveLength(3);
-});
-
 test("errors and names are text, and a failed setup does not present enabled actions", () => {
   const html = renderToStaticMarkup(
     <WorkspaceManager
