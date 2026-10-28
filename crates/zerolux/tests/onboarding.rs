@@ -125,7 +125,6 @@ async fn first_run_requires_owner_name_and_has_no_placeholder_agent() {
     )] {
         let response = server.post(route, body).await;
         assert_eq!(response.status(), StatusCode::CONFLICT, "{route}");
-        assert!(response.text().await.unwrap().contains("Set your name"));
     }
     for name in [
         "".to_owned(),

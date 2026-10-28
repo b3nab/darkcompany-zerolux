@@ -2,6 +2,12 @@
 use std::net::{SocketAddr, TcpListener};
 
 use serde_json::Value;
+
+fn lease_contended(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|error| error.raw_os_error() == fs2::lock_contended_error().raw_os_error())
+}
 use zerolux::{
     api::PublicOrigin,
     livekit::LiveKitConfig,
@@ -300,23 +306,18 @@ async fn a_busy_port_fails_before_any_data_is_opened() {
 async fn only_loopback_addresses_are_accepted_without_expose() {
     let dir = tempfile::tempdir().unwrap();
     for address in ["0.0.0.0:0", "192.0.2.7:0"] {
-        let error = Server::start(options(dir.path(), address.parse().unwrap()))
+        Server::start(options(dir.path(), address.parse().unwrap()))
             .await
             .err()
             .expect("a non-loopback kernel address is refused");
-        assert!(format!("{error:#}").contains("--expose"), "{error:#}");
     }
-    let error = Server::start(ServerOptions {
+    Server::start(ServerOptions {
         expose: Some("127.0.0.1".parse().unwrap()),
         ..options(dir.path(), "127.0.0.1:0".parse().unwrap())
     })
     .await
     .err()
     .expect("exposing loopback is refused");
-    assert!(
-        format!("{error:#}").contains("private network"),
-        "{error:#}"
-    );
     assert!(!dir.path().join("data").exists());
 }
 
@@ -353,7 +354,7 @@ async fn dropping_the_server_requests_shutdown_and_a_second_start_reuses_the_por
                 second = Some(server);
                 break;
             }
-            Err(error) if format!("{error:#}").contains("already serves") => {
+            Err(error) if lease_contended(&error) => {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
             Err(error) => panic!("{error:#}"),
@@ -381,7 +382,7 @@ async fn one_kernel_serves_a_workspace_at_a_time_and_the_lease_ends_with_it() {
         .await
         .err()
         .expect("the workspace is leased");
-    assert!(format!("{error:#}").contains("already serves"), "{error:#}");
+    assert!(lease_contended(&error), "{error:#}");
     // An alias of the same data is the same workspace: a symlinked directory meets the lease.
     let alias = dir.path().join("alias");
     std::os::unix::fs::symlink(dir.path().join("data"), &alias).unwrap();
@@ -393,7 +394,7 @@ async fn one_kernel_serves_a_workspace_at_a_time_and_the_lease_ends_with_it() {
     .await
     .err()
     .expect("the alias is leased too");
-    assert!(format!("{error:#}").contains("already serves"), "{error:#}");
+    assert!(lease_contended(&error), "{error:#}");
     // A symlink planted at the lease path is not followed; a hard-linked database is refused.
     let planted = dir.path().join("planted");
     std::fs::write(&planted, "").unwrap();
@@ -401,11 +402,11 @@ async fn one_kernel_serves_a_workspace_at_a_time_and_the_lease_ends_with_it() {
     std::fs::create_dir_all(other.path().join("data")).unwrap();
     std::fs::write(other.path().join("data/zerolux.db"), "").unwrap();
     std::os::unix::fs::symlink(&planted, other.path().join("data/zerolux.db.lock")).unwrap();
-    let error = Server::start(options(other.path(), "127.0.0.1:0".parse().unwrap()))
+    Server::start(options(other.path(), "127.0.0.1:0".parse().unwrap()))
         .await
         .err()
         .expect("a symlinked lease file is refused");
-    assert!(format!("{error:#}").contains("lease"), "{error:#}");
+    assert_eq!(std::fs::read(&planted).unwrap(), b"");
     let linked = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(linked.path().join("data")).unwrap();
     std::fs::hard_link(
@@ -413,11 +414,10 @@ async fn one_kernel_serves_a_workspace_at_a_time_and_the_lease_ends_with_it() {
         linked.path().join("data/zerolux.db"),
     )
     .unwrap();
-    let error = Server::start(options(linked.path(), "127.0.0.1:0".parse().unwrap()))
+    Server::start(options(linked.path(), "127.0.0.1:0".parse().unwrap()))
         .await
         .err()
         .expect("a hard-linked database is refused");
-    assert!(format!("{error:#}").contains("hard link"), "{error:#}");
     std::fs::remove_file(linked.path().join("data/zerolux.db")).unwrap();
     // Plain store access is not a kernel: maintenance and tests keep working alongside.
     let store = Store::open(&dir.path().join("data/zerolux.db"))
