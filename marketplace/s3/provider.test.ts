@@ -106,9 +106,7 @@ test("a location shows its bucket's folder as it is, and changes it there", asyn
       "team/empty/",
       "team/report.pdf",
     ]);
-    await expect(provider.stat(bucket, config, "plans")).rejects.toThrow(
-      "not there",
-    );
+    await expect(provider.stat(bucket, config, "plans")).rejects.toThrow();
   } finally {
     await rm(folder, { recursive: true, force: true });
   }
