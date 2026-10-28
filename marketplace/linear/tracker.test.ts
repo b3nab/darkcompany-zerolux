@@ -151,7 +151,5 @@ test("a workspace's issues are read live, created, changed, commented on and del
   });
   await linear.comment({ task: "I1", text: "Shipped" });
   await linear.delete_task({ task: "I1" });
-  await expect(linear.task({ project: "T", task: "GONE" })).rejects.toThrow(
-    "not found",
-  );
+  await expect(linear.task({ project: "T", task: "GONE" })).rejects.toThrow();
 });

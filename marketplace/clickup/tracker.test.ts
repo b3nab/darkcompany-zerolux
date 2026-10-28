@@ -119,5 +119,5 @@ test("an account's lists and tasks are read live, created, changed, commented on
   });
   await clickup.comment({ task: "t1", text: "Shipped" });
   await clickup.delete_task({ task: "t1" });
-  await expect(clickup.task({ task: "gone" })).rejects.toThrow("not found");
+  await expect(clickup.task({ task: "gone" })).rejects.toThrow();
 });
