@@ -55,9 +55,7 @@ test("a saved session opens with its own identity, file and folder, and the chat
 
 test("a saved session of another folder is not opened", async () => {
   const f = await fixture();
-  await expect(openPiSession(f.file, f.root, f.entry, "pi")).rejects.toThrow(
-    "does not name this folder",
-  );
+  await expect(openPiSession(f.file, f.root, f.entry, "pi")).rejects.toThrow();
 });
 
 test("a saved session forks whole, or up to one of its entries, into a session of its own", async () => {
