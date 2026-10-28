@@ -100,8 +100,8 @@ a workspace that runs elsewhere, to run your sessions there. See
 ### Kernel on a computer or server
 
 Each release has the kernel for macOS, Linux and Windows as a single file, with everything it
-runs inside: LiveKit, the web app, sign-in, the runners of the sessions it starts and the
-official extensions, with Bun and uv to run them. Download the one for your system and start
+runs inside: LiveKit, the web app, sign-in and the runners of the sessions it starts, with
+Bun and uv to run extensions installed separately. Download the one for your system and start
 it:
 
 ```sh
