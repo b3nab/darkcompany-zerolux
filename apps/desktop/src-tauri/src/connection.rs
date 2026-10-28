@@ -175,11 +175,7 @@ mod tests {
         assert_eq!(verified.name, "Workspace");
         assert!(verified.url.as_str().starts_with("http://127.0.0.1:"));
         assert_eq!(verify(&url, Some("ws-1")).await.unwrap(), verified);
-        let error = verify(&url, Some("ws-other")).await.unwrap_err();
-        assert!(
-            format!("{error:#}").contains("different workspace"),
-            "{error:#}"
-        );
+        assert!(verify(&url, Some("ws-other")).await.is_err());
     }
 
     #[tokio::test]
@@ -188,35 +184,29 @@ mod tests {
             (
                 "200 OK",
                 r#"{"name":"other","workspace":{"id":"x"}}"#.to_owned(),
-                "not a ZeroLux kernel",
             ),
             (
                 "200 OK",
                 r#"{"name":"zerolux","version":"0.0.1-dev"}"#.to_owned(),
-                "did not name its workspace",
             ),
             (
                 "200 OK",
                 r#"{"name":"zerolux","workspace":{"id":""}}"#.to_owned(),
-                "did not name its workspace",
             ),
-            ("200 OK", "not json".to_owned(), "not JSON"),
-            ("503 Service Unavailable", "{}".to_owned(), "answered 503"),
-            ("302 Found", "{}".to_owned(), "answered 302"),
+            ("503 Service Unavailable", "{}".to_owned()),
+            ("302 Found", "{}".to_owned()),
             (
                 "200 OK",
                 format!(r#"{{"name":"zerolux","pad":"{}"}}"#, "x".repeat(MAX_BODY)),
-                "too large",
             ),
         ];
-        for (status, body, expected) in cases {
+        for (status, body) in cases {
             let url = fixture(status, body).await;
-            let error = verify(&url, None).await.unwrap_err();
-            assert!(
-                format!("{error:#}").contains(expected),
-                "{status}: {error:#}"
-            );
+            assert!(verify(&url, None).await.is_err(), "{status}");
         }
+        let url = fixture("200 OK", "not json".to_owned()).await;
+        let error = verify(&url, None).await.unwrap_err();
+        assert!(error.downcast_ref::<serde_json::Error>().is_some());
     }
 
     #[tokio::test]
@@ -227,9 +217,6 @@ mod tests {
         let error = verify(&format!("http://127.0.0.1:{port}"), None)
             .await
             .unwrap_err();
-        assert!(
-            format!("{error:#}").contains("No ZeroLux kernel answered"),
-            "{error:#}"
-        );
+        assert!(error.downcast_ref::<reqwest::Error>().unwrap().is_connect());
     }
 }

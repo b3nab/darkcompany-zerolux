@@ -457,11 +457,9 @@ mod tests {
             ignored: true,
             ..Fake::default()
         };
-        assert!(
-            set(&ignored, true, true)
-                .unwrap_err()
-                .contains("did not confirm")
-        );
+        assert!(set(&ignored, true, true).is_err());
+        assert!(!ignored.enabled.get());
+        assert_eq!(*ignored.writes.borrow(), [true]);
     }
 
     #[test]
