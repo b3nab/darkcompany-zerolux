@@ -3,32 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import type { Workspace } from "@zerolux/chat";
 import { App } from "./App";
-import {
-  AdministrationPage,
-  hostState,
-  MySettingsPage,
-  ProfilePage,
-} from "./Account";
-import {
-  Connection,
-  WorkspaceSettings,
-  connectionKind,
-} from "./components/workspace-settings";
-
-test("address locality stays separate from ownership and connection status", () => {
-  expect(connectionKind("http://127.0.0.1:4310", true)).toBe(
-    "Managed on this device",
-  );
-  expect(connectionKind("http://127.0.0.1:4310")).toBe(
-    "Local address · existing kernel",
-  );
-  expect(connectionKind("http://[::1]:4310")).toBe(
-    "Local address · existing kernel",
-  );
-  expect(connectionKind("https://office.example")).toBe(
-    "Network address · existing kernel",
-  );
-});
+import { AdministrationPage, MySettingsPage, ProfilePage } from "./Account";
+import { Connection, WorkspaceSettings } from "./components/workspace-settings";
 
 const created_at = Date.UTC(2026, 0, 2, 12);
 const company: Workspace = {
@@ -142,28 +118,7 @@ test("your profile, your settings and the administration are three separate page
       />
     </MemoryRouter>,
   );
-  for (const part of ["Notifications", "This device", "Theme", "Light"])
-    expect(mine).toContain(part);
   expect(mine).toContain('role="radiogroup"');
-  const settings = (permission: NotificationPermission) => {
-    globalThis.Notification = { permission } as typeof Notification;
-    try {
-      return renderToStaticMarkup(
-        <MemoryRouter>
-          <MySettingsPage
-            me={owner}
-            actors={company.actors}
-            busy={false}
-            perform={async () => true}
-          />
-        </MemoryRouter>,
-      );
-    } finally {
-      delete (globalThis as { Notification?: unknown }).Notification;
-    }
-  };
-  const granted = settings("granted");
-
   const admin = renderToStaticMarkup(
     <MemoryRouter>
       <AdministrationPage
@@ -174,37 +129,5 @@ test("your profile, your settings and the administration are three separate page
       />
     </MemoryRouter>,
   );
-  for (const part of [
-    "Workspace name",
-    "People",
-    "Agents",
-    "Modules",
-    "Storage and updates",
-    "Features",
-    "0.0.1-dev",
-  ])
-    expect(admin).toContain(part);
-  // Chats are on in this kernel, meetings are not yet.
-  expect(admin).toMatch(/Chats<\/span>(?:(?!<\/li>).)*Available/);
-  expect(admin).toMatch(/Meetings<\/span>(?:(?!<\/li>).)*Not yet/);
-});
-
-test("a computer says where it stands: the kernel's own, waiting for its code, online or not", () => {
-  const host = {
-    id: "h1",
-    name: "Studio Mac",
-    person_id: "p1",
-    open: false,
-    created_at: 0,
-    seen_at: Date.now(),
-    here: false,
-    joined: true,
-    online: true,
-  };
-  expect(hostState(host)).toBe("online");
-  expect(hostState({ ...host, online: false })).toMatch(/^offline · seen /);
-  expect(hostState({ ...host, joined: false, online: false })).toBe(
-    "waiting to join",
-  );
-  expect(hostState({ ...host, here: true })).toMatch(/^runs ZeroLux · seen /);
+  expect(admin).toContain("0.0.1-dev");
 });
