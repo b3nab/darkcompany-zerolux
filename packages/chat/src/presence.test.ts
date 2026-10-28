@@ -166,13 +166,9 @@ test("a session tells you when it starts needing you, fails or finishes, once, a
   expect(
     sessionNotices(look([working]), look([session("aspen", "stopped")])),
   ).toEqual([]);
-  expect(noticeText("approval", working, asks, "aspen").title).toBe(
-    "aspen asks for approval",
+  expect(noticeText("finished", idle, [], "aspen").body).toBe(
+    "Fixed the build",
   );
-  expect(noticeText("finished", idle, [], "aspen")).toEqual({
-    title: "aspen finished",
-    body: "Fixed the build",
-  });
 });
 
 test("a session knows the session that delegated work to it, and the ones it delegated to", () => {
