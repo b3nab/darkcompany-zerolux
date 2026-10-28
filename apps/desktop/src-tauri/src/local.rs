@@ -26,7 +26,7 @@ pub fn wait_for_previous(root: &std::path::Path, timeout: std::time::Duration) -
     loop {
         match file.try_lock_exclusive() {
             Ok(()) => return Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < until => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() && std::time::Instant::now() < until => std::thread::sleep(std::time::Duration::from_millis(50)),
             Err(error) => return Err(error).context("The previous ZeroLux app has not closed; the update did not open another workspace"),
         }
     }

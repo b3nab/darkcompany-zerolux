@@ -206,9 +206,9 @@ impl Decision {
                 Ok(lock) => break lock,
                 Err(error)
                     if error.chain().any(|cause| {
-                        cause
-                            .downcast_ref::<std::io::Error>()
-                            .is_some_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
+                        cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                            error.raw_os_error() == fs2::lock_contended_error().raw_os_error()
+                        })
                     }) && tokio::time::Instant::now() < until =>
                 {
                     tokio::time::sleep(Duration::from_millis(50)).await
