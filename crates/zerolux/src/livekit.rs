@@ -3,6 +3,7 @@
 
 use std::{
     fs::OpenOptions,
+    io::ErrorKind,
     net::{IpAddr, Ipv4Addr, TcpListener, UdpSocket},
     path::PathBuf,
     process::Stdio,
@@ -19,7 +20,6 @@ use livekit_api::{
     },
 };
 use tokio::{
-    net::TcpStream,
     process::{Child, Command},
     sync::{Mutex, Notify, watch},
 };
@@ -467,12 +467,6 @@ async fn start_managed(
     data_dir: &PathBuf,
     expose: Option<IpAddr>,
 ) -> anyhow::Result<(String, String, Child)> {
-    let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?
-        .local_addr()?
-        .port();
-    let udp_port = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?
-        .local_addr()?
-        .port();
     // Generated on every start and handed over in the environment: never on disk or in argv.
     let secret = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     tokio::fs::create_dir_all(data_dir).await?;
@@ -481,42 +475,65 @@ async fn start_managed(
         .create(true)
         .append(true)
         .open(&log_path)?;
-    let mut child = Command::new(crate::platform::executable("livekit-server"))
-        .env(
-            "LIVEKIT_CONFIG",
-            managed_config(
-                port,
-                udp_port,
-                &secret,
-                expose,
-                if cfg!(windows) && expose.is_none() {
-                    this_computer()
-                } else {
-                    None
-                }
-            ),
-        )
-        .stdin(Stdio::null())
-        .stdout(log.try_clone()?)
-        .stderr(log)
-        .kill_on_drop(true)
-        .spawn()
-        .context("Cannot start the LiveKit server. Install `livekit-server`, or set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET to use an external one")?;
+    let media = if cfg!(windows) && expose.is_none() {
+        this_computer()
+    } else {
+        None
+    };
+    let loopback = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    let extra_http = expose.filter(|ip| *ip != loopback);
+    let extra_udp = expose.or(media).filter(|ip| *ip != loopback);
+    let http_ips = [Some(loopback), extra_http];
+    let udp_ips = [Some(loopback), extra_udp];
     let ready = async {
         loop {
-            if let Some(status) = child.try_wait()? {
+            let tcp = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+            let port = tcp.local_addr()?.port();
+            let udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
+            let udp_port = udp.local_addr()?.port();
+            let mut command = Command::new(crate::platform::executable("livekit-server"));
+            command
+                .env(
+                    "LIVEKIT_CONFIG",
+                    managed_config(port, udp_port, &secret, expose, media),
+                )
+                .stdin(Stdio::null())
+                .stdout(log.try_clone()?)
+                .stderr(log.try_clone()?)
+                .kill_on_drop(true);
+            // Keep the ports reserved until the child can take them over.
+            drop((tcp, udp));
+            let mut child = command.spawn().context("Cannot start the LiveKit server. Install `livekit-server`, or set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET to use an external one")?;
+            let url = format!("ws://127.0.0.1:{port}");
+            let rooms = RoomClient::with_api_key(&url, MANAGED_KEY, &secret);
+            let status = loop {
+                let result = tokio::select! {
+                    status = child.wait() => break status?,
+                    result = rooms.list_rooms(Vec::new()) => result,
+                };
+                if result.is_ok() {
+                    if let Some(status) = child.try_wait()? {
+                        break status;
+                    }
+                    tracing::info!(
+                        port,
+                        udp_port,
+                        "Managed LiveKit server ready (loopback only)"
+                    );
+                    return Ok((url, secret, child));
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            };
+            // Another process can win the gap between release and spawn. Only an OS
+            // bind conflict after the child has exited permits a fresh allocation.
+            if !managed_ports_in_use(port, udp_port, &http_ips, &udp_ips) {
                 bail!(
                     "The LiveKit server stopped during startup ({status}); see {}",
                     log_path.display()
                 );
             }
-            if TcpStream::connect((Ipv4Addr::LOCALHOST, port))
-                .await
-                .is_ok()
-            {
-                return Ok(());
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tracing::warn!(port, udp_port, %status, "Managed LiveKit ports were taken during startup");
+            tokio::task::yield_now().await;
         }
     };
     tokio::time::timeout(READY_TIMEOUT, ready)
@@ -526,13 +543,32 @@ async fn start_managed(
                 "The LiveKit server did not start in time; see {}",
                 log_path.display()
             )
-        })??;
-    tracing::info!(
-        port,
-        udp_port,
-        "Managed LiveKit server ready (loopback only)"
-    );
-    Ok((format!("ws://127.0.0.1:{port}"), secret, child))
+        })?
+}
+
+fn managed_ports_in_use(
+    port: u16,
+    udp_port: u16,
+    http_ips: &[Option<IpAddr>],
+    udp_ips: &[Option<IpAddr>],
+) -> bool {
+    let tcp = http_ips
+        .iter()
+        .flatten()
+        .map(|ip| TcpListener::bind((*ip, port)).map(drop));
+    let udp = udp_ips
+        .iter()
+        .flatten()
+        .map(|ip| UdpSocket::bind((*ip, udp_port)).map(drop));
+    let mut occupied = false;
+    for result in tcp.chain(udp) {
+        match result {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::AddrInUse => occupied = true,
+            Err(_) => return false,
+        }
+    }
+    occupied
 }
 
 #[cfg(test)]

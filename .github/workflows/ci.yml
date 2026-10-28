@@ -57,15 +57,6 @@ jobs:
         run: bun run --cwd apps/desktop assets
       - name: Lint (clippy)
         run: cargo clippy --workspace --all-targets -- -D warnings
-      # Temporary: remove once the concurrent LiveKit startup failure is diagnosed.
-      - name: Concurrent extension startup diagnostic
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          for iteration in {1..20}; do
-            echo "Extension startup iteration $iteration/20"
-            cargo test -p zerolux --test extensions || exit "$?"
-          done
       - name: Rust tests (SQLite)
         run: cargo test --workspace --no-fail-fast
       - name: Rust tests (PostgreSQL)
