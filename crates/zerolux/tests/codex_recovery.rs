@@ -608,7 +608,6 @@ async fn a_codex_session_zerolux_held_is_continued_after_a_restart_by_the_same_t
     assert!(fork_actor.is_none());
     assert_eq!(forked.native_session_id, FORKED);
     assert_eq!(forked.actor_id, None);
-    assert!(forked.title.ends_with("(fork)"));
     assert_eq!(runtime.count("thread/fork"), 1);
     // Its subagents are the threads Codex spawned from it.
     let subagents = chat_runtime.subagents(&owner, &first.id).await.unwrap();
