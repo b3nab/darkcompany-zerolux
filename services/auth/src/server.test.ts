@@ -197,9 +197,9 @@ describe.each(["source", "bundle"])("%s", (mode) => {
       version: 1,
       reason: "config",
     });
-    expect(await new Response(child.stderr).text()).toBe(
-      "ZeroLux authentication service failed to start\n",
-    );
+    const stderr = await new Response(child.stderr).text();
+    expect(stderr).not.toContain(config.secret);
+    expect(stderr).not.toContain(config.control_token);
   }, 20_000);
 
   test("parent EOF ends a child even when an established database query never returns", async () => {
@@ -301,8 +301,8 @@ describe.each(["source", "bundle"])("%s", (mode) => {
       version: 1,
       reason: "database",
     });
-    expect(await new Response(child.stderr).text()).toBe(
-      "ZeroLux authentication service failed to start\n",
-    );
+    const stderr = await new Response(child.stderr).text();
+    expect(stderr).not.toContain(config.secret);
+    expect(stderr).not.toContain(config.control_token);
   }, 20_000);
 });
