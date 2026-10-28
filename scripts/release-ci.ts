@@ -205,7 +205,33 @@ if (import.meta.main) {
   } else if (action === "feed") {
     const dir = process.argv[3]!;
     const build = (await Bun.file(join(dir, "build.json")).json()) as BuildInfo;
-    const desktop = await Bun.file(join(dir, "latest.json")).json();
+    const desktop = (await Bun.file(join(dir, "latest.json")).json()) as {
+      version: string;
+      platforms: Record<string, Artifact>;
+    };
+    const tag = `v${build.version}`;
+    const release = JSON.parse(
+      execFileSync(
+        "gh",
+        ["release", "view", tag, "--json", "tagName,assets"],
+        { encoding: "utf8" },
+      ),
+    ) as {
+      tagName: string;
+      assets: { apiUrl: string; url: string }[];
+    };
+    if (release.tagName !== tag)
+      throw new Error("Desktop assets belong to another release");
+    const prefix = `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}/`;
+    // Tauri Action uses API asset URLs; publish the same assets at their versioned URLs.
+    for (const [platform, artifact] of Object.entries(desktop.platforms)) {
+      const asset = release.assets.find(
+        (asset) => artifact.url === asset.apiUrl || artifact.url === asset.url,
+      );
+      if (!asset || !asset.url.startsWith(prefix))
+        throw new Error(`Desktop artifact is not in this release: ${platform}`);
+      artifact.url = asset.url;
+    }
     const kernels: Record<string, Artifact> = {};
     for (const target of kernelTargets) {
       const name = `zerolux-v${build.version}-${target}${target.includes("windows") ? ".exe" : ""}`;
