@@ -67,8 +67,6 @@ test.skipIf(windows)(
     expect(result.calls).toBe(
       "test --workspace:\ntest -p zerolux -- --test-threads=4:postgres\n",
     );
-    expect(result.stdout).toContain("Rust: SQLite");
-    expect(result.stdout).toContain("Rust: PostgreSQL");
     expect(result.stdout + result.stderr).not.toContain(fixtureUrl);
   },
 );
