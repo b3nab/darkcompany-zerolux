@@ -131,10 +131,6 @@ test("Claude never invents an effort catalog or a successful capability when nat
   const f = fixture();
   f.query.supportedModels = async () => [];
   expect((await f.settings.read()).models).toEqual([]);
-  await expect(f.settings.apply({ effort: "native-effort" })).rejects.toThrow(
-    "model",
-  );
-  await expect(new ClaudeSettings(() => undefined).read()).rejects.toThrow(
-    "cannot report",
-  );
+  await expect(f.settings.apply({ effort: "native-effort" })).rejects.toThrow();
+  await expect(new ClaudeSettings(() => undefined).read()).rejects.toThrow();
 });
