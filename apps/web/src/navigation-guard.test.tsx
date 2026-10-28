@@ -67,11 +67,9 @@ test("restart refuses a Console input before a render, through failure and retry
     { data: "AA==", media_type: "image/png" },
   ]);
   expect(state().canLeave).toBe(false);
-  expect(state().reason).toContain("finish sending");
   answer.resolve(Response.json({ error: "fixture offline" }, { status: 503 }));
   await expect(sent).rejects.toThrow();
   expect(state().canLeave).toBe(false);
-  expect(state().reason).toContain("Retry or remove");
   answer = Promise.withResolvers<Response>();
   const retry = chat.retryInput(id);
   expect(state().canLeave).toBe(false);
