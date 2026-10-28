@@ -715,6 +715,55 @@ async fn a_kernel_module_is_loaded_while_the_kernel_runs() {
         eprintln!("livekit-server not installed: skipped");
         return;
     }
+    #[cfg(target_os = "macos")]
+    let completion = std::env::var_os("ZEROLUX_TEST_HARDENED_MODULE").map(std::path::PathBuf::from);
+    #[cfg(target_os = "macos")]
+    if completion.is_none() {
+        // Exercise the real loader under the desktop's signing policy, without changing the
+        // executable Cargo built. The child runs this same behavior test exactly once.
+        let signed = tempfile::tempdir().unwrap();
+        let executable = signed.path().join("extensions");
+        std::fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
+        let entitlements = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../apps/desktop/src-tauri/Entitlements.plist");
+        let output = std::process::Command::new("codesign")
+            .args([
+                "--force",
+                "--sign",
+                "-",
+                "--options",
+                "runtime",
+                "--entitlements",
+            ])
+            .arg(entitlements)
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let completed = signed.path().join("completed");
+        let output = std::process::Command::new(executable)
+            .args([
+                "--exact",
+                "a_kernel_module_is_loaded_while_the_kernel_runs",
+                "--nocapture",
+            ])
+            .env("ZEROLUX_TEST_HARDENED_MODULE", &completed)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // A successful process with no matching test must not count as a passing regression.
+        assert!(completed.is_file());
+        return;
+    }
     let built = tally_module();
     let dir = tempfile::tempdir().unwrap();
     let (kernel, runtime, livekit, server, _database) = kernel_for(dir.path()).await;
@@ -724,11 +773,22 @@ async fn a_kernel_module_is_loaded_while_the_kernel_runs() {
         .join("kernel")
         .join(zerolux::extensions::library::platform());
     std::fs::create_dir_all(&modules).unwrap();
-    std::fs::copy(
-        &built,
-        modules.join(zerolux::extensions::library::file_name("tally")),
-    )
-    .unwrap();
+    let library = modules.join(zerolux::extensions::library::file_name("tally"));
+    std::fs::copy(&built, &library).unwrap();
+    #[cfg(target_os = "macos")]
+    {
+        // Third-party code has no shared Apple Team ID, even when its package is trusted.
+        let output = std::process::Command::new("codesign")
+            .args(["--force", "--sign", "-"])
+            .arg(&library)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     std::fs::write(
         folder.join("zerolux-extension.toml"),
         "[extension]\nid = \"zerolux.tally\"\nname = \"Tally\"\nversion = \"0.1.0\"\npublisher = \"zerolux\"\n\n[kernel]\nlibrary = \"tally\"\n",
@@ -803,6 +863,8 @@ async fn a_kernel_module_is_loaded_while_the_kernel_runs() {
     runtime.shutdown().await.unwrap();
     server.abort();
     livekit.shutdown().await.unwrap();
+    #[cfg(target_os = "macos")]
+    std::fs::write(completion.unwrap(), b"").unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
