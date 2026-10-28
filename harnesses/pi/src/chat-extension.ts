@@ -1076,31 +1076,37 @@ export default function chatExtension(pi: ExtensionAPI) {
       takeover: async (request) => {
         const key = request.workspace_id;
         const link = links.get(key);
-        const idle = () =>
+        const idle = (allowSync = false) =>
           !managed &&
           !disposed &&
           !pairing &&
           !stopping &&
+          !pendingUpdate &&
+          !updateQueued &&
           links.size === 1 &&
           links.get(key) === link &&
           link?.bridge.sessionId === request.session_id &&
           link.bridge.connected &&
           !link.bridge.busy &&
-          link.bridge.syncing === false &&
+          (allowSync || !link.bridge.syncing) &&
           metadata.session_file === request.session_file &&
           settled &&
           uiPrompts === 0 &&
           ctx.isIdle() &&
           !ctx.hasPendingMessages();
-        if (takingOver || !idle()) return { accepted: false };
+        if (takingOver || !idle(!request.check)) return { accepted: false };
         let closing = false;
         let paused = false;
         try {
+          if (!request.check) {
+            takingOver = true;
+            paused = true;
+            // An inbox read may finish, but cannot admit input during handover.
+            await link!.bridge.pauseInput();
+          }
           await checkTerminalTakeover(pi, ctx, metadata);
-          if (takingOver || !idle()) return { accepted: false };
+          if ((!paused && takingOver) || !idle()) return { accepted: false };
           if (request.check) return { accepted: true };
-          takingOver = true;
-          paused = true;
           // The kernel must durably request recovery before the old writer exits.
           // Its authenticated inbox also rechecks owner Stop and a concurrent relink.
           const inbox = await link!.transport.request<{
@@ -1133,6 +1139,7 @@ export default function chatExtension(pi: ExtensionAPI) {
           // A check must not trigger dispatch, nor release another request's pause.
           if (paused && !closing) {
             takingOver = false;
+            link!.bridge.resumeInput();
             refresh();
           }
         }

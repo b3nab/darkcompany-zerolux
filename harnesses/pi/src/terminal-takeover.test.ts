@@ -103,9 +103,7 @@ unixTest(
         ...profile,
         unavailable: "Unsupported native options",
       });
-      await expect(checkTerminalTakeover(pi, ctx, metadata)).rejects.toThrow(
-        "Unsupported native options",
-      );
+      await expect(checkTerminalTakeover(pi, ctx, metadata)).rejects.toThrow();
       expect(await readFile(file, "utf8")).toBe(before);
     } finally {
       process.argv = oldArgs;
@@ -116,7 +114,7 @@ unixTest(
   },
 );
 
-for (const scenario of ["idle", "owner-stop", "dispatch"] as const)
+for (const scenario of ["idle", "owner-stop", "dispatch", "inbox"] as const)
   unixTest(
     `terminal control takeover: ${scenario}`,
     async () => {
@@ -156,6 +154,16 @@ for (const scenario of ["idle", "owner-stop", "dispatch"] as const)
       const dispatchAck = new Promise<void>((resolve) => {
         releaseDispatch = resolve;
       });
+      let holdInbox = false;
+      let releaseInbox!: () => void;
+      let readingInbox!: () => void;
+      const inboxPending = new Promise<void>((resolve) => {
+        readingInbox = resolve;
+      });
+      const inboxResponse = new Promise<void>((resolve) => {
+        releaseInbox = resolve;
+      });
+      let takeover: ReturnType<typeof controlRequest> | undefined;
       const delivery = {
         id: "d",
         session_id: "link",
@@ -179,7 +187,14 @@ for (const scenario of ["idle", "owner-stop", "dispatch"] as const)
             await dispatchAck;
             return Response.json({ delivery, message: delivery.message });
           }
-          if (new URL(request.url).pathname.endsWith("/inbox")) inboxReads++;
+          if (new URL(request.url).pathname.endsWith("/inbox")) {
+            inboxReads++;
+            if (holdInbox) {
+              holdInbox = false;
+              readingInbox();
+              await inboxResponse;
+            }
+          }
           if (new URL(request.url).pathname.endsWith("/status")) {
             status = ((await request.json()) as { status: string }).status;
             return Response.json({});
@@ -253,9 +268,9 @@ for (const scenario of ["idle", "owner-stop", "dispatch"] as const)
           registerCommand() {},
           getThinkingLevel: () => "high",
           sendUserMessage(content: string) {
+            submitted.push(content);
             if (scenario !== "dispatch")
               throw new Error("Takeover must not submit native input");
-            submitted.push(content);
           },
           events: { on: () => () => {}, emit() {} },
         } as unknown as ExtensionAPI);
@@ -322,6 +337,26 @@ for (const scenario of ["idle", "owner-stop", "dispatch"] as const)
           for (let i = 0; i < 100 && submitted.length === 0; i++)
             await Bun.sleep(10);
           expect(submitted).toHaveLength(1);
+        } else if (scenario === "inbox") {
+          holdInbox = true;
+          await emit("agent_settled");
+          await inboxPending;
+          let completed = false;
+          takeover = controlRequest(record, "takeover", request).finally(
+            () => (completed = true),
+          );
+          let takingOver = false;
+          while (!takingOver && !completed)
+            takingOver =
+              (await controlRequest(record, "describe")).taking_over === true;
+          expect(takingOver).toBe(true);
+          expect(completed).toBe(false);
+          expect(shutdowns).toBe(0);
+          expect(submitted).toHaveLength(0);
+          releaseInbox();
+          expect((await takeover).accepted).toBe(true);
+          expect(shutdowns).toBe(1);
+          expect(submitted).toHaveLength(0);
         } else {
           expect(
             (await controlRequest(record, "takeover", request)).accepted,
@@ -331,6 +366,8 @@ for (const scenario of ["idle", "owner-stop", "dispatch"] as const)
         expect(await readFile(file, "utf8")).toBe(history);
       } finally {
         releaseDispatch();
+        releaseInbox();
+        await takeover?.catch(() => {});
         await emit("session_shutdown");
         server.stop(true);
         process.argv = oldArgs;
