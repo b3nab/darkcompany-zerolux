@@ -51,7 +51,7 @@ pub struct Process {
 }
 
 enum Part {
-    Child(Child),
+    Child(Box<Child>),
     Module(Arc<super::library::Module>),
 }
 
@@ -113,7 +113,7 @@ impl Process {
             send: send.clone(),
             pending: pending.clone(),
             next: AtomicU64::new(1),
-            part: Mutex::new(Some(Part::Child(child))),
+            part: Mutex::new(Some(Part::Child(Box::new(child)))),
             ended,
         });
         let extension = extension.to_owned();
