@@ -211,11 +211,9 @@ if (import.meta.main) {
     };
     const tag = `v${build.version}`;
     const release = JSON.parse(
-      execFileSync(
-        "gh",
-        ["release", "view", tag, "--json", "tagName,assets"],
-        { encoding: "utf8" },
-      ),
+      execFileSync("gh", ["release", "view", tag, "--json", "tagName,assets"], {
+        encoding: "utf8",
+      }),
     ) as {
       tagName: string;
       assets: { apiUrl: string; url: string }[];
