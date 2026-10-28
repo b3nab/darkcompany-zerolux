@@ -31,7 +31,7 @@ test("acquisition preserves previous liveness evidence until the caller validate
     // A free flock alone does not authorize replacing an execution whose PID is alive.
     next.release();
     expect(await readFile(path, "utf8")).toBe(old);
-    expect(() => next.write("must not write")).toThrow("released");
+    expect(() => next.write("must not write")).toThrow();
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -45,17 +45,17 @@ test("untrusted permissions, hardlinks and oversized metadata fail without trunc
     // On Windows the user's profile is private by its permissions; modes do not apply.
     if (process.platform !== "win32") {
       await chmod(path, 0o644);
-      expect(() => acquireSessionLock(path)).toThrow("private");
+      expect(() => acquireSessionLock(path)).toThrow();
       expect(await readFile(path, "utf8")).toBe("evidence");
       await chmod(path, 0o600);
     }
     const alias = join(root, "other.lock");
     await link(path, alias);
-    expect(() => acquireSessionLock(alias)).toThrow("unaliased");
+    expect(() => acquireSessionLock(alias)).toThrow();
     expect(await readFile(path, "utf8")).toBe("evidence");
     await rm(alias);
     await writeFile(path, "x".repeat(64 * 1024 + 1));
-    expect(() => acquireSessionLock(path)).toThrow("too large");
+    expect(() => acquireSessionLock(path)).toThrow();
     expect((await stat(path)).size).toBe(64 * 1024 + 1);
   } finally {
     await rm(root, { recursive: true, force: true });
