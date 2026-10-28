@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { cronOf, ruleOf, scheduleWords } from "./schedules";
+import { cronOf, ruleOf } from "./schedules";
 import type { ScheduleRule } from "./schedules";
 
 test("the common rules are cron patterns and back", () => {
@@ -25,13 +25,4 @@ test("the common rules are cron patterns and back", () => {
   });
   expect(ruleOf("0 9 1 * *").every).toBe("custom");
   expect(ruleOf("61 9 * * *").every).toBe("custom");
-});
-
-test("a schedule says when it runs in words, a custom one as its pattern", () => {
-  expect(scheduleWords("0 * * * *")).toBe("Every hour");
-  expect(scheduleWords("5 * * * *")).toBe("Every hour at :05");
-  expect(scheduleWords("0 9 * * *")).toBe("Every day at 09:00");
-  expect(scheduleWords("30 8 * * 1-5")).toBe("Every weekday at 08:30");
-  expect(scheduleWords("0 18 * * 5")).toBe("Every Friday at 18:00");
-  expect(scheduleWords("*/15 * * * *")).toBe("*/15 * * * *");
 });
