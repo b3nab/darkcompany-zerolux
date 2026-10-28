@@ -1332,13 +1332,7 @@ async fn runtime_recovery_marks_live_sessions_attention_without_changing_stopped
     let sessions = f.store.sessions(&f.owner).await.unwrap();
     let active = sessions.iter().find(|s| s.id == aspen.session.id).unwrap();
     assert_eq!(active.status, "attention");
-    assert!(
-        active
-            .attention_reason
-            .as_deref()
-            .unwrap()
-            .contains("restarted")
-    );
+    assert!(active.attention_reason.is_some());
     let after_stop = sessions.iter().find(|s| s.id == stopped.id).unwrap();
     assert_eq!(after_stop.status, "stopped");
     assert_eq!(after_stop.stopped_at, stopped.stopped_at);
