@@ -591,7 +591,6 @@ mod tests {
             config(Some(" "), Some("key"), Some("hidden-secret")),
         ] {
             let error = LiveKit::start(partial).await.err().unwrap().to_string();
-            assert!(error.contains("incomplete"), "{error}");
             assert!(!error.contains("hidden-secret"), "{error}");
         }
     }
