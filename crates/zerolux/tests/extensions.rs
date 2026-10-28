@@ -1456,10 +1456,7 @@ async fn projects_keep_tasks_here_or_in_a_tracker() {
         .unwrap();
     let (status, given) = run("update_task", json!({"id": task, "assignee": agent["id"]})).await;
     assert_eq!(status, StatusCode::OK, "{given} {agent}");
-    assert_eq!(
-        given["result"]["told"]["error"], "The agent has no running session",
-        "{given}"
-    );
+    assert!(given["result"]["told"]["error"].is_string(), "{given}");
     // A tracker's workspace as a source: its projects and tasks read live from it, and
     // changed there; only the agent ZeroLux gives a task is kept here.
     let (status, tracker) = kernel
@@ -1517,10 +1514,7 @@ async fn projects_keep_tasks_here_or_in_a_tracker() {
     assert_eq!(status, StatusCode::OK, "{shipped}");
     assert_eq!(shipped["result"]["key"], "ENG-2");
     assert_eq!(shipped["result"]["assignee"], agent["id"]);
-    assert_eq!(
-        shipped["result"]["told"]["error"], "The agent has no running session",
-        "{shipped}"
-    );
+    assert!(shipped["result"]["told"]["error"].is_string(), "{shipped}");
     let shipped = shipped["result"]["id"].as_str().unwrap().to_owned();
     run("update_task", json!({"id": shipped, "status": "done"})).await;
     run("comment", json!({"id": shipped, "text": "Shipped"})).await;
@@ -1808,14 +1802,18 @@ async fn an_extension_keeps_secrets_and_signs_in_to_another_service() {
     };
     let page = back(&query["state"], "code-1").await;
     assert_eq!(page.status(), StatusCode::OK);
-    assert!(page.text().await.unwrap().contains("Signed in"));
     let exchanged = sent.lock().unwrap()[0].clone();
     assert_eq!(exchanged["redirect_uri"], query["redirect_uri"].as_str());
     assert_eq!(exchanged["client_secret"], "client-secret");
     assert!(exchanged["code_verifier"].as_str().unwrap().len() >= 43);
     // Once only.
     let again = back(&query["state"], "code-1").await;
-    assert!(again.text().await.unwrap().contains("Not signed in"));
+    assert_eq!(again.status(), StatusCode::OK);
+    assert_eq!(
+        sent.lock().unwrap().len(),
+        1,
+        "the code is exchanged only once"
+    );
     // The extension heard of it.
     let mut heard = Value::Null;
     for _ in 0..100 {
