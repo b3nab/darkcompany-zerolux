@@ -1,9 +1,9 @@
 //! Where extensions are found: indexes on HTTPS, each listing its publishers' keys and their
 //! extensions' versions with a package for each computer (`macos-aarch64`, …) or for any. Anyone
-//! may host one. A kernel reads those `ZEROLUX_EXTENSION_INDEXES` names; otherwise one run from a
-//! checkout, in development, reads only its local marketplace, `marketplace/index.json` in its
-//! data folder, which `bun run marketplace` writes from the checkout's own extensions, and a
-//! release none yet. Development never reaches a marketplace in production.
+//! may host one. A kernel reads those `ZEROLUX_EXTENSION_INDEXES` names; otherwise it keeps an
+//! existing local marketplace, `marketplace/index.json` in its data folder, across app updates.
+//! A checkout expects that local index, written by `bun run marketplace`; a release without
+//! one reads none yet. Development never reaches a marketplace in production.
 
 use std::collections::BTreeMap;
 
@@ -61,13 +61,21 @@ pub struct Package {
 
 /// The indexes this kernel reads.
 pub fn indexes(data_dir: &std::path::Path) -> Vec<String> {
-    match std::env::var("ZEROLUX_EXTENSION_INDEXES") {
-        Ok(listed) if !listed.trim().is_empty() => listed
+    indexes_for(
+        data_dir,
+        std::env::var("ZEROLUX_EXTENSION_INDEXES").ok().as_deref(),
+        crate::platform::carried().is_some(),
+    )
+}
+
+fn indexes_for(data_dir: &std::path::Path, listed: Option<&str>, carried: bool) -> Vec<String> {
+    match listed {
+        Some(listed) if !listed.trim().is_empty() => listed
             .split(',')
             .map(|url| url.trim().to_owned())
             .filter(|url| !url.is_empty())
             .collect(),
-        _ if crate::platform::carried().is_none() => {
+        _ if !carried || data_dir.join("marketplace/index.json").is_file() => {
             let local = std::path::absolute(data_dir.join("marketplace/index.json"))
                 .unwrap_or_else(|_| data_dir.join("marketplace/index.json"));
             reqwest::Url::from_file_path(&local)
@@ -187,11 +195,9 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn a_checkout_reads_its_local_marketplace_only() {
+    async fn a_workspace_keeps_its_local_marketplace_in_a_release() {
         let dir = tempfile::tempdir().unwrap();
-        // SAFETY: this test alone reads it, and leaves it unset.
-        unsafe { std::env::remove_var("ZEROLUX_EXTENSION_INDEXES") };
-        let indexes = indexes(dir.path());
+        let indexes = indexes_for(dir.path(), None, false);
         assert_eq!(indexes.len(), 1);
         assert!(indexes[0].starts_with("file://"), "{indexes:?}");
         assert!(read(&indexes[0]).await.is_err());
@@ -203,6 +209,7 @@ mod tests {
             serde_json::json!({"name": "Local", "publishers": {}, "extensions": []}).to_string(),
         )
         .unwrap();
+        assert_eq!(indexes_for(dir.path(), None, true), indexes);
         assert_eq!(read(&indexes[0]).await.unwrap().name, "Local");
         let package = Package {
             url: "packages/a.zlx".into(),
@@ -214,5 +221,33 @@ mod tests {
             ..package
         };
         assert!(download(&indexes[0], &wrong).await.is_err());
+    }
+
+    #[test]
+    fn explicit_indexes_override_an_existing_local_marketplace() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("marketplace");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("index.json"), "{}").unwrap();
+        for carried in [false, true] {
+            assert_eq!(
+                indexes_for(
+                    dir.path(),
+                    Some(" https://example.test/one.json, ,https://example.test/two.json "),
+                    carried,
+                ),
+                vec![
+                    "https://example.test/one.json",
+                    "https://example.test/two.json"
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_release_workspace_has_no_implicit_index() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(indexes_for(dir.path(), None, true).is_empty());
+        assert!(indexes_for(dir.path(), Some(" "), true).is_empty());
     }
 }
