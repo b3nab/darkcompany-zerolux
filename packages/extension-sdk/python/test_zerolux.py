@@ -119,7 +119,7 @@ class SDK(unittest.TestCase):
             "operation": "put", "input": {"key": "k"}}})
         self.assertEqual(kernel.answer(2)["result"], {"kept": "k"})
         kernel.send({"id": 3, "method": "action.run", "params": {"action": "missing"}})
-        self.assertIn("missing", kernel.answer(3)["error"]["message"])
+        self.assertEqual(kernel.answer(3)["error"]["code"], -32000)
         kernel.send({"method": "event", "params": {"name": "zerolux.other/changed", "payload": 5}})
         for _ in range(100):
             if ext.heard:  # type: ignore[attr-defined]
