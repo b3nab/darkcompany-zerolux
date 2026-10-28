@@ -10,10 +10,7 @@ use anyhow::{Context, Result};
 use crate::db::Location;
 
 /// Held for the kernel's lifetime; dropping it releases the workspace.
-pub struct Lease(
-    #[allow(dead_code)] Option<std::fs::File>,
-    Option<std::path::PathBuf>,
-);
+pub struct Lease(Option<std::fs::File>, Option<std::path::PathBuf>);
 
 impl Lease {
     pub fn acquire(location: &Location) -> Result<Self> {
@@ -35,6 +32,16 @@ impl Lease {
             "The database lease belongs to a different workspace"
         );
         Ok(())
+    }
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        if let Some(file) = &self.0 {
+            // A fork can retain this descriptor until exec. Release ownership now,
+            // without waiting for every inherited copy of the file to close.
+            let _ = fs2::FileExt::unlock(file);
+        }
     }
 }
 
@@ -92,4 +99,27 @@ fn file(database: &Path) -> Result<(std::fs::File, std::path::PathBuf)> {
         )
     })?;
     Ok((file, real))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropping_lease_releases_ownership_while_a_duplicate_remains_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let location = Location::Sqlite(directory.path().join("workspace.db"));
+        let lease = Lease::acquire(&location).unwrap();
+        let inherited = lease.0.as_ref().unwrap().try_clone().unwrap();
+        assert!(Lease::acquire(&location).is_err());
+
+        drop(lease);
+        let next = Lease::acquire(&location).unwrap();
+        assert!(Lease::acquire(&location).is_err());
+        drop(inherited);
+        assert!(Lease::acquire(&location).is_err());
+
+        drop(next);
+        assert!(Lease::acquire(&location).is_ok());
+    }
 }
