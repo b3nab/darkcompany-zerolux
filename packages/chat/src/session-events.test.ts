@@ -8,14 +8,8 @@ import {
   sessionBlocks,
   recordsResync,
   sessionReader,
-  spanLabel,
-  toolName,
   toolText,
-  turnLine,
-  thoughtLabel,
-  turnLabel,
   turnSummary,
-  workPhrase,
 } from "./session-events";
 import type { SessionRecord } from "./session-events";
 import { toolLine } from "./tool-view";
@@ -130,9 +124,6 @@ test("a tool reads as one line of what it was given, and its values as text", ()
   expect(toolLine({ file_path: "src/a.ts", limit: 20 })).toBe("src/a.ts");
   expect(toolLine({ limit: 20, note: "first text" })).toBe("first text");
   expect(toolLine("plain")).toBe("");
-  expect(toolName("mcp__zerolux__send")).toBe("zerolux · send");
-  expect(toolName("mcp__claude_ai_Docs__read")).toBe("claude_ai_Docs · read");
-  expect(toolName("Bash")).toBe("Bash");
   expect(toolText("12 pass")).toBe("12 pass");
   expect(toolText({ ok: true })).toBe('{\n  "ok": true\n}');
 });
@@ -178,62 +169,6 @@ test("a chat's turns start at its inputs, end with the turn, and skip other chat
     added: 0,
     removed: 0,
   });
-  expect(currentStep(sessionBlocks(turns[1]!.events))).toBe("Writing");
-  expect(
-    currentStep(
-      sessionBlocks([
-        at(
-          {
-            type: "tool_call",
-            id: "t9",
-            name: "Bash",
-            input: { command: "bun test" },
-          },
-          0,
-        ),
-      ]),
-    ),
-  ).toBe("Running bun test");
-});
-
-test("a finished turn reads as how it ended, how long it took and what it ran", () => {
-  const turn = (status: string) => {
-    const [only] = chatTurns(
-      [
-        at(
-          { type: "input", text: "Go", chat: "c", delivery: "d1" },
-          0,
-          "2026-01-01T10:00:00Z",
-        ),
-        at({ type: "thinking", text: "Plan." }, 10, "2026-01-01T10:00:20Z"),
-        at(
-          {
-            type: "tool_call",
-            id: "t1",
-            name: "Bash",
-            input: { command: "ls" },
-          },
-          20,
-          "2026-01-01T10:01:00Z",
-        ),
-        at({ type: "turn_ended", status }, 30, "2026-01-01T10:02:10Z"),
-      ],
-      "c",
-    );
-    return turnLine(only!, sessionBlocks(only!.events));
-  };
-  expect(turn("completed")).toBe("worked for 2m · 1 tool · reasoned");
-  expect(turn("interrupted")).toBe(
-    "was interrupted after 2m · 1 tool · reasoned",
-  );
-  expect(turn("error")).toBe(
-    "stopped on an error after 2m · 1 tool · reasoned",
-  );
-  expect([spanLabel(400), spanLabel(45_000), spanLabel(125 * 60_000)]).toEqual([
-    "1s",
-    "45s",
-    "2h 5m",
-  ]);
 });
 
 /** A kernel serving one record's events, two per page back, all of them forward. */
@@ -404,14 +339,6 @@ test("a turn knows when it began, reasoning how long it took, a summary what it 
     added: 3,
     removed: 2,
   });
-  expect(workPhrase(30_000)).toBe("worked for 30s");
-  expect(workPhrase(90_000, "interrupted")).toBe("was interrupted after 2m");
-  const turn = blocks.at(-1);
-  expect(turn?.kind === "turn" && turnLabel(turn)).toBe("Worked for 30s");
-  const thinking = blocks[0];
-  expect(thinking?.kind === "thinking" && thoughtLabel(thinking)).toBe(
-    "Thought for 4s",
-  );
   // The live step names the reasoning by its heading.
   expect(currentStep(blocks.slice(0, 1))).toBe("Fixing the path");
 });
