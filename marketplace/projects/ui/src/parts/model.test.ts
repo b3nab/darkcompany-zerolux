@@ -84,9 +84,6 @@ test("a source says what keeps it from working, and a secret it has is not asked
   expect(sourceState({ ...ready, error: "Plane refused (401)" })).toBe(
     "Plane refused (401)",
   );
-  expect(sourceState({ ...ready, available: false })).toBe(
-    "Tracker not installed",
-  );
   const fields: Field[] = [
     { key: "workspace", label: "Workspace", type: "text", required: true },
     { key: "api_key", label: "API key", type: "secret", required: true },

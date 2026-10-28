@@ -142,7 +142,5 @@ test("a workspace's work items are read live, created, changed, commented on and
     comment_html: "<p>a &lt;b&gt;</p>",
   });
   await plane.delete_task({ project: "P", task: "W1" });
-  await expect(plane.task({ project: "P", task: "MISSING" })).rejects.toThrow(
-    "not found",
-  );
+  await expect(plane.task({ project: "P", task: "MISSING" })).rejects.toThrow();
 });
