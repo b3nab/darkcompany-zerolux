@@ -270,44 +270,69 @@ test.skipIf(process.platform === "win32" || !stockPi || !node)(
       if (!path)
         throw new Error(`host exited ${child.exitCode}: ${await stderr}`);
       const descriptor = await readControlDescriptor(path);
-      // Binding starts stock pi, which can outlast the control client's own timeout on a
-      // loaded machine; the host goes on regardless, so its state is what is awaited.
-      const bound = await controlRequest(descriptor, "bind", {
+      const waiting = await controlRequest(descriptor, "describe");
+      expect(waiting.phase).toBe("waiting");
+      expect(waiting.native_pid).toBeUndefined();
+      // Send bind once. A lost acknowledgement does not establish success or permit a
+      // retry: the same host must prove the native context it actually started.
+      const binding = await controlRequest(descriptor, "bind", {
         base_url: `http://127.0.0.1:${kernel.port}`,
         token: "fixture",
-      }).catch(async (error) => {
-        if (!String(error).includes("timed out")) {
-          child!.kill();
-          throw new Error(`${error}\nhost stderr: ${await stderr}`);
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      if ("value" in binding) expect(binding.value.ok).toBe(true);
+      try {
+        let state = await controlRequest(descriptor, "describe");
+        for (let i = 0; i < 300 && state.phase !== "running"; i++) {
+          if (child.exitCode !== null)
+            throw new Error(`host exited ${child.exitCode}: ${await stderr}`);
+          if (state.phase === "ended")
+            throw new Error("host ended before startup");
+          await Bun.sleep(200);
+          state = await controlRequest(descriptor, "describe");
         }
-        return { ok: true, late: true };
-      });
-      expect(bound.ok).toBe(true);
-      // Running: stock pi loaded the bundled extension (its guard verified the host) and
-      // answered get_state with the saved model and thinking, which it persisted again.
-      let state = await controlRequest(descriptor, "describe");
-      for (let i = 0; i < 300 && state.phase !== "running"; i++) {
-        if (child.exitCode !== null)
-          throw new Error(`host exited ${child.exitCode}: ${await stderr}`);
-        if (state.phase === "ended")
-          throw new Error(`host ended: ${await stderr}`);
-        await Bun.sleep(200);
-        state = await controlRequest(descriptor, "describe");
+        expect(state).toMatchObject({
+          kind: "pi-runner",
+          guard_version: 1,
+          phase: "running",
+          native_session_id: saved.id,
+          workspace,
+          session_file: saved.file,
+          profile: saved.profile,
+          link_id: "link",
+          model: { provider: "fixture", id: "native-model" },
+          thinking: "off",
+        });
+        expect(Number.isSafeInteger(state.native_pid)).toBe(true);
+        expect(Number(state.native_pid)).toBeGreaterThan(0);
+        if ("value" in binding)
+          expect(binding.value.native_pid).toBe(state.native_pid);
+        // The native file, not just the host's remembered configuration, records pi's
+        // confirmed model and thinking after loading the bundled extension.
+        const history = (await readFile(saved.file, "utf8"))
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line));
+        expect(history[0]).toMatchObject({
+          type: "session",
+          id: saved.id,
+          cwd: workspace,
+        });
+        expect(history.map((entry) => entry.type)).toEqual([
+          "session",
+          "model_change",
+          "thinking_level_change",
+          "model_change",
+          "thinking_level_change",
+        ]);
+      } catch (error) {
+        throw new AggregateError(
+          "error" in binding ? [binding.error, error] : [error],
+          "The host did not confirm the bound native session",
+        );
       }
-      expect(state.phase).toBe("running");
-      expect(state.model).toEqual({ provider: "fixture", id: "native-model" });
-      expect(state.thinking).toBe("off");
-      const history = (await readFile(saved.file, "utf8"))
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => JSON.parse(line).type);
-      expect(history).toEqual([
-        "session",
-        "model_change",
-        "thinking_level_change",
-        "model_change",
-        "thinking_level_change",
-      ]);
       if (child.exitCode === null) {
         try {
           expect(
