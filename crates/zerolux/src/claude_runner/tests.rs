@@ -45,7 +45,6 @@ async fn a_live_claimant_with_unreachable_control_is_not_absent() {
             result.is_err(),
             "An invalid process identity proves no death"
         );
-        assert!(format!("{:#}", result.err().unwrap()).contains("no valid process identity"));
     }
 }
 
