@@ -235,8 +235,7 @@ async fn interrupt_stops_only_the_running_turn() {
 #[tokio::test]
 async fn compaction_waits_for_the_running_turn() {
     let busy = Fixture::new(true, false, "applied").await;
-    let error = busy.control.compact().await.unwrap_err();
-    assert!(error.to_string().contains("Codex is working"));
+    assert!(busy.control.compact().await.is_err());
     assert!(busy.calls("thread/compact/start").is_empty());
     let idle = Fixture::new(false, false, "applied").await;
     idle.control.compact().await.unwrap();

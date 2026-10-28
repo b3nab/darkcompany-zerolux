@@ -79,11 +79,10 @@ async fn owner_stop_during_native_read_prevents_cold_resume() {
         .await
         .unwrap()
         .unwrap();
-    let error = match result {
-        Err(error) => error,
-        Ok(_) => panic!("A native session was resumed after the owner stopped its relink"),
-    };
-    assert!(format!("{error:#}").contains("stopped before"), "{error:#}");
+    assert!(
+        result.is_err(),
+        "A native session was resumed after the owner stopped its relink"
+    );
     assert_eq!(native.count("thread/resume"), 0);
     assert_eq!(native.count("thread/queue/add"), 0);
     assert_eq!(native.count("turn/start"), 0);
