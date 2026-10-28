@@ -328,7 +328,11 @@ async fn kernel_for(
             data_dir: dir.join("livekit"),
         })
         .await
-        .unwrap(),
+        .unwrap_or_else(|error| {
+            let log = std::fs::read_to_string(dir.join("livekit/livekit.log"))
+                .unwrap_or_else(|error| format!("Could not read LiveKit log: {error}"));
+            panic!("Start fixture LiveKit: {error:#}\n{log}");
+        }),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
