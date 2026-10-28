@@ -1810,10 +1810,12 @@ impl Host {
                 .phase
                 .store(2, Ordering::Release);
             #[cfg(not(windows))]
-            self.app.exit(0);
+            {
+                self.app.exit(0);
+                Ok(())
+            }
             #[cfg(windows)]
-            self.app.restart();
-            Ok(())
+            self.app.restart()
         }
         .await;
         if result.is_ok() {
