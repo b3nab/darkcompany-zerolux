@@ -261,6 +261,7 @@ export class ChatBridge {
   private flushing?: Promise<void>;
   private closed = false;
   private inputPaused = false;
+  private claiming = false;
   private dirty = false;
   private refresh?: Promise<void>;
   private nativeSettled = true;
@@ -289,6 +290,7 @@ export class ChatBridge {
 
   get busy() {
     return (
+      this.claiming ||
       this.envelopes.size > 0 ||
       this.outgoing.size > 0 ||
       this.receipts.size > 0
@@ -417,6 +419,7 @@ export class ChatBridge {
           const taken: Delivery[] = [];
           for (const delivery of deliveries) {
             let claim: { delivery: Delivery; message: ChatMessage };
+            this.claiming = true;
             try {
               claim = await this.request(
                 `/chat/deliveries/${encodeURIComponent(delivery.id)}/dispatch`,
@@ -439,6 +442,8 @@ export class ChatBridge {
               );
               halted = true;
               break;
+            } finally {
+              this.claiming = false;
             }
             if (this.closed) return;
             if (
