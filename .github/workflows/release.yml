@@ -188,12 +188,14 @@ jobs:
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          # Keep the CLI's noninteractive CI packaging instead of forcing Finder.
+          TAURI_BUNDLER_DMG_IGNORE_CI: "false"
         with:
           projectPath: apps/desktop
           tauriScript: bun x --bun tauri
           tagName: ${{ needs.draft.outputs.tag }}
           releaseDraft: true
-          args: --config ${{ runner.temp }}/zerolux-tauri.json
+          args: --config ${{ runner.temp }}/zerolux-tauri.json --verbose
           updaterJsonPreferNsis: true
 
   # The mobile app for Android, as an APK for 64-bit ARM phones. Signed with the release key
