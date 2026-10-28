@@ -1121,20 +1121,24 @@ impl Extensions {
                     still.push(row);
                     continue;
                 }
-                if let Err(error) = self.load(&row).await {
-                    tracing::warn!(
-                        extension = row.id,
-                        error = format!("{error:#}"),
-                        "Extension not enabled"
-                    );
-                    let _ = extensions::ActiveModel {
-                        id: Set(row.id.clone()),
-                        error: Set(Some(format!("{error:#}"))),
-                        ..Default::default()
+                let error = match self.load(&row).await {
+                    Ok(_) => None,
+                    Err(error) => {
+                        tracing::warn!(
+                            extension = row.id,
+                            error = format!("{error:#}"),
+                            "Extension not enabled"
+                        );
+                        Some(format!("{error:#}"))
                     }
-                    .update(self.store.db())
-                    .await;
+                };
+                let _ = extensions::ActiveModel {
+                    id: Set(row.id.clone()),
+                    error: Set(error),
+                    ..Default::default()
                 }
+                .update(self.store.db())
+                .await;
             }
             if still.is_empty() || still.len() == before {
                 for row in still {

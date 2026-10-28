@@ -846,6 +846,64 @@ async fn a_kernel_module_is_loaded_while_the_kernel_runs() {
         .call(Method::POST, "/ext/zerolux.tally/total", Some(json!({})))
         .await;
     assert_eq!(total["result"]["text"], "5", "{total}");
+    // Bootstrap failures stay visible until the next successful start, including those of
+    // a dependent that could not start while its dependency was unavailable.
+    let dependent = dir.path().join("dependent");
+    let dependent_modules = dependent
+        .join("kernel")
+        .join(zerolux::extensions::library::platform());
+    std::fs::create_dir_all(&dependent_modules).unwrap();
+    std::fs::copy(
+        &library,
+        dependent_modules.join(zerolux::extensions::library::file_name("tally")),
+    )
+    .unwrap();
+    std::fs::write(
+        dependent.join("zerolux-extension.toml"),
+        "[extension]\nid = \"zerolux.dependent\"\nname = \"Dependent\"\nversion = \"0.1.0\"\npublisher = \"zerolux\"\n\n[kernel]\nlibrary = \"tally\"\n\n[dependencies]\n\"zerolux.tally\" = \"^0.1\"\n",
+    )
+    .unwrap();
+    let (status, installed) = kernel
+        .call(
+            Method::POST,
+            "/extensions/folder",
+            Some(json!({"folder": dependent})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{installed}");
+    runtime.extensions.shutdown().await;
+    // The loader maps its own copy; this original file is not mapped, including on Windows.
+    let unavailable = library.with_extension("unavailable");
+    std::fs::rename(&library, &unavailable).unwrap();
+    for restored in [false, true] {
+        if restored {
+            std::fs::rename(&unavailable, &library).unwrap();
+        }
+        runtime.extensions.start_enabled().await;
+        let (status, listed) = kernel.call(Method::GET, "/extensions", None).await;
+        assert_eq!(status, StatusCode::OK, "{listed}");
+        for id in ["zerolux.tally", "zerolux.dependent"] {
+            let found = listed["extensions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|extension| extension["id"] == id)
+                .unwrap();
+            assert_eq!(found["enabled"], true, "{found}");
+            assert_eq!(found["running"], restored, "{found}");
+            assert!(found["proposed_by"].is_null(), "{found}");
+            if restored {
+                assert!(found["error"].is_null(), "{found}");
+            } else {
+                assert!(found["error"].is_string(), "{found}");
+            }
+        }
+    }
+    let (status, total) = kernel
+        .call(Method::POST, "/ext/zerolux.tally/total", Some(json!({})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{total}");
+    assert_eq!(total["result"]["text"], "5", "{total}");
     // A library that is not a module is refused, and says why.
     std::fs::write(
         modules.join(zerolux::extensions::library::file_name("tally")),
