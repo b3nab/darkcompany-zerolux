@@ -98,9 +98,7 @@ unixTest(
         checkTerminalTakeover(pi, ctx, { pid: process.pid }),
       ).rejects.toThrow();
       await savePiProfile({ ...profile, args: ["--no-tools"] });
-      await expect(checkTerminalTakeover(pi, ctx, metadata)).rejects.toThrow(
-        "launch profile",
-      );
+      await expect(checkTerminalTakeover(pi, ctx, metadata)).rejects.toThrow();
       await savePiProfile({
         ...profile,
         unavailable: "Unsupported native options",

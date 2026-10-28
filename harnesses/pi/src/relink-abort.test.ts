@@ -224,8 +224,10 @@ unixTest.each([
           text: "pending fixture reply",
           reply_to: "d1",
         });
-      if (phase !== "late-receipt")
-        expect((await reply()).content[0].text).toContain("kept");
+      if (phase !== "late-receipt") {
+        await reply();
+        expect(posts).toHaveLength(0);
+      }
       const resumed = await pair("THREE");
       expect(resumed.ok).toBe(true);
       releaseReceipt(); // In the reverse race, the stale 401 arrives after handoff.
