@@ -466,8 +466,20 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
             break;
         }
         assert!(
-            status == 400 && text.contains("Let terminal pi finish") && Instant::now() < deadline,
+            status == 400 && Instant::now() < deadline,
             "takeover: {status}: {text}"
+        );
+        // Preflight refusal leaves the live terminal attached. Once takeover starts,
+        // the kernel records attention before asking it to exit: never retry that intent.
+        let current = api(&client, &base, &format!("/sessions/{hired_id}"), None).await;
+        assert_eq!(current["session"]["status"], "connected", "{text}");
+        assert_eq!(current["session"]["origin"], "attached");
+        assert_eq!(current["session"]["native_session_id"], native);
+        assert!(terminal.0.try_wait().unwrap().is_none());
+        assert_eq!(starts(&root).len(), 4);
+        assert_eq!(
+            fs::read(root.join("home/native-inputs.jsonl")).unwrap(),
+            inputs
         );
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
