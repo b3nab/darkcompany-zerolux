@@ -21,7 +21,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail, ensure};
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set, sea_query::OnConflict,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
@@ -1187,27 +1189,41 @@ impl Extensions {
         key: &str,
         value: Option<&Value>,
     ) -> Result<()> {
-        extension_values::Entity::delete_many()
-            .filter(extension_values::Column::ExtensionId.eq(id))
-            .filter(extension_values::Column::Kind.eq(kind))
-            .filter(extension_values::Column::Key.eq(key))
-            .exec(self.store.db())
-            .await?;
         if let Some(value) = value {
             let value = if sealed(kind) {
                 self.vault.seal(value)?
             } else {
                 value.clone()
             };
-            extension_values::ActiveModel {
+            // Readers must see the previous or the new value, never a gap between them.
+            extension_values::Entity::insert(extension_values::ActiveModel {
                 extension_id: Set(id.to_owned()),
                 kind: Set(kind.to_owned()),
                 key: Set(key.to_owned()),
                 value_json: Set(value.to_string()),
                 updated_at: Set(now_ms()),
-            }
-            .insert(self.store.db())
+            })
+            .on_conflict(
+                OnConflict::columns([
+                    extension_values::Column::ExtensionId,
+                    extension_values::Column::Kind,
+                    extension_values::Column::Key,
+                ])
+                .update_columns([
+                    extension_values::Column::ValueJson,
+                    extension_values::Column::UpdatedAt,
+                ])
+                .to_owned(),
+            )
+            .exec_without_returning(self.store.db())
             .await?;
+        } else {
+            extension_values::Entity::delete_many()
+                .filter(extension_values::Column::ExtensionId.eq(id))
+                .filter(extension_values::Column::Kind.eq(kind))
+                .filter(extension_values::Column::Key.eq(key))
+                .exec(self.store.db())
+                .await?;
         }
         Ok(())
     }

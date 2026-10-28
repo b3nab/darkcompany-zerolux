@@ -1294,7 +1294,8 @@ async fn storage_shows_each_location_live_and_changes_files_where_they_are() {
                 .unwrap()
                 .iter()
                 .find(|location| location["id"] == disk.as_str())
-                .unwrap()["signed_in"]
+                .unwrap_or_else(|| panic!("Added location {disk} disappeared: {locations}"))
+                ["signed_in"]
                 .clone()
         };
         assert_eq!(signed_in(&locations), false);
