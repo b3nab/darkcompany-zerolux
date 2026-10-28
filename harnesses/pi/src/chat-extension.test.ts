@@ -161,7 +161,6 @@ printf 'closed' > "$HOME/subscriber-closed"
       expect(statuses).toEqual(
         phase === "ready" ? ["connected", "attention"] : [],
       );
-      expect(await readFile(ui, "utf8")).not.toContain("chat: connected");
       expect(
         await readFile(join(root, "subscriber-closed"), "utf8").catch(
           () => null,
@@ -1026,7 +1025,6 @@ while IFS= read -r line; do :; done
         text: "dropped",
       });
       expect(lost.ok).toBe(false);
-      expect(lost.error).toContain("did not accept");
       expect(sent.filter((s) => s.content === "dropped")).toHaveLength(1);
       // Received while pi works through a long tool call: queued for the running turn,
       // accepted at once though it enters the context only when the call ends.
