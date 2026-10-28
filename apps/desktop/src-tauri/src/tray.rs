@@ -375,7 +375,7 @@ fn place(panel: &WebviewWindow, anchor: Rect) -> tauri::Result<()> {
     let position: tauri::Position = tauri::LogicalPosition::new(x, y).into();
     #[cfg(not(target_os = "macos"))]
     let position: tauri::Position =
-        PhysicalPosition::new((x * scale).round() as i32, (y * scale).round() as i32).into();
+        tauri::PhysicalPosition::new((x * scale).round() as i32, (y * scale).round() as i32).into();
     panel.set_position(position)
 }
 
