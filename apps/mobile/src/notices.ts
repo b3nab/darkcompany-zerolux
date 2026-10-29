@@ -13,7 +13,7 @@ import {
 } from "@zerolux/chat";
 import type { Attention, Extension } from "@zerolux/chat";
 import { useMe } from "./me";
-import { useSession } from "./kernel";
+import { keptKey, keptName, useKernel, useSession } from "./kernel";
 import { preference } from "./saved";
 
 /**
@@ -49,6 +49,40 @@ export const dismissNotice = (id: string) =>
   void Notifications.dismissNotificationAsync(id).catch(() => {});
 
 /**
+ * Which workspace a notification is from: said under its title when the phone keeps several,
+ * and carried with it, so that a tap opens that workspace first.
+ */
+function useNoticeWorkspace() {
+  const kernel = useKernel();
+  // A tap is read as the workspaces are then: one removed since opens nothing.
+  const now = useRef(kernel);
+  now.current = kernel;
+  const here = kernel.current ? keptKey(kernel.current) : undefined;
+  return {
+    here,
+    label:
+      kernel.current && kernel.workspaces.length > 1
+        ? { subtitle: keptName(kernel.current) }
+        : {},
+    /** A notification of another workspace opens it, and is read again once it is open. */
+    elsewhere(workspace: unknown) {
+      if (typeof workspace !== "string" || workspace === here) return false;
+      const target = now.current.workspaces.find(
+        (w) => keptKey(w) === workspace,
+      );
+      if (target)
+        void now.current.open(target.kernel, {
+          id: target.id,
+          name: target.name,
+          base: target.base,
+        });
+      else Notifications.clearLastNotificationResponse();
+      return true;
+    },
+  };
+}
+
+/**
  * Tells you, through the phone's notifications, when a session starts needing you, fails or
  * finishes: never about the one on screen, and one notification per session at a time (the
  * new one takes the old one's place). Tapping it opens the session. Without push, only while
@@ -56,6 +90,7 @@ export const dismissNotice = (id: string) =>
  */
 export function useSessionNotices() {
   const { workspace, chat } = useSession();
+  const from = useNoticeWorkspace();
   const { me } = useMe();
   const pathname = usePathname();
   // Only your sessions: one shared with you needs its person, not you.
@@ -99,7 +134,8 @@ export function useSessionNotices() {
           identifier: id,
           content: {
             ...noticeText(notice, session, chat.approvals, name),
-            data: { session: id },
+            ...from.label,
+            data: { session: id, workspace: from.here },
             sound: "default",
           },
           trigger: null,
@@ -113,7 +149,8 @@ export function useSessionNotices() {
     // Tapping one opens its session or extension, also when the tap launches the app.
     const open = (response: Notifications.NotificationResponse | null) => {
       const data = response?.notification.request.content.data;
-      const { session, extension } = data ?? {};
+      const { session, extension, workspace } = data ?? {};
+      if (from.elsewhere(workspace)) return;
       if (typeof session === "string") router.push(`/session/${session}`);
       else if (typeof extension === "string")
         router.push(`/extensions/proposals/${extension}`);
@@ -133,6 +170,7 @@ export function useSessionNotices() {
  */
 export function useProposalNotices() {
   const { url, workspace, chat } = useSession();
+  const from = useNoticeWorkspace();
   const { owner } = useMe();
   const pathname = usePathname();
   const { extensions } = useExtensions(url, owner);
@@ -154,7 +192,8 @@ export function useProposalNotices() {
           content: {
             title: extension.name,
             body: `Proposed by ${proposer(extension, workspace?.actors ?? [], chat.sessions)}`,
-            data: { extension: extension.id },
+            ...from.label,
+            data: { extension: extension.id, workspace: from.here },
             sound: "default",
           },
           trigger: null,

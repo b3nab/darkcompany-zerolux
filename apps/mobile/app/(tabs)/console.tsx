@@ -18,6 +18,7 @@ import {
 } from "@zerolux/chat";
 import type { Attention } from "@zerolux/chat";
 import { Screen } from "@/components/screen";
+import { WorkspaceButton } from "@/components/workspace-mark";
 import { SearchField } from "@/components/search-field";
 import { SessionRow } from "@/components/session";
 import { Text } from "@/components/ui/text";
@@ -85,6 +86,7 @@ export default function Console() {
         : row.attention;
   return (
     <Screen
+      leading={<WorkspaceButton />}
       title="Console"
       action={
         starts ? (

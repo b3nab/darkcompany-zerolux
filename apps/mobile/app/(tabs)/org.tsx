@@ -16,6 +16,7 @@ import type { Actor, MemberTone, ShiftSegment } from "@zerolux/chat";
 import { ActorMark } from "@/components/member";
 import { Eyebrow } from "@/components/meter";
 import { Screen } from "@/components/screen";
+import { WorkspaceButton } from "@/components/workspace-mark";
 import { Segmented } from "@/components/segmented";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
@@ -62,7 +63,7 @@ export default function Org() {
   ) : undefined;
   if (!workspace)
     return (
-      <Screen title="Org" action={newAgent}>
+      <Screen leading={<WorkspaceButton />} title="Org" action={newAgent}>
         {null}
       </Screen>
     );
@@ -75,7 +76,7 @@ export default function Org() {
     memberTone(actor, people[0]?.id, chat.sessions);
   const open = (actor: Actor) => router.push(`/member/${actor.id}`);
   return (
-    <Screen title="Org" action={newAgent}>
+    <Screen leading={<WorkspaceButton />} title="Org" action={newAgent}>
       <View className="px-5 pb-3">
         <Segmented
           options={(Object.keys(views) as Mode[]).map((id) => [

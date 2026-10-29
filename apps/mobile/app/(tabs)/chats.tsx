@@ -19,6 +19,7 @@ import { useCSSVariable } from "uniwind";
 import { MenuLink } from "@/components/action-menu";
 import { ChatMark } from "@/components/chat-mark";
 import { Screen } from "@/components/screen";
+import { WorkspaceButton } from "@/components/workspace-mark";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "../../src/kernel";
@@ -38,6 +39,7 @@ export default function Chats() {
   const chats = listChats(chat.conversations, filter, waiting);
   return (
     <Screen
+      leading={<WorkspaceButton />}
       title="Chats"
       action={
         <Pressable

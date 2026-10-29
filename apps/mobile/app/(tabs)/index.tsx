@@ -19,6 +19,7 @@ import { ActorMark } from "@/components/member";
 import { McpForm, QuestionForm } from "@/components/request-answer";
 import { Eyebrow } from "@/components/meter";
 import { Screen } from "@/components/screen";
+import { Elsewhere, WorkspaceButton } from "@/components/workspace-mark";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
@@ -38,7 +39,12 @@ export default function Tonight() {
   const live = useMeetings(capabilities.includes("meetings-v1")).meetings;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  if (!workspace) return <Screen title={homeLabel()}>{null}</Screen>;
+  if (!workspace)
+    return (
+      <Screen leading={<WorkspaceButton />} title={homeLabel()}>
+        {null}
+      </Screen>
+    );
   const actors = activeActors(workspace.actors);
   const actor = (id: string | null) =>
     workspace.actors.find((a) => a.id === id);
@@ -74,7 +80,7 @@ export default function Tonight() {
   }
 
   return (
-    <Screen title={homeLabel()}>
+    <Screen leading={<WorkspaceButton />} title={homeLabel()}>
       <ScrollView contentContainerClassName="gap-7 px-5 pb-10">
         <View className="gap-2">
           <Eyebrow>
@@ -203,6 +209,7 @@ export default function Tonight() {
             );
           })}
         </View>
+        <Elsewhere />
         <View className="gap-2.5">
           <Eyebrow>Running now · {running.length}</Eyebrow>
           <View className="rounded-md border border-border bg-card">

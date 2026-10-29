@@ -111,6 +111,8 @@ const symbols: Record<string, Symbol> = {
   "signal-high": "cellularbars",
   "signal-medium": "cellularbars",
   "signal-low": "cellularbars",
+  "arrow-right-left": "arrow.left.arrow.right",
+  "log-out": "rectangle.portrait.and.arrow.right",
   "chevron-up": "chevron.up",
   "chevron-down": "chevron.down",
 };

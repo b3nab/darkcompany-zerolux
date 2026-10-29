@@ -13,6 +13,8 @@ import {
   AuthConnection,
   credentialStorageKey,
   errorMessage,
+  requiresSignIn,
+  workspaceSummary,
   type AuthHealth,
   type AuthDevice,
   type AuthIdentity,
@@ -33,6 +35,48 @@ const storage: AuthStorage = {
       });
   },
 };
+
+/**
+ * What waits in a workspace that is not open, read with the sign-in this phone keeps for it:
+ * the workspace's identity is verified before the sign-in is sent, as for the open one.
+ */
+export async function readElsewhere(
+  base: string,
+  workspaceId: string,
+): Promise<
+  { state: "ready"; requests: number; unread: number } | { state: "signed-out" }
+> {
+  const client = new AuthConnection(base, workspaceId, storage);
+  // A kernel that answers its health but not the rest is out of reach all the same.
+  const late = new AbortController();
+  const timer = setTimeout(() => late.abort(), 10_000);
+  try {
+    const { health, identity } = await client.restore();
+    if (requiresSignIn(health) && !identity?.actor_id)
+      return { state: "signed-out" };
+    return { state: "ready", ...(await workspaceSummary(base, late.signal)) };
+  } finally {
+    clearTimeout(timer);
+    client.dispose();
+  }
+}
+
+/**
+ * Signs this phone out of a workspace that is not open: the kernel ends the session when it
+ * answers, and the phone forgets its sign-in either way.
+ */
+export async function signOutElsewhere(base: string, workspaceId: string) {
+  const client = new AuthConnection(base, workspaceId, storage);
+  try {
+    const { identity } = await client.restore();
+    if (identity) await client.signOut();
+  } catch {
+    // Unreachable, or already signed out: what the phone keeps goes all the same.
+  } finally {
+    client.dispose();
+    await storage.write(base, workspaceId, null);
+  }
+}
 
 interface Authentication {
   health?: AuthHealth;

@@ -10,7 +10,17 @@ real time.
 The app asks where your kernel is. On the same network, start the kernel with
 `--expose <ip>`, the address of that computer on the network, and enter
 `http://<ip>:4310`. For a workspace elsewhere, enter its HTTPS address. Invited by someone?
-Paste the invitation link they sent instead: the app joins their workspace.
+Paste the invitation link they sent instead: the app joins their workspace. When the kernel
+serves several workspaces, the app lists them to choose one.
+
+## Workspaces
+
+The app keeps every workspace you add, each with its own sign-in, and opens one at a time. The
+mark at the top left of Tonight, Console, Chats and Org lists them, with what waits in the
+others: requests to decide and chats with unread messages. Tonight shows those under
+Elsewhere. **Add workspace** connects another one; holding a workspace renames it on this
+phone, signs out of it or removes it from the phone. Notifications name their workspace when
+the app keeps more than one, and a tap opens it.
 
 ## Android
 

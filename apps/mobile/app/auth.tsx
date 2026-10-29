@@ -1,19 +1,21 @@
+import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { ScrollView, View } from "react-native";
 import { errorMessage, ownerNameError } from "@zerolux/chat";
 import type { Invitation } from "@zerolux/chat";
-import { Wordmark } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SafeArea } from "@/components/ui/native";
 import { Text } from "@/components/ui/text";
+import { WorkspaceMark } from "@/components/workspace-mark";
 import { useAuthentication } from "../src/auth";
 import { setPendingInvite, usePendingInvite } from "../src/invite";
-import { useKernel, useSession } from "../src/kernel";
+import { keptName, useKernel, useSession } from "../src/kernel";
 
 export default function Authenticate() {
   const auth = useAuthentication();
   const kernel = useKernel();
+  const router = useRouter();
   const { chat } = useSession();
   const [existing, setExisting] = useState(false);
   const [name, setName] = useState("");
@@ -81,42 +83,64 @@ export default function Authenticate() {
       return;
     }
     try {
-      await kernel.forget();
+      if (kernel.current) await kernel.forget(kernel.current);
     } catch (error) {
       setError(errorMessage(error));
     }
   }
 
+  const current = kernel.current;
+  // The name given on this phone, else the workspace's own.
+  const title =
+    current?.alias ||
+    auth.health?.workspace.name ||
+    (current ? keptName(current) : "Your workspace");
+  const host = current ? new URL(current.kernel).host : undefined;
+  // Its kernel did not answer: said in a line, the network's own words left out.
+  const offline = !auth.loading && !auth.health && Boolean(auth.error);
   return (
     <SafeArea className="flex-1 bg-background">
       <ScrollView
         keyboardShouldPersistTaps="handled"
         contentContainerClassName="grow justify-center gap-5 p-6"
       >
-        <Wordmark height={22} />
+        <View className="flex-row items-center gap-3.5">
+          {current ? (
+            <WorkspaceMark id={current.id} name={title} size="lg" />
+          ) : null}
+          <View className="min-w-0 flex-1">
+            <Text className="text-[28px] font-semibold tracking-tight">
+              {joining ? "Join " : ""}
+              {title}
+            </Text>
+            {host && host !== title ? (
+              <Text className="font-mono text-[13px] text-muted-foreground">
+                {host}
+              </Text>
+            ) : null}
+          </View>
+        </View>
         <View className="gap-2">
-          <Text className="text-[32px] font-light tracking-tight">
-            {joining ? "Join " : ""}
-            {auth.health?.workspace.name ?? "Your workspace"}
-          </Text>
           <Text className="text-base leading-6 text-muted-foreground">
-            {auth.loading
-              ? "Verifying the workspace…"
-              : invite && inviteError
-                ? `This invitation can no longer be used (${inviteError}). Ask for a new one.`
-                : joining
-                  ? auth.identity
-                    ? "Join this workspace with the account you are signed in to."
-                    : invitation
-                      ? `${invitation.invited_by} invited you.`
-                      : "Reading the invitation…"
-                  : auth.identity
-                    ? enrollment
-                      ? "Bind your account to this workspace’s owner."
-                      : "This account is not a member of this workspace. Sign out to use another account."
-                    : signup
-                      ? "Create your account to become this workspace’s owner."
-                      : "Sign in to your workspace."}
+            {offline
+              ? `${host ?? "The kernel"} is not reachable.`
+              : auth.loading
+                ? "Verifying the workspace…"
+                : invite && inviteError
+                  ? `This invitation can no longer be used (${inviteError}). Ask for a new one.`
+                  : joining
+                    ? auth.identity
+                      ? "Join this workspace with the account you are signed in to."
+                      : invitation
+                        ? `${invitation.invited_by} invited you.`
+                        : "Reading the invitation…"
+                    : auth.identity
+                      ? enrollment
+                        ? "Bind your account to this workspace’s owner."
+                        : "This account is not a member of this workspace. Sign out to use another account."
+                      : signup
+                        ? "Create your account to become this workspace’s owner."
+                        : "Sign in to your workspace."}
           </Text>
         </View>
         {auth.health && !auth.loading && (
@@ -241,7 +265,7 @@ export default function Authenticate() {
             )}
           </>
         )}
-        {error || auth.error ? (
+        {error || (auth.error && !offline) ? (
           <Text accessibilityRole="alert" className="text-sm text-destructive">
             {error || auth.error}
           </Text>
@@ -252,19 +276,34 @@ export default function Authenticate() {
             disabled={auth.busy}
             onPress={() => void auth.refresh()}
           >
-            <Text>Verify connection again</Text>
+            <Text>{offline ? "Try again" : "Verify connection again"}</Text>
           </Button>
         )}
+        {kernel.workspaces.length > 1 ? (
+          <Button
+            variant="ghost"
+            disabled={auth.busy}
+            onPress={() => router.push("/workspaces")}
+          >
+            <Text>Choose another workspace</Text>
+          </Button>
+        ) : null}
         <Button
           variant="ghost"
           disabled={auth.busy}
           onPress={() => {
+            if (!invite && kernel.workspaces.length > 1)
+              return router.push("/workspace-add");
             setPendingInvite(null);
             void changeKernel();
           }}
         >
           <Text>
-            {invite ? "Use another link" : "Connect to another kernel"}
+            {invite
+              ? "Use another link"
+              : kernel.workspaces.length > 1
+                ? "Add workspace"
+                : "Connect to another kernel"}
           </Text>
         </Button>
       </ScrollView>

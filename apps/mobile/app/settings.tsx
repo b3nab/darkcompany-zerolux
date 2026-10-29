@@ -7,7 +7,15 @@ import {
 } from "lucide-react-native";
 import type { LucideIcon } from "lucide-react-native";
 import { useEffect, useState } from "react";
-import { AppState, Linking, ScrollView, Switch, View } from "react-native";
+import { useRouter } from "expo-router";
+import {
+  Alert,
+  AppState,
+  Linking,
+  ScrollView,
+  Switch,
+  View,
+} from "react-native";
 import * as Notifications from "expo-notifications";
 import { useCSSVariable } from "uniwind";
 import { ago, ApiError, deviceName, errorMessage } from "@zerolux/chat";
@@ -39,22 +47,24 @@ const realtime = {
 
 /** What is yours and this phone's: notifications, your devices, the look and the kernel. */
 export default function MySettings() {
-  const { url, forget } = useKernel();
+  const { current, forget } = useKernel();
+  const router = useRouter();
   const { chat, version } = useSession();
   const auth = useAuthentication();
   const { theme, light } = useTheme();
   const muted = String(useCSSVariable("--color-muted-foreground"));
   const check = <CheckIcon color={muted} size={18} strokeWidth={2} />;
   const [connectionError, setConnectionError] = useState("");
-  async function changeKernel() {
+  async function remove() {
+    if (!current) return;
     if (!chat.canLeave()) {
       setConnectionError(
-        "Wait for pending chat messages before changing kernels.",
+        "Wait for pending chat messages before removing this workspace.",
       );
       return;
     }
     try {
-      await forget();
+      await forget(current);
     } catch (error) {
       setConnectionError(errorMessage(error));
     }
@@ -115,17 +125,37 @@ export default function MySettings() {
               </Text>
             </View>
             <Text className="font-mono text-[13px] text-faint">
-              {url?.replace(/^https?:\/\//, "")}
+              {current ? new URL(current.kernel).host : ""}
               {version ? ` · v${version}` : ""}
             </Text>
           </View>
-          <View className="border-t border-border px-4 py-3">
+          <View className="gap-2 border-t border-border px-4 py-3">
             <Button
               variant="outline"
               disabled={auth?.busy}
-              onPress={() => void changeKernel()}
+              onPress={() => router.push("/workspace-add")}
             >
-              <Text>Connect to another kernel</Text>
+              <Text>Add workspace</Text>
+            </Button>
+            <Button
+              variant="ghost"
+              disabled={auth?.busy}
+              onPress={() =>
+                Alert.alert(
+                  "Remove this workspace from this phone?",
+                  undefined,
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Remove",
+                      style: "destructive",
+                      onPress: () => void remove(),
+                    },
+                  ],
+                )
+              }
+            >
+              <Text className="text-destructive">Remove from this phone</Text>
             </Button>
             {connectionError ? (
               <Text className="mt-2 text-sm text-destructive">

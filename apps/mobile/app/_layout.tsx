@@ -106,6 +106,21 @@ function Navigator() {
       <Stack.Protected guard={!url}>
         <Stack.Screen name="connect" />
       </Stack.Protected>
+      {/* The workspaces on this phone, open or still to sign in to. */}
+      <Stack.Protected guard={Boolean(url)}>
+        <Stack.Screen
+          name="workspaces"
+          options={{
+            presentation: "formSheet",
+            sheetAllowedDetents: [0.6, 1],
+            sheetGrabberVisible: true,
+          }}
+        />
+        <Stack.Screen
+          name="workspace-add"
+          options={{ presentation: "modal" }}
+        />
+      </Stack.Protected>
     </Stack>
   );
 }
