@@ -19,6 +19,7 @@ import {
 import { cn } from "cn";
 import {
   BlocksIcon,
+  CheckIcon,
   ChevronsUpDownIcon,
   LayoutDashboardIcon,
   LogOutIcon,
@@ -50,6 +51,8 @@ import { activeActors } from "./api";
 import type { Actor, Workspace } from "./api";
 import { agentPresence } from "./presence";
 import { useAuthentication } from "./AuthGate";
+import { macKeys } from "./desktop";
+import { useElsewhere, useHere, WorkspaceMark } from "./instance";
 import { pieceIcon } from "./extension-view";
 import { stored } from "./stored";
 import { useTheme } from "./theme";
@@ -65,6 +68,7 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
@@ -323,37 +327,59 @@ const row =
 const add =
   "grid size-7 place-items-center rounded-sm text-faint transition-colors hover:bg-accent hover:text-foreground aria-expanded:bg-accent [&>svg]:size-4";
 
-/** The workspace you are in, how old it is and how many work in it. */
+/** A count of requests, as on the bar. */
+function Count({ count }: { count: number }) {
+  return (
+    <span className="grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 font-mono text-[10px] font-medium text-primary-foreground tabular-nums">
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
+const unreadDot = "size-1.5 shrink-0 rounded-full bg-foreground";
+
+/**
+ * The workspace you are in, how old it is and how many work in it; and the kernel's others,
+ * each with what waits in it, to go to (in a new tab with ⌘ or Ctrl).
+ */
 export function WorkspaceMenu({ workspace }: { workspace: Workspace }) {
   const navigate = useNavigate();
+  const here = useHere();
+  const elsewhere = useElsewhere(here);
   const members = activeActors(workspace.actors).length;
   const info = workspace.workspace;
   const { name } = info;
   const line = `${workspaceAge(info)} · ${members} member${members === 1 ? "" : "s"}`;
+  const all =
+    here && here.instance.workspaces.length > 1 ? here.instance.workspaces : [];
+  const waiting = Object.values(elsewhere);
+  const requests = waiting.reduce((sum, w) => sum + w.requests, 0);
+  const unread = waiting.some((w) => w.unread > 0);
+  const key = macKeys() ? "⌃" : "Alt+";
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
           <button
             type="button"
-            title={`${name} · ${line}`}
+            title={`${name} · ${line}${requests ? ` · ${requests} waiting elsewhere` : ""}`}
             className="flex h-8 min-w-0 items-center gap-2 rounded-md px-1.5 transition-colors hover:bg-accent aria-expanded:bg-accent"
           />
         }
       >
-        <span
-          aria-hidden
-          className="grid size-6 shrink-0 place-items-center rounded-sm border border-input bg-secondary text-xs font-semibold"
-        >
-          {name.slice(0, 1).toUpperCase()}
-        </span>
+        <WorkspaceMark name={name} />
         <span className="truncate text-[13.5px] font-semibold">{name}</span>
+        {requests > 0 ? (
+          <Count count={requests} />
+        ) : (
+          unread && <span aria-hidden className={unreadDot} />
+        )}
         <ChevronsUpDownIcon
           aria-hidden
           className="size-3.5 shrink-0 text-faint"
         />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-60">
+      <DropdownMenuContent align="start" className="w-64">
         <DropdownMenuGroup>
           <DropdownMenuLabel className="flex flex-col gap-0.5">
             <span className="truncate text-[13.5px] font-semibold text-foreground">
@@ -379,6 +405,46 @@ export function WorkspaceMenu({ workspace }: { workspace: Workspace }) {
             Hire an agent
           </DropdownMenuItem>
         </DropdownMenuGroup>
+        {all.length > 0 && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuLabel className="truncate font-mono text-[11px] font-normal">
+                {globalThis.location?.host}
+              </DropdownMenuLabel>
+              {all.map((other, at) => {
+                const current = other.id === here!.workspace.id;
+                const waits = elsewhere[other.id];
+                return (
+                  <DropdownMenuItem
+                    key={other.id}
+                    render={
+                      current ? undefined : (
+                        <a href={`/w/${encodeURIComponent(other.id)}/`} />
+                      )
+                    }
+                  >
+                    <WorkspaceMark name={other.name} className="size-5" />
+                    <span className="truncate">{other.name}</span>
+                    <span className="ml-auto flex items-center gap-1.5">
+                      {!!waits?.requests && <Count count={waits.requests} />}
+                      {!!waits?.unread && (
+                        <span aria-label="Unread" className={unreadDot} />
+                      )}
+                      {current && <CheckIcon aria-label="Open" />}
+                      {at < 9 && (
+                        <DropdownMenuShortcut>
+                          {key}
+                          {at + 1}
+                        </DropdownMenuShortcut>
+                      )}
+                    </span>
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuGroup>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

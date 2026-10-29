@@ -155,6 +155,15 @@ export function useTrafficLightsInset() {
   return macos && !fullscreen;
 }
 
+/** Whether keys are a Mac's: ⌘ and ⌃, rather than Ctrl and Alt. */
+export const macKeys = () => {
+  const platform = desktopConnection()?.platform;
+  return platform
+    ? platform === "macos"
+    : typeof navigator !== "undefined" &&
+        /Mac|iPhone|iPad/.test(navigator.platform);
+};
+
 /** Windows and Linux have no native title bar in the desktop app: the page draws the buttons. */
 export const drawsWindowControls = () => {
   const platform = desktopConnection()?.platform;

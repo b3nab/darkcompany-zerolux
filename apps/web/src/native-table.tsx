@@ -3,6 +3,7 @@ import { ChevronDownIcon, ChevronUpIcon, XIcon } from "lucide-react";
 import type { MenuEntry, MenuItem, TableProps, TableRow } from "@zerolux/ui";
 import { cn } from "cn";
 import { MenuEntries, WithMenu, dragFrom, useDropOn } from "./native-menus";
+import { macKeys } from "./desktop";
 import { lucideIcon } from "./lucide-icon";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,9 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-const isMac =
-  typeof navigator !== "undefined" &&
-  /Mac|iPhone|iPad/.test(navigator.platform);
+const isMac = macKeys();
 
 /** A key pressed as a menu writes its shortcut: `⌘⌫`, `⇧⌘N`, `F2`. */
 function pressed(event: React.KeyboardEvent) {

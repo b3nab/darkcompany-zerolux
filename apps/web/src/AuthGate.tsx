@@ -24,8 +24,8 @@ import {
   desktopSignIn,
   kernelAddress,
   windowDragProps,
-  WORKSPACES_LINK,
 } from "./desktop";
+import { useHere, useWorkspacesLink } from "./instance";
 import { ownerNameError } from "./OwnerOnboarding";
 import { WindowControls } from "./components/window-controls";
 import { Button } from "./components/ui/button";
@@ -57,21 +57,23 @@ export function useMe(actors: Actor[]) {
   );
 }
 
-/** The invitation a join link carries: `/join?invite=…`. */
+/** The invitation a join link carries: `/join?invite=…`, under its workspace's `/w/<id>`. */
 const invited = () =>
-  globalThis.location?.pathname === "/join"
+  /^(?:\/w\/[^/]+)?\/join$/.test(globalThis.location?.pathname ?? "")
     ? new URLSearchParams(location.search).get("invite")
     : null;
 
 /** Domain UI is mounted only for a verified, bound human identity. */
 export function AuthGate({ children }: { children: ReactNode }) {
+  const here = useHere();
+  const back = useWorkspacesLink();
   const [client] = useState(() => {
     const desktop = desktopConnection();
     // Packaged desktop pages are cross-origin to their kernel: no cookie reaches it, so
     // their bearer is kept by the desktop for this connection.
     return new AuthConnection(
-      kernelAddress(),
-      desktop?.workspaceId,
+      here?.workspace.base ?? kernelAddress(),
+      here?.workspace.id ?? desktop?.workspaceId,
       desktop ? desktopSignIn() : undefined,
     );
   });
@@ -201,8 +203,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
         if (!next.actor_id && (next.setup_required || joining))
           next = await client.claim(joining);
       }
-      // In, the join link has done its work.
-      if (joining && next.actor_id) history.replaceState(null, "", "/");
+      // In, the join link has done its work: the workspace's first page.
+      if (joining && next.actor_id) history.replaceState(null, "", "./");
       if (live.current) {
         setIdentity(next);
         setPassword("");
@@ -246,11 +248,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
         <WindowControls />
       </div>
       <main className="mx-auto flex max-w-lg flex-col gap-4 px-6 py-12">
-        {desktopConnection() && (
+        {back && (
           <Button
             variant="outline"
             className="self-start"
-            render={<a href={WORKSPACES_LINK} />}
+            render={<a href={back} />}
           >
             Back to workspaces
           </Button>

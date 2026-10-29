@@ -1,18 +1,15 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter } from "react-router";
 import { App } from "./App";
 import { AuthGate } from "./AuthGate";
 import { preloadRenderer } from "./components/message-text";
-import { keepDraftsIn, lookWith, setKernelUrl } from "@zerolux/chat";
-import { kernelAddress } from "./desktop";
+import { keepDraftsIn, lookWith } from "@zerolux/chat";
+import { WorkspaceRoot } from "./instance";
 import { startTheme } from "./theme";
 import { trayPanel } from "./tray";
 import { TrayPanel } from "./TrayPanel";
 
 startTheme();
-// In the desktop app the page is packaged and the kernel is wherever the workspace says.
-setKernelUrl(kernelAddress());
 // Unsent messages survive a reload, in this browser only.
 const DRAFTS = "zerolux-drafts";
 try {
@@ -53,11 +50,11 @@ createRoot(document.getElementById("root")!).render(
     {trayPanel() ? (
       <TrayPanel />
     ) : (
-      <BrowserRouter>
+      <WorkspaceRoot>
         <AuthGate>
           <App />
         </AuthGate>
-      </BrowserRouter>
+      </WorkspaceRoot>
     )}
   </StrictMode>,
 );

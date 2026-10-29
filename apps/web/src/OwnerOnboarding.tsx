@@ -6,17 +6,20 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Eyebrow } from "@/components/presence";
-import { desktopConnection, WORKSPACES_LINK } from "@/desktop";
+import { useWorkspacesLink } from "@/instance";
 
 export function OwnerOnboarding({
   busy,
   save,
-  desktop = Boolean(desktopConnection()),
+  back: given,
 }: {
-  desktop?: boolean;
+  /** Where the workspaces are, to leave before naming yourself; none, nowhere to go. */
+  back?: string | null;
   busy: boolean;
   save: (name: string) => Promise<boolean>;
 }) {
+  const workspaces = useWorkspacesLink();
+  const back = given === undefined ? workspaces : given;
   const [name, setName] = useState("");
   const error = ownerNameError(name);
   const invalid = name.length > 0 && !!error;
@@ -29,11 +32,11 @@ export function OwnerOnboarding({
       aria-labelledby="owner-heading"
       className="mx-auto flex max-w-lg flex-col gap-4 py-12"
     >
-      {desktop && (
+      {back && (
         <Button
           variant="outline"
           className="self-start"
-          render={<a href={WORKSPACES_LINK} />}
+          render={<a href={back} />}
         >
           Back to workspaces
         </Button>

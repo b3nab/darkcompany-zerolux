@@ -137,16 +137,21 @@ test("retired agents are absent from the roster", () => {
 test("desktop welcome can return to workspaces without completing onboarding, even while saving", () => {
   for (const busy of [false, true]) {
     const html = renderToStaticMarkup(
-      <OwnerOnboarding desktop busy={busy} save={async () => true} />,
+      <OwnerOnboarding
+        back="zerolux://workspaces"
+        busy={busy}
+        save={async () => true}
+      />,
     );
     expect(html).toMatch(/<a[^>]*href="zerolux:\/\/workspaces"[^>]*>/);
     expect(html.indexOf('href="zerolux://workspaces"')).toBeLessThan(
       html.indexOf("<form"),
     );
   }
-  const browser = renderToStaticMarkup(
-    <OwnerOnboarding desktop={false} busy={false} save={async () => true} />,
+  const alone = renderToStaticMarkup(
+    <OwnerOnboarding back={null} busy={false} save={async () => true} />,
   );
+  expect(alone).not.toContain("<a");
 });
 
 test("onboarding saving state disables duplicate submissions", () => {
