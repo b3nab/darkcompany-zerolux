@@ -1898,6 +1898,14 @@ fn supported_platform() -> Result<()> {
     Ok(())
 }
 
+/// Where the desktop keeps its data: the system's place for the app, or a test's own.
+pub(crate) fn data_root(app: &tauri::AppHandle) -> tauri::Result<PathBuf> {
+    std::env::var_os("ZEROLUX_DESKTOP_DATA_DIR")
+        .map(PathBuf::from)
+        .map(Ok)
+        .unwrap_or_else(|| app.path().app_data_dir())
+}
+
 pub fn run(launch: LaunchOptions) -> Result<()> {
     supported_platform()?;
     let mut context = tauri::generate_context!();
@@ -1907,11 +1915,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
         tauri::plugin::Builder::<tauri::Wry>::new("previous-instance")
             .setup(move |app, _| {
                 if wait_for_parent {
-                    let root = std::env::var_os("ZEROLUX_DESKTOP_DATA_DIR")
-                        .map(PathBuf::from)
-                        .map(Ok)
-                        .unwrap_or_else(|| app.path().app_data_dir());
-                    local::wait_for_previous(&root?, Duration::from_secs(30))?;
+                    local::wait_for_previous(&data_root(app)?, Duration::from_secs(30))?;
                 }
                 Ok(())
             })
@@ -1965,11 +1969,16 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             crate::updates::update_download,
             crate::updates::update_install,
             crate::autostart::autostart_status,
-            crate::autostart::autostart_set
+            crate::autostart::autostart_set,
+            crate::menu::menu_commands,
+            crate::menu::menu_sections,
+            crate::menu::menu_run,
+            crate::menu::menu_popup
         ])
-        .on_menu_event(|app, event| match event.id().as_ref() {
-            "workspaces" => show_manager(app, None),
-            "new-window" => ask(app, Action::NewWindow { id: None }),
+        .on_menu_event(|app, event| crate::menu::run(app, event.id().as_ref()))
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::Focused(true) => crate::menu::focused(window),
+            tauri::WindowEvent::Destroyed => crate::menu::closed(window),
             _ => {}
         })
         .setup(move |app| {
@@ -2039,39 +2048,10 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                     }
                 }
             });
-            let menu = tauri::menu::Menu::default(app.handle())?;
-            // ⌘N opens another window, as in Finder and Safari: ⇧⌘N stays a new folder.
-            let window = tauri::menu::MenuItem::with_id(
-                app,
-                "new-window",
-                "New Window",
-                true,
-                Some("CmdOrCtrl+N"),
-            )?;
-            let item = tauri::menu::MenuItem::with_id(
-                app,
-                "workspaces",
-                "Manage Workspaces…",
-                true,
-                Some("CmdOrCtrl+Shift+O"),
-            )?;
-            menu.append(&tauri::menu::Submenu::with_items(
-                app,
-                "Workspace",
-                true,
-                &[&window, &item],
-            )?)?;
-            app.set_menu(menu)?;
+            crate::menu::install(app.handle())?;
             crate::notify::install(app.handle());
             crate::tray::install(app.handle())?;
-            let data = std::env::var_os("ZEROLUX_DESKTOP_DATA_DIR")
-                .map(PathBuf::from)
-                .map(Ok)
-                .unwrap_or_else(|| {
-                    app.path()
-                        .app_data_dir()
-                        .context("Locate desktop data directory")
-                });
+            let data = data_root(app.handle()).context("Locate desktop data directory");
             let (stop, mut stopped) = watch::channel(false);
             let task_handle = app.handle().clone();
             let task = tauri::async_runtime::spawn(async move {

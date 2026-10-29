@@ -25,6 +25,10 @@ fn main() {
             "update_install",
             "autostart_status",
             "autostart_set",
+            "menu_commands",
+            "menu_sections",
+            "menu_run",
+            "menu_popup",
         ]),
     ))
     .expect("build desktop permissions");

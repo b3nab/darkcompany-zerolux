@@ -117,6 +117,11 @@ test("registry commands are restricted to the packaged manager, not workspace pa
     "allow-update-channel",
     "allow-update-download",
     "allow-update-install",
+    // The app's menu: its commands, the bar's sections, and the window's own menu button.
+    "allow-menu-commands",
+    "allow-menu-sections",
+    "allow-menu-run",
+    "allow-menu-popup",
   ]);
   // The tray's panel hears every open workspace: their sign-ins are read, never written, and
   // it has no registry or window controls.

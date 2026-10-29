@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router";
 import {
   DndContext,
@@ -50,6 +50,7 @@ import type { Chat } from "@zerolux/chat";
 import { activeActors } from "./api";
 import type { Actor, Workspace } from "./api";
 import { agentPresence } from "./presence";
+import { reportSections } from "./app-menu";
 import { useAuthentication } from "./AuthGate";
 import { macKeys } from "./desktop";
 import { useElsewhere, useHere, WorkspaceMark } from "./instance";
@@ -192,6 +193,10 @@ function Sections({ sections }: { sections: Section[] }) {
   );
   const named = (id: UniqueIdentifier) =>
     sections.find((section) => section.to === id)?.label ?? "";
+  // The desktop's menu opens them by their place, with ⌘1…9.
+  useEffect(() =>
+    reportSections(placed.map((to) => ({ path: to, label: named(to) }))),
+  );
   const at = (id: UniqueIdentifier) =>
     `${placed.indexOf(String(id)) + 1} of ${placed.length}`;
   const announcements: Announcements = {

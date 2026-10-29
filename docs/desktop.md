@@ -43,6 +43,8 @@ The desktop loads its packaged interface and calls the selected kernel's HTTP AP
 
 Each workspace opens in its own window, beside the others' as in VS Code. **New Window** (⌘N, Ctrl+N) opens another window of the workspace in front. Closing a window closes only it; opened local kernels keep running. With its last window closed the app stays in the tray until you quit it, and on macOS in the Dock, whose icon brings back the workspace last in front. Saved workspaces are not all started at app launch.
 
+The app's menu is the menu bar on macOS, and on Windows and Linux the window's menu button (☰), also opened with Alt or F10. It holds the windows and workspaces (File), editing (Edit), the sidebar, the command menu and zoom (View), back, forward and the bar's sections by their place, ⌘1…9 (Go), and help, the keyboard shortcuts and updates (Help, and on macOS the ZeroLux menu). **Help → Keyboard Shortcuts** lists every shortcut. Reload and the developer tools are in **View → Developer** in builds from source only.
+
 On macOS, local kernels remain responsive while the app is in the background: their lifetime prevents App Nap, including service shutdown. The Mac can still sleep when idle. Connections to external kernels do not prevent App Nap.
 
 **Start when ZeroLux opens** controls startup separately for each managed workspace; taking over an existing workspace enables it for that connection. **My settings → Desktop → Open at login** starts ZeroLux in the background when you sign in to this computer, then starts only the workspaces enabled for app startup. Login startup is off until you enable it; it does not run before you sign in.

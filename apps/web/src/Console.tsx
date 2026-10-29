@@ -350,6 +350,20 @@ export function ConsoleList({
   const [starting, setStarting] = useState(false);
   // One's own joined computers online: sessions start there too.
   const computers = ownComputers(hosts, me?.id);
+  const canStart = starts || computers.length > 0;
+  // `?start`, as the menu's New Session asks: the new session's dialog, once.
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    if (!params.has("start")) return;
+    setStarting(canStart);
+    setParams(
+      (all) => {
+        all.delete("start");
+        return all;
+      },
+      { replace: true },
+    );
+  }, [params, setParams, canStart]);
   // A guest's sessions here run with their own accounts: one per harness, connected first.
   const { accounts: guestAccounts } = useHostAccounts(guestOn);
   // Every word typed is in the session's title, agent, folder, harness or latest line.
@@ -381,7 +395,7 @@ export function ConsoleList({
     <section aria-label="Console" className="flex min-h-0 flex-1 flex-col">
       <header className="flex items-center justify-between gap-2 px-4 pt-4 pb-3">
         <h2 className="text-lg font-semibold tracking-tight">Console</h2>
-        {(starts || computers.length > 0) && (
+        {canStart && (
           <Button size="sm" variant="outline" onClick={() => setStarting(true)}>
             <PlusIcon data-icon="inline-start" />
             New session

@@ -406,10 +406,17 @@ pub fn initialize(app: &tauri::AppHandle, root: PathBuf) {
 #[tauri::command]
 pub fn update_status(window: WebviewWindow, app: tauri::AppHandle) -> Result<UpdateState, String> {
     permitted(&window)?;
-    Ok(app
-        .try_state::<Updates>()
-        .ok_or("The desktop is still starting")?
-        .state())
+    Ok(updates(&app)?.state())
+}
+
+fn updates(app: &tauri::AppHandle) -> Result<tauri::State<'_, Updates>, String> {
+    app.try_state::<Updates>()
+        .ok_or_else(|| "The desktop is still starting".into())
+}
+
+/// Looks for an update on the channel chosen.
+pub(crate) async fn check(app: &tauri::AppHandle) -> Result<UpdateState, String> {
+    Ok(updates(app)?.check(app).await)
 }
 
 #[tauri::command]
@@ -418,11 +425,7 @@ pub async fn update_check(
     app: tauri::AppHandle,
 ) -> Result<UpdateState, String> {
     permitted(&window)?;
-    Ok(app
-        .try_state::<Updates>()
-        .ok_or("The desktop is still starting")?
-        .check(&app)
-        .await)
+    check(&app).await
 }
 
 #[tauri::command]
@@ -433,9 +436,7 @@ pub async fn update_channel(
 ) -> Result<UpdateState, String> {
     permitted(&window)?;
     self::channel(&channel).map_err(|error| error.to_string())?;
-    let updates = app
-        .try_state::<Updates>()
-        .ok_or("The desktop is still starting")?;
+    let updates = updates(&app)?;
     {
         let _operation = updates
             .operation
@@ -458,15 +459,9 @@ pub async fn update_channel(
     Ok(updates.check(&app).await)
 }
 
-#[tauri::command]
-pub async fn update_download(
-    window: WebviewWindow,
-    app: tauri::AppHandle,
-) -> Result<UpdateState, String> {
-    permitted(&window)?;
-    let updates = app
-        .try_state::<Updates>()
-        .ok_or("The desktop is still starting")?;
+/// Downloads the update found, ready to install.
+pub(crate) async fn download(app: &tauri::AppHandle) -> Result<UpdateState, String> {
+    let updates = updates(app)?;
     let _operation = updates
         .operation
         .try_lock()
@@ -474,21 +469,24 @@ pub async fn update_download(
     if matches!(updates.state().phase, "ready" | "installing") {
         return Ok(updates.state());
     }
-    if let Err(error) = updates.download(&app).await {
-        updates.failure(&app, error);
+    if let Err(error) = updates.download(app).await {
+        updates.failure(app, error);
     }
     Ok(updates.state())
 }
 
 #[tauri::command]
-pub async fn update_install(
+pub async fn update_download(
     window: WebviewWindow,
     app: tauri::AppHandle,
 ) -> Result<UpdateState, String> {
     permitted(&window)?;
-    let updates = app
-        .try_state::<Updates>()
-        .ok_or("The desktop is still starting")?;
+    download(&app).await
+}
+
+/// Installs the update downloaded, restarting the app.
+pub(crate) async fn install(app: &tauri::AppHandle) -> Result<UpdateState, String> {
+    let updates = updates(app)?;
     let _operation = updates
         .operation
         .try_lock()
@@ -506,18 +504,27 @@ pub async fn update_install(
     // A stable build promoted into Nightly or Beta must not change an implicit preference.
     // Persist it before any shutdown or replacement; a write failure leaves this app ready.
     save_channel(&updates.root, &updates.state().channel).map_err(|error| format!("{error:#}"))?;
-    updates.publish(&app, |inner| {
+    updates.publish(app, |inner| {
         inner.state.phase = "installing";
         inner.state.error = None;
     });
-    if let Err(error) = crate::app::install_update(&app, pending).await {
-        updates.publish(&app, |inner| {
+    if let Err(error) = crate::app::install_update(app, pending).await {
+        updates.publish(app, |inner| {
             inner.state.phase = "ready";
             inner.state.error = Some(error.clone());
         });
         return Err(error);
     }
     Ok(updates.state())
+}
+
+#[tauri::command]
+pub async fn update_install(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<UpdateState, String> {
+    permitted(&window)?;
+    install(&app).await
 }
 
 /// Called only after the desktop has stopped its local kernels and taken their leases.

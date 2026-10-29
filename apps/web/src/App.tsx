@@ -20,7 +20,8 @@ import {
 import type { Conversation } from "@zerolux/chat";
 import { activeActors, api, errorMessage } from "./api";
 import {
-  useDesktopOpen,
+  desktopConnection,
+  useDesktopEvent,
   useTrafficLightsInset,
   windowDragProps,
   workspaceNavigationGuard,
@@ -29,6 +30,7 @@ import { WindowControls } from "@/components/window-controls";
 import { cn } from "cn";
 import type { Actor, Workspace } from "./api";
 import { AdministrationPage, MySettingsPage, ProfilePage } from "./Account";
+import { KeyboardShortcuts, MenuButton, useAppMenu } from "./app-menu";
 import { ExtensionsPage } from "./Extensions";
 import { Approvals, openApprovals } from "./Approvals";
 import { useAuthentication, useMe } from "./AuthGate";
@@ -99,7 +101,23 @@ export function App({
     return true;
   }, [side]);
   const navigate = useNavigate();
-  useDesktopOpen(navigate);
+  useDesktopEvent("zerolux-open", navigate);
+  const [shortcuts, setShortcuts] = useState(false);
+  // The menu's commands that are this window's own.
+  const commands = useAppMenu((id) => {
+    if (id.startsWith("go:")) return navigate(id.slice(3));
+    const run: Record<string, () => unknown> = {
+      "new-chat": () => navigate("/chats/new"),
+      "new-session": () => navigate("/console?start"),
+      settings: () => navigate("/settings"),
+      sidebar: toggle,
+      "command-menu": () => setMenu((open) => !open),
+      back: () => navigate(-1),
+      forward: () => navigate(1),
+      shortcuts: () => setShortcuts(true),
+    };
+    run[id]?.();
+  });
   const { pathname } = useLocation();
   const chatId = useMatch("/chats/:id")?.params.id;
   const agentId = useMatch("/team/:id")?.params.id;
@@ -141,6 +159,8 @@ export function App({
   }, [refresh]);
 
   useEffect(() => {
+    // In the desktop app these keys are its menu's.
+    if (desktopConnection()) return;
     const keys = (e: KeyboardEvent) => {
       if (!e.metaKey && !e.ctrlKey) return;
       const key = e.key.toLowerCase();
@@ -347,6 +367,7 @@ export function App({
         )}
       >
         <div className="flex min-w-0 items-center gap-1.5">
+          <MenuButton />
           {shell && (
             <Button
               variant="ghost"
@@ -687,6 +708,11 @@ export function App({
           />
         </>
       )}
+      <KeyboardShortcuts
+        commands={commands}
+        open={shortcuts}
+        onOpenChange={setShortcuts}
+      />
     </div>
   );
 }

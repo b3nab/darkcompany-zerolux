@@ -11,6 +11,7 @@ mod connection;
 mod credentials;
 mod extension_ui;
 mod local;
+mod menu;
 mod notify;
 mod preferences;
 #[cfg(not(windows))]

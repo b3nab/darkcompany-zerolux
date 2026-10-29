@@ -97,10 +97,16 @@ export function extensionUiAddress(url: string) {
     : `zerolux-ui://localhost/${file}`;
 }
 
-/** The page the desktop sends this window to, from the tray's panel: a request's chat or session. */
-export function useDesktopOpen(open: (path: string) => void) {
-  const latest = useRef(open);
-  latest.current = open;
+/**
+ * What the desktop tells this window by `event`: the page to show, from the tray's panel
+ * (`zerolux-open`), or a command of the menu (`zerolux-command`).
+ */
+export function useDesktopEvent(
+  event: string,
+  receive: (payload: string) => void,
+) {
+  const latest = useRef(receive);
+  latest.current = receive;
   useEffect(() => {
     if (!desktopConnection()) return;
     let live = true;
@@ -108,8 +114,8 @@ export function useDesktopOpen(open: (path: string) => void) {
     void import("@tauri-apps/api/webviewWindow").then(
       async ({ getCurrentWebviewWindow }) => {
         const unlisten = await getCurrentWebviewWindow().listen<string>(
-          "zerolux-open",
-          (event) => latest.current(event.payload),
+          event,
+          (heard) => latest.current(heard.payload),
         );
         if (live) stop = unlisten;
         else unlisten();
@@ -119,7 +125,7 @@ export function useDesktopOpen(open: (path: string) => void) {
       live = false;
       stop?.();
     };
-  }, []);
+  }, [event]);
 }
 
 /** The desktop draws no title bar: these elements move the window; buttons inside keep working. */
