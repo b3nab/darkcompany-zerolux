@@ -1,3 +1,7 @@
+import { request } from "./client";
+import { isThread, unreadIn } from "./chat";
+import type { Approval, Conversation } from "./chat";
+
 /** A workspace a kernel serves, at its own base: `<kernel>/w/<id>`, or the kernel itself. */
 export interface ServedWorkspace {
   id: string;
@@ -108,4 +112,30 @@ export function rememberWorkspace(kernel: string, id: string) {
   } catch {
     // Storage refused, as in a private window: the choice is asked again next time.
   }
+}
+
+/**
+ * What waits for you in a workspace other than the one open: its requests to decide and its
+ * chats with messages you have not read, as a badge and «Elsewhere» say them.
+ */
+export async function workspaceSummary(base: string, signal?: AbortSignal) {
+  const [{ approvals }, { conversations }] = await Promise.all([
+    request<{ approvals: Approval[] }>(
+      base,
+      "/chat/approvals",
+      undefined,
+      signal,
+    ),
+    request<{ conversations: Conversation[] }>(
+      base,
+      "/conversations",
+      undefined,
+      signal,
+    ),
+  ]);
+  return {
+    requests: approvals.filter((a) => a.status === "pending").length,
+    // As the Chats badge counts them: chats, not their threads.
+    unread: conversations.filter((c) => !isThread(c) && unreadIn(c) > 0).length,
+  };
 }

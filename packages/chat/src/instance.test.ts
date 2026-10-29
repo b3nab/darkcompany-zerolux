@@ -9,6 +9,7 @@ import {
   rememberWorkspace,
   workspaceAddress,
   workspaceBase,
+  workspaceSummary,
 } from "./instance";
 import { inviteLink, readInviteLink } from "./people";
 
@@ -154,5 +155,34 @@ test("calls and a piece's own file go under the workspace's base", async () => {
   expect(asked).toEqual([
     `${base}/api/workspace`,
     `${base}/api/extensions/aspen.board/ui`,
+  ]);
+});
+
+test("what waits in another workspace: its pending requests and its chats, not threads, with unread messages", async () => {
+  const base = `${kernel}/w/ws-b`;
+  const asked: string[] = [];
+  setKernelFetch(async (url) => {
+    asked.push(url);
+    return url.endsWith("/chat/approvals")
+      ? Response.json({
+          approvals: [
+            { id: "a1", status: "pending" },
+            { id: "a2", status: "decided" },
+            { id: "a3", status: "pending" },
+          ],
+        })
+      : Response.json({
+          conversations: [
+            { id: "c1", last_seq: 5, read_seq: 5 },
+            { id: "c2", last_seq: 7, read_seq: 4 },
+            { id: "c3", last_seq: 2 },
+            { id: "t1", kind: "thread", last_seq: 9, read_seq: 1 },
+          ],
+        });
+  });
+  expect(await workspaceSummary(base)).toEqual({ requests: 2, unread: 2 });
+  expect(asked.sort()).toEqual([
+    `${base}/api/chat/approvals`,
+    `${base}/api/conversations`,
   ]);
 });
