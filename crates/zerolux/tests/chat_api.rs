@@ -219,8 +219,9 @@ async fn child_kernel_discovers_and_hires_an_isolated_native_session_over_http()
             eprintln!("fixture kernel: {line}");
         }
     });
-    let url = format!("http://127.0.0.1:{port}/api");
-    let client = owner::client(&format!("http://127.0.0.1:{port}"), Duration::from_secs(20)).await;
+    let base = owner::workspace(&format!("http://127.0.0.1:{port}")).await;
+    let url = format!("{base}/api");
+    let client = owner::client(&base, Duration::from_secs(20)).await;
     let discovery = client
         .get(format!("{url}/sessions/discover"))
         .send()

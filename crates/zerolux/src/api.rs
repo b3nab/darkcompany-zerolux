@@ -138,6 +138,175 @@ impl FromRef<AppState> for Store {
     }
 }
 
+/// Who may reach this kernel at all, whatever the workspace: its addresses' rules.
+#[derive(Clone)]
+struct Gate {
+    exposed: Option<Arc<Exposed>>,
+    public: Option<Arc<PublicOrigin>>,
+}
+
+impl FromRef<AppState> for Gate {
+    fn from_ref(state: &AppState) -> Self {
+        Self {
+            exposed: state.exposed.clone(),
+            public: state.public.clone(),
+        }
+    }
+}
+
+/// A workspace this kernel serves, under `/w/{id}`.
+pub struct Hosted {
+    pub store: Store,
+    pub runtime: Arc<ChatRuntime>,
+    pub router: Router,
+}
+
+/// The workspaces this kernel serves, by ID; they come and go while it runs.
+pub type Workspaces = std::sync::RwLock<std::collections::HashMap<String, Arc<Hosted>>>;
+
+#[derive(Clone)]
+struct InstanceState {
+    workspaces: Arc<Workspaces>,
+    gate: Gate,
+    web_dir: Arc<PathBuf>,
+}
+
+impl FromRef<InstanceState> for Gate {
+    fn from_ref(state: &InstanceState) -> Self {
+        state.gate.clone()
+    }
+}
+
+/// The kernel's own addresses: what it is and which workspaces it serves, each workspace's
+/// API under `/w/{id}/api`, and the web app.
+pub fn instance_router(
+    workspaces: Arc<Workspaces>,
+    web_dir: PathBuf,
+    exposed: Option<Arc<Exposed>>,
+    public: Option<Arc<PublicOrigin>>,
+) -> Router {
+    let state = InstanceState {
+        workspaces,
+        gate: Gate { exposed, public },
+        web_dir: Arc::new(web_dir),
+    };
+    let api = Router::new()
+        .route("/health", get(instance_health))
+        // A service comes back here from a sign-in, whichever workspace started it.
+        .route("/extensions/oauth/callback", get(instance_signed_in))
+        .fallback(|| async {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Unknown API endpoint" })),
+            )
+        })
+        .layer(middleware::from_fn(no_store));
+    Router::new()
+        .nest("/api", api)
+        // Matched by hand: the workspace's own routes must not see this router's parameters.
+        .fallback(workspace_or_web)
+        .layer(middleware::from_fn(web_cache))
+        .layer(DefaultBodyLimit::max(1024 * 1024))
+        .layer(middleware::from_fn_with_state(state.clone(), access))
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
+}
+
+/// What this kernel is, and the workspaces it serves.
+async fn instance_health(State(state): State<InstanceState>) -> Result<Json<Value>, Error> {
+    let stores: Vec<Store> = state
+        .workspaces
+        .read()
+        .expect("workspaces")
+        .values()
+        .map(|hosted| hosted.store.clone())
+        .collect();
+    let mut workspaces = Vec::with_capacity(stores.len());
+    for store in stores {
+        workspaces.push(store.workspace_info().await?);
+    }
+    workspaces.sort_by_key(|workspace| workspace.created_at);
+    Ok(Json(json!({
+        "name": "zerolux",
+        "version": crate::build::version(),
+        "build": crate::build::info(),
+        "api_version": API_VERSION,
+        "capabilities": ["workspaces-v1"],
+        "workspaces": workspaces,
+    })))
+}
+
+/// `/w/{id}/…` goes to that workspace, as it receives it: without `/w/{id}`. Any other
+/// address is the web app's.
+async fn workspace_or_web(State(state): State<InstanceState>, mut request: Request) -> Response {
+    use tower::ServiceExt;
+    let path = request.uri().path().to_owned();
+    let Some(rest) = path.strip_prefix("/w/") else {
+        return match web_files(&state.web_dir).oneshot(request).await {
+            Ok(response) => response.into_response(),
+            Err(never) => match never {},
+        };
+    };
+    let (id, rest) = rest.split_once('/').unwrap_or((rest, ""));
+    let hosted = state
+        .workspaces
+        .read()
+        .expect("workspaces")
+        .get(id)
+        .cloned();
+    let Some(hosted) = hosted else {
+        return refused(
+            StatusCode::NOT_FOUND,
+            "This kernel serves no such workspace",
+        );
+    };
+    let mut uri = format!("/{rest}");
+    if let Some(query) = request.uri().query() {
+        uri = format!("{uri}?{query}");
+    }
+    match uri.parse::<axum::http::Uri>() {
+        // The workspace sees its own addresses, as if it were served alone.
+        Ok(uri) => {
+            request
+                .extensions_mut()
+                .insert(axum::extract::OriginalUri(uri.clone()));
+            *request.uri_mut() = uri;
+        }
+        Err(_) => return refused(StatusCode::BAD_REQUEST, "Invalid address"),
+    }
+    match hosted.router.clone().oneshot(request).await {
+        Ok(response) => response,
+        Err(never) => match never {},
+    }
+}
+
+/// A service sent the person back from signing in: to the workspace whose sign-in it was.
+async fn instance_signed_in(
+    State(state): State<InstanceState>,
+    Query(query): Query<SignedIn>,
+) -> Response {
+    let runtimes: Vec<Arc<ChatRuntime>> = state
+        .workspaces
+        .read()
+        .expect("workspaces")
+        .values()
+        .map(|hosted| hosted.runtime.clone())
+        .collect();
+    let runtime = runtimes
+        .into_iter()
+        .find(|runtime| runtime.extensions.waits_for(&query.state));
+    let page = match runtime {
+        Some(runtime) => {
+            runtime
+                .extensions
+                .signed_in(&query.state, query.code.as_deref(), query.error.as_deref())
+                .await
+        }
+        None => crate::extensions::oauth::page(Err("this sign-in expired; start it again".into())),
+    };
+    axum::response::Html(page).into_response()
+}
+
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let status = match self {
@@ -420,19 +589,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .layer(middleware::from_fn(no_store));
     Router::new()
         .nest("/api", api)
-        // The web app owns its addresses: any page address gets the app, which shows the page.
-        // The build writes `.br` and `.gz` next to each file; a client that accepts them gets
-        // the smaller one, the original is always there for the others.
-        .fallback_service(
-            ServeDir::new(&web_dir)
-                .precompressed_br()
-                .precompressed_gzip()
-                .fallback(
-                    ServeFile::new(web_dir.join("index.html"))
-                        .precompressed_br()
-                        .precompressed_gzip(),
-                ),
-        )
+        .fallback_service(web_files(&web_dir))
         .layer(middleware::from_fn(web_cache))
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), access))
@@ -440,12 +597,27 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .with_state(state)
 }
 
+/// The web app owns its addresses: any page address gets the app, which shows the page.
+/// The build writes `.br` and `.gz` next to each file; a client that accepts them gets
+/// the smaller one, the original is always there for the others.
+fn web_files(web_dir: &std::path::Path) -> ServeDir<ServeFile> {
+    ServeDir::new(web_dir)
+        .precompressed_br()
+        .precompressed_gzip()
+        .fallback(
+            ServeFile::new(web_dir.join("index.html"))
+                .precompressed_br()
+                .precompressed_gzip(),
+        )
+}
+
 /// The web app's files with a hash in their names never change: a browser keeps them. Every
 /// other address, the app's page first, is asked again, so a new build reaches it at once.
 async fn web_cache(request: Request, next: Next) -> Response {
     let path = request.uri().path().to_owned();
     let mut response = next.run(request).await;
-    if path.starts_with("/api/") || !response.status().is_success() {
+    // A workspace's own router decides for what it serves.
+    if path.starts_with("/api/") || path.starts_with("/w/") || !response.status().is_success() {
         return response;
     }
     let file = path.rsplit('/').next().unwrap_or_default();
@@ -2678,7 +2850,7 @@ fn peer(request: &Request) -> Option<IpAddr> {
 }
 
 /// Match the request's Host and Origin to a served address.
-async fn access(State(state): State<AppState>, request: Request, next: Next) -> Response {
+async fn access(State(state): State<Gate>, request: Request, next: Next) -> Response {
     // The desktop app's pages are cross-origin to every kernel they talk to: answer the
     // browser's preflight, then let the request through the same checks as any other, with
     // its Origin accepted, and tag the response for the browser.
@@ -2698,7 +2870,7 @@ async fn access(State(state): State<AppState>, request: Request, next: Next) -> 
     }
 }
 
-async fn classify(state: AppState, request: Request, next: Next) -> Response {
+async fn classify(state: Gate, request: Request, next: Next) -> Response {
     let desktop = desktop_origin(&request).is_some();
     let host = request.headers().get("host").and_then(|h| h.to_str().ok());
     // Public by authority, even when the proxy connects from loopback: never a local privilege.

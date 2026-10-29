@@ -103,7 +103,8 @@ pub struct LiveKit {
     rooms: Arc<RoomClient>,
     /// Started by this kernel (as opposed to an external server), whatever its URL says.
     owns_server: bool,
-    managed: Mutex<Option<Child>>,
+    /// Shared by every workspace's view of the same server.
+    managed: Arc<Mutex<Option<Child>>>,
 }
 
 impl LiveKit {
@@ -144,8 +145,21 @@ impl LiveKit {
             api_secret,
             room: ROOM.to_owned(),
             owns_server: managed.is_some(),
-            managed: Mutex::new(managed),
+            managed: Arc::new(Mutex::new(managed)),
         })
+    }
+
+    /// The same server, seen from one workspace: its notices go to that workspace's room.
+    pub fn scoped(&self, workspace_id: &str) -> Self {
+        Self {
+            url: self.url.clone(),
+            api_key: self.api_key.clone(),
+            api_secret: self.api_secret.clone(),
+            room: workspace_room(workspace_id),
+            rooms: self.rooms.clone(),
+            owns_server: self.owns_server,
+            managed: self.managed.clone(),
+        }
     }
 
     /// Scopes the notices to one workspace's room. Call before any token is issued.

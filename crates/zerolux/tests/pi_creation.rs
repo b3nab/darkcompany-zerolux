@@ -235,6 +235,7 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
         .unwrap();
     let kernel = start(&root, port);
     ready(&client, &base).await;
+    let base = owner::workspace(&base).await;
     let client = owner::client(&base, Duration::from_secs(65)).await;
     let invalid = client
         .post(format!("{base}/api/sessions"))
@@ -589,6 +590,7 @@ async fn a_pi_session_runs_on_a_joined_computer() {
         .unwrap();
     let _kernel = start(&root, port);
     ready(&plain, &base).await;
+    let base = owner::workspace(&base).await;
     let client = owner::client(&base, Duration::from_secs(65)).await;
     let linked = api(&client, &base, "/hosts/link", Some(json!({}))).await;
     let host = linked["host"]["id"].as_str().unwrap().to_owned();

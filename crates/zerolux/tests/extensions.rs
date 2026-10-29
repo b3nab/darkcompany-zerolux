@@ -1831,6 +1831,93 @@ async fn token_service() -> (String, Arc<std::sync::Mutex<Vec<Value>>>) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_sign_in_comes_back_to_the_kernel_and_reaches_the_workspace_that_started_it() {
+    for program in ["livekit-server", "bun"] {
+        if std::process::Command::new(program)
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("{program} not installed: skipped");
+            return;
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let server = zerolux::server::Server::start(zerolux::server::ServerOptions {
+        address: "127.0.0.1:0".parse().unwrap(),
+        expose: None,
+        data_dir: dir.path().join("first"),
+        database: zerolux::db::Location::Sqlite(dir.path().join("first/zerolux.db")),
+        initial_workspace_name: None,
+        web_dir: dir.path().join("web"),
+        livekit: Some(LiveKitConfig {
+            url: None,
+            api_key: None,
+            api_secret: None,
+            data_dir: dir.path().join("livekit"),
+        }),
+        public: None,
+        runner: None,
+        auth: None,
+    })
+    .await
+    .unwrap();
+    let second = server
+        .handle()
+        .add_workspace(zerolux::server::WorkspaceOptions::in_folder(
+            dir.path().join("second"),
+            None,
+        ))
+        .await
+        .unwrap();
+    let client = Client::builder().no_proxy().build().unwrap();
+    let kernel = Kernel {
+        url: server.handle().workspace_url(&second.id),
+        client: client.clone(),
+    };
+    let (status, body) = kernel
+        .call(
+            Method::POST,
+            "/onboarding/owner",
+            Some(json!({"name": "Owner"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = kernel
+        .call(
+            Method::POST,
+            "/extensions/folder",
+            Some(json!({"folder": fixture("account")})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (service, sent) = token_service().await;
+    let (status, started) = kernel
+        .call(
+            Method::POST,
+            "/ext/zerolux.account/connect",
+            Some(json!({"service": service})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{started}");
+    let address = reqwest::Url::parse(started["result"]["url"].as_str().unwrap()).unwrap();
+    let query: std::collections::HashMap<_, _> = address.query_pairs().into_owned().collect();
+    // One address for every workspace: the kernel's own.
+    let callback = format!("{}/api/extensions/oauth/callback", server.url());
+    assert_eq!(query["redirect_uri"], callback);
+    let page = client
+        .get(format!("{callback}?state={}&code=code-1", query["state"]))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    let exchanged = sent.lock().unwrap().clone();
+    assert_eq!(exchanged.len(), 1);
+    assert_eq!(exchanged[0]["grant_type"], "authorization_code");
+    server.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn an_extension_keeps_secrets_and_signs_in_to_another_service() {
     // Inspect the persisted value directly on either backend, including SQLite's WAL.
     async fn stored_secret(database: &db::TestDatabase, key: &str) -> String {

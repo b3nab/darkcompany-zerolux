@@ -60,7 +60,10 @@ impl Kernel {
         })
         .await
         .unwrap();
-        let url = server.url();
+        // Everything a person does happens at their workspace's address.
+        let url = server
+            .handle()
+            .workspace_url(&server.handle().workspaces().await.unwrap()[0].id);
         Self {
             server,
             url,
@@ -276,9 +279,10 @@ async fn the_first_account_becomes_the_owner_and_signs_in_after_restart() {
         kernel.sign_up("Other", "other@example.test").await.status(),
         StatusCode::FORBIDDEN
     );
+    let workspace = reqwest::Url::parse(&kernel.url).unwrap().path().to_owned();
     let raw = raw_post(
         kernel.address(),
-        "/api/auth/sign-up/../sign-up/email",
+        &format!("{workspace}/api/auth/sign-up/../sign-up/email"),
         &["x-zerolux-auth-enroll: 1"],
         &json!({ "name": "Other", "email": "other@example.test", "password": "correct horse battery" }).to_string(),
     )

@@ -133,6 +133,11 @@ impl Flows {
     }
 
     /// The sign-in a service's return belongs to, once.
+    /// Whether a sign-in waits for the service to come back with this state.
+    pub fn waits(&self, state: &str) -> bool {
+        self.pending.lock().expect("sign-ins").contains_key(state)
+    }
+
     pub fn take(&self, state: &str) -> Option<Pending> {
         let flow = self.pending.lock().expect("sign-ins").remove(state)?;
         (flow.expires > crate::store::now_ms()).then_some(flow)

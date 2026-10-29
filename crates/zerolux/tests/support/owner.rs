@@ -32,6 +32,25 @@ pub fn bun_dir() -> PathBuf {
         .expect("bun is installed")
 }
 
+/// A kernel's first workspace: the address its people and agents call.
+pub async fn workspace(kernel: &str) -> String {
+    let health: serde_json::Value = Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .get(format!("{kernel}/api/health"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = health["workspaces"][0]["id"]
+        .as_str()
+        .expect("the kernel serves a workspace");
+    format!("{kernel}/w/{id}")
+}
+
 /// A client that is the owner: the first account, signed up and claimed, or signed in again
 /// when that already happened (a restarted kernel).
 pub async fn client(base: &str, timeout: Duration) -> Client {

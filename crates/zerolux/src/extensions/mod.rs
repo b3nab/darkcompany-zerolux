@@ -297,6 +297,11 @@ impl Extensions {
     /// A service sent the person back from a sign-in: the tokens go into the secret the
     /// extension named, and it hears `zerolux/signed_in` with whether it worked. The page the
     /// person sees.
+    /// Whether one of this workspace's sign-ins waits for `state`.
+    pub fn waits_for(&self, state: &str) -> bool {
+        self.sign_ins.waits(state)
+    }
+
     pub async fn signed_in(&self, state: &str, code: Option<&str>, error: Option<&str>) -> String {
         let Some(flow) = self.sign_ins.take(state) else {
             return oauth::page(Err("this sign-in expired; start it again".into()));
@@ -1680,11 +1685,13 @@ impl process::Kernel for Extensions {
             "oauth.start" => {
                 let request: oauth::Request = serde_json::from_value(params.clone())
                     .map_err(|error| Error::Invalid(format!("Invalid sign-in: {error}")))?;
+                // The service comes back to the kernel's own address, whichever workspace.
                 let origin = self
                     .runtime
                     .get()
                     .and_then(Weak::upgrade)
-                    .map(|runtime| runtime.base_url().to_owned())
+                    .and_then(|runtime| reqwest::Url::parse(runtime.base_url()).ok())
+                    .map(|url| url.origin().ascii_serialization())
                     .unwrap_or_default();
                 self.sign_ins.start(&extension, request, &origin)
             }

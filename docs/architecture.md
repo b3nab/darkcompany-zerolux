@@ -29,9 +29,11 @@ Web, desktop and mobile command the same control plane. Hiring or starting an ag
 
 **Current limitation:** chat discovery and creation are implemented locally to the kernel. Remote execution-host enrollment and routing are not implemented yet. Missing client controls are also implementation gaps, not restrictions of this architecture.
 
-## Workspace and actors
+## Workspaces and actors
 
-The workspace has a generated ID, an editable name and a creation date, preserved across restarts. `GET /workspace` includes its metadata in `workspace`; the owner renames it with `POST /workspace {"name":"…"}`. Renaming changes neither its ID nor its date. The clients show these details in workspace settings.
+One kernel serves one or more workspaces at its address. Each workspace is a folder of its own, usually `.zerolux` in a project's folder, with its database, sign-in, storage, extensions and agents; nothing is shared between workspaces but the kernel's address and its LiveKit server. A folder in a git repository is added to `.git/info/exclude` when its workspace is created. Removing a workspace from a kernel leaves its folder as it is; opening the folder again serves the same workspace.
+
+A workspace has a generated ID, an editable name and a creation date, preserved across restarts. `GET /workspace` includes its metadata in `workspace`; the owner renames it with `POST /workspace {"name":"…"}`. Renaming changes neither its ID nor its date. The clients show these details in workspace settings.
 
 Humans and agents are actors with generated UUIDs and creation dates shown in their profiles. Each agent has a human owner. The owner is found among the workspace actors, never by a fixed ID.
 
@@ -41,7 +43,7 @@ Native settings belong to each session and are observed, not enforced. Harness a
 
 ## API
 
-All routes are under `/api`. Main groups:
+The kernel's own routes are `GET /api/health`, which names it and lists its `workspaces`, and `/api/extensions/oauth/callback`, where other services send people back after an extension's sign-in, whichever workspace started it. Each workspace's routes are under `/w/{id}/api`; clients connect to the kernel's address and choose the workspace there. Main groups, under a workspace's `/api`:
 
 | Routes                                                                                                                                                  | Purpose                                                                                                                                                     |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
