@@ -1,5 +1,11 @@
 import { ApiError, fetchKernel } from "./client";
 import {
+  secureKernelAddress,
+  workspaceAddress,
+  workspaceBase,
+} from "./instance";
+import type { KernelInstance, ServedWorkspace } from "./instance";
+import {
   authenticationRequired,
   bindCredential,
   clearCredential,
@@ -45,55 +51,15 @@ export interface AuthStorage {
   ): Promise<void>;
 }
 
-/** A collision-free, SecureStore-compatible key, including BOTH address and workspace identity. */
+/**
+ * A collision-free, SecureStore-compatible key, including BOTH the kernel's origin and the
+ * workspace's identity: a workspace keeps its credential when its kernel serves it at `/w/<id>`.
+ */
 export function credentialStorageKey(kernel: string, workspaceId: string) {
-  const address = Array.from(kernel, (c) =>
+  const address = Array.from(new URL(kernel).origin, (c) =>
     c.codePointAt(0)!.toString(16).padStart(6, "0"),
   ).join("");
   return `zerolux.auth.${workspaceId}.${address}`;
-}
-
-/** HTTP is supported for a kernel on the owner's own computer, over the LAN; public connections use HTTPS. */
-function localAuthHost(host: string) {
-  if (host === "localhost" || host === "[::1]") return true;
-  if (/^\[(?:f[cd][\da-f]{2}|fe[89ab][\da-f]):/i.test(host)) return true;
-  if (!/^\d+(?:\.\d+){3}$/.test(host)) return false;
-  const ip = host.split(".").map(Number);
-  if (
-    ip.length !== 4 ||
-    ip.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
-  )
-    return false;
-  const [a, b = 0] = ip;
-  return (
-    a === 127 ||
-    a === 10 ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 169 && b === 254)
-  );
-}
-
-export function secureKernelOrigin(kernel: string) {
-  const value = kernel || globalThis.location?.origin;
-  if (!value) throw new Error("Choose a kernel before signing in");
-  const url = new URL(value);
-  if (
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash ||
-    url.pathname !== "/"
-  )
-    throw new Error(
-      "The kernel address must be an origin without credentials or a path",
-    );
-  if (
-    url.protocol !== "https:" &&
-    !(url.protocol === "http:" && localAuthHost(url.hostname))
-  )
-    throw new Error("Use HTTPS for a workspace outside your local network");
-  return url.origin;
 }
 
 async function authRequest(url: string, init: RequestInit) {
@@ -120,7 +86,7 @@ class AuthProtocolError extends Error {}
 
 /** Public discovery only: never reads storage, sends credentials or follows redirects. */
 export async function probeKernel(kernel: string): Promise<AuthHealth> {
-  secureKernelOrigin(kernel);
+  secureKernelAddress(kernel);
   const { response, value } = await authRequest(
     `${kernel.replace(/\/+$/, "")}/api/health`,
     {
@@ -145,6 +111,51 @@ export async function probeKernel(kernel: string): Promise<AuthHealth> {
   if (typeof health.auth?.setup_required !== "boolean")
     throw new AuthProtocolError("This kernel's sign-in is not understood");
   return health;
+}
+
+/**
+ * Public discovery of what a kernel serves, at its root: its workspaces, each at its base. A
+ * kernel without `workspaces-v1` answers as one workspace, at its origin.
+ */
+export async function readInstance(address: string): Promise<KernelInstance> {
+  const { kernel } = workspaceAddress(address);
+  const { response, value } = await authRequest(`${kernel}/api/health`, {
+    credentials: "omit",
+    redirect: "error",
+  });
+  if (!response.ok)
+    throw new ApiError("The kernel could not be verified", response.status);
+  const health = value as {
+    capabilities?: unknown;
+    version?: unknown;
+    workspaces?: unknown;
+    workspace?: { id?: unknown; name?: unknown };
+  } | null;
+  if (!health || !Array.isArray(health.capabilities))
+    throw new AuthProtocolError("This is not a ZeroLux kernel");
+  const version =
+    typeof health.version === "string" ? health.version : undefined;
+  const served = (id: unknown, name: unknown, base?: string) => {
+    if (typeof id !== "string" || !id || typeof name !== "string")
+      throw new AuthProtocolError("This is not a ZeroLux kernel");
+    return { id, name, base: base ?? workspaceBase(kernel, id) };
+  };
+  if (health.capabilities.includes("workspaces-v1")) {
+    if (!Array.isArray(health.workspaces))
+      throw new AuthProtocolError(
+        "This kernel's workspaces are not understood",
+      );
+    const workspaces: ServedWorkspace[] = health.workspaces.map(
+      (w: { id?: unknown; name?: unknown } | null) => served(w?.id, w?.name),
+    );
+    return { kernel, multi: true, version, workspaces };
+  }
+  return {
+    kernel,
+    multi: false,
+    version,
+    workspaces: [served(health.workspace?.id, health.workspace?.name, kernel)],
+  };
 }
 
 /** Whether a kernel asks people to sign in at all. */

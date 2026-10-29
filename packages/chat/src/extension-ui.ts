@@ -329,8 +329,10 @@ export async function pieceUrl(piece: UiPiece, kernel = kernelUrl()) {
     `/extensions/${encodeURIComponent(piece.extension)}/ui`,
     { entry },
   );
-  // On the web the kernel is the page's own origin, and its path is already the address.
-  return kernel ? new URL(url, kernel).toString() : url;
+  // Its path is under the workspace's base; on the web without one, it is already the address.
+  return kernel && url.startsWith("/")
+    ? `${kernel.replace(/\/+$/, "")}${url}`
+    : url;
 }
 
 // TODO: web: call pieceUrl, then drop this.

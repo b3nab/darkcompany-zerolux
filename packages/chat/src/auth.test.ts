@@ -2,12 +2,12 @@ import { afterEach, expect, test } from "bun:test";
 import {
   AuthConnection,
   credentialStorageKey,
-  secureKernelOrigin,
   probeKernel,
   type AuthStorage,
 } from "./auth";
 import { request, setKernelFetch } from "./client";
 import { bindCredential, clearCredential } from "./credentials";
+import { secureKernelAddress } from "./instance";
 
 const originalFetch = globalThis.fetch;
 const clients: AuthConnection[] = [];
@@ -454,7 +454,7 @@ test("LAN HTTP is supported but public HTTP and private-looking hostnames are no
     "http://[fd00::1]:4310",
     "http://[fe80::1]:4310",
   ])
-    expect(secureKernelOrigin(origin)).toBe(origin);
+    expect(secureKernelAddress(origin)).toBe(origin);
   for (const origin of [
     "http://company.example",
     "http://172.15.0.2:4310",
@@ -462,7 +462,33 @@ test("LAN HTTP is supported but public HTTP and private-looking hostnames are no
     "http://[2001:db8::1]:4310",
     "http://192.168.1.10.attacker.example",
   ])
-    expect(() => secureKernelOrigin(origin)).toThrow();
+    expect(() => secureKernelAddress(origin)).toThrow();
+});
+
+test("a workspace on a kernel is addressed by its base, and no other path is", () => {
+  expect(secureKernelAddress("http://192.168.1.10:4310/w/workspace-a")).toBe(
+    "http://192.168.1.10:4310/w/workspace-a",
+  );
+  expect(secureKernelAddress("https://company.example/w/workspace-a/")).toBe(
+    "https://company.example/w/workspace-a",
+  );
+  for (const address of [
+    "https://company.example/api",
+    "https://company.example/w/",
+    "https://company.example/w/a/b",
+    "https://company.example/w/a?x=1",
+    "http://192.0.2.10:4310/w/workspace-a",
+  ])
+    expect(() => secureKernelAddress(address)).toThrow();
+});
+
+test("a workspace keeps its secure-store key when its kernel serves it at /w/<id>", () => {
+  expect(
+    credentialStorageKey(
+      "http://192.168.1.10:4310/w/workspace-a",
+      "workspace-a",
+    ),
+  ).toBe(credentialStorageKey("http://192.168.1.10:4310", "workspace-a"));
 });
 
 test("secure-store keys cannot collide across address or workspace, and public auth requires HTTPS", () => {
@@ -473,12 +499,12 @@ test("secure-store keys cannot collide across address or workspace, and public a
   ];
   expect(new Set(keys).size).toBe(3);
   expect(keys.every((key) => /^[a-zA-Z0-9._-]+$/.test(key))).toBe(true);
-  expect(secureKernelOrigin("http://127.0.0.1:4310")).toBe(
+  expect(secureKernelAddress("http://127.0.0.1:4310")).toBe(
     "http://127.0.0.1:4310",
   );
-  expect(() => secureKernelOrigin("http://192.0.2.10:4310")).toThrow();
+  expect(() => secureKernelAddress("http://192.0.2.10:4310")).toThrow();
   expect(() =>
-    secureKernelOrigin("https://user:secret@company.example"),
+    secureKernelAddress("https://user:secret@company.example"),
   ).toThrow();
 });
 

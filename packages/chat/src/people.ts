@@ -35,8 +35,9 @@ export const inviteLink = (kernel: string, token: string) =>
 
 /** The kernel and the invitation an invite link carries; nothing when the text is not one. */
 export function readInviteLink(text: string) {
+  // The kernel's own, or a workspace's on it: `<kernel>/w/<id>/join?invite=…`.
   const link =
-    /^(https?:\/\/[^/?#\s]+)\/join\/?\?(?:[^#\s]*&)?invite=([^&#\s]+)/.exec(
+    /^(https?:\/\/[^/?#\s]+(?:\/w\/[^/?#\s]+)?)\/join\/?\?(?:[^#\s]*&)?invite=([^&#\s]+)/.exec(
       text.trim(),
     );
   return link

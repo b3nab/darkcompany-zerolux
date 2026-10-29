@@ -1,5 +1,6 @@
 export * from "./client";
 export * from "./auth";
+export * from "./instance";
 export * from "./chat";
 export * from "./realtime";
 export * from "./useChat";

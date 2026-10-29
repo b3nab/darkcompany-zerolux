@@ -13,7 +13,7 @@ import {
   probeKernel,
   renameWorkspace as rename,
   setAgentSettings as saveAgentSettings,
-  secureKernelOrigin,
+  secureKernelAddress,
   setKernelFetch,
   setKernelUrl,
   useChat,
@@ -189,7 +189,7 @@ export function KernelProvider({ children }: { children: ReactNode }) {
           // No bearer existed in the old app. Pin its public identity before the first
           // authenticated use; the workspace must match before any credentials are loaded.
           if (legacy) {
-            const url = secureKernelOrigin(legacy);
+            const url = secureKernelAddress(legacy);
             const health = await probeKernel(url);
             if (live && current === version.current)
               await persist({ url, workspaceId: health.workspace.id }, current);
@@ -233,7 +233,7 @@ export function KernelProvider({ children }: { children: ReactNode }) {
     async connect(input) {
       const current = ++version.current;
       const address = input.trim().replace(/\/+$/, "");
-      const url = secureKernelOrigin(
+      const url = secureKernelAddress(
         /^https?:\/\//i.test(address) ? address : `http://${address}`,
       );
       const health = await probeKernel(url);
