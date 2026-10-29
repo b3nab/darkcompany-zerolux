@@ -226,9 +226,7 @@ impl Updates {
             return Ok(None);
         }
         for profile in crate::catalog::Catalog::load(&self.root)?.profiles {
-            if matches!(profile.source, crate::catalog::Source::Local { .. })
-                && profile.database(&self.root)?.is_file()
-            {
+            if profile.directory().is_some() && profile.database()?.is_file() {
                 ensure!(
                     feed["schema"] == zerolux::build::schema(),
                     "This update changes the workspace schema; this pre-release cannot install it automatically"

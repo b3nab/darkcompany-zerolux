@@ -1,6 +1,6 @@
 # Desktop app
 
-The ZeroLux desktop app keeps a list of workspace connections on this device. Each workspace has its own kernel and database; the desktop uses the same interface and HTTP API as the browser client.
+The ZeroLux desktop app keeps a list of workspaces on this device. A workspace on this computer is a folder, usually a project's `.zerolux`, with its own database, sign-in and agents; the app's one kernel serves all of them at one address, each at `/w/<id>`. Workspaces of other computers are reached at their kernel's address. The desktop uses the same interface and HTTP API as the browser client.
 
 The app runs on macOS **14 or later** (for each workspace's own browser storage), Linux and Windows. Signed builds check for updates automatically; choose their release channel in **Account settings › Updates**.
 
@@ -17,15 +17,20 @@ The launcher builds the web assets and starts the native app. Restart it after c
 
 ## Workspaces and connections
 
-Open **Manage Workspaces…** from the app menu (`Cmd/Ctrl+Shift+O`), or **Manage connections** from **Workspace settings** in an up-to-date kernel interface.
+The workspaces window opens when no workspace is open, and from **File › Manage Workspaces…** (`Cmd/Ctrl+Shift+O`). On the left it creates, opens or connects a workspace; on the right it lists the saved ones, each opened with a click.
 
-- **Connect to an existing workspace:** enter a kernel's HTTP or HTTPS origin, such as `http://127.0.0.1:4310` or a server address on your private network. The desktop verifies the service and records its workspace identity. It does not copy or open that kernel's database.
-- **Create a local workspace:** choose a name. The desktop starts an independent kernel with its own data directory and stable local address. A new workspace begins with onboarding; it does not inherit another workspace's people or messages.
-- **Open a saved workspace:** the desktop checks the saved identity and shows its retained view, or starts that saved local kernel when needed. Failed connections show an error; there is no automatic local fallback or silent reassignment to a different workspace.
+- **New Workspace…** (`Cmd/Ctrl+Shift+N`): choose a folder and a name. The workspace is kept in the folder's `.zerolux`, which is left out of the folder's git repository. It begins with its owner's account; it does not inherit another workspace's people or messages.
+- **Open Folder…** (`Cmd/Ctrl+O`): a folder that already holds a workspace, in its `.zerolux`.
+- **Connect to Another Computer…**: enter a kernel's HTTP or HTTPS origin, such as `http://192.0.2.10:4310`, then choose one of the workspaces it serves. The desktop verifies the service and records the workspace's identity. It does not copy or open that kernel's database.
+- **Open a saved workspace:** the desktop checks the saved identity and shows its retained view, serving it first when it is a folder of this computer. Failed connections show an error; there is no automatic local fallback or silent reassignment to a different workspace.
+
+A workspace whose folder was moved or deleted stays in the list, greyed: **Locate…** points it to its folder again, and only the same workspace is accepted there; **Remove** takes it off the list. Removing a workspace stops serving it and leaves its folder and files as they are.
+
+In a workspace's window, the workspace's name at the top left lists every saved workspace, by the computer that serves it, with the requests waiting in each. A click opens one in that window, and with Cmd or Ctrl in a new one; `Ctrl+1…9` on macOS, `Alt+1…9` elsewhere, opens them by place. At launch the app opens again the windows open when it quit, each on its page.
 
 A server on the same computer can still be **external to the desktop**. For example, a separately started kernel on port 4310 is not owned or stopped by the app. A local address is not the same as an app-managed kernel, and a network address does not imply the server is currently online.
 
-To run that workspace with the app, choose **Run with this app** on its saved connection, then select its existing workspace folder. The preview verifies the running kernel and workspace before taking over. The app retains the complete data directory, database path, connection profile, sign-in and drafts. It also keeps the listening port, private and public addresses, and external LiveKit configuration.
+To run that workspace with the app, choose **Run with this app…** in its row's menu, then select its existing workspace folder. The preview verifies the running kernel and workspace before taking over. The app retains the complete data directory, database path, connection profile, sign-in and drafts.
 
 On macOS, **Browse…** shows hidden folders such as `.zerolux` and selects folders only.
 
@@ -33,7 +38,7 @@ Taking over requires an updated local CLI kernel running interactively in a term
 
 An interrupted transfer is reconciled when the app opens again: a confirmed transfer remains app-managed; otherwise the saved connection returns to the CLI. Recovery preserves the workspace's data and never restores a database backup over later writes.
 
-Managed workspaces show their folder and address. **Network settings** changes the port, private network IP and optional public web and call addresses; **Apply and restart** applies them to that workspace. Other devices need the private network address or a configured public address. Keep the app open for those devices to reach its workspaces.
+**This computer**, at the bottom left of the workspaces window, shows the address of the app's kernel. **Network…** changes its port, private network IP and optional public web and call addresses; **Apply and restart** serves every workspace of this computer there again, each window where it was. Other devices need the private network address or a configured public address. Keep the app open for those devices to reach its workspaces. A workspace taken over from the CLI before the app had a kernel gives it its address and services; one taken over later is served at the app's address.
 
 The workspace's **name is shared** with everyone using it. Renaming does not change its identity or history. The saved **address belongs to this client**. Change an existing connection's address only when the new address serves the same workspace; add a different workspace separately. Identity continuity is not authentication.
 
@@ -41,24 +46,24 @@ The desktop loads its packaged interface and calls the selected kernel's HTTP AP
 
 ## Windows, drafts and closing
 
-Each workspace opens in its own window, beside the others' as in VS Code. **New Window** (⌘N, Ctrl+N) opens another window of the workspace in front. Closing a window closes only it; opened local kernels keep running. With its last window closed the app stays in the tray until you quit it, and on macOS in the Dock, whose icon brings back the workspace last in front. Saved workspaces are not all started at app launch.
+Each workspace opens in its own window, beside the others' as in VS Code. **New Window** (⌘N, Ctrl+N) opens another window of the workspace in front. Closing a window closes only it; the app's kernel keeps serving its workspaces. With its last window closed the app stays in the tray until you quit it, and on macOS in the Dock, whose icon brings back the workspace last in front. Saved workspaces are not all started at app launch.
 
 The app's menu is the menu bar on macOS, and on Windows and Linux the window's menu button (☰), also opened with Alt or F10. It holds the windows and workspaces (File), editing (Edit), the sidebar, the command menu and zoom (View), back, forward and the bar's sections by their place, ⌘1…9 (Go), and help, the keyboard shortcuts and updates (Help, and on macOS the ZeroLux menu). **Help → Keyboard Shortcuts** lists every shortcut. Reload and the developer tools are in **View → Developer** in builds from source only.
 
-On macOS, local kernels remain responsive while the app is in the background: their lifetime prevents App Nap, including service shutdown. The Mac can still sleep when idle. Connections to external kernels do not prevent App Nap.
+On macOS, the app's kernel remains responsive while the app is in the background: its lifetime prevents App Nap, including service shutdown. The Mac can still sleep when idle. Connections to external kernels do not prevent App Nap.
 
-**Start when ZeroLux opens** controls startup separately for each managed workspace; taking over an existing workspace enables it for that connection. **My settings → Desktop → Open at login** starts ZeroLux in the background when you sign in to this computer, then starts only the workspaces enabled for app startup. Login startup is off until you enable it; it does not run before you sign in.
+**Start when ZeroLux opens**, in a workspace's row menu, serves that workspace of this computer as soon as the app opens; taking over an existing workspace enables it for that connection. **My settings → Desktop → Open at login** starts ZeroLux in the background when you sign in to this computer, then starts only the workspaces enabled for app startup. Login startup is off until you enable it; it does not run before you sign in.
 
 Open at login reads and changes the operating system's startup registration: a LaunchAgent on macOS, the current user's startup entry on Windows, and XDG autostart on Linux. System settings or administrator policy can still block startup. Keep the installed app at the same path; source executables on macOS and isolated test data directories cannot register for login startup.
 
-Changing the address of an open connection or forgetting it checks for pending sends. Pending messages block that change. An address change preserves drafts only after verifying the same workspace; it does not transfer kernel cookies or arbitrary browser storage.
+Changing the address of an open connection or removing it checks for pending sends. Pending messages block that change. An address change preserves drafts only after verifying the same workspace; it does not transfer kernel cookies or arbitrary browser storage.
 
-**Forgetting a connection is not deleting its data.** Local databases and browser stores are retained. A running app-managed kernel cannot be forgotten while the app still owns it.
+**Removing a workspace is not deleting its data.** Its folder, database and browser store are retained.
 
 On Quit:
 
 - Existing kernels and their services stay running.
-- The app waits for its own kernels and managed LiveKit services to shut down.
+- The app waits for its kernel and managed LiveKit services to shut down.
 - Kernel shutdown is not the same as pressing Stop on a native agent; native work may continue independently.
 
 Finish sending before closing a window or quitting: pending sends live in their window, and are not kept across a close, an app exit or a crash.
@@ -82,11 +87,13 @@ Connections are stored in `workspaces.json` in the operating system's applicatio
 
 A workspace taken over from a local kernel keeps its existing directory and database path. The app retains its host identity, storage, extensions and session links there; it does not copy only the database into a new workspace.
 
+An app that ran a kernel for each local workspace serves them all from one kernel after the update: the address of a workspace taken over from the CLI, else the first one's, becomes its address, and each workspace's data stays in its folder.
+
 On first launch after upgrading from the single-connection desktop, the app imports the previous connection and retains any previous local workspace as a separate entry. Importing the connection list does not open, copy, migrate or reset a database. When upgrading from kernel-served desktop pages, first opening a saved connection imports only its validated drafts into its isolated packaged-page store. The old stores remain untouched, and import completion is recorded only after the new store confirms persistence. The previous address must be available for this one-time import; open the connection before changing its address. Invalid settings are reported rather than reset.
 
 Only one kernel runtime may serve a database. Connect to its address rather than starting another kernel against the same data.
 
-Before taking over, the app stops the CLI through its handover protocol and backs up the existing database while holding its exclusive lock. The transfer keeps the same profile and workspace identities. The app records enough state to recover an interrupted ownership or network change without replacing workspace data.
+Before taking over, the app stops the CLI through its handover protocol and backs up the existing database while holding its exclusive lock. The transfer keeps the same profile and workspace identities. The app records enough state to recover an interrupted transfer without replacing workspace data.
 
 ## Updates
 
@@ -94,11 +101,11 @@ Choose **Nightly**, **Beta** (including release candidates) or **Stable** in Acc
 
 Restart checks every open workspace window. Pending or failed sends, recording, transcription and attachments must be resolved first. Text drafts and open views are saved for the restart. An unavailable remote workspace keeps its saved drafts until it can open again.
 
-Before replacing the app, the desktop stops its own kernels, holds their database locks, and creates verified SQLite snapshots in `backups/update-<id>` under its application-data directory. External kernels and native agents are not stopped. If backup or installation fails, the original local kernels restart and the windows become usable again. Backups are never restored automatically over subsequent writes.
+Before replacing the app, the desktop stops its kernel, holds its workspaces' database locks, and creates verified SQLite snapshots in `backups/update-<id>` under its application-data directory. External kernels and native agents are not stopped. If backup or installation fails, the kernel serves its workspaces again and the windows become usable again. Backups are never restored automatically over subsequent writes.
 
 The current pre-release still has a mutable `0001_bootstrap` schema. Automatic installation requires the release's signed schema fingerprint to match the running build when local databases exist. A different fingerprint stops the update before download and is checked again before installation. Supporting future schema changes requires an immutable migration history and an explicit upgrade path; a backup alone does not make such an upgrade or downgrade safe.
 
-The feed and its signature are published separately. A check that catches them between uploads fails safely; **Check for updates** in settings retries it. Source builds without `ZEROLUX_UPDATE_PUBLIC_KEY` report that updates are unconfigured and make no update request. Updates apply to the desktop and its embedded kernels; they do not replace independently running kernels, mobile apps or separately installed extensions.
+The feed and its signature are published separately. A check that catches them between uploads fails safely; **Check for updates** in settings retries it. Source builds without `ZEROLUX_UPDATE_PUBLIC_KEY` report that updates are unconfigured and make no update request. Updates apply to the desktop and its embedded kernel; they do not replace independently running kernels, mobile apps or separately installed extensions.
 
 ## Services
 
@@ -126,7 +133,7 @@ The package includes the web assets, Bun, the LiveKit server, uv, the ZeroLux Cl
 
 The host and client-owned catalog live in [`apps/desktop`](../apps/desktop). The kernel's shared lifecycle is in [`server.rs`](../crates/zerolux/src/server.rs), independently of Tauri. See [architecture](architecture.md) for component boundaries.
 
-Creating a local workspace supplies its initial name during kernel startup, under the database lease and before authentication starts. Existing connections do not supply an initial name; after an owner claims the workspace, startup cannot rename it. Later name changes use the authenticated workspace API.
+Creating a workspace in a folder supplies its initial name when the kernel first serves it, under the database lease and before authentication starts. Existing connections do not supply an initial name; after an owner claims the workspace, startup cannot rename it. Later name changes use the authenticated workspace API.
 
 Only the packaged manager can call the connection-registry command. Both its capability and actual window URL are checked. Workspace pages have no registry, file or process privileges; a narrowly intercepted `zerolux://workspaces` navigation can open the manager but returns no registry data. Other HTTP/HTTPS links open in the system browser.
 

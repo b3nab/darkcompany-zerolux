@@ -72,6 +72,18 @@ static COMMANDS: &[Command] = &[
     ),
     command("new-session", "New Session…", None, Runs::Window),
     command(
+        "new-workspace",
+        "New Workspace…",
+        Some("CmdOrCtrl+Shift+N"),
+        Runs::App,
+    ),
+    command(
+        "open-folder",
+        "Open Folder…",
+        Some("CmdOrCtrl+O"),
+        Runs::App,
+    ),
+    command(
         "manage-workspaces",
         "Manage Workspaces…",
         Some("CmdOrCtrl+Shift+O"),
@@ -127,13 +139,20 @@ static COMMANDS: &[Command] = &[
     command("whats-new", "What's New", None, Runs::App),
     command("report-issue", "Report an Issue…", None, Runs::App),
     command("data-folder", "Show Data Folder", None, Runs::App),
+    // The app's own, not the system's: quitting waits for the kernel to stop and keeps the
+    // windows open for the next launch.
     command(
         "quit",
-        if cfg!(windows) { "Exit" } else { "Quit" },
+        if MAC {
+            "Quit ZeroLux"
+        } else if cfg!(windows) {
+            "Exit"
+        } else {
+            "Quit"
+        },
         Some("CmdOrCtrl+Q"),
         Runs::App,
-    )
-    .when(!MAC),
+    ),
 ];
 
 fn find(id: &str) -> Option<&'static Command> {
@@ -279,6 +298,8 @@ fn file(app: &AppHandle) -> tauri::Result<Submenu<Wry>> {
             of(app, "new-chat"),
             of(app, "new-session"),
             PredefinedMenuItem::separator(app),
+            of(app, "new-workspace"),
+            of(app, "open-folder"),
             of(app, "manage-workspaces"),
             PredefinedMenuItem::separator(app),
             PredefinedMenuItem::close_window(app, None),
@@ -416,7 +437,7 @@ fn menu_bar(app: &AppHandle, sections: &[Section]) -> tauri::Result<Menu<Wry>> {
             PredefinedMenuItem::hide_others(app, None),
             PredefinedMenuItem::show_all(app, None),
             PredefinedMenuItem::separator(app),
-            PredefinedMenuItem::quit(app, Some("Quit ZeroLux")),
+            of(app, "quit"),
         ],
     );
     menu(
@@ -575,6 +596,20 @@ pub fn run(app: &AppHandle, id: &str) {
     match id {
         "new-window" => crate::app::ask(app, crate::app::Action::NewWindow { id: None }),
         "manage-workspaces" => crate::app::show_manager(app, None),
+        "new-workspace" => crate::app::show_manager_to(app, "new"),
+        "open-folder" => {
+            let app = app.clone();
+            app.dialog().file().pick_folder(move |chosen| {
+                if let Some(Ok(directory)) = chosen.map(|chosen| chosen.into_path()) {
+                    crate::app::ask_and_tell(
+                        &app,
+                        crate::app::Action::OpenFolder {
+                            directory: directory.to_string_lossy().into_owned(),
+                        },
+                    );
+                }
+            });
+        }
         "check-updates" => {
             tauri::async_runtime::spawn(update(app.clone()));
         }

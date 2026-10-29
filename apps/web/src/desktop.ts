@@ -207,5 +207,39 @@ export function workspaceNavigationGuard(
   };
 }
 
+/** A workspace the desktop app knows, as its windows' switcher shows it. */
+export interface DesktopWorkspace {
+  profile: string;
+  name: string;
+  /** This window's own. */
+  here: boolean;
+  /** The computer whose kernel serves it; none for this one. */
+  computer: string | null;
+  /** Its folder is not where it was. */
+  missing: boolean;
+  /** The requests waiting there. */
+  requests: number;
+}
+
+/** Every workspace the desktop app knows, in their order, as they change. */
+export function useDesktopWorkspaces() {
+  const [workspaces, setWorkspaces] = useState<DesktopWorkspace[]>([]);
+  const read = () =>
+    void import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<DesktopWorkspace[]>("desktop_workspaces"))
+      .then(setWorkspaces, () => {});
+  useEffect(() => {
+    if (desktopConnection()) read();
+  }, []);
+  useDesktopEvent("zerolux-workspaces", read);
+  return workspaces;
+}
+
+/** Another workspace, instead of this window's, or in a window of its own. */
+export async function desktopSwitch(profile: string, newWindow: boolean) {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("desktop_switch", { profile, newWindow });
+}
+
 /** An in-app navigation request opens the trusted manager; no data is returned to this page. */
 export const WORKSPACES_LINK = "zerolux://workspaces";

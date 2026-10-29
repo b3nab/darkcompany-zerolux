@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { WorkspaceManager, newerDesktopState } from "./startup";
+import { WorkspaceManager, newerDesktopState, projectFolder } from "./startup";
 import type { DesktopState } from "./startup";
 
 const state: DesktopState = {
@@ -12,37 +12,74 @@ const state: DesktopState = {
       name: "Studio",
       source: { kind: "existing", url: "https://studio.example/" },
       running: false,
+      missing: false,
       start_on_launch: false,
       dataDirectory: null,
       database: null,
-      network: null,
       localUrl: null,
     },
     {
       id: "profile-b",
       workspace_id: "workspace-b",
       name: "Local",
-      source: { kind: "local", legacy: false },
+      source: { kind: "folder", directory: "/tmp/aspen/.zerolux" },
       running: true,
+      missing: false,
       start_on_launch: true,
-      dataDirectory: "/tmp/studio",
-      database: "/tmp/studio/zerolux.db",
-      network: {
-        listen: "127.0.0.1",
-        port: 4311,
-        expose: null,
-        publicOrigin: null,
-        publicLivekitUrl: null,
-      },
-      localUrl: "http://127.0.0.1:4311",
+      dataDirectory: "/tmp/aspen/.zerolux",
+      database: "/tmp/aspen/.zerolux/zerolux.db",
+      localUrl: "http://127.0.0.1:4311/w/workspace-b/",
+    },
+    {
+      id: "profile-c",
+      workspace_id: "workspace-c",
+      name: "Moved",
+      source: { kind: "folder", directory: "/tmp/birch/.zerolux" },
+      running: false,
+      missing: true,
+      start_on_launch: false,
+      dataDirectory: "/tmp/birch/.zerolux",
+      database: "/tmp/birch/.zerolux/zerolux.db",
+      localUrl: null,
     },
   ],
   active: "profile-a",
+  kernel: {
+    network: {
+      listen: "127.0.0.1",
+      port: 4311,
+      expose: null,
+      publicOrigin: null,
+      publicLivekitUrl: null,
+    },
+    running: true,
+  },
   computers: [],
   ready: true,
   busy: false,
   error: null,
 };
+
+test("a workspace whose folder is gone cannot be opened, the others can", () => {
+  const html = renderToStaticMarkup(<WorkspaceManager initialState={state} />);
+  const rows = html.split("<li").slice(1);
+  expect(rows).toHaveLength(3);
+  // Each row opens its workspace with its first button.
+  const opens = (row: string) =>
+    !/^[^>]*disabled=""/.test(row.split("<button")[1] ?? "");
+  expect(rows.map(opens)).toEqual([true, true, false]);
+  expect(rows.map((row) => row.includes(`data-missing="true"`))).toEqual([
+    false,
+    false,
+    true,
+  ]);
+});
+
+test("a workspace is kept in its project's folder", () => {
+  expect(projectFolder("/tmp/aspen/.zerolux")).toBe("/tmp/aspen");
+  expect(projectFolder("/tmp/aspen/.zerolux/")).toBe("/tmp/aspen");
+  expect(projectFolder("/tmp/aspen")).toBe("/tmp/aspen");
+});
 
 test("a late initial list cannot replace a newer connection result", () => {
   const early = { ...state, revision: 1, ready: false, profiles: [] };
@@ -87,6 +124,7 @@ test("registry commands are restricted to the packaged manager, not workspace pa
   expect(of("manager").permissions).toEqual([
     "allow-workspace-action",
     "allow-workspace-adoption-preview",
+    "allow-kernel-workspaces",
     "allow-choose-folder",
     "allow-autostart-status",
     "allow-autostart-set",
@@ -117,6 +155,9 @@ test("registry commands are restricted to the packaged manager, not workspace pa
     "allow-update-channel",
     "allow-update-download",
     "allow-update-install",
+    // Its switcher: the workspaces the app knows, and opening one.
+    "allow-desktop-workspaces",
+    "allow-desktop-switch",
     // The app's menu: its commands, the bar's sections, and the window's own menu button.
     "allow-menu-commands",
     "allow-menu-sections",

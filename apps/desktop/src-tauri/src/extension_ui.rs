@@ -20,6 +20,10 @@ impl Kernels {
             .insert(profile.to_owned(), kernel.clone());
     }
 
+    pub fn get(&self, profile: &str) -> Option<tauri::Url> {
+        self.0.lock().expect("kernels lock").get(profile).cloned()
+    }
+
     pub fn all(&self) -> HashMap<String, tauri::Url> {
         self.0.lock().expect("kernels lock").clone()
     }

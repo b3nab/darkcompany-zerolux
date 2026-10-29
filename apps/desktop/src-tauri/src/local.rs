@@ -3,7 +3,6 @@ use fs2::FileExt;
 use std::{
     ffi::OsString,
     fs::{self, File, OpenOptions},
-    io::Write,
     path::PathBuf,
 };
 
@@ -62,11 +61,8 @@ impl LocalWorkspace {
         Ok(Self { root, _lock: lock })
     }
 
-    /// First launch lets the OS allocate a port; subsequent launches retain the webview origin.
-    pub fn port(&self) -> Result<u16> {
-        Self::port_at(&self.root)
-    }
-
+    /// The port a workspace's own kernel kept in its folder, before the app had one kernel
+    /// for all of them; 0 for none.
     pub fn port_at(root: &std::path::Path) -> Result<u16> {
         let path = root.join("port");
         match fs::read_to_string(&path) {
@@ -78,21 +74,6 @@ impl LocalWorkspace {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
             Err(error) => Err(error).context("Read desktop port"),
         }
-    }
-
-    pub fn remember_port(&self, port: u16) -> Result<()> {
-        ensure!(port != 0, "Cannot save an unbound desktop port");
-        let previous = self.port()?;
-        if previous != 0 {
-            ensure!(previous == port, "Desktop origin must not change silently");
-            return Ok(());
-        }
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(self.root.join("port"))?;
-        writeln!(file, "{port}")?;
-        file.sync_all().context("Persist desktop port")
     }
 }
 
@@ -191,7 +172,6 @@ mod tests {
         wait_for_previous(&missing, std::time::Duration::ZERO).unwrap();
         assert!(!missing.exists());
         let parent = LocalWorkspace::open(dir.path().into()).unwrap();
-        parent.remember_port(4310).unwrap();
         assert!(wait_for_previous(dir.path(), std::time::Duration::ZERO).is_err());
         let release = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -199,8 +179,7 @@ mod tests {
         });
         wait_for_previous(dir.path(), std::time::Duration::from_secs(2)).unwrap();
         release.join().unwrap();
-        let replacement = LocalWorkspace::open(dir.path().into()).unwrap();
-        assert_eq!(replacement.port().unwrap(), 4310);
+        LocalWorkspace::open(dir.path().into()).unwrap();
         assert!(!dir.path().join("zerolux.db").exists());
     }
     #[test]
@@ -213,18 +192,13 @@ mod tests {
         assert!(LocalWorkspace::open(dir.path().into()).is_ok());
     }
     #[test]
-    fn port_survives_reopen_and_never_silently_changes() {
+    fn a_kept_port_is_read_and_a_broken_one_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
-        let first = LocalWorkspace::open(dir.path().into()).unwrap();
-        assert_eq!(first.port().unwrap(), 0);
-        first.remember_port(43219).unwrap();
-        drop(first);
-        let next = LocalWorkspace::open(dir.path().into()).unwrap();
-        assert_eq!(next.port().unwrap(), 43219);
-        assert!(next.remember_port(43220).is_err());
-        next.remember_port(43219).unwrap();
+        assert_eq!(LocalWorkspace::port_at(dir.path()).unwrap(), 0);
+        fs::write(dir.path().join("port"), "43219\n").unwrap();
+        assert_eq!(LocalWorkspace::port_at(dir.path()).unwrap(), 43219);
         fs::write(dir.path().join("port"), "not a port").unwrap();
-        assert!(next.port().is_err());
+        assert!(LocalWorkspace::port_at(dir.path()).is_err());
     }
     #[test]
     fn navigation_is_restricted_to_the_exact_kernel_origin() {

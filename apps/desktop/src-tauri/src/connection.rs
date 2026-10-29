@@ -4,10 +4,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
 
-/// A kernel whose `/api/health` answered, and the workspace it serves.
+/// A workspace a kernel serves, verified by the kernel's `/api/health`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedWorkspace {
+    /// The kernel's address.
     pub url: tauri::Url,
+    /// Where the workspace's own API is: `<kernel>/w/<id>/`, or the kernel itself for one that
+    /// serves a single workspace at its root.
+    pub base: tauri::Url,
     pub id: String,
     pub name: String,
 }
@@ -47,9 +51,9 @@ pub fn kernel_url(value: &str) -> Result<tauri::Url> {
     Ok(url)
 }
 
-/// Asks the kernel who it is. With `expected_id`, a different workspace is an error: the
-/// desktop never adopts another identity silently.
-pub async fn verify(value: &str, expected_id: Option<&str>) -> Result<VerifiedWorkspace> {
+/// The workspaces a kernel serves, the oldest first: a kernel with `workspaces-v1` lists
+/// them at its root, an older one serves its one workspace there.
+pub async fn served(value: &str) -> Result<Vec<VerifiedWorkspace>> {
     let url = kernel_url(value)?;
     let client = reqwest::Client::builder()
         .no_proxy()
@@ -87,22 +91,70 @@ pub async fn verify(value: &str, expected_id: Option<&str>) -> Result<VerifiedWo
         health["name"] == "zerolux",
         "The service at {url} is not a ZeroLux kernel"
     );
-    let id = match health["workspace"]["id"].as_str() {
-        Some(id) if !id.trim().is_empty() => id.to_owned(),
-        _ => bail!("The kernel at {url} did not name its workspace; update it first"),
+    let several = health["capabilities"]
+        .as_array()
+        .is_some_and(|all| all.iter().any(|one| one == "workspaces-v1"));
+    let workspace = |entry: &serde_json::Value, base: tauri::Url| -> Result<VerifiedWorkspace> {
+        let id = match entry["id"].as_str() {
+            Some(id) if !id.trim().is_empty() => id.to_owned(),
+            _ => bail!("The kernel at {url} did not name its workspace; update it first"),
+        };
+        let name = entry["name"]
+            .as_str()
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or("Workspace")
+            .to_owned();
+        Ok(VerifiedWorkspace {
+            url: url.clone(),
+            base,
+            id,
+            name,
+        })
     };
-    if let Some(expected) = expected_id {
-        ensure!(
-            expected == id,
-            "The kernel at {url} serves a different workspace than this saved connection"
-        );
+    if !several {
+        return Ok(vec![workspace(&health["workspace"], url.clone())?]);
     }
-    let name = health["workspace"]["name"]
-        .as_str()
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or("Workspace")
-        .to_owned();
-    Ok(VerifiedWorkspace { url, id, name })
+    health["workspaces"]
+        .as_array()
+        .with_context(|| format!("The kernel at {url} did not list its workspaces"))?
+        .iter()
+        .map(|entry| {
+            let id = entry["id"].as_str().unwrap_or_default();
+            ensure!(
+                !id.is_empty()
+                    && id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte)),
+                "The kernel at {url} named a workspace that is not an ID"
+            );
+            workspace(entry, url.join(&format!("w/{id}/"))?)
+        })
+        .collect()
+}
+
+/// Asks the kernel who it is. With `expected_id`, the workspace it serves by that ID, else its
+/// only one: the desktop never adopts another identity silently.
+pub async fn verify(value: &str, expected_id: Option<&str>) -> Result<VerifiedWorkspace> {
+    let served = served(value).await?;
+    let url = kernel_url(value)?;
+    match expected_id {
+        Some(expected) => served
+            .into_iter()
+            .find(|workspace| workspace.id == expected)
+            .with_context(|| {
+                format!(
+                    "The kernel at {url} serves a different workspace than this saved connection"
+                )
+            }),
+        None => {
+            ensure!(
+                served.len() == 1,
+                "The kernel at {url} serves {} workspaces: choose one",
+                served.len()
+            );
+            Ok(served.into_iter().next().expect("one workspace"))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -174,8 +226,36 @@ mod tests {
         assert_eq!(verified.id, "ws-1");
         assert_eq!(verified.name, "Workspace");
         assert!(verified.url.as_str().starts_with("http://127.0.0.1:"));
+        assert_eq!(verified.base, verified.url);
         assert_eq!(verify(&url, Some("ws-1")).await.unwrap(), verified);
         assert!(verify(&url, Some("ws-other")).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_kernel_of_several_workspaces_gives_each_its_base_and_the_one_asked_for() {
+        let url = fixture(
+            "200 OK",
+            r#"{"name":"zerolux","capabilities":["workspaces-v1"],"workspaces":[{"id":"aspen","name":"Aspen","created_at":1},{"id":"birch","name":"Birch","created_at":2}]}"#.to_owned(),
+        )
+        .await;
+        assert_eq!(served(&url).await.unwrap().len(), 2);
+        let birch = verify(&url, Some("birch")).await.unwrap();
+        assert_eq!(birch.name, "Birch");
+        assert_eq!(birch.base, birch.url.join("w/birch/").unwrap());
+        assert!(verify(&url, None).await.is_err());
+        assert!(verify(&url, Some("cedar")).await.is_err());
+        let one = fixture(
+            "200 OK",
+            r#"{"name":"zerolux","capabilities":["workspaces-v1"],"workspaces":[{"id":"aspen","name":"Aspen"}]}"#.to_owned(),
+        )
+        .await;
+        assert_eq!(verify(&one, None).await.unwrap().id, "aspen");
+        let odd = fixture(
+            "200 OK",
+            r#"{"name":"zerolux","capabilities":["workspaces-v1"],"workspaces":[{"id":"../api","name":"Odd"}]}"#.to_owned(),
+        )
+        .await;
+        assert!(served(&odd).await.is_err());
     }
 
     #[tokio::test]

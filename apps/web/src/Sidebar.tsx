@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router";
 import {
   DndContext,
@@ -21,6 +21,7 @@ import {
   BlocksIcon,
   CheckIcon,
   ChevronsUpDownIcon,
+  FolderOpenIcon,
   LayoutDashboardIcon,
   LogOutIcon,
   MessagesSquareIcon,
@@ -50,9 +51,14 @@ import type { Chat } from "@zerolux/chat";
 import { activeActors } from "./api";
 import type { Actor, Workspace } from "./api";
 import { agentPresence } from "./presence";
-import { reportSections } from "./app-menu";
+import { reportSections, runMenuCommand } from "./app-menu";
 import { useAuthentication } from "./AuthGate";
-import { macKeys } from "./desktop";
+import {
+  desktopConnection,
+  desktopSwitch,
+  macKeys,
+  useDesktopWorkspaces,
+} from "./desktop";
 import { useElsewhere, useHere, WorkspaceMark } from "./instance";
 import { pieceIcon } from "./extension-view";
 import { stored } from "./stored";
@@ -343,24 +349,105 @@ function Count({ count }: { count: number }) {
 
 const unreadDot = "size-1.5 shrink-0 rounded-full bg-foreground";
 
+/** A workspace to go to from the menu, with what waits in it. */
+type Choice = {
+  key: string;
+  name: string;
+  here: boolean;
+  requests: number;
+  unread?: boolean;
+  missing?: boolean;
+  /** A browser opens it at its address, in a new tab with ⌘ or Ctrl. */
+  href?: string;
+  /** The desktop opens it instead of this window's, or in a new window. */
+  open?: (newWindow: boolean) => void;
+};
+
 /**
- * The workspace you are in, how old it is and how many work in it; and the kernel's others,
- * each with what waits in it, to go to (in a new tab with ⌘ or Ctrl).
+ * The workspaces to go to: in a browser the kernel's, in the desktop app every one it knows,
+ * by the computer that serves them.
+ */
+function useChoices(): { label: string; choices: Choice[] }[] {
+  const here = useHere();
+  const elsewhere = useElsewhere(here);
+  const desktop = useDesktopWorkspaces();
+  if (desktopConnection()) {
+    const groups = new Map<string, Choice[]>();
+    for (const workspace of desktop) {
+      const label = workspace.computer ?? "This computer";
+      groups.set(label, [
+        ...(groups.get(label) ?? []),
+        {
+          key: workspace.profile,
+          name: workspace.name,
+          here: workspace.here,
+          requests: workspace.requests,
+          missing: workspace.missing,
+          open: (newWindow) =>
+            void desktopSwitch(workspace.profile, newWindow).catch(() => {}),
+        },
+      ]);
+    }
+    return desktop.length > 1
+      ? [...groups].map(([label, choices]) => ({ label, choices }))
+      : [];
+  }
+  if (!here || here.instance.workspaces.length < 2) return [];
+  return [
+    {
+      label: globalThis.location?.host ?? "",
+      choices: here.instance.workspaces.map((workspace) => ({
+        key: workspace.id,
+        name: workspace.name,
+        here: workspace.id === here.workspace.id,
+        requests: elsewhere[workspace.id]?.requests ?? 0,
+        unread: (elsewhere[workspace.id]?.unread ?? 0) > 0,
+        href: `/w/${encodeURIComponent(workspace.id)}/`,
+      })),
+    },
+  ];
+}
+
+/** ⌃1…9 on a Mac, Alt+1…9 elsewhere: the desktop app's workspaces by place. */
+function useDesktopKeys(choices: Choice[]) {
+  const latest = useRef(choices);
+  latest.current = choices;
+  useEffect(() => {
+    if (!desktopConnection()) return;
+    const mac = macKeys();
+    const keys = (event: KeyboardEvent) => {
+      const at = /^Digit([1-9])$/.exec(event.code)?.[1];
+      const held = mac
+        ? event.ctrlKey && !event.altKey
+        : event.altKey && !event.ctrlKey;
+      const choice = at && latest.current[Number(at) - 1];
+      if (!choice || !held || event.metaKey || event.shiftKey) return;
+      event.preventDefault();
+      if (!choice.here) choice.open?.(false);
+    };
+    addEventListener("keydown", keys);
+    return () => removeEventListener("keydown", keys);
+  }, []);
+}
+
+/**
+ * The workspace you are in, how old it is and how many work in it; and the others, each with
+ * what waits in it, to go to here, or with ⌘ or Ctrl in a new window or tab.
  */
 export function WorkspaceMenu({ workspace }: { workspace: Workspace }) {
   const navigate = useNavigate();
-  const here = useHere();
-  const elsewhere = useElsewhere(here);
+  const groups = useChoices();
+  const all = groups.flatMap((group) => group.choices);
+  useDesktopKeys(all);
   const members = activeActors(workspace.actors).length;
   const info = workspace.workspace;
   const { name } = info;
   const line = `${workspaceAge(info)} · ${members} member${members === 1 ? "" : "s"}`;
-  const all =
-    here && here.instance.workspaces.length > 1 ? here.instance.workspaces : [];
-  const waiting = Object.values(elsewhere);
-  const requests = waiting.reduce((sum, w) => sum + w.requests, 0);
-  const unread = waiting.some((w) => w.unread > 0);
+  const others = all.filter((choice) => !choice.here);
+  const requests = others.reduce((sum, choice) => sum + choice.requests, 0);
+  const unread = others.some((choice) => choice.unread);
   const key = macKeys() ? "⌃" : "Alt+";
+  const desktop = !!desktopConnection();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -410,33 +497,39 @@ export function WorkspaceMenu({ workspace }: { workspace: Workspace }) {
             Hire an agent
           </DropdownMenuItem>
         </DropdownMenuGroup>
-        {all.length > 0 && (
-          <>
+        {groups.map((group) => (
+          <Fragment key={group.label}>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
               <DropdownMenuLabel className="truncate font-mono text-[11px] font-normal">
-                {globalThis.location?.host}
+                {group.label}
               </DropdownMenuLabel>
-              {all.map((other, at) => {
-                const current = other.id === here!.workspace.id;
-                const waits = elsewhere[other.id];
+              {group.choices.map((choice) => {
+                const at = all.indexOf(choice);
                 return (
                   <DropdownMenuItem
-                    key={other.id}
+                    key={choice.key}
+                    disabled={choice.missing}
                     render={
-                      current ? undefined : (
-                        <a href={`/w/${encodeURIComponent(other.id)}/`} />
-                      )
+                      choice.href && !choice.here ? (
+                        <a href={choice.href} />
+                      ) : undefined
                     }
+                    onClick={(event) => {
+                      if (!choice.here)
+                        choice.open?.(event.metaKey || event.ctrlKey);
+                    }}
                   >
-                    <WorkspaceMark name={other.name} className="size-5" />
-                    <span className="truncate">{other.name}</span>
+                    <WorkspaceMark name={choice.name} className="size-5" />
+                    <span className="truncate">{choice.name}</span>
                     <span className="ml-auto flex items-center gap-1.5">
-                      {!!waits?.requests && <Count count={waits.requests} />}
-                      {!!waits?.unread && (
+                      {choice.requests > 0 && !choice.here && (
+                        <Count count={choice.requests} />
+                      )}
+                      {choice.unread && !choice.here && (
                         <span aria-label="Unread" className={unreadDot} />
                       )}
-                      {current && <CheckIcon aria-label="Open" />}
+                      {choice.here && <CheckIcon aria-label="Open" />}
                       {at < 9 && (
                         <DropdownMenuShortcut>
                           {key}
@@ -447,6 +540,27 @@ export function WorkspaceMenu({ workspace }: { workspace: Workspace }) {
                   </DropdownMenuItem>
                 );
               })}
+            </DropdownMenuGroup>
+          </Fragment>
+        ))}
+        {desktop && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuItem onClick={() => runMenuCommand("new-workspace")}>
+                <PlusIcon />
+                New Workspace…
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => runMenuCommand("open-folder")}>
+                <FolderOpenIcon />
+                Open Folder…
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => runMenuCommand("manage-workspaces")}
+              >
+                <SlidersHorizontalIcon />
+                Manage Workspaces…
+              </DropdownMenuItem>
             </DropdownMenuGroup>
           </>
         )}

@@ -1,5 +1,9 @@
 //! Client-owned connections. A profile ID, a workspace ID and its address are distinct.
 //! Loading or forgetting a connection never opens, moves or deletes workspace data.
+//!
+//! The workspaces in folders of this computer are served by one kernel of the app, the
+//! instance, at one address: each at `/w/<id>` there. Connections to other kernels keep the
+//! kernel's address and the workspace's identity.
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -15,17 +19,7 @@ use crate::{
 };
 
 const FILE: &str = "workspaces.json";
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct Managed {
-    pub directory: PathBuf,
-    pub database: PathBuf,
-    pub host_id: String,
-    pub network: zerolux::handoff::Network,
-    #[serde(default)]
-    pub private_services: bool,
-}
+const VERSION: u32 = 3;
 
 /// Private recovery state, written before the CLI stops. Its profile keeps browser storage
 /// and Keychain identity; the kernel's receipt resolves crashes around catalog persistence.
@@ -57,38 +51,6 @@ fn remove_journal(root: &Path, filename: &str) -> Result<()> {
     Ok(())
 }
 
-#[derive(Deserialize, Serialize)]
-pub struct NetworkJournal {
-    pub previous: Profile,
-}
-
-impl NetworkJournal {
-    fn filename(&self) -> Result<String> {
-        Ok(format!(
-            "network-{}.json",
-            Uuid::parse_str(&self.previous.id)?
-        ))
-    }
-    pub fn save(&self, root: &Path) -> Result<()> {
-        preferences::write_json(root, &self.filename()?, self)
-    }
-    pub fn finish(&self, root: &Path) -> Result<()> {
-        remove_journal(root, &self.filename()?)
-    }
-    pub fn recover(&self, root: &Path, catalog: &mut Catalog) -> Result<()> {
-        let current = catalog.profile(&self.previous.id)?;
-        ensure!(
-            current.workspace_id == self.previous.workspace_id
-                && current.directory(root) == self.previous.directory(root)
-                && current.database(root)? == self.previous.database(root)?,
-            "An interrupted network change belongs to different workspace files"
-        );
-        *catalog.profile_mut(&self.previous.id)? = self.previous.clone();
-        confirmed_save(root, catalog, catalog.save(root))?;
-        self.finish(root)
-    }
-}
-
 impl AdoptionJournal {
     fn filename(&self) -> Result<String> {
         let id = Uuid::parse_str(&self.previous.id)?;
@@ -110,7 +72,7 @@ impl AdoptionJournal {
         let adopted = self.previous.adopted(&self.info)?;
         ensure!(
             current.workspace_id == self.previous.workspace_id
-                && (current.source == self.previous.source || current.managed == adopted.managed),
+                && (current.source == self.previous.source || current.source == adopted.source),
             "An unfinished transfer conflicts with this connection; its files were not changed"
         );
         if !committed {
@@ -142,10 +104,13 @@ impl AdoptionJournal {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Source {
-    /// The earlier desktop kept its one local database directly in app-data.
-    Local {
-        #[serde(default)]
-        legacy: bool,
+    /// A workspace kept in a folder of this computer, usually a project's `.zerolux`, and
+    /// served by the app's kernel.
+    Folder {
+        directory: PathBuf,
+        /// Its database, when it is not `zerolux.db` in the folder.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        database: Option<PathBuf>,
     },
     Existing {
         url: String,
@@ -166,14 +131,12 @@ pub struct Profile {
     /// False until drafts have been imported from the old kernel-origin browser store.
     #[serde(default)]
     pub app_ui: bool,
-    /// Explicitly adopted data stays in place, including its runtime identity and files.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub managed: Option<Managed>,
     #[serde(default)]
     pub start_on_launch: bool,
 }
 
 impl Profile {
+    /// The same connection, its workspace now served by this app from the CLI's files.
     pub fn adopted(&self, info: &zerolux::handoff::Info) -> Result<Self> {
         ensure!(
             matches!(self.source, Source::Existing { .. }),
@@ -184,57 +147,40 @@ impl Profile {
             "The adopted files belong to a different workspace"
         );
         let mut profile = self.clone();
-        profile.source = Source::Local { legacy: false };
-        profile.managed = Some(Managed {
+        profile.source = Source::Folder {
             directory: info.directory.clone(),
-            database: info.database.clone(),
-            host_id: info.host_id.clone(),
-            network: info.network.clone(),
-            private_services: true,
-        });
+            database: (info.database != info.directory.join("zerolux.db"))
+                .then(|| info.database.clone()),
+        };
         profile.start_on_launch = true;
         profile.name = info.workspace_name.clone();
         Ok(profile)
     }
 
-    pub fn network(&self, root: &Path) -> Result<Option<zerolux::handoff::Network>> {
-        let Some(directory) = self.directory(root) else {
-            return Ok(None);
-        };
-        if let Some(managed) = &self.managed {
-            return Ok(Some(managed.network.clone()));
-        }
-        Ok(Some(zerolux::handoff::Network::local(
-            crate::local::LocalWorkspace::port_at(&directory)?,
-        )))
-    }
-
-    pub fn directory(&self, root: &Path) -> Option<PathBuf> {
-        if matches!(self.source, Source::Local { .. })
-            && let Some(managed) = &self.managed
-        {
-            return Some(managed.directory.clone());
-        }
-        match self.source {
-            Source::Local { legacy: true } => Some(root.to_owned()),
-            Source::Local { legacy: false } => Some(root.join("workspaces").join(&self.id)),
+    /// The folder of a workspace of this computer.
+    pub fn directory(&self) -> Option<&Path> {
+        match &self.source {
+            Source::Folder { directory, .. } => Some(directory),
             Source::Existing { .. } => None,
         }
     }
 
-    pub fn database(&self, root: &Path) -> Result<PathBuf> {
-        let database = match &self.managed {
-            Some(managed) => managed.database.clone(),
-            None => self
-                .directory(root)
-                .context("This is not an app-managed workspace")?
-                .join("zerolux.db"),
+    pub fn database(&self) -> Result<PathBuf> {
+        let Source::Folder {
+            directory,
+            database,
+        } = &self.source
+        else {
+            anyhow::bail!("This is not a workspace of this computer");
         };
-        ensure!(
-            self.workspace_id.is_none() || database.is_file(),
-            "This local workspace's database is missing"
-        );
-        Ok(database)
+        Ok(database
+            .clone()
+            .unwrap_or_else(|| directory.join("zerolux.db")))
+    }
+
+    /// A workspace of this computer whose folder is no longer where it was.
+    pub fn missing(&self) -> bool {
+        self.workspace_id.is_some() && self.database().is_ok_and(|database| !database.is_file())
     }
 
     pub fn existing_url(&self) -> Option<&str> {
@@ -260,43 +206,40 @@ impl Profile {
     }
 }
 
+/// The app's own kernel: its address and its services.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Instance {
+    pub network: zerolux::handoff::Network,
+    /// The private file, in the app's data, with this kernel's LiveKit settings; without one
+    /// the kernel runs LiveKit itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub services: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Catalog {
     version: u32,
     pub selected: Option<String>,
+    /// Set once the app's kernel has an address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<Instance>,
     pub profiles: Vec<Profile>,
 }
 
 impl Default for Catalog {
     fn default() -> Self {
         Self {
-            version: 2,
+            version: VERSION,
             selected: None,
+            instance: None,
             profiles: Vec::new(),
         }
     }
 }
 
 impl Catalog {
-    pub fn recover_networks(&mut self, root: &Path) -> Result<()> {
-        for entry in std::fs::read_dir(root)? {
-            let entry = entry?;
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if !name.starts_with("network-") || !name.ends_with(".json") {
-                continue;
-            }
-            let journal: NetworkJournal = serde_json::from_slice(&std::fs::read(entry.path())?)?;
-            ensure!(
-                name == journal.filename()?,
-                "The network journal names a different connection"
-            );
-            journal.recover(root, self)?;
-        }
-        Ok(())
-    }
-
     pub fn pending_adoptions(root: &Path) -> Result<Vec<AdoptionJournal>> {
         let mut pending = Vec::new();
         for entry in std::fs::read_dir(root)? {
@@ -327,17 +270,22 @@ impl Catalog {
         Ok(resumed)
     }
 
+    /// The saved connections; an earlier version is read as this one, and written only when
+    /// something is saved.
     pub fn load(root: &Path) -> Result<Self> {
-        let mut catalog: Self = match std::fs::read(root.join(FILE)) {
-            Ok(bytes) => serde_json::from_slice(&bytes).context("Invalid workspace connections")?,
+        let bytes = match std::fs::read(root.join(FILE)) {
+            Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Self::import_previous(root)?
+                return Self::import_previous(root);
             }
             Err(error) => return Err(error).context("Read workspace connections"),
         };
-        if catalog.version == 1 {
-            catalog.version = 2;
-        }
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).context("Invalid workspace connections")?;
+        let catalog = match value["version"].as_u64() {
+            Some(1 | 2) => v2::upgrade(root, serde_json::from_value(value)?)?,
+            _ => serde_json::from_value(value).context("Invalid workspace connections")?,
+        };
         catalog.validate()?;
         Ok(catalog)
     }
@@ -353,7 +301,6 @@ impl Catalog {
                 source: Source::Existing { url: url.clone() },
                 legacy_browser: true,
                 app_ui: false,
-                managed: None,
                 start_on_launch: false,
             };
             catalog.selected = Some(profile.id.clone());
@@ -366,10 +313,12 @@ impl Catalog {
                 id: Uuid::new_v4().to_string(),
                 workspace_id: None,
                 name: "Local workspace".into(),
-                source: Source::Local { legacy: true },
+                source: Source::Folder {
+                    directory: root.to_owned(),
+                    database: None,
+                },
                 legacy_browser: selected || previous.is_none(),
                 app_ui: false,
-                managed: None,
                 start_on_launch: false,
             };
             if selected {
@@ -416,7 +365,6 @@ impl Catalog {
             },
             legacy_browser: false,
             app_ui: true,
-            managed: None,
             start_on_launch: false,
         };
         profile.observe(verified)?;
@@ -425,21 +373,31 @@ impl Catalog {
         Ok(id)
     }
 
-    pub fn add_local(&mut self, name: &str) -> Result<String> {
+    /// A workspace in `directory`, its `.zerolux`: a new one by this name, or the one there.
+    pub fn add_folder(&mut self, name: &str, directory: PathBuf) -> Result<String> {
         let name = name.trim();
         ensure!(
             !name.is_empty() && name.len() <= 200,
             "Choose a workspace name of up to 200 bytes"
+        );
+        ensure!(
+            !self
+                .profiles
+                .iter()
+                .any(|profile| profile.directory() == Some(&directory)),
+            "This folder's workspace is already saved"
         );
         let id = Uuid::new_v4().to_string();
         self.profiles.push(Profile {
             id: id.clone(),
             workspace_id: None,
             name: name.to_owned(),
-            source: Source::Local { legacy: false },
+            source: Source::Folder {
+                directory,
+                database: None,
+            },
             legacy_browser: false,
             app_ui: true,
-            managed: None,
             start_on_launch: false,
         });
         Ok(id)
@@ -456,11 +414,11 @@ impl Catalog {
 
     fn validate(&self) -> Result<()> {
         ensure!(
-            self.version == 2,
+            self.version == VERSION,
             "This desktop cannot read this version of workspace connections"
         );
         let mut ids = HashSet::new();
-        let mut legacy_local = 0;
+        let mut directories = HashSet::new();
         let mut legacy_browser = 0;
         for profile in &self.profiles {
             let id = Uuid::parse_str(&profile.id).context("Invalid connection ID")?;
@@ -478,8 +436,8 @@ impl Catalog {
             match &profile.source {
                 Source::Existing { url } => {
                     ensure!(
-                        profile.managed.is_none() && !profile.start_on_launch,
-                        "External connections cannot own local runtime settings"
+                        !profile.start_on_launch,
+                        "External connections cannot start with the app"
                     );
                     ensure!(
                         kernel_url(url)?.as_str() == url,
@@ -490,39 +448,209 @@ impl Catalog {
                         "An existing workspace needs a verified identity"
                     );
                 }
-                Source::Local { legacy: true } => legacy_local += 1,
-                Source::Local { .. } => {}
-            }
-            if let Some(managed) = &profile.managed {
-                ensure!(
-                    managed.directory.is_absolute()
-                        && managed.database.is_absolute()
-                        && !managed.host_id.trim().is_empty(),
-                    "Managed workspace paths and host identity are required"
-                );
-                managed.network.validate()?;
-                ensure!(
-                    managed.network.port != 0,
-                    "A managed workspace keeps its listening port"
-                );
+                Source::Folder {
+                    directory,
+                    database,
+                } => {
+                    ensure!(
+                        directory.is_absolute()
+                            && database.as_ref().is_none_or(|path| path.is_absolute()),
+                        "A workspace's folder must be an absolute path"
+                    );
+                    ensure!(
+                        directories.insert(directory),
+                        "Two connections name the same folder"
+                    );
+                }
             }
             legacy_browser += usize::from(profile.legacy_browser);
         }
         ensure!(
-            legacy_local <= 1 && legacy_browser <= 1,
+            legacy_browser <= 1,
             "Only one connection can inherit previous desktop state"
         );
         ensure!(
             self.selected.as_ref().is_none_or(|id| ids.contains(id)),
             "The selected workspace connection is missing"
         );
+        if let Some(instance) = &self.instance {
+            instance.network.validate()?;
+            ensure!(
+                instance.network.port != 0,
+                "The app's kernel keeps its listening port"
+            );
+            ensure!(
+                instance.services.as_ref().is_none_or(|file| {
+                    file.starts_with("runtime-")
+                        && file.ends_with(".json")
+                        && !file.contains(['/', '\\'])
+                }),
+                "Invalid private service settings"
+            );
+        }
         Ok(())
+    }
+}
+
+/// Versions 1 and 2, where each workspace of this computer had a kernel and an address of its
+/// own. They are read as version 3: the address of a workspace taken over from the CLI, else
+/// the first one's, becomes the app's kernel's, with its services.
+mod v2 {
+    use super::*;
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Managed {
+        directory: PathBuf,
+        database: PathBuf,
+        #[allow(dead_code)]
+        host_id: String,
+        network: zerolux::handoff::Network,
+        #[serde(default)]
+        private_services: bool,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+    enum Source {
+        Local {
+            #[serde(default)]
+            legacy: bool,
+        },
+        Existing {
+            url: String,
+        },
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub(super) struct Profile {
+        id: String,
+        workspace_id: Option<String>,
+        name: String,
+        source: Source,
+        #[serde(default)]
+        legacy_browser: bool,
+        #[serde(default)]
+        app_ui: bool,
+        #[serde(default)]
+        managed: Option<Managed>,
+        #[serde(default)]
+        start_on_launch: bool,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub(super) struct Catalog {
+        #[allow(dead_code)]
+        version: u32,
+        selected: Option<String>,
+        profiles: Vec<Profile>,
+    }
+
+    /// A network change interrupted by a crash: its connection as it was before.
+    #[derive(Deserialize)]
+    struct NetworkJournal {
+        previous: Profile,
+    }
+
+    pub(super) fn upgrade(root: &Path, mut previous: Catalog) -> Result<super::Catalog> {
+        for entry in std::fs::read_dir(root)? {
+            let name = entry?.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("network-") && name.ends_with(".json") {
+                let journal: NetworkJournal =
+                    serde_json::from_slice(&std::fs::read(root.join(name.as_ref()))?)
+                        .context("Read an interrupted network change")?;
+                if let Some(profile) = previous
+                    .profiles
+                    .iter_mut()
+                    .find(|profile| profile.id == journal.previous.id)
+                {
+                    *profile = journal.previous;
+                }
+            }
+        }
+        let taken_over = previous.profiles.iter().find_map(|profile| {
+            let managed = profile.managed.as_ref()?;
+            Some(Instance {
+                network: managed.network.clone(),
+                services: managed
+                    .private_services
+                    .then(|| format!("runtime-{}.json", profile.id)),
+            })
+        });
+        let mut catalog = super::Catalog {
+            selected: previous.selected,
+            ..Default::default()
+        };
+        for profile in previous.profiles {
+            let source = match (profile.source, profile.managed) {
+                (Source::Existing { url }, _) => super::Source::Existing { url },
+                (Source::Local { .. }, Some(managed)) => super::Source::Folder {
+                    database: (managed.database != managed.directory.join("zerolux.db"))
+                        .then_some(managed.database),
+                    directory: managed.directory,
+                },
+                (Source::Local { legacy }, None) => super::Source::Folder {
+                    directory: if legacy {
+                        root.to_owned()
+                    } else {
+                        root.join("workspaces").join(&profile.id)
+                    },
+                    database: None,
+                },
+            };
+            catalog.profiles.push(super::Profile {
+                id: profile.id,
+                workspace_id: profile.workspace_id,
+                name: profile.name,
+                source,
+                legacy_browser: profile.legacy_browser,
+                app_ui: profile.app_ui,
+                start_on_launch: profile.start_on_launch,
+            });
+        }
+        catalog.instance = match taken_over {
+            Some(instance) => Some(instance),
+            // The first workspace's address that was kept, so its windows keep their place.
+            None => catalog
+                .profiles
+                .iter()
+                .filter_map(|profile| profile.directory())
+                .find_map(|directory| {
+                    crate::local::LocalWorkspace::port_at(directory)
+                        .ok()
+                        .filter(|port| *port != 0)
+                })
+                .map(|port| Instance {
+                    network: zerolux::handoff::Network::local(port),
+                    services: None,
+                }),
+        };
+        Ok(catalog)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn info(directory: &Path, database: &Path, workspace: &str) -> zerolux::handoff::Info {
+        zerolux::handoff::Info {
+            instance: Uuid::new_v4().to_string(),
+            workspace_id: workspace.into(),
+            workspace_name: "Company".into(),
+            host_id: "host".into(),
+            version: "0.0.1".into(),
+            schema: zerolux::build::schema().into(),
+            directory: directory.into(),
+            database: database.into(),
+            network: zerolux::handoff::Network::local(4310),
+            external_livekit: false,
+            authenticated: true,
+        }
+    }
 
     #[test]
     fn journals_reconcile_crashes_on_both_sides_of_commit_and_post_rename_errors() {
@@ -536,19 +664,7 @@ mod tests {
                 .add_existing(&verified("http://127.0.0.1:4310", "kept", "Company"))
                 .unwrap();
             let previous = catalog.profile(&id).unwrap().clone();
-            let info = zerolux::handoff::Info {
-                instance: Uuid::new_v4().to_string(),
-                workspace_id: "kept".into(),
-                workspace_name: "Company".into(),
-                host_id: "host".into(),
-                version: "0.0.1".into(),
-                schema: zerolux::build::schema().into(),
-                directory: data.path().into(),
-                database: database.clone(),
-                network: zerolux::handoff::Network::local(4310),
-                external_livekit: false,
-                authenticated: true,
-            };
+            let info = info(data.path(), &database, "kept");
             let journal = AdoptionJournal {
                 previous: previous.clone(),
                 info: info.clone(),
@@ -602,23 +718,6 @@ mod tests {
                 )
                 .is_err()
             );
-            if committed {
-                let network = NetworkJournal {
-                    previous: adopted.clone(),
-                };
-                network.save(app.path()).unwrap();
-                catalog
-                    .profile_mut(&id)
-                    .unwrap()
-                    .managed
-                    .as_mut()
-                    .unwrap()
-                    .network
-                    .port = 5432;
-                catalog.save(app.path()).unwrap();
-                catalog.recover_networks(app.path()).unwrap();
-                assert_eq!(catalog.profile(&id).unwrap(), &adopted);
-            }
         }
     }
 
@@ -628,7 +727,6 @@ mod tests {
         let data = tempfile::tempdir().unwrap();
         let database = data.path().join("company.sqlite");
         std::fs::write(&database, b"existing database is not opened by the catalog").unwrap();
-        std::fs::write(data.path().join("host-id"), "host-kept").unwrap();
         std::fs::write(data.path().join("storage-file"), "kept").unwrap();
         let mut catalog = Catalog::default();
         let id = catalog
@@ -640,19 +738,7 @@ mod tests {
             .unwrap();
         catalog.selected = Some(id.clone());
         let previous = catalog.profile(&id).unwrap().clone();
-        let mut info = zerolux::handoff::Info {
-            instance: "instance".into(),
-            workspace_id: "different-workspace".into(),
-            workspace_name: "Company".into(),
-            host_id: "host-kept".into(),
-            version: "0.0.1".into(),
-            schema: zerolux::build::schema().into(),
-            directory: data.path().to_owned(),
-            database: database.clone(),
-            network: zerolux::handoff::Network::local(4310),
-            external_livekit: false,
-            authenticated: true,
-        };
+        let mut info = info(data.path(), &database, "different-workspace");
         assert!(previous.adopted(&info).is_err());
         info.workspace_id = "workspace-kept".into();
         let adopted = previous.adopted(&info).unwrap();
@@ -661,8 +747,8 @@ mod tests {
         assert_eq!(adopted.legacy_browser, previous.legacy_browser);
         assert_eq!(adopted.app_ui, previous.app_ui);
         assert!(adopted.start_on_launch);
-        assert_eq!(adopted.directory(app.path()).unwrap(), data.path());
-        assert_eq!(adopted.database(app.path()).unwrap(), database);
+        assert_eq!(adopted.directory().unwrap(), data.path());
+        assert_eq!(adopted.database().unwrap(), database);
         *catalog.profile_mut(&id).unwrap() = adopted;
         catalog.save(app.path()).unwrap();
         assert_eq!(Catalog::load(app.path()).unwrap(), catalog);
@@ -675,19 +761,12 @@ mod tests {
             "kept"
         );
         assert!(!app.path().join("workspaces").exists());
-        let wire = serde_json::to_value(info.network).unwrap();
-        assert!(wire.get("publicOrigin").is_some() && wire.get("publicLivekitUrl").is_some());
-        assert!(
-            serde_json::to_value(catalog.profile(&id).unwrap())
-                .unwrap()
-                .get("start_on_launch")
-                .is_some()
-        );
     }
 
     fn verified(url: &str, id: &str, name: &str) -> VerifiedWorkspace {
         VerifiedWorkspace {
             url: kernel_url(url).unwrap(),
+            base: kernel_url(url).unwrap(),
             id: id.into(),
             name: name.into(),
         }
@@ -726,40 +805,162 @@ mod tests {
     }
 
     #[test]
-    fn old_profiles_require_draft_import_but_new_profiles_use_packaged_storage() {
+    fn a_folder_holds_one_workspace_and_a_missing_one_is_never_recreated() {
         let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("aspen/.zerolux");
         let mut catalog = Catalog::default();
-        let id = catalog.add_local("Saved").unwrap();
-        assert!(catalog.profile(&id).unwrap().app_ui);
-        let mut old = serde_json::to_value(&catalog).unwrap();
-        old["version"] = 1.into();
-        old["profiles"][0].as_object_mut().unwrap().remove("app_ui");
-        let before = old.to_string();
+        let id = catalog.add_folder("aspen", folder.clone()).unwrap();
+        assert!(catalog.add_folder("again", folder.clone()).is_err());
+        assert!(catalog.add_folder(" ", root.path().join("birch")).is_err());
+        let profile = catalog.profile_mut(&id).unwrap();
+        assert_eq!(profile.database().unwrap(), folder.join("zerolux.db"));
+        // Not yet created: nothing is missing, and nothing was written.
+        assert!(!profile.missing());
+        assert!(!folder.exists());
+        profile.workspace_id = Some("aspen-id".into());
+        assert!(profile.missing());
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("zerolux.db"), b"sentinel").unwrap();
+        assert!(!profile.missing());
+        catalog.save(root.path()).unwrap();
+        assert_eq!(Catalog::load(root.path()).unwrap(), catalog);
+    }
+
+    #[test]
+    fn version_two_is_read_as_one_kernel_with_the_taken_over_workspace_address() {
+        let root = tempfile::tempdir().unwrap();
+        let repository = tempfile::tempdir().unwrap();
+        let taken = Uuid::new_v4().to_string();
+        let local = Uuid::new_v4().to_string();
+        let remote = Uuid::new_v4().to_string();
+        std::fs::create_dir_all(root.path().join("workspaces").join(&local)).unwrap();
+        std::fs::write(
+            root.path().join("workspaces").join(&local).join("port"),
+            "45123",
+        )
+        .unwrap();
+        let directory = repository.path().join(".zerolux");
+        let v2 = serde_json::json!({
+            "version": 2,
+            "selected": taken,
+            "profiles": [
+                {
+                    "id": local, "workspace_id": "birch-id", "name": "birch",
+                    "source": {"kind": "local", "legacy": false}, "app_ui": true,
+                },
+                {
+                    "id": taken, "workspace_id": "aspen-id", "name": "aspen",
+                    "source": {"kind": "local", "legacy": false}, "app_ui": true,
+                    "start_on_launch": true,
+                    "managed": {
+                        "directory": directory, "database": directory.join("zerolux.db"),
+                        "host_id": "host", "private_services": true,
+                        "network": {
+                            "listen": "127.0.0.1", "port": 4310, "expose": "192.0.2.10",
+                            "publicOrigin": null, "publicLivekitUrl": null,
+                        },
+                    },
+                },
+                {
+                    "id": remote, "workspace_id": "cedar-id", "name": "cedar",
+                    "source": {"kind": "existing", "url": "http://192.0.2.20:4310/"},
+                },
+            ],
+        });
+        let before = serde_json::to_string(&v2).unwrap();
         std::fs::write(root.path().join(FILE), &before).unwrap();
-        let imported = Catalog::load(root.path()).unwrap();
-        assert_eq!(imported.version, 2);
-        assert!(!imported.profile(&id).unwrap().app_ui);
+        let catalog = Catalog::load(root.path()).unwrap();
+        let instance = catalog.instance.clone().unwrap();
+        assert_eq!(instance.network.port, 4310);
+        assert_eq!(instance.network.expose, Some("192.0.2.10".parse().unwrap()));
+        assert_eq!(instance.services, Some(format!("runtime-{taken}.json")));
+        let aspen = catalog.profile(&taken).unwrap();
+        assert_eq!(aspen.directory(), Some(directory.as_path()));
+        assert_eq!(aspen.database().unwrap(), directory.join("zerolux.db"));
+        assert!(aspen.start_on_launch);
+        assert_eq!(
+            catalog.profile(&local).unwrap().directory(),
+            Some(root.path().join("workspaces").join(&local).as_path())
+        );
+        assert_eq!(
+            catalog.profile(&remote).unwrap().existing_url(),
+            Some("http://192.0.2.20:4310/")
+        );
+        assert_eq!(catalog.selected.as_deref(), Some(taken.as_str()));
+        // Read, never rewritten until something is saved; no database is touched.
         assert_eq!(
             std::fs::read_to_string(root.path().join(FILE)).unwrap(),
             before
         );
-        assert!(!root.path().join("workspaces").exists());
+        assert!(!directory.exists());
+        catalog.save(root.path()).unwrap();
+        assert_eq!(Catalog::load(root.path()).unwrap(), catalog);
     }
 
     #[test]
-    fn a_pinned_local_database_is_never_silently_recreated() {
+    fn without_a_taken_over_workspace_the_first_kept_address_is_the_kernels() {
         let root = tempfile::tempdir().unwrap();
-        let mut catalog = Catalog::default();
-        let id = catalog.add_local("Local").unwrap();
-        let profile = catalog.profile_mut(&id).unwrap();
-        let database = profile.database(root.path()).unwrap();
-        assert!(!database.exists());
-        profile.workspace_id = Some("existing-workspace".into());
-        assert!(profile.database(root.path()).is_err());
-        assert!(!database.exists());
-        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
-        std::fs::write(&database, b"sentinel: do not open as SQLite").unwrap();
-        assert_eq!(profile.database(root.path()).unwrap(), database);
+        let first = Uuid::new_v4().to_string();
+        std::fs::write(root.path().join("port"), "45200").unwrap();
+        let v1 = serde_json::json!({
+            "version": 1,
+            "selected": null,
+            "profiles": [{
+                "id": first, "workspace_id": null, "name": "Local workspace",
+                "source": {"kind": "local", "legacy": true}, "legacy_browser": true,
+            }],
+        });
+        std::fs::write(root.path().join(FILE), v1.to_string()).unwrap();
+        let catalog = Catalog::load(root.path()).unwrap();
+        assert_eq!(catalog.instance.as_ref().unwrap().network.port, 45200);
+        let profile = catalog.profile(&first).unwrap();
+        assert_eq!(profile.directory(), Some(root.path()));
+        assert!(!profile.app_ui && profile.legacy_browser);
+    }
+
+    #[test]
+    fn importing_the_existing_connection_preserves_it_and_keeps_old_local_data() {
+        let root = tempfile::tempdir().unwrap();
+        preferences::save(
+            root.path(),
+            &SavedConnection::Existing {
+                url: "http://127.0.0.1:4310/".into(),
+                workspace_id: "current".into(),
+            },
+        )
+        .unwrap();
+        let previous = std::fs::read(root.path().join("connection.json")).unwrap();
+        std::fs::write(
+            root.path().join("zerolux.db"),
+            b"not opened or migrated by the catalog",
+        )
+        .unwrap();
+        let mut catalog = Catalog::load(root.path()).unwrap();
+        assert_eq!(catalog.profiles.len(), 2);
+        let active = catalog
+            .profile(catalog.selected.as_deref().unwrap())
+            .unwrap();
+        assert_eq!(active.workspace_id.as_deref(), Some("current"));
+        assert!(active.legacy_browser);
+        let local = catalog
+            .profiles
+            .iter()
+            .find(|p| p.directory().is_some())
+            .unwrap();
+        assert_eq!(local.directory(), Some(root.path()));
+        assert!(!local.legacy_browser);
+        let local_id = local.id.clone();
+        catalog.save(root.path()).unwrap();
+        assert_eq!(Catalog::load(root.path()).unwrap(), catalog);
+        assert_eq!(
+            std::fs::read(root.path().join("connection.json")).unwrap(),
+            previous
+        );
+        catalog.forget(&local_id).unwrap();
+        assert_eq!(
+            std::fs::read(root.path().join("zerolux.db")).unwrap(),
+            b"not opened or migrated by the catalog"
+        );
     }
 
     #[test]
@@ -791,76 +992,10 @@ mod tests {
     }
 
     #[test]
-    fn importing_the_existing_connection_preserves_it_and_keeps_old_local_data() {
-        let root = tempfile::tempdir().unwrap();
-        preferences::save(
-            root.path(),
-            &SavedConnection::Existing {
-                url: "http://127.0.0.1:4310/".into(),
-                workspace_id: "current".into(),
-            },
-        )
-        .unwrap();
-        let previous = std::fs::read(root.path().join("connection.json")).unwrap();
-        std::fs::write(
-            root.path().join("zerolux.db"),
-            b"not opened or migrated by the catalog",
-        )
-        .unwrap();
-        let mut catalog = Catalog::load(root.path()).unwrap();
-        assert_eq!(catalog.profiles.len(), 2);
-        let active = catalog
-            .profile(catalog.selected.as_deref().unwrap())
-            .unwrap();
-        assert_eq!(active.workspace_id.as_deref(), Some("current"));
-        assert!(active.legacy_browser);
-        let local = catalog
-            .profiles
-            .iter()
-            .find(|p| p.directory(root.path()).is_some())
-            .unwrap();
-        assert_eq!(local.directory(root.path()).as_deref(), Some(root.path()));
-        assert!(!local.legacy_browser);
-        let local_id = local.id.clone();
-        catalog.save(root.path()).unwrap();
-        assert_eq!(Catalog::load(root.path()).unwrap(), catalog);
-        assert_eq!(
-            std::fs::read(root.path().join("connection.json")).unwrap(),
-            previous
-        );
-        catalog.forget(&local_id).unwrap();
-        assert_eq!(
-            std::fs::read(root.path().join("zerolux.db")).unwrap(),
-            b"not opened or migrated by the catalog"
-        );
-    }
-
-    #[test]
-    fn local_profiles_have_separate_stable_directories_and_no_implicit_processes() {
-        let root = tempfile::tempdir().unwrap();
-        let mut catalog = Catalog::default();
-        let a = catalog.add_local("Research").unwrap();
-        let b = catalog.add_local("Experiments").unwrap();
-        let first = catalog.profile(&a).unwrap().directory(root.path()).unwrap();
-        let second = catalog.profile(&b).unwrap().directory(root.path()).unwrap();
-        assert_ne!(first, second);
-        assert!(!first.exists() && !second.exists());
-        catalog.save(root.path()).unwrap();
-        assert_eq!(
-            Catalog::load(root.path())
-                .unwrap()
-                .profile(&a)
-                .unwrap()
-                .directory(root.path()),
-            Some(first)
-        );
-    }
-
-    #[test]
     fn corrupt_or_newer_catalogs_are_not_reset() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join(FILE);
-        for body in ["broken", r#"{"version":3,"selected":null,"profiles":[]}"#] {
+        for body in ["broken", r#"{"version":4,"selected":null,"profiles":[]}"#] {
             std::fs::write(&path, body).unwrap();
             assert!(Catalog::load(root.path()).is_err());
             assert_eq!(std::fs::read_to_string(&path).unwrap(), body);

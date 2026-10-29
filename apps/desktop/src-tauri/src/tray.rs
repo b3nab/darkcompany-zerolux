@@ -579,12 +579,13 @@ pub fn tray_credential(
 #[tauri::command]
 pub fn tray_report(window: WebviewWindow, report: Report) -> Result<(), String> {
     panel_only(&window)?;
-    let waiting = report
+    let before = waiting(window.app_handle());
+    let shown = report
         .requests
         .iter()
         .map(|request| format!("{}|{}", request.profile, request.id))
         .collect();
-    crate::notify::keep_only(window.app_handle(), &waiting);
+    crate::notify::keep_only(window.app_handle(), &shown);
     window
         .app_handle()
         .state::<Mutex<State>>()
@@ -592,7 +593,26 @@ pub fn tray_report(window: WebviewWindow, report: Report) -> Result<(), String> 
         .expect("tray lock")
         .report = report;
     refresh(window.app_handle());
+    // The windows' switchers count them too.
+    if waiting(window.app_handle()) != before {
+        let _ = window.app_handle().emit("zerolux-workspaces", ());
+    }
     Ok(())
+}
+
+/// The requests waiting in each workspace the panel hears, by profile.
+pub(crate) fn waiting(app: &AppHandle) -> std::collections::HashMap<String, usize> {
+    let mut waiting = std::collections::HashMap::new();
+    for request in &app
+        .state::<Mutex<State>>()
+        .lock()
+        .expect("tray lock")
+        .report
+        .requests
+    {
+        *waiting.entry(request.profile.clone()).or_default() += 1;
+    }
+    waiting
 }
 
 /// The panel as tall as what it shows, within the screen.

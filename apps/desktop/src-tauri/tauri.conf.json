@@ -22,6 +22,7 @@
           "permissions": [
             "allow-workspace-action",
             "allow-workspace-adoption-preview",
+            "allow-kernel-workspaces",
             "allow-choose-folder",
             "allow-autostart-status",
             "allow-autostart-set"
@@ -80,6 +81,8 @@
             "allow-update-channel",
             "allow-update-download",
             "allow-update-install",
+            "allow-desktop-workspaces",
+            "allow-desktop-switch",
             "allow-menu-commands",
             "allow-menu-sections",
             "allow-menu-run",

@@ -1,5 +1,5 @@
 use crate::{
-    catalog::{AdoptionJournal, Catalog, Managed, NetworkJournal, Profile, Source},
+    catalog::{AdoptionJournal, Catalog, Instance, Profile, Source},
     computer::{LinkView, Links},
     connection,
     local::{self, LocalWorkspace},
@@ -21,16 +21,20 @@ use tauri_plugin_opener::OpenerExt;
 use tokio::sync::{mpsc, oneshot, watch};
 use zerolux::{
     claude_runner::{RunnerProgram, executable},
-    server::{Server, ServerOptions},
+    server::{Server, ServerHandle, ServerOptions, WorkspaceOptions},
 };
 
 const MANAGER: &str = "manager";
+/// The windows open at the last quit.
+const WINDOWS: &str = "windows.json";
 
 #[derive(Clone, Default, Serialize)]
 pub(crate) struct View {
     revision: u64,
     pub(crate) profiles: Vec<ProfileView>,
     pub(crate) active: Option<String>,
+    /// The app's kernel, which serves the workspaces in this computer's folders.
+    kernel: KernelView,
     /// Other workspaces this computer joined, to run their person's sessions here.
     computers: Vec<LinkView>,
     ready: bool,
@@ -38,15 +42,23 @@ pub(crate) struct View {
     error: Option<String>,
 }
 
+#[derive(Clone, Default, Serialize)]
+struct KernelView {
+    /// Its address and services, as they are, or as it will start.
+    network: Option<zerolux::handoff::Network>,
+    running: bool,
+}
+
 #[derive(Clone, Serialize)]
 pub(crate) struct ProfileView {
     #[serde(flatten)]
     pub(crate) profile: Profile,
     running: bool,
+    /// Its folder is not where it was: to locate, or to remove.
+    missing: bool,
     #[serde(rename = "dataDirectory")]
     data_directory: Option<PathBuf>,
     database: Option<PathBuf>,
-    network: Option<zerolux::handoff::Network>,
     #[serde(rename = "localUrl")]
     local_url: Option<String>,
 }
@@ -58,11 +70,26 @@ pub(crate) enum Action {
     Open {
         id: String,
     },
+    /// A workspace of another computer's kernel: the one named, or its only one.
     Add {
         url: String,
+        #[serde(default)]
+        workspace: Option<String>,
     },
+    /// A new workspace, in `directory`'s `.zerolux`; without one, in the app's own data.
     Create {
         name: String,
+        #[serde(default)]
+        directory: Option<String>,
+    },
+    /// The workspace already in a folder.
+    OpenFolder {
+        directory: String,
+    },
+    /// The folder a saved workspace moved to.
+    Locate {
+        id: String,
+        directory: String,
     },
     Edit {
         id: String,
@@ -72,8 +99,8 @@ pub(crate) enum Action {
         id: String,
         directory: String,
     },
+    /// The app's kernel's address and services.
     Network {
-        id: String,
         network: zerolux::handoff::Network,
     },
     Startup {
@@ -100,6 +127,13 @@ pub(crate) enum Action {
     },
     /// The app was brought back with no window open: its workspace comes back.
     Reopen,
+    /// A workspace from a window's switcher: in a window of its own, or instead of the one
+    /// that asks, where it was.
+    #[serde(skip)]
+    Switch {
+        id: String,
+        replacing: Option<String>,
+    },
     /// Internal only: package activation is requested by the authenticated updater.
     #[serde(skip)]
     InstallUpdate(Box<crate::updates::Pending>),
@@ -134,6 +168,89 @@ async fn workspace_action(
     receive
         .await
         .map_err(|_| "The desktop is closing".to_owned())?
+}
+
+/// A workspace in a window's switcher.
+#[derive(Serialize)]
+struct Choice {
+    profile: String,
+    name: String,
+    /// The window's own.
+    here: bool,
+    /// The computer whose kernel serves it; none for this one.
+    computer: Option<String>,
+    missing: bool,
+    /// The requests waiting there, where the tray hears it.
+    requests: usize,
+}
+
+fn workspace_window(window: &WebviewWindow) -> Result<String, String> {
+    window
+        .url()
+        .ok()
+        .and_then(|url| crate::chrome::workspace_profile(window.label(), &url).map(str::to_owned))
+        .ok_or_else(|| "Only a workspace's own view has its switcher".into())
+}
+
+/// Every workspace the app knows, in their order, for a window's switcher.
+#[tauri::command]
+fn desktop_workspaces(
+    window: WebviewWindow,
+    commands: tauri::State<'_, Commands>,
+) -> Result<Vec<Choice>, String> {
+    let here = workspace_window(&window)?;
+    let waiting = crate::tray::waiting(window.app_handle());
+    let view = commands.view.lock().expect("desktop view lock").clone();
+    Ok(view
+        .profiles
+        .into_iter()
+        .map(|entry| Choice {
+            here: entry.profile.id == here,
+            computer: entry
+                .profile
+                .existing_url()
+                .and_then(|url| tauri::Url::parse(url).ok())
+                .and_then(|url| url.host_str().map(str::to_owned)),
+            missing: entry.missing,
+            requests: waiting.get(&entry.profile.id).copied().unwrap_or_default(),
+            name: entry.profile.name,
+            profile: entry.profile.id,
+        })
+        .collect())
+}
+
+/// A workspace from a window's switcher: instead of this window, or in a new one.
+#[tauri::command]
+fn desktop_switch(window: WebviewWindow, profile: String, new_window: bool) -> Result<(), String> {
+    workspace_window(&window)?;
+    ask_and_tell(
+        window.app_handle(),
+        Action::Switch {
+            id: profile,
+            replacing: (!new_window).then(|| window.label().to_owned()),
+        },
+    );
+    Ok(())
+}
+
+/// The workspaces a kernel at an address serves, to choose one to connect to.
+#[tauri::command]
+async fn kernel_workspaces(
+    window: WebviewWindow,
+    url: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    if window.label() != MANAGER || !window.url().ok().as_ref().is_some_and(local::boot_page) {
+        return Err("Workspaces are connected from the desktop's local window only".into());
+    }
+    connection::served(&url)
+        .await
+        .map(|served| {
+            served
+                .into_iter()
+                .map(|workspace| serde_json::json!({"id": workspace.id, "name": workspace.name}))
+                .collect()
+        })
+        .map_err(|error| format!("{error:#}"))
 }
 
 #[derive(Serialize)]
@@ -209,11 +326,15 @@ struct Lifecycle {
     phase: AtomicU8,
 }
 
-struct LocalRuntime {
+/// The app's kernel, running: one address for every workspace in this computer's folders.
+struct Kernel {
+    handle: ServerHandle,
     url: tauri::Url,
     network: zerolux::handoff::Network,
     stop: watch::Sender<bool>,
     task: tokio::task::JoinHandle<Result<()>>,
+    /// The workspace each profile is, by its ID on this kernel.
+    served: HashMap<String, String>,
 }
 
 struct WorkspaceView {
@@ -315,7 +436,7 @@ struct Host {
     app: tauri::AppHandle,
     root: Arc<LocalWorkspace>,
     catalog: Catalog,
-    runtimes: HashMap<String, LocalRuntime>,
+    kernel: Option<Kernel>,
     /// Each workspace's open windows, the one last opened at the end.
     windows: HashMap<String, Vec<WorkspaceView>>,
     active: Option<String>,
@@ -472,6 +593,35 @@ pub(crate) fn ask(app: &tauri::AppHandle, action: Action) {
     let _ = app.state::<Commands>().send.try_send((action, reply));
 }
 
+/// Asks the desktop for something, and says in a dialog when it could not be done.
+pub(crate) fn ask_and_tell(app: &tauri::AppHandle, action: Action) {
+    let (reply, answer) = oneshot::channel();
+    if app
+        .state::<Commands>()
+        .send
+        .try_send((action, reply))
+        .is_err()
+    {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Ok(Err(error)) = answer.await {
+            use tauri_plugin_dialog::DialogExt;
+            app.dialog().message(error).title("ZeroLux").show(|_| {});
+        }
+    });
+}
+
+/// The workspaces' window, at what the menu asked for: `new`, a new workspace.
+pub(crate) fn show_manager_to(app: &tauri::AppHandle, intent: &str) {
+    show_manager(app, None);
+    if let Some(window) = app.get_webview_window(MANAGER) {
+        let intent = serde_json::to_string(intent).expect("intent");
+        let _ = window.eval(format!("window.zeroluxDesktopIntent?.({intent})"));
+    }
+}
+
 pub(crate) fn show_manager(app: &tauri::AppHandle, profile: Option<&str>) {
     if let Some(window) = app.get_webview_window(MANAGER) {
         let _ = window.show();
@@ -483,8 +633,30 @@ pub(crate) fn show_manager(app: &tauri::AppHandle, profile: Option<&str>) {
     }
 }
 
+/// Where a workspace is kept in a folder chosen: its `.zerolux`, or the `.zerolux` chosen.
+fn workspace_folder(chosen: &Path) -> Result<PathBuf> {
+    ensure!(
+        chosen.is_absolute() && chosen.is_dir(),
+        "Choose a folder of this computer"
+    );
+    Ok(
+        if chosen.file_name() == Some(std::ffi::OsStr::new(".zerolux")) {
+            chosen.to_owned()
+        } else {
+            chosen.join(".zerolux")
+        },
+    )
+}
+
+/// A workspace's base on the app's kernel: `<kernel>/w/<id>/`.
+fn workspace_base(kernel: &tauri::Url, id: &str) -> tauri::Url {
+    kernel.join(&format!("w/{id}/")).expect("workspace base")
+}
+
 fn render(app: &tauri::AppHandle, view: &View) {
     crate::tray::changed(app);
+    // The windows' switchers list the workspaces as they are now.
+    let _ = tauri::Emitter::emit(app, "zerolux-workspaces", ());
     if let Some(window) = app.get_webview_window(MANAGER)
         && window.url().ok().as_ref().is_some_and(local::boot_page)
     {
@@ -506,32 +678,40 @@ impl Host {
     }
 
     fn snapshot(&self, busy: bool, error: Option<String>) -> View {
+        let kernel = self
+            .kernel
+            .as_ref()
+            .filter(|kernel| !kernel.task.is_finished());
         View {
             revision: 0,
             profiles: self
                 .catalog
                 .profiles
                 .iter()
-                .map(|profile| ProfileView {
-                    profile: profile.clone(),
-                    data_directory: profile.directory(&self.root.root),
-                    database: profile.database(&self.root.root).ok(),
-                    network: self
-                        .runtimes
-                        .get(&profile.id)
-                        .map(|runtime| runtime.network.clone())
-                        .or_else(|| profile.network(&self.root.root).ok().flatten()),
-                    local_url: self
-                        .runtimes
-                        .get(&profile.id)
-                        .map(|runtime| runtime.url.to_string()),
-                    running: self
-                        .runtimes
-                        .get(&profile.id)
-                        .is_some_and(|runtime| !runtime.task.is_finished()),
+                .map(|profile| {
+                    let served =
+                        kernel.and_then(|kernel| Some((kernel, kernel.served.get(&profile.id)?)));
+                    ProfileView {
+                        profile: profile.clone(),
+                        running: served.is_some(),
+                        missing: profile.missing(),
+                        data_directory: profile.directory().map(Path::to_owned),
+                        database: profile.database().ok(),
+                        local_url: served
+                            .map(|(kernel, id)| workspace_base(&kernel.url, id).to_string()),
+                    }
                 })
                 .collect(),
             active: self.active.clone(),
+            kernel: KernelView {
+                network: kernel.map(|kernel| kernel.network.clone()).or_else(|| {
+                    self.catalog
+                        .instance
+                        .as_ref()
+                        .map(|instance| instance.network.clone())
+                }),
+                running: kernel.is_some(),
+            },
             computers: self.computers.views(),
             ready: true,
             busy,
@@ -562,60 +742,105 @@ impl Host {
         Ok(())
     }
 
-    async fn local_url(&mut self, profile: &Profile) -> Result<tauri::Url> {
-        self.local_url_with_lease(profile, None).await
+    /// The app's kernel, when it runs.
+    fn running(&self) -> Option<&Kernel> {
+        self.kernel
+            .as_ref()
+            .filter(|kernel| !kernel.task.is_finished())
     }
 
-    async fn local_url_with_lease(
+    /// Serves a workspace of this computer's folders on the app's kernel, started with it if
+    /// need be: the kernel's address, and the workspace's ID there.
+    async fn serve(
         &mut self,
         profile: &Profile,
         lease: Option<zerolux::lease::Lease>,
-    ) -> Result<tauri::Url> {
-        if let Some(runtime) = self.runtimes.get(&profile.id)
-            && !runtime.task.is_finished()
+    ) -> Result<(tauri::Url, String)> {
+        if let Some(kernel) = self.running()
+            && let Some(id) = kernel.served.get(&profile.id)
         {
-            return Ok(runtime.url.clone());
+            return Ok((kernel.url.clone(), id.clone()));
         }
-        if let Some(runtime) = self.runtimes.remove(&profile.id) {
-            let _ = runtime.task.await;
-        }
-        let database = profile.database(&self.root.root)?;
+        let database = profile.database()?;
         let directory = profile
-            .directory(&self.root.root)
-            .context("This is not an app-managed workspace")?;
-        let workspace = if directory == self.root.root {
-            self.root.clone()
-        } else {
-            Arc::new(LocalWorkspace::open(directory)?)
+            .directory()
+            .context("This is not a workspace of this computer")?
+            .to_owned();
+        // A saved workspace is never created again where its folder was.
+        ensure!(
+            profile.workspace_id.is_none() || database.is_file(),
+            "This workspace's folder is missing: locate it or remove it"
+        );
+        let options = WorkspaceOptions {
+            initial_workspace_name: (!database.is_file()).then(|| profile.name.clone()),
+            data_dir: directory,
+            database: zerolux::db::Location::Sqlite(database),
         };
-        let resources = self.resources()?;
-        let network = profile
-            .network(&self.root.root)?
-            .context("This workspace has no local network settings")?;
-        if let Some(managed) = &profile.managed {
-            ensure!(
-                std::fs::read_to_string(workspace.root.join("host-id"))?.trim() == managed.host_id,
-                "This workspace's host identity changed; its data was not opened"
-            );
-        }
-        let livekit = match std::fs::read(
-            self.root.root.join(format!("runtime-{}.json", profile.id)),
-        ) {
-            Ok(bytes) => Some(
-                serde_json::from_slice::<zerolux::livekit::LiveKitConfig>(&bytes)
-                    .context("Read this workspace's private service settings")?,
-            ),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                ensure!(
-                    !profile
-                        .managed
-                        .as_ref()
-                        .is_some_and(|managed| managed.private_services),
-                    "This adopted workspace's private service settings are missing; its services were not replaced"
-                );
-                None
+        let id = match self.running() {
+            Some(kernel) => {
+                let handle = kernel.handle.clone();
+                let info = match lease {
+                    Some(lease) => handle.add_workspace_with_lease(options, lease).await,
+                    None => handle.add_workspace(options).await,
+                }
+                .context("Serve this workspace")?;
+                info.id
             }
-            Err(error) => return Err(error.into()),
+            None => {
+                if let Some(previous) = self.kernel.take() {
+                    let _ = previous.task.await;
+                }
+                self.start(options, lease).await?
+            }
+        };
+        let kernel = self.kernel.as_mut().expect("the app's kernel");
+        kernel.served.insert(profile.id.clone(), id.clone());
+        let url = kernel.url.clone();
+        // The folder holds the workspace saved, and no other saved one.
+        let other = self
+            .catalog
+            .profiles
+            .iter()
+            .find(|other| other.id != profile.id && other.workspace_id.as_ref() == Some(&id))
+            .map(|other| other.name.clone());
+        if profile
+            .workspace_id
+            .as_ref()
+            .is_some_and(|expected| expected != &id)
+            || other.is_some()
+        {
+            self.unserve(&profile.id).await?;
+            match other {
+                Some(name) => anyhow::bail!("This folder's workspace is already saved as {name}"),
+                None => anyhow::bail!("This folder holds a different workspace"),
+            }
+        }
+        Ok((url, id))
+    }
+
+    /// Starts the app's kernel with its first workspace, at the address it keeps.
+    async fn start(
+        &mut self,
+        first: WorkspaceOptions,
+        lease: Option<zerolux::lease::Lease>,
+    ) -> Result<String> {
+        let resources = self.resources()?;
+        let instance = self.catalog.instance.clone();
+        let network = instance
+            .as_ref()
+            .map(|instance| instance.network.clone())
+            .unwrap_or_else(|| zerolux::handoff::Network::local(0));
+        let livekit = match instance
+            .as_ref()
+            .and_then(|instance| instance.services.as_ref())
+        {
+            Some(file) => serde_json::from_slice::<zerolux::livekit::LiveKitConfig>(
+                &std::fs::read(self.root.root.join(file))
+                    .context("Read the kernel's private service settings")?,
+            )
+            .context("Read the kernel's private service settings")?,
+            // Its own, apart from any workspace's folder.
+            None => zerolux::livekit::LiveKitConfig::from_env(self.root.root.join("kernel")),
         };
         let options = ServerOptions {
             address: network.address(),
@@ -627,13 +852,11 @@ impl Host {
                     zerolux::api::PublicOrigin::new(origin, network.public_livekit_url.clone())
                 })
                 .transpose()?,
-            data_dir: workspace.root.clone(),
-            database: zerolux::db::Location::Sqlite(database),
-            initial_workspace_name: (profile.workspace_id.is_none()
-                && matches!(profile.source, Source::Local { legacy: false }))
-            .then(|| profile.name.clone()),
+            data_dir: first.data_dir,
+            database: first.database,
+            initial_workspace_name: first.initial_workspace_name,
             web_dir: resources.join("web"),
-            livekit,
+            livekit: Some(livekit),
             runner: Some(RunnerProgram::bundled(&resources)),
             auth: Some(zerolux::auth::AuthEntry {
                 bun: executable("bun"),
@@ -646,21 +869,42 @@ impl Host {
             Some(lease) => Server::start_with_lease(options, lease).await,
             None => Server::start(options).await,
         }
-        .context("Start this workspace's local kernel")?;
-        if profile.managed.is_none()
-            && let Err(error) = workspace.remember_port(server.address().port())
-        {
-            server.shutdown().await?;
-            return Err(error);
+        .context("Start the app's kernel")?;
+        let handle = server.handle();
+        let started: Result<(String, zerolux::handoff::Network)> = async {
+            let id = handle
+                .workspaces()
+                .await?
+                .into_iter()
+                .next()
+                .context("The kernel started without its workspace")?
+                .id;
+            let network = zerolux::handoff::Network {
+                port: server.address().port(),
+                ..network
+            };
+            // The address stays the same across launches: the windows' storage is by origin.
+            if instance.as_ref().map(|instance| &instance.network) != Some(&network) {
+                let mut catalog = self.catalog.clone();
+                catalog.instance = Some(Instance {
+                    network: network.clone(),
+                    services: instance.and_then(|instance| instance.services),
+                });
+                self.save(catalog)?;
+            }
+            Ok((id, network))
         }
-        let url: tauri::Url = server.url().parse().expect("bound kernel URL");
-        let network = zerolux::handoff::Network {
-            port: server.address().port(),
-            ..network
+        .await;
+        let (id, network) = match started {
+            Ok(started) => started,
+            Err(error) => {
+                server.shutdown().await?;
+                return Err(error);
+            }
         };
+        let url: tauri::Url = server.url().parse().expect("bound kernel URL");
         let (stop, mut stopped) = watch::channel(false);
         let task = tokio::spawn(async move {
-            let _workspace = workspace;
             #[cfg(target_os = "macos")]
             let _activity = activity;
             server
@@ -669,24 +913,61 @@ impl Host {
                 })
                 .await
         });
-        self.runtimes.insert(
-            profile.id.clone(),
-            LocalRuntime {
-                url: url.clone(),
-                network,
-                stop,
-                task,
-            },
-        );
-        Ok(url)
+        self.kernel = Some(Kernel {
+            handle,
+            url,
+            network,
+            stop,
+            task,
+            served: HashMap::new(),
+        });
+        Ok(id)
     }
 
-    /// Where a workspace's kernel answers: its address, or its local kernel, started if need be.
-    async fn kernel_url(&mut self, profile: &Profile) -> Result<tauri::Url> {
-        match &profile.source {
-            Source::Existing { url } => connection::kernel_url(url),
-            Source::Local { .. } => self.local_url(profile).await,
+    /// Stops the app's kernel and waits for it: the profiles it served, to serve again.
+    async fn stop_kernel(&mut self) -> Result<Vec<String>> {
+        let Some(kernel) = self.kernel.take() else {
+            return Ok(Vec::new());
+        };
+        kernel.stop.send_replace(true);
+        let served = kernel.served.into_keys().collect();
+        kernel
+            .task
+            .await
+            .context("Wait for the app's kernel to stop")??;
+        Ok(served)
+    }
+
+    /// Stops serving one workspace; its folder stays as it is. A kernel left with none stops
+    /// too, and leaves its address free.
+    async fn unserve(&mut self, id: &str) -> Result<()> {
+        let Some(kernel) = self.kernel.as_mut() else {
+            return Ok(());
+        };
+        if let Some(workspace) = kernel.served.remove(id)
+            && !kernel.task.is_finished()
+        {
+            kernel.handle.remove_workspace(&workspace).await?;
         }
+        if kernel.served.is_empty() {
+            self.stop_kernel().await?;
+        }
+        Ok(())
+    }
+
+    /// The workspace a profile is, verified on its kernel, served first when it is in a folder of
+    /// this computer.
+    async fn verified(&mut self, profile: &Profile) -> Result<connection::VerifiedWorkspace> {
+        let (url, expected) = match &profile.source {
+            Source::Existing { url } => {
+                (connection::kernel_url(url)?, profile.workspace_id.clone())
+            }
+            Source::Folder { .. } => {
+                let (url, id) = self.serve(profile, None).await?;
+                (url, Some(id))
+            }
+        };
+        connection::verify(url.as_str(), expected.as_deref()).await
     }
 
     /// Forgets the windows their person closed.
@@ -701,15 +982,14 @@ impl Host {
     async fn open(&mut self, id: &str) -> Result<()> {
         self.prune();
         let mut profile = self.catalog.profile(id)?.clone();
-        let url = self.kernel_url(&profile).await?;
-        let verified = connection::verify(url.as_str(), profile.workspace_id.as_deref()).await?;
+        let verified = self.verified(&profile).await?;
         profile.observe(&verified)?;
         ensure!(!*self.stopped.borrow(), "The desktop is closing");
         for view in self.windows.get(id).into_iter().flatten() {
             view.window.set_title(&profile.name)?;
         }
         if !self.windows.contains_key(id) {
-            self.restore_profile_views(&profile, &verified.url).await?;
+            self.restore_profile_views(&profile, &verified.base).await?;
         }
         if !self.windows.contains_key(id) {
             let saved = if profile.app_ui {
@@ -723,7 +1003,7 @@ impl Host {
                 })
             };
             let window = self
-                .build_view(&profile, &verified.url, saved.as_ref())
+                .build_view(&profile, &verified.base, saved.as_ref())
                 .await?;
             self.windows.insert(id.to_owned(), vec![window]);
         }
@@ -773,9 +1053,8 @@ impl Host {
             return self.open(&id).await;
         }
         let profile = self.catalog.profile(&id)?.clone();
-        let url = self.kernel_url(&profile).await?;
-        let verified = connection::verify(url.as_str(), profile.workspace_id.as_deref()).await?;
-        let view = self.build_view(&profile, &verified.url, None).await?;
+        let verified = self.verified(&profile).await?;
+        let view = self.build_view(&profile, &verified.base, None).await?;
         if let Some(position) = self
             .windows
             .get(&id)
@@ -908,19 +1187,25 @@ impl Host {
         let popup = self.app.clone();
         let profile_id = profile.id.clone();
         let popup_id = profile.id.clone();
-        let context = serde_json::json!({"profileId":profile.id,"workspaceId":profile.workspace_id,"managed":matches!(profile.source, Source::Local { .. }),"kernelUrl":url.as_str(),"platform":std::env::consts::OS});
-        let restore = match saved.and_then(|saved| saved.drafts.as_ref()) {
-            Some(drafts) => {
-                let json = serde_json::to_string(drafts)?;
+        let context = serde_json::json!({"profileId":profile.id,"workspaceId":profile.workspace_id,"managed":profile.directory().is_some(),"kernelUrl":url.as_str(),"platform":std::env::consts::OS});
+        // Once per window, not again on a reload: its drafts and the page it was on.
+        let restore = match saved {
+            Some(saved) => {
+                let drafts = match &saved.drafts {
+                    Some(drafts) => {
+                        let json = serde_json::to_string(drafts)?;
+                        let migration = !profile.app_ui;
+                        format!(
+                            "let drafts={json}; if ({migration}) {{ const existing=localStorage.getItem('zerolux-drafts'); if (existing!==null) drafts=JSON.parse(existing); }} if (drafts===null || typeof drafts!=='object' || Array.isArray(drafts) || Object.values(drafts).some(v=>typeof v!=='string')) throw new Error('Invalid saved drafts'); window.zeroluxRestoredDrafts=drafts; window.zeroluxDraftImportSaved=false; try {{ localStorage.setItem('zerolux-drafts',JSON.stringify(drafts)); window.zeroluxDraftImportSaved=true; }} catch {{}}"
+                        )
+                    }
+                    None => String::new(),
+                };
                 let marker = uuid::Uuid::new_v4();
-                let migration = !profile.app_ui;
-                let route = serde_json::to_string(
-                    &saved
-                        .and_then(|saved| saved.path.as_deref())
-                        .and_then(local::app_route),
-                )?;
+                let route =
+                    serde_json::to_string(&saved.path.as_deref().and_then(local::app_route))?;
                 format!(
-                    "let restore=true; try {{ restore=sessionStorage.getItem('zerolux-restored')!=='{marker}'; }} catch {{}} if (restore) {{ let drafts={json}; if ({migration}) {{ const existing=localStorage.getItem('zerolux-drafts'); if (existing!==null) drafts=JSON.parse(existing); }} if (drafts===null || typeof drafts!=='object' || Array.isArray(drafts) || Object.values(drafts).some(v=>typeof v!=='string')) throw new Error('Invalid saved drafts'); window.zeroluxRestoredDrafts=drafts; window.zeroluxDraftImportSaved=false; try {{ localStorage.setItem('zerolux-drafts',JSON.stringify(drafts)); window.zeroluxDraftImportSaved=true; }} catch {{}} const route={route}; if (route) history.replaceState(null,'',route); try {{ sessionStorage.setItem('zerolux-restored','{marker}'); }} catch {{}} }}"
+                    "let restore=true; try {{ restore=sessionStorage.getItem('zerolux-restored')!=='{marker}'; }} catch {{}} if (restore) {{ {drafts} const route={route}; if (route) history.replaceState(null,'',route); try {{ sessionStorage.setItem('zerolux-restored','{marker}'); }} catch {{}} }}"
                 )
             }
             None => String::new(),
@@ -1097,7 +1382,7 @@ impl Host {
             // Each window again at the new address, where it was, with its drafts.
             let mut replacements = Vec::new();
             for one in &saved {
-                match self.build_view(&profile, &verified.url, Some(one)).await {
+                match self.build_view(&profile, &verified.base, Some(one)).await {
                     Ok(view) => replacements.push(view),
                     Err(error) => {
                         for view in &replacements {
@@ -1138,17 +1423,6 @@ impl Host {
         result
     }
 
-    async fn stop_local(&mut self, id: &str) -> Result<()> {
-        if let Some(runtime) = self.runtimes.remove(id) {
-            runtime.stop.send_replace(true);
-            runtime
-                .task
-                .await
-                .context("Wait for the local kernel to stop")??;
-        }
-        Ok(())
-    }
-
     async fn replacement_views(
         &mut self,
         profile: &Profile,
@@ -1187,9 +1461,8 @@ impl Host {
         for journal in Catalog::pending_adoptions(&self.root.root)? {
             ensure!(
                 !self
-                    .runtimes
-                    .get(&journal.previous.id)
-                    .is_some_and(|runtime| !runtime.task.is_finished()),
+                    .running()
+                    .is_some_and(|kernel| kernel.served.contains_key(&journal.previous.id)),
                 "An ownership transfer is still being reconciled; restart the app before another transfer"
             );
         }
@@ -1203,8 +1476,8 @@ impl Host {
                 .iter()
                 .filter(|profile| profile.id != id)
                 .any(|profile| {
-                    profile.directory(&self.root.root).as_ref() == Some(&info.directory)
-                        || profile.database(&self.root.root).ok().as_ref() == Some(&info.database)
+                    profile.directory() == Some(info.directory.as_path())
+                        || profile.database().ok().as_ref() == Some(&info.database)
                 }),
             "These files are already managed by another saved connection"
         );
@@ -1234,6 +1507,11 @@ impl Host {
             private_before,
         };
         journal.save(&self.root.root)?;
+        let kernel_before = self.catalog.instance.clone();
+        let view_kernel = self
+            .app
+            .state::<crate::extension_ui::Kernels>()
+            .get(&previous.id);
         let transfer = zerolux::handoff::Transfer::begin(&info, &previous.id).await?;
         let result: Result<Vec<WorkspaceView>> = async {
             let lease = zerolux::lease::Lease::acquire(&zerolux::db::Location::Sqlite(
@@ -1273,12 +1551,23 @@ impl Host {
                 &private_name,
                 &transfer.configuration.livekit,
             )?;
+            // The app's first kernel keeps the CLI's address and services; one already set up
+            // serves the workspace at its own.
+            if self.catalog.instance.is_none() {
+                let mut catalog = self.catalog.clone();
+                catalog.instance = Some(Instance {
+                    network: info.network.clone(),
+                    services: Some(private_name.clone()),
+                });
+                self.save(catalog)?;
+            }
             let mut profile = previous.adopted(&info)?;
-            let url = self.local_url_with_lease(&profile, Some(lease)).await?;
-            let verified =
-                connection::verify(url.as_str(), profile.workspace_id.as_deref()).await?;
+            let (url, id) = self.serve(&profile, Some(lease)).await?;
+            let verified = connection::verify(url.as_str(), Some(&id)).await?;
             profile.observe(&verified)?;
-            let views = self.replacement_views(&profile, &url, &saved).await?;
+            let views = self
+                .replacement_views(&profile, &verified.base, &saved)
+                .await?;
             let mut catalog = self.catalog.clone();
             *catalog.profile_mut(&previous.id)? = profile;
             if let Err(error) = self.save(catalog) {
@@ -1315,15 +1604,13 @@ impl Host {
                     for view in views {
                         let _ = view.close();
                     }
-                    self.stop_local(&previous.id).await?;
+                    self.unserve(&previous.id).await?;
                     journal.recover(&self.root.root, &mut self.catalog).await?;
-                    if let Some(url) = previous
-                        .existing_url()
-                        .and_then(|url| connection::kernel_url(url).ok())
-                    {
+                    self.restore_kernel(kernel_before)?;
+                    if let Some(url) = &view_kernel {
                         self.app
                             .state::<crate::extension_ui::Kernels>()
-                            .set(&previous.id, &url);
+                            .set(&previous.id, url);
                     }
                     acknowledgement
                         .context("The transfer was not committed; the CLI retains this workspace")
@@ -1331,16 +1618,16 @@ impl Host {
             }
             Err(error) => {
                 let mut recovery = Vec::new();
-                if let Err(stopped) = self.stop_local(&previous.id).await {
-                    recovery.push(format!("Stop the attempted embedded kernel: {stopped:#}"));
+                if let Err(stopped) = self.unserve(&previous.id).await {
+                    recovery.push(format!("Stop serving the workspace here: {stopped:#}"));
                 }
-                if let Some(url) = previous
-                    .existing_url()
-                    .and_then(|url| connection::kernel_url(url).ok())
-                {
+                if let Err(restored) = self.restore_kernel(kernel_before) {
+                    recovery.push(format!("Restore the kernel's address: {restored:#}"));
+                }
+                if let Some(url) = &view_kernel {
                     self.app
                         .state::<crate::extension_ui::Kernels>()
-                        .set(&previous.id, &url);
+                        .set(&previous.id, url);
                 }
                 if let Err(cancelled) = transfer.finish(false).await {
                     recovery.push(format!("The CLI was asked to resume: {cancelled:#}"));
@@ -1357,114 +1644,212 @@ impl Host {
         }
     }
 
-    async fn change_network(&mut self, id: &str, network: zerolux::handoff::Network) -> Result<()> {
-        self.catalog.recover_networks(&self.root.root)?;
+    /// The kernel's address as it was before a transfer that did not happen, when nothing
+    /// else changed it since.
+    fn restore_kernel(&mut self, before: Option<Instance>) -> Result<()> {
+        if self.running().is_none() && self.catalog.instance != before {
+            let mut catalog = self.catalog.clone();
+            catalog.instance = before;
+            self.save(catalog)?;
+        }
+        Ok(())
+    }
+
+    /// The app's kernel at another address: every workspace it serves comes back there, each
+    /// window where it was with its drafts. Nothing changes when one cannot.
+    async fn change_network(&mut self, network: zerolux::handoff::Network) -> Result<()> {
         network.validate()?;
         ensure!(network.port != 0, "Choose a port from 1 to 65535");
-        let previous = self.catalog.profile(id)?.clone();
-        if previous.network(&self.root.root)?.as_ref() == Some(&network)
+        let before = self.catalog.instance.clone();
+        if before.as_ref().map(|instance| &instance.network) == Some(&network)
             && self
-                .runtimes
-                .get(id)
-                .is_none_or(|runtime| runtime.network == network)
+                .running()
+                .is_none_or(|kernel| kernel.network == network)
         {
             return Ok(());
         }
-        let directory = previous
-            .directory(&self.root.root)
-            .context("Only an app-managed workspace has local network settings")?;
-        let mut profile = previous.clone();
-        profile.managed = Some(Managed {
-            database: previous.database(&self.root.root)?,
-            directory: directory.clone(),
-            host_id: std::fs::read_to_string(directory.join("host-id"))?
-                .trim()
-                .to_owned(),
+        let mut catalog = self.catalog.clone();
+        catalog.instance = Some(Instance {
             network,
-            private_services: previous
-                .managed
+            services: before
                 .as_ref()
-                .is_some_and(|managed| managed.private_services),
+                .and_then(|instance| instance.services.clone()),
         });
+        if self.running().is_none() {
+            return self.save(catalog);
+        }
         self.prune();
+        let served: Vec<String> = self
+            .running()
+            .map(|kernel| kernel.served.keys().cloned().collect())
+            .unwrap_or_default();
         let result: Result<()> = async {
-            let saved = self.prepare_views(id).await?;
-            let journal = NetworkJournal {
-                previous: previous.clone(),
-            };
-            journal.save(&self.root.root)?;
-            if let Err(error) = self.stop_local(id).await {
-                let recovered = self.local_url(&previous).await;
-                journal.recover(&self.root.root, &mut self.catalog)?;
-                recovered?;
-                return Err(error);
+            let mut saved = HashMap::new();
+            for id in &served {
+                saved.insert(id.clone(), self.prepare_views(id).await?);
             }
-            let started: Result<Vec<WorkspaceView>> = async {
-                let url = self.local_url(&profile).await?;
-                connection::verify(url.as_str(), profile.workspace_id.as_deref()).await?;
-                let views = self.replacement_views(&profile, &url, &saved).await?;
-                let mut catalog = self.catalog.clone();
-                *catalog.profile_mut(id)? = profile;
-                if let Err(error) = self.save(catalog) {
-                    for view in views {
-                        let _ = view.close();
-                    }
-                    return Err(error);
-                }
-                Ok(views)
-            }
-            .await;
-            match started {
+            self.save(catalog)?;
+            self.stop_kernel().await?;
+            match self.serve_again(&served, &saved).await {
                 Ok(views) => {
-                    let replaced = self.replace_views(id, views);
-                    journal.finish(&self.root.root)?;
-                    replaced
+                    for (id, views) in views {
+                        self.replace_views(&id, views)?;
+                    }
+                    Ok(())
                 }
                 Err(error) => {
-                    self.stop_local(id).await?;
-                    journal.recover(&self.root.root, &mut self.catalog)?;
-                    let url = self
-                        .local_url(&previous)
+                    self.stop_kernel().await?;
+                    let mut catalog = self.catalog.clone();
+                    catalog.instance = before;
+                    self.save(catalog)?;
+                    self.serve_again(&served, &HashMap::new())
                         .await
-                        .context("The previous network settings could not restart")?;
-                    self.app
-                        .state::<crate::extension_ui::Kernels>()
-                        .set(id, &url);
+                        .context("The previous address could not serve the workspaces again")?;
                     Err(error)
                 }
             }
         }
         .await;
-        self.unfreeze(id);
+        for id in &served {
+            self.unfreeze(id);
+        }
         result
+    }
+
+    /// The workspaces served before, served again by the kernel as it is now, with new windows
+    /// for those saved.
+    async fn serve_again(
+        &mut self,
+        served: &[String],
+        saved: &HashMap<String, Vec<SavedView>>,
+    ) -> Result<Vec<(String, Vec<WorkspaceView>)>> {
+        let mut replaced = Vec::new();
+        let result: Result<()> = async {
+            for id in served {
+                let profile = self.catalog.profile(id)?.clone();
+                let verified = self.verified(&profile).await?;
+                let views = self
+                    .replacement_views(
+                        &profile,
+                        &verified.base,
+                        saved.get(id).map(Vec::as_slice).unwrap_or_default(),
+                    )
+                    .await?;
+                replaced.push((id.clone(), views));
+            }
+            Ok(())
+        }
+        .await;
+        match result {
+            Ok(()) => Ok(replaced),
+            Err(error) => {
+                for (_, views) in replaced {
+                    for view in views {
+                        let _ = view.close();
+                    }
+                }
+                Err(error)
+            }
+        }
     }
 
     async fn perform(&mut self, action: Action) -> Result<()> {
         match action {
             Action::List => {}
             Action::Open { id } => self.open(&id).await?,
-            Action::Add { url } => {
-                let verified = connection::verify(&url, None).await?;
+            Action::Add { url, workspace } => {
+                let verified = connection::verify(&url, workspace.as_deref()).await?;
+                if let Some(saved) = self
+                    .catalog
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.workspace_id.as_ref() == Some(&verified.id))
+                {
+                    let id = saved.id.clone();
+                    return self.open(&id).await;
+                }
                 let mut catalog = self.catalog.clone();
                 let id = catalog.add_existing(&verified)?;
                 self.save(catalog)?;
                 self.open(&id).await?;
             }
-            Action::Create { name } => {
+            Action::Create { name, directory } => {
+                let folder = match directory {
+                    Some(chosen) => workspace_folder(Path::new(&chosen))?,
+                    None => self
+                        .root
+                        .root
+                        .join("workspaces")
+                        .join(uuid::Uuid::new_v4().to_string()),
+                };
+                ensure!(
+                    !folder.join("zerolux.db").exists(),
+                    "This folder already has a workspace: open it instead"
+                );
                 let mut catalog = self.catalog.clone();
-                let id = catalog.add_local(&name)?;
+                let id = catalog.add_folder(&name, folder)?;
                 self.save(catalog)?;
-                self.open(&id).await?;
+                self.open_new(&id).await?;
+            }
+            Action::OpenFolder { directory } => {
+                let folder = workspace_folder(Path::new(&directory))?;
+                ensure!(
+                    folder.join("zerolux.db").is_file(),
+                    "This folder has no workspace: create one in it"
+                );
+                if let Some(saved) = self
+                    .catalog
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.directory() == Some(folder.as_path()))
+                {
+                    let id = saved.id.clone();
+                    return self.open(&id).await;
+                }
+                let name = folder
+                    .parent()
+                    .and_then(Path::file_name)
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Workspace".into());
+                let mut catalog = self.catalog.clone();
+                let id = catalog.add_folder(&name, folder)?;
+                self.save(catalog)?;
+                self.open_new(&id).await?;
+            }
+            Action::Locate { id, directory } => {
+                let folder = workspace_folder(Path::new(&directory))?;
+                ensure!(
+                    folder.join("zerolux.db").is_file(),
+                    "This folder has no workspace"
+                );
+                let previous = self.catalog.profile(&id)?.clone();
+                ensure!(
+                    previous.directory().is_some(),
+                    "Only a workspace of this computer has a folder"
+                );
+                self.unserve(&id).await?;
+                let mut catalog = self.catalog.clone();
+                catalog.profile_mut(&id)?.source = Source::Folder {
+                    directory: folder,
+                    database: None,
+                };
+                self.save(catalog)?;
+                if let Err(error) = self.open(&id).await {
+                    let mut catalog = self.catalog.clone();
+                    *catalog.profile_mut(&id)? = previous;
+                    self.save(catalog)?;
+                    return Err(error);
+                }
             }
             Action::Edit { id, url } => self.edit(&id, &url).await?,
             Action::Adopt { id, directory } => self.adopt(&id, Path::new(&directory)).await?,
-            Action::Network { id, network } => self.change_network(&id, network).await?,
+            Action::Network { network } => self.change_network(network).await?,
             Action::Startup { id, enabled } => {
                 let mut catalog = self.catalog.clone();
                 let profile = catalog.profile_mut(&id)?;
                 ensure!(
-                    matches!(profile.source, Source::Local { .. }),
-                    "Only an app-managed workspace can start with the app"
+                    profile.directory().is_some(),
+                    "Only a workspace of this computer can start with the app"
                 );
                 profile.start_on_launch = enabled;
                 self.save(catalog)?;
@@ -1476,17 +1861,15 @@ impl Host {
             Action::Leave { id } => self.computers.leave(&id).await?,
             Action::NewWindow { id } => self.new_window(id).await?,
             Action::Reopen => self.reopen().await?,
+            Action::Switch { id, replacing } => self.switch(&id, replacing.as_deref()).await?,
             Action::InstallUpdate(pending) => self.install_update(*pending).await?,
             Action::Forget { id } => {
-                ensure!(
-                    !self
-                        .runtimes
-                        .get(&id)
-                        .is_some_and(|runtime| !runtime.task.is_finished()),
-                    "This local kernel is still running"
-                );
                 self.prune();
                 if let Err(error) = self.prepare_views(&id).await {
+                    self.unfreeze(&id);
+                    return Err(error);
+                }
+                if let Err(error) = self.unserve(&id).await {
                     self.unfreeze(&id);
                     return Err(error);
                 }
@@ -1504,14 +1887,77 @@ impl Host {
                     self.active = None;
                 }
                 show_manager(&self.app, None);
-                // Browser storage and local databases are deliberately not deleted here.
+                // Browser storage and the workspace's folder are deliberately not deleted here.
             }
         }
         Ok(())
     }
 
+    /// A workspace just saved, opened; one that cannot open is not kept.
+    async fn open_new(&mut self, id: &str) -> Result<()> {
+        let opened = self.open(id).await;
+        if opened.is_err() {
+            let _ = self.unserve(id).await;
+            let mut catalog = self.catalog.clone();
+            if catalog.forget(id).is_ok() {
+                let _ = self.save(catalog);
+            }
+        }
+        opened
+    }
+
+    /// A workspace from a window's switcher. In a window of its own; or instead of the window
+    /// that asks, where it was, once that one's sends are done. One already open comes forward.
+    async fn switch(&mut self, id: &str, replacing: Option<&str>) -> Result<()> {
+        self.prune();
+        let Some(label) = replacing else {
+            return self.new_window(Some(id.to_owned())).await;
+        };
+        if self.windows.contains_key(id) {
+            return self.activate(id);
+        }
+        let Some(current) = self
+            .app
+            .get_webview_window(label)
+            .filter(|window| profile_of(window.label()).is_some_and(|from| from != id))
+        else {
+            return self.open(id).await;
+        };
+        let view = WorkspaceView {
+            window: current.clone(),
+        };
+        Self::prepare_view(&view).await?;
+        let frame = (
+            current.outer_position()?,
+            current.inner_size()?,
+            current.is_maximized()?,
+        );
+        if let Err(error) = self.open(id).await {
+            let _ = current.eval("document.body.inert = false");
+            return Err(error);
+        }
+        if let Some(view) = self.windows.get(id).and_then(|views| views.last()) {
+            let (position, size, maximized) = frame;
+            if maximized {
+                view.window.maximize()?;
+            } else {
+                view.window.set_position(position)?;
+                view.window.set_size(size)?;
+            }
+        }
+        current.close()?;
+        Ok(())
+    }
+
     async fn initial(&mut self, launch: LaunchOptions) -> Result<()> {
-        self.catalog.recover_networks(&self.root.root)?;
+        // Network changes an earlier version left unfinished were read with its connections.
+        for entry in std::fs::read_dir(&self.root.root)? {
+            let name = entry?.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("network-") && name.ends_with(".json") {
+                std::fs::remove_file(self.root.root.join(name.as_ref()))?;
+            }
+        }
         let resumed = self.catalog.recover_adoptions(&self.root.root).await?;
         let mut startup_errors: Vec<_> = resumed.into_iter().map(|name| format!("{name}: the previous CLI kept ownership after an interrupted transfer; retry Run with this app")).collect();
         let profiles: Vec<_> = self
@@ -1522,7 +1968,7 @@ impl Host {
             .cloned()
             .collect();
         for profile in profiles {
-            if let Err(error) = self.local_url(&profile).await {
+            if let Err(error) = self.serve(&profile, None).await {
                 self.startup_retry.insert(
                     profile.id.clone(),
                     (1, tokio::time::Instant::now() + Duration::from_secs(2)),
@@ -1570,7 +2016,7 @@ impl Host {
             if !profile.start_on_launch {
                 continue;
             }
-            if let Err(error) = self.local_url(&profile).await {
+            if let Err(error) = self.serve(&profile, None).await {
                 if attempt < 6 {
                     self.startup_retry.insert(
                         id,
@@ -1608,14 +2054,19 @@ impl Host {
                 let id = profile.id.clone();
                 return self.open(&id).await;
             }
-            return self.perform(Action::Add { url }).await;
+            return self
+                .perform(Action::Add {
+                    url,
+                    workspace: None,
+                })
+                .await;
         }
         if launch.local {
             if let Some(profile) = self
                 .catalog
                 .profiles
                 .iter()
-                .find(|profile| matches!(profile.source, Source::Local { .. }))
+                .find(|profile| profile.directory().is_some())
             {
                 let id = profile.id.clone();
                 return self.open(&id).await;
@@ -1623,8 +2074,12 @@ impl Host {
             return self
                 .perform(Action::Create {
                     name: "Workspace".into(),
+                    directory: None,
                 })
                 .await;
+        }
+        if self.reopen_windows().await? {
+            return Ok(());
         }
         if let Some(id) = self.catalog.selected.clone() {
             self.open(&id).await?;
@@ -1709,8 +2164,8 @@ impl Host {
             .catalog
             .profiles
             .iter()
-            .filter(|profile| matches!(profile.source, Source::Local { .. }))
-            .map(|profile| Ok((profile.id.clone(), profile.database(&self.root.root)?)))
+            .filter(|profile| profile.directory().is_some())
+            .map(|profile| Ok((profile.id.clone(), profile.database()?)))
             .collect::<Result<_>>()?;
         let databases: Vec<_> = databases
             .into_iter()
@@ -1732,7 +2187,7 @@ impl Host {
             .compare_exchange(0, 3, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| anyhow::anyhow!("The desktop is already closing"))?;
         self.prune();
-        let running: Vec<_> = self.runtimes.keys().cloned().collect();
+        let mut running = Vec::new();
         let mut leases = Vec::new();
         let mut stopped = false;
         let mut computers_stopped = false;
@@ -1747,21 +2202,13 @@ impl Host {
                 saved,
             );
             UpdateViews::persist(&self.root.root, Some(&checkpoint))?;
-            // Freeze is only a browser-input guard. The snapshot is taken after the kernels
-            // have stopped, while their database leases prevent another writer starting.
-            for runtime in self.runtimes.values() {
-                runtime.stop.send_replace(true);
-            }
+            // Freeze is only a browser-input guard. The snapshot is taken after the kernel
+            // has stopped, while the database leases prevent another writer starting.
             stopped = true;
-            let mut shutdown_error = None;
-            for (_, runtime) in self.runtimes.drain() {
-                if let Err(error) = runtime.task.await.unwrap_or_else(|error| Err(error.into())) {
-                    shutdown_error.get_or_insert(error);
-                }
-            }
-            if let Some(error) = shutdown_error {
-                return Err(error.context("Stop the local kernels before updating"));
-            }
+            running = self
+                .stop_kernel()
+                .await
+                .context("Stop the app's kernel before updating")?;
             for (_, database) in &databases {
                 leases.push(zerolux::lease::Lease::acquire(
                     &zerolux::db::Location::Sqlite(database.clone()),
@@ -1833,7 +2280,7 @@ impl Host {
         if stopped {
             for id in running {
                 if let Ok(profile) = self.catalog.profile(&id).cloned()
-                    && let Err(error) = self.local_url(&profile).await
+                    && let Err(error) = self.serve(&profile, None).await
                 {
                     recovery.push(format!("{}: {error:#}", profile.name));
                 }
@@ -1863,15 +2310,114 @@ impl Host {
         }
     }
 
-    async fn shutdown(self) {
-        self.computers.shutdown().await;
-        for runtime in self.runtimes.values() {
-            runtime.stop.send_replace(true);
-        }
-        for (_, runtime) in self.runtimes {
-            if let Err(error) = runtime.task.await.unwrap_or_else(|error| Err(error.into())) {
-                eprintln!("Local kernel shutdown: {error:#}");
+    /// The page a window is on.
+    async fn page_of(window: &WebviewWindow) -> Option<String> {
+        let (send, receive) = oneshot::channel();
+        let send = Mutex::new(Some(send));
+        window
+            .eval_with_callback(
+                "location.pathname + location.search + location.hash",
+                move |value| {
+                    if let Some(send) = send.lock().expect("page lock").take() {
+                        let _ = send.send(value);
+                    }
+                },
+            )
+            .ok()?;
+        let json = tokio::time::timeout(Duration::from_secs(1), receive)
+            .await
+            .ok()?
+            .ok()?;
+        serde_json::from_str(&json).ok()
+    }
+
+    /// The windows open at quit, each on its page, to open again at the next launch.
+    async fn remember_windows(&mut self) {
+        self.prune();
+        let mut open: HashMap<String, Vec<SavedView>> = HashMap::new();
+        for (id, views) in &self.windows {
+            for view in views {
+                open.entry(id.clone()).or_default().push(SavedView {
+                    path: Self::page_of(&view.window).await,
+                    ..Default::default()
+                });
             }
+        }
+        let file = self.root.root.join(WINDOWS);
+        let kept = if open.is_empty() {
+            match std::fs::remove_file(file) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+                _ => Ok(()),
+            }
+        } else {
+            crate::preferences::write_json(&self.root.root, WINDOWS, &open)
+        };
+        if let Err(error) = kept {
+            eprintln!("The open windows could not be kept for the next launch: {error:#}");
+        }
+    }
+
+    /// The windows open at the last quit, again on their pages; whether any opened.
+    async fn reopen_windows(&mut self) -> Result<bool> {
+        let file = self.root.root.join(WINDOWS);
+        let saved: HashMap<String, Vec<SavedView>> = match std::fs::read(&file) {
+            Ok(bytes) => {
+                serde_json::from_slice(&bytes).context("Read the windows open at the last quit")?
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        std::fs::remove_file(file)?;
+        let mut errors = Vec::new();
+        for (id, states) in saved {
+            let Ok(mut profile) = self.catalog.profile(&id).cloned() else {
+                continue;
+            };
+            if self.windows.contains_key(&id) {
+                continue;
+            }
+            let reopened: Result<()> = async {
+                let verified = self.verified(&profile).await?;
+                profile.observe(&verified)?;
+                let views = self
+                    .replacement_views(&profile, &verified.base, &states)
+                    .await?;
+                for view in &views {
+                    view.window.show()?;
+                }
+                self.windows.insert(id.clone(), views);
+                let mut catalog = self.catalog.clone();
+                *catalog.profile_mut(&id)? = profile.clone();
+                self.save(catalog)
+            }
+            .await;
+            if let Err(error) = reopened {
+                errors.push(format!("{}: {error:#}", profile.name));
+            }
+        }
+        if let Some(id) = self
+            .catalog
+            .selected
+            .clone()
+            .filter(|id| self.windows.contains_key(id))
+        {
+            self.activate(&id)?;
+        }
+        ensure!(
+            errors.is_empty(),
+            "Some windows could not reopen: {}",
+            errors.join("; ")
+        );
+        Ok(!self.windows.is_empty())
+    }
+
+    async fn shutdown(mut self) {
+        self.remember_windows().await;
+        std::mem::replace(&mut self.computers, Links::new(PathBuf::new()))
+            .shutdown()
+            .await;
+        if let Err(error) = self.stop_kernel().await {
+            eprintln!("The app's kernel did not stop cleanly: {error:#}");
         }
     }
 }
@@ -1970,6 +2516,9 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             crate::updates::update_install,
             crate::autostart::autostart_status,
             crate::autostart::autostart_set,
+            desktop_workspaces,
+            desktop_switch,
+            kernel_workspaces,
             crate::menu::menu_commands,
             crate::menu::menu_sections,
             crate::menu::menu_run,
@@ -1995,9 +2544,9 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             let manager =
                 WebviewWindowBuilder::new(app, MANAGER, WebviewUrl::App("desktop.html".into()))
                     .visible(!launch.autostart)
-                    .title("ZeroLux — Workspaces")
-                    .inner_size(760.0, 720.0)
-                    .min_inner_size(600.0, 520.0)
+                    .title("ZeroLux")
+                    .inner_size(860.0, 580.0)
+                    .min_inner_size(640.0, 460.0)
                     .on_navigation(move |url| {
                         let allowed = local::boot_page(url);
                         if !allowed {
@@ -2094,7 +2643,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                     app: task_handle,
                     root,
                     catalog,
-                    runtimes: HashMap::new(),
+                    kernel: None,
                     windows: HashMap::new(),
                     active: None,
                     generation: 0,

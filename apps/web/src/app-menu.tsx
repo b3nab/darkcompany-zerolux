@@ -93,6 +93,11 @@ export function reportSections(shown: MenuSection[]) {
   void invoke("menu_sections", { sections: shown }).catch(() => {});
 }
 
+/** A command of the desktop's menu, as its item would run it. */
+export function runMenuCommand(id: string) {
+  void invoke("menu_run", { id }).catch(() => {});
+}
+
 /** The window's menu, from its button or keys, where the window draws its own title bar. */
 function openMenu(x = 8, y = 40) {
   void invoke("menu_popup", { x, y }).catch(() => {});
@@ -130,7 +135,7 @@ export function useAppMenu(run: (id: string) => void) {
           : commands.find((c) => c.keys && pressed(c.keys, event))?.id;
       if (!id) return;
       event.preventDefault();
-      void invoke("menu_run", { id }).catch(() => {});
+      runMenuCommand(id);
     };
     const up = (event: KeyboardEvent) => {
       if (event.key === "Alt" && alone) {
