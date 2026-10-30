@@ -7,7 +7,8 @@ declare global {
   interface Window {
     zeroluxDesktop?: Readonly<{
       profileId: string;
-      workspaceId: string;
+      /** The ZeroLux it reaches: its instance, or an older kernel's one workspace. */
+      instanceId: string;
       managed?: boolean;
       kernelUrl?: string;
       platform?: "macos" | "windows" | "linux";
@@ -26,30 +27,34 @@ export function desktopConnection() {
 }
 
 /**
- * The sign-in of this page's connection, kept by the desktop in the system's credential store
- * across restarts. Where the store is missing or refuses, it lasts while the window is open.
+ * The sign-in of this window's kernel, kept by the desktop in the system's credential store
+ * across restarts, one for each kernel. Where the store is missing or refuses, it lasts while
+ * the window is open.
  */
 export function desktopSignIn() {
   let kept: string | null = null;
+  const instanceId = desktopConnection()?.instanceId;
   const call = <T>(command: string, args: Record<string, unknown>) =>
     import("@tauri-apps/api/core").then(({ invoke }) =>
       invoke<T>(command, args),
     );
   return {
-    async read(_kernel: string, workspaceId: string) {
+    async read() {
       const saved = await call<string | null>("read_workspace_credential", {
-        workspaceId,
+        workspaceId: instanceId,
       }).catch((error: unknown) => {
         console.warn("The saved sign-in could not be read:", error);
         return null;
       });
       return saved ?? kept;
     },
-    async write(_kernel: string, workspaceId: string, token: string | null) {
+    async write(_kernel: string, token: string | null) {
       kept = token;
-      await call("write_workspace_credential", { workspaceId, token }).catch(
-        (error: unknown) =>
-          console.warn("The sign-in could not be kept:", error),
+      await call("write_workspace_credential", {
+        workspaceId: instanceId,
+        token,
+      }).catch((error: unknown) =>
+        console.warn("The sign-in could not be kept:", error),
       );
     },
   };
@@ -90,11 +95,14 @@ export async function chooseFolder(start?: string) {
  */
 export function extensionUiAddress(url: string) {
   const desktop = desktopConnection();
-  const file = /\/api\/extension-ui\/(.+)$/.exec(url)?.[1];
+  // The workspace's own, under its `/w/<id>`, as the kernel serves it.
+  const file =
+    /^[a-z]+:\/\/[^/]+((?:\/w\/[^/]+)?)\/api\/extension-ui\/(.+)$/.exec(url);
   if (!desktop || !file) return url;
+  const path = `${file[1]}/${file[2]}`.replace(/^\//, "");
   return desktop.platform === "windows"
-    ? `http://zerolux-ui.localhost/${file}`
-    : `zerolux-ui://localhost/${file}`;
+    ? `http://zerolux-ui.localhost/${path}`
+    : `zerolux-ui://localhost/${path}`;
 }
 
 /**
@@ -207,21 +215,19 @@ export function workspaceNavigationGuard(
   };
 }
 
-/** A workspace the desktop app knows, as its windows' switcher shows it. */
+/** A ZeroLux the desktop app reaches, as its windows' switcher shows it. */
 export interface DesktopWorkspace {
   profile: string;
   name: string;
   /** This window's own. */
   here: boolean;
-  /** The computer whose kernel serves it; none for this one. */
+  /** The computer whose kernel it is; none for this one. */
   computer: string | null;
-  /** Its folder is not where it was. */
-  missing: boolean;
   /** The requests waiting there. */
   requests: number;
 }
 
-/** Every workspace the desktop app knows, in their order, as they change. */
+/** Every ZeroLux the desktop app reaches, in their order, as they change. */
 export function useDesktopWorkspaces() {
   const [workspaces, setWorkspaces] = useState<DesktopWorkspace[]>([]);
   const read = () =>
@@ -235,10 +241,18 @@ export function useDesktopWorkspaces() {
   return workspaces;
 }
 
-/** Another workspace, instead of this window's, or in a window of its own. */
+/** Another ZeroLux the app reaches, instead of this window's, or in a window of its own. */
 export async function desktopSwitch(profile: string, newWindow: boolean) {
   const { invoke } = await import("@tauri-apps/api/core");
-  await invoke("desktop_switch", { profile, newWindow });
+  await invoke("desktop_switch", { profile, newWindow, path: null });
+}
+
+/** Another window of this window's ZeroLux, on a page of its own: `/w/<id>/`. */
+export async function desktopNewWindow(path: string) {
+  const profile = desktopConnection()?.profileId;
+  if (!profile) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("desktop_switch", { profile, newWindow: true, path });
 }
 
 /** An in-app navigation request opens the trusted manager; no data is returned to this page. */

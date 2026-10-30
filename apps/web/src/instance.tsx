@@ -1,86 +1,123 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
 import { BrowserRouter } from "react-router";
 import { cn } from "cn";
 import {
-  ApiError,
   AuthConnection,
   errorMessage,
+  multiWorkspace,
   pickWorkspace,
-  readInstance,
   rememberedWorkspace,
   rememberWorkspace,
   requiresSignIn,
   setKernelUrl,
-  workspaceAddress,
+  workspaceBase,
   workspaceSummary,
 } from "@zerolux/chat";
-import type { KernelInstance, ServedWorkspace } from "@zerolux/chat";
+import type {
+  AccountIdentity,
+  AuthHealth,
+  AuthIdentity,
+  Invitation,
+  ServedWorkspace,
+} from "@zerolux/chat";
 import {
+  chooseFolder,
   desktopConnection,
+  desktopNewWindow,
+  desktopSignIn,
   kernelAddress,
+  kernelHere,
   macKeys,
-  windowDragProps,
+  useDesktopEvent,
   WORKSPACES_LINK,
 } from "./desktop";
-import { WindowControls } from "./components/window-controls";
+import { AuthenticationContext, Frame, SignIn } from "./AuthGate";
+import type { Credentials } from "./AuthGate";
 import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
+import { Label } from "./components/ui/label";
 
-/** This page's workspace, and every workspace its kernel serves. */
+/** This page's workspace, the kernel's sign-in, and the account's other workspaces there. */
 export interface Here {
-  instance: KernelInstance;
+  connection: AuthConnection;
+  health: AuthHealth;
+  /** The account's workspaces on this kernel, the oldest first. */
+  workspaces: ServedWorkspace[];
   workspace: ServedWorkspace;
+  /** Another workspace, here or in a new window or tab. */
+  open(workspace: ServedWorkspace, newWindow?: boolean): void;
+  /** The list of workspaces, to make a new one. */
+  create(): void;
 }
 const HereContext = createContext<Here | null>(null);
 export const useHere = () => useContext(HereContext);
 
-/** In a browser, the page at a kernel's root that lists its workspaces. */
+/** The page at a kernel's root that lists the account's workspaces there. */
 export const WORKSPACES_PAGE = "/workspaces";
 
-const pageOf = (workspace: ServedWorkspace) =>
+export const pageOf = (workspace: { id: string }) =>
   `/w/${encodeURIComponent(workspace.id)}`;
 
-/** Where a page is on its kernel: in a workspace, its pages under `basename`, or choosing one. */
+/** Where a page is among the account's workspaces: in one, or choosing one. */
 export type Placed =
   | {
-      here: Here;
+      workspace: ServedWorkspace;
       basename: string;
       /** The page's address, when it changes to name the workspace. */
       address?: string;
     }
-  | { choose: KernelInstance };
+  | { choose: { creating: boolean } };
 
 /**
- * A desktop window is in the workspace it was opened for. A browser is in the one its address
- * names (`/w/<id>/…`), else the one chosen last on this kernel, else the kernel's only one.
+ * A kernel of several workspaces has each at `/w/<id>/…`: the one the address names, else the
+ * one chosen last, else the account's only one. An older kernel has its one at its root.
  */
 export function place(
-  instance: KernelInstance,
   path: string,
-  desktop?: string,
+  search: string,
+  workspaces: ServedWorkspace[],
+  multi: boolean,
+  remembered?: string,
 ): Placed {
   const named = /^\/w\/([^/]+)/.exec(path);
-  if (!instance.multi)
+  if (!multi)
     return {
-      here: { instance, workspace: instance.workspaces[0]! },
+      workspace: workspaces[0]!,
       basename: "",
       address: named ? path.slice(named[0].length) || "/" : undefined,
     };
-  const id = desktop ?? (named ? decodeURIComponent(named[1]!) : undefined);
+  if (path === WORKSPACES_PAGE)
+    return { choose: { creating: new URLSearchParams(search).has("new") } };
+  const id = named ? decodeURIComponent(named[1]!) : undefined;
   const workspace =
     id !== undefined
-      ? instance.workspaces.find((w) => w.id === id)
-      : path === WORKSPACES_PAGE
-        ? undefined
-        : pickWorkspace(instance, rememberedWorkspace(instance.kernel));
-  if (!workspace) return { choose: instance };
-  if (desktop !== undefined)
-    return { here: { instance, workspace }, basename: "" };
+      ? workspaces.find((w) => w.id === id)
+      : pickWorkspace(workspaces, remembered);
+  if (!workspace) return { choose: { creating: workspaces.length === 0 } };
   const basename = pageOf(workspace);
   return {
-    here: { instance, workspace },
+    workspace,
     basename,
     address: named ? undefined : `${basename}${path}`,
+  };
+}
+
+/** The invitation a join link carries: `/join?invite=…`, under its workspace's `/w/<id>`. */
+export function invitedTo(path: string, search: string) {
+  const match = /^(?:\/w\/([^/]+))?\/join$/.exec(path);
+  const token = new URLSearchParams(search).get("invite");
+  if (!match || !token) return undefined;
+  return {
+    workspace: match[1] ? decodeURIComponent(match[1]) : undefined,
+    token,
   };
 }
 
@@ -105,92 +142,380 @@ export function WorkspaceMark({
   );
 }
 
-/** Where to go back to the workspaces: the desktop's own window, or a kernel's list of them. */
+/** Where to go back to the workspaces: the desktop's own window, or the kernel's list. */
 export function useWorkspacesLink() {
   const here = useHere();
   if (desktopConnection()) return WORKSPACES_LINK;
-  return here && here.instance.workspaces.length > 1
-    ? WORKSPACES_PAGE
-    : undefined;
+  return here && multiWorkspace(here.health) ? WORKSPACES_PAGE : undefined;
 }
 
-/** A page before the workspace's own: the window's controls, and what it says. */
-function Frame({ children }: { children: ReactNode }) {
-  return (
-    <div className="min-h-dvh bg-background text-foreground">
-      <div
-        className="flex h-10 items-center justify-end"
-        {...windowDragProps()}
-      >
-        <WindowControls />
-      </div>
-      <main className="mx-auto flex max-w-lg flex-col gap-4 px-6 py-12">
-        {children}
-      </main>
-    </div>
-  );
-}
+export type Stage =
+  | { kind: "loading" }
+  | { kind: "failed"; error: string }
+  | {
+      kind: "sign-in";
+      health: AuthHealth;
+      invitation?: Invitation;
+      invitationError?: string;
+    }
+  | {
+      kind: "choose";
+      health: AuthHealth;
+      workspaces: ServedWorkspace[];
+      creating: boolean;
+      /** A workspace the address named, of which the account is not a member. */
+      outside?: ServedWorkspace;
+    }
+  | {
+      kind: "in";
+      health: AuthHealth;
+      workspaces: ServedWorkspace[];
+      workspace: ServedWorkspace;
+      basename: string;
+      identity: AuthIdentity | null;
+    };
 
 const RETRY = 5_000;
 
+/** What a page asks of its kernel's sign-in to arrive in a workspace. */
+type Gate = Pick<
+  AuthConnection,
+  "kernel" | "restore" | "workspaces" | "identity" | "claim" | "invitation"
+>;
+
+/** A workspace, entered as the person the account is there. */
+export async function enterWorkspace(
+  connection: Gate,
+  health: AuthHealth,
+  workspaces: ServedWorkspace[],
+  workspace: ServedWorkspace,
+): Promise<Stage> {
+  let identity = requiresSignIn(health)
+    ? await connection.identity(workspace.base)
+    : null;
+  // An older kernel's workspace becomes its first account's.
+  if (identity && !identity.actor_id && identity.setup_required)
+    identity = await connection.claim(workspace.base);
+  if (identity && !identity.actor_id)
+    return {
+      kind: "choose",
+      health,
+      workspaces,
+      creating: false,
+      outside: workspace,
+    };
+  return {
+    kind: "in",
+    health,
+    workspaces,
+    workspace,
+    basename: multiWorkspace(health) ? pageOf(workspace) : "",
+    identity,
+  };
+}
+
 /**
- * The page's workspace, found on its kernel before anything of it shows: every call, sign-in
- * and file goes to its base, and in a browser its pages are under `/w/<id>`.
+ * Where a page arrives on its kernel: signing in, choosing a workspace, or in one. A join
+ * link's invitation is used once the account is signed in, and the page's address then
+ * changes (`address`).
+ */
+export async function arrive(
+  connection: Gate,
+  path: string,
+  search: string,
+  invite: ReturnType<typeof invitedTo>,
+  remembered?: string,
+): Promise<{ stage: Stage; address?: string }> {
+  const { health, identity: account } = await connection.restore();
+  const joinBase = invite?.workspace
+    ? workspaceBase(connection.kernel, invite.workspace)
+    : connection.kernel;
+  if (requiresSignIn(health) && !account) {
+    if (!invite) return { stage: { kind: "sign-in", health } };
+    try {
+      const invitation = await connection.invitation(joinBase, invite.token);
+      return { stage: { kind: "sign-in", health, invitation } };
+    } catch (failed) {
+      return {
+        stage: {
+          kind: "sign-in",
+          health,
+          invitationError: errorMessage(failed),
+        },
+      };
+    }
+  }
+  if (invite) {
+    // Signed in, the invitation makes the account a person of its workspace.
+    await connection.claim(joinBase, invite.token);
+    path = invite.workspace ? `${pageOf({ id: invite.workspace })}/` : "/";
+    search = "";
+  }
+  const workspaces = await connection.workspaces();
+  const there = place(
+    path,
+    search,
+    workspaces,
+    multiWorkspace(health),
+    remembered,
+  );
+  if ("choose" in there)
+    return {
+      stage: {
+        kind: "choose",
+        health,
+        workspaces,
+        creating: there.choose.creating,
+      },
+      address: invite ? WORKSPACES_PAGE : undefined,
+    };
+  const stage = await enterWorkspace(
+    connection,
+    health,
+    workspaces,
+    there.workspace,
+  );
+  return {
+    stage,
+    address:
+      stage.kind === "in"
+        ? (there.address ?? (invite ? path : undefined))
+        : undefined,
+  };
+}
+
+/**
+ * The kernel the page belongs to, signed in to once for all its workspaces, and the
+ * workspace it shows: every call, file and invitation goes to that workspace's base, and its
+ * pages are under `/w/<id>`.
  */
 export function WorkspaceRoot({ children }: { children: ReactNode }) {
-  const [placed, setPlaced] = useState<Placed>();
+  const [connection] = useState(() => {
+    const desktop = desktopConnection();
+    // Packaged desktop pages are cross-origin to their kernel: no cookie reaches it, so
+    // their bearer is kept by the desktop, one for each kernel.
+    return new AuthConnection(
+      kernelAddress() || location.origin,
+      desktop?.instanceId,
+      desktop ? desktopSignIn() : undefined,
+    );
+  });
+  const [stage, setStage] = useState<Stage>({ kind: "loading" });
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    let live = true;
-    const desktop = desktopConnection();
-    const address = kernelAddress() || location.origin;
-    readInstance(address).then(
-      (instance) => {
-        if (!live) return;
-        const there = place(
-          instance,
-          location.pathname,
-          desktop &&
-            (workspaceAddress(address).workspaceId ?? desktop.workspaceId),
+  // A join link's invitation, until it has been used.
+  const invite = useRef(invitedTo(location.pathname, location.search));
+  const canLeave = useRef<() => boolean>(() => true);
+  const version = useRef(0);
+
+  /** The stage the page is at: in a workspace, its calls go to the workspace's base. */
+  const land = useCallback(
+    (next: Stage) => {
+      if (next.kind === "in") {
+        setKernelUrl(next.workspace.base);
+        if (multiWorkspace(next.health))
+          rememberWorkspace(connection.kernel, next.workspace.id);
+      }
+      setStage(next);
+    },
+    [connection],
+  );
+  const enter = useCallback(
+    (
+      health: AuthHealth,
+      workspaces: ServedWorkspace[],
+      workspace: ServedWorkspace,
+    ) => enterWorkspace(connection, health, workspaces, workspace),
+    [connection],
+  );
+
+  const settle = useCallback(async () => {
+    const run = ++version.current;
+    const live = () => run === version.current;
+    try {
+      const invited = invite.current;
+      const { stage: next, address } = await arrive(
+        connection,
+        location.pathname,
+        location.search,
+        invited,
+        rememberedWorkspace(connection.kernel),
+      );
+      if (!live()) return;
+      // Used once the account is in: an invitation joins one workspace.
+      if (next.kind !== "sign-in") invite.current = undefined;
+      if (address)
+        history.replaceState(
+          history.state,
+          "",
+          invited ? address : `${address}${location.search}${location.hash}`,
         );
-        if ("here" in there) {
-          const { workspace } = there.here;
-          setKernelUrl(workspace.base);
-          if (instance.multi && !desktop)
-            rememberWorkspace(instance.kernel, workspace.id);
-          if (there.address)
-            history.replaceState(
-              history.state,
-              "",
-              `${there.address}${location.search}${location.hash}`,
-            );
-        }
-        setError("");
-        setPlaced(there);
-      },
-      (failed: unknown) => {
-        if (live) setError(errorMessage(failed));
-      },
-    );
-    return () => {
-      live = false;
-    };
-  }, [attempt]);
+      setError("");
+      land(next);
+    } catch (failed) {
+      if (!live() || (failed instanceof Error && failed.name === "AbortError"))
+        return;
+      setStage({ kind: "failed", error: errorMessage(failed) });
+    }
+  }, [connection, land]);
+
+  useEffect(() => {
+    void settle();
+  }, [settle, attempt]);
+  // A sign-in the kernel no longer accepts: sign in again.
+  useEffect(
+    () => connection.onRequired(() => void settle()),
+    [connection, settle],
+  );
+  useEffect(() => () => connection.dispose(), [connection]);
   // An unreachable kernel, often one restarting, is asked again until it answers.
   useEffect(() => {
-    if (!error) return;
+    if (stage.kind !== "failed") return;
     const again = setTimeout(() => setAttempt((n) => n + 1), RETRY);
     return () => clearTimeout(again);
-  }, [error, attempt]);
-  useWorkspaceKeys(placed && "here" in placed ? placed.here : undefined);
+  }, [stage]);
 
-  if (placed && "here" in placed)
+  async function act(work: () => Promise<void>) {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await work();
+    } catch (failed) {
+      setError(errorMessage(failed));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const signIn = (credentials: Credentials) =>
+    act(async () => {
+      if (credentials.name)
+        await connection.signUp(
+          credentials.name,
+          credentials.email,
+          credentials.password,
+          invite.current?.token,
+        );
+      else await connection.signIn(credentials.email, credentials.password);
+      await settle();
+    });
+
+  const signOut = () =>
+    act(async () => {
+      if (!canLeave.current())
+        throw new Error("Wait for pending chat messages before signing out.");
+      await connection.signOut();
+      history.replaceState(null, "", "/");
+      await settle();
+    });
+
+  /** Another of the account's workspaces, in place of what the page shows. */
+  const show = (
+    health: AuthHealth,
+    workspaces: ServedWorkspace[],
+    workspace: ServedWorkspace,
+  ) =>
+    act(async () => {
+      const next = await enter(health, workspaces, workspace);
+      if (next.kind === "in") history.pushState(null, "", `${next.basename}/`);
+      land(next);
+    });
+
+  /** The account's workspaces, to choose one or to make a new one. */
+  const choose = (creating: boolean) =>
+    act(async () => {
+      const { health } = await connection.restore();
+      const workspaces = await connection.workspaces();
+      history.pushState(
+        null,
+        "",
+        `${WORKSPACES_PAGE}${creating ? "?new" : ""}`,
+      );
+      setStage({ kind: "choose", health, workspaces, creating });
+    });
+
+  const open = (workspace: ServedWorkspace, newWindow?: boolean) => {
+    if (newWindow) openElsewhere(workspace);
+    else if ("workspaces" in stage)
+      void show(stage.health, stage.workspaces, workspace);
+  };
+
+  // The desktop sends a window to a page: the list, to make a new workspace, or another
+  // workspace's page, as the tray does; this workspace's own pages are the app's.
+  useDesktopEvent("zerolux-open", (path) => {
+    if (path.startsWith(WORKSPACES_PAGE)) {
+      void choose(path.includes("?new"));
+      return;
+    }
+    const id = /^\/w\/([^/]+)/.exec(path)?.[1];
+    if (!id || !("workspaces" in stage)) return;
+    const target = stage.workspaces.find(
+      (workspace) => workspace.id === decodeURIComponent(id),
+    );
+    if (!target || (stage.kind === "in" && stage.workspace.id === target.id))
+      return;
+    void act(async () => {
+      const next = await enter(stage.health, stage.workspaces, target);
+      if (next.kind === "in") history.pushState(null, "", path);
+      land(next);
+    });
+  });
+  // ⌃1…9 on a Mac, Alt+1…9 elsewhere: the account's workspaces here, by place.
+  const byPlace = useRef<(at: number) => void>(() => {});
+  byPlace.current = (at) => {
+    if (stage.kind !== "in" || !multiWorkspace(stage.health)) return;
+    const workspace = stage.workspaces[at];
+    if (workspace && workspace.id !== stage.workspace.id) open(workspace);
+  };
+  useEffect(() => {
+    const mac = macKeys();
+    const keys = (event: KeyboardEvent) => {
+      const at = /^Digit([1-9])$/.exec(event.code)?.[1];
+      const held = mac
+        ? event.ctrlKey && !event.altKey
+        : event.altKey && !event.ctrlKey;
+      if (!at || !held || event.metaKey || event.shiftKey) return;
+      event.preventDefault();
+      byPlace.current(Number(at) - 1);
+    };
+    addEventListener("keydown", keys);
+    return () => removeEventListener("keydown", keys);
+  }, []);
+
+  if (stage.kind === "in") {
+    const here: Here = {
+      connection,
+      health: stage.health,
+      workspaces: stage.workspaces,
+      workspace: stage.workspace,
+      open,
+      create: () => void choose(true),
+    };
+    const authentication = stage.identity && {
+      identity: stage.identity,
+      account: connection,
+      busy,
+      error,
+      signOut,
+      guard(check: () => boolean) {
+        canLeave.current = check;
+        return () => {
+          if (canLeave.current === check) canLeave.current = () => true;
+        };
+      },
+    };
     return (
-      <HereContext value={placed.here}>
-        <BrowserRouter basename={placed.basename}>{children}</BrowserRouter>
+      <HereContext value={here}>
+        <AuthenticationContext value={authentication}>
+          <BrowserRouter key={stage.workspace.id} basename={stage.basename}>
+            {children}
+          </BrowserRouter>
+        </AuthenticationContext>
       </HereContext>
     );
+  }
   const back = desktopConnection() && (
     <Button
       variant="outline"
@@ -200,7 +525,9 @@ export function WorkspaceRoot({ children }: { children: ReactNode }) {
       Back to workspaces
     </Button>
   );
-  if (error)
+  const host = new URL(connection.kernel).host;
+  if (stage.kind === "loading") return <Frame>{null}</Frame>;
+  if (stage.kind === "failed")
     return (
       <Frame>
         {back}
@@ -208,67 +535,210 @@ export function WorkspaceRoot({ children }: { children: ReactNode }) {
           Can't reach ZeroLux
         </h1>
         <p role="alert" className="text-sm text-destructive">
-          {error}
+          {stage.error}
         </p>
         <Button className="self-start" onClick={() => setAttempt((n) => n + 1)}>
           Try again
         </Button>
       </Frame>
     );
-  if (!placed) return <Frame>{null}</Frame>;
-  const { workspaces } = placed.choose;
+  if (stage.kind === "sign-in")
+    return (
+      <Frame>
+        {back}
+        <SignIn
+          health={stage.health}
+          invitation={stage.invitation}
+          invitationError={stage.invitationError}
+          place={stage.health.workspace?.name ?? host}
+          busy={busy}
+          error={error}
+          submit={(credentials) => void signIn(credentials)}
+        />
+      </Frame>
+    );
   return (
     <Frame>
       {back}
-      <p className="text-xs uppercase tracking-widest text-muted-foreground">
-        ZeroLux · {location.host}
-      </p>
-      <h1 className="text-3xl font-semibold tracking-tight">
-        {desktopConnection()
-          ? "This workspace is not served here"
-          : "Workspaces"}
-      </h1>
-      {!desktopConnection() &&
-        (workspaces.length ? (
-          <nav aria-label="Workspaces" className="flex flex-col gap-1">
-            {workspaces.map((workspace) => (
-              <a
-                key={workspace.id}
-                href={`${pageOf(workspace)}/`}
-                className="flex h-11 items-center gap-3 rounded-md px-2 text-sm transition-colors hover:bg-accent"
-              >
-                <WorkspaceMark name={workspace.name} className="size-7" />
-                <span className="truncate font-medium">{workspace.name}</span>
-              </a>
-            ))}
-          </nav>
-        ) : (
-          <p className="text-sm text-muted-foreground">No workspaces yet.</p>
-        ))}
+      <Workspaces
+        place={host}
+        workspaces={stage.workspaces}
+        outside={stage.outside}
+        creating={stage.creating}
+        canCreate={multiWorkspace(stage.health)}
+        busy={busy}
+        error={error}
+        open={(workspace, newWindow) => open(workspace, newWindow)}
+        create={(name, folder) =>
+          void act(async () => {
+            const made = await connection.createWorkspace(name, folder);
+            const workspaces = await connection.workspaces();
+            const next = await enter(stage.health, workspaces, made);
+            if (next.kind === "in")
+              history.pushState(null, "", `${next.basename}/`);
+            land(next);
+          })
+        }
+        startCreating={() => void choose(true)}
+        signOut={() => void signOut()}
+      />
     </Frame>
   );
 }
 
-/** ⌃1…9 on a Mac, Alt+1…9 elsewhere: the kernel's workspaces by position, in a browser. */
-function useWorkspaceKeys(here?: Here) {
-  useEffect(() => {
-    if (!here?.instance.multi || desktopConnection()) return;
-    const mac = macKeys();
-    const keys = (event: KeyboardEvent) => {
-      const at = /^Digit([1-9])$/.exec(event.code)?.[1];
-      const held = mac
-        ? event.ctrlKey && !event.altKey
-        : event.altKey && !event.ctrlKey;
-      if (!at || !held || event.metaKey || event.shiftKey) return;
-      const workspace = here.instance.workspaces[Number(at) - 1];
-      if (!workspace) return;
-      event.preventDefault();
-      if (workspace.id !== here.workspace.id)
-        location.assign(`${pageOf(workspace)}/`);
-    };
-    addEventListener("keydown", keys);
-    return () => removeEventListener("keydown", keys);
-  }, [here]);
+/** A workspace in a window or tab of its own. */
+function openElsewhere(workspace: ServedWorkspace) {
+  if (desktopConnection()) void desktopNewWindow(`${pageOf(workspace)}/`);
+  else window.open(`${pageOf(workspace)}/`, "_blank", "noopener");
+}
+
+/** The account's workspaces on a kernel: one to open, or a new one to make. */
+export function Workspaces({
+  place,
+  workspaces,
+  outside,
+  creating,
+  canCreate,
+  busy,
+  error,
+  open,
+  create,
+  startCreating,
+  signOut,
+}: {
+  place: string;
+  workspaces: ServedWorkspace[];
+  /** A workspace the account is not a member of, which the address named. */
+  outside?: ServedWorkspace;
+  creating: boolean;
+  canCreate: boolean;
+  busy: boolean;
+  error: string;
+  open: (workspace: ServedWorkspace, newWindow: boolean) => void;
+  create: (name: string, folder?: string) => void;
+  startCreating: () => void;
+  signOut: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [folder, setFolder] = useState("");
+  // On this computer's own kernel, a workspace keeps its files in a folder chosen here.
+  const folders = !!desktopConnection() && kernelHere();
+  return (
+    <>
+      <p className="text-xs uppercase tracking-widest text-muted-foreground">
+        ZeroLux · {place}
+      </p>
+      <h1 className="text-3xl font-semibold tracking-tight">
+        {creating ? "New workspace" : "Workspaces"}
+      </h1>
+      {outside && (
+        <p role="alert" className="text-sm text-muted-foreground">
+          You are not a member of {outside.name}.
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+      {creating ? (
+        <form
+          aria-label="New workspace"
+          className="flex flex-col gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!busy && name.trim()) create(name.trim(), folder || undefined);
+          }}
+        >
+          {folders && (
+            <>
+              <Label htmlFor="new-folder">Folder · optional</Label>
+              <div className="flex gap-2">
+                <Input id="new-folder" value={folder} readOnly />
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() =>
+                    void chooseFolder(folder || undefined).then(
+                      (chosen) => {
+                        if (!chosen) return;
+                        setFolder(chosen);
+                        if (!name)
+                          setName(
+                            chosen.split(/[\\/]/).filter(Boolean).pop() ?? "",
+                          );
+                      },
+                      () => {},
+                    )
+                  }
+                >
+                  Choose…
+                </Button>
+              </div>
+            </>
+          )}
+          <Label htmlFor="new-name">Name</Label>
+          <Input
+            id="new-name"
+            required
+            maxLength={200}
+            disabled={busy}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+          <Button
+            type="submit"
+            className="self-start"
+            disabled={busy || !name.trim()}
+          >
+            Create workspace
+          </Button>
+        </form>
+      ) : (
+        <>
+          {workspaces.length > 0 ? (
+            <nav aria-label="Workspaces" className="flex flex-col gap-1">
+              {workspaces.map((workspace) => (
+                <a
+                  key={workspace.id}
+                  href={`${pageOf(workspace)}/`}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    open(workspace, event.metaKey || event.ctrlKey);
+                  }}
+                  className="flex h-11 items-center gap-3 rounded-md px-2 text-sm transition-colors hover:bg-accent"
+                >
+                  <WorkspaceMark name={workspace.name} className="size-7" />
+                  <span className="truncate font-medium">{workspace.name}</span>
+                </a>
+              ))}
+            </nav>
+          ) : (
+            <p className="text-sm text-muted-foreground">No workspaces yet.</p>
+          )}
+          {canCreate && (
+            <Button
+              variant="outline"
+              className="self-start"
+              disabled={busy}
+              onClick={startCreating}
+            >
+              New workspace
+            </Button>
+          )}
+        </>
+      )}
+      <Button
+        variant="ghost"
+        className="self-start"
+        disabled={busy}
+        onClick={signOut}
+      >
+        Sign out
+      </Button>
+    </>
+  );
 }
 
 export type Waits = Awaited<ReturnType<typeof workspaceSummary>>;
@@ -276,48 +746,31 @@ export type Waits = Awaited<ReturnType<typeof workspaceSummary>>;
 const ELSEWHERE_EVERY = 60_000;
 
 /**
- * What waits in the kernel's other workspaces this browser is signed in to, read again every
- * minute while the page is in view. The desktop keeps each workspace's sign-in to its window.
+ * What waits in the account's other workspaces on this kernel, read again every minute while
+ * the page is in view; one sign-in reaches them all.
  */
 export function useElsewhere(here: Here | null) {
   const [waits, setWaits] = useState<Record<string, Waits>>({});
-  const others =
-    here && !desktopConnection()
-      ? here.instance.workspaces.filter((w) => w.id !== here.workspace.id)
-      : [];
+  const others = here
+    ? here.workspaces.filter((w) => w.id !== here.workspace.id)
+    : [];
   const key = others.map((w) => w.base).join(" ");
   useEffect(() => {
     if (!key) return;
     let live = true;
-    const signedIn = new Set<string>();
-    const connections = others.map(
-      (workspace) =>
-        [workspace, new AuthConnection(workspace.base, workspace.id)] as const,
-    );
-    async function readOne(
-      workspace: ServedWorkspace,
-      connection: AuthConnection,
-    ) {
-      try {
-        if (!signedIn.has(workspace.id)) {
-          const { health, identity } = await connection.restore();
-          if (requiresSignIn(health) && !identity?.actor_id) return undefined;
-          signedIn.add(workspace.id);
-        }
-        return await workspaceSummary(workspace.base);
-      } catch (error) {
-        if (error instanceof ApiError && error.status === 401)
-          signedIn.delete(workspace.id);
-        return undefined;
-      }
-    }
     async function read() {
       if (document.visibilityState !== "visible") return;
       const all = await Promise.all(
-        connections.map(
-          async ([workspace, connection]) =>
-            [workspace.id, await readOne(workspace, connection)] as const,
-        ),
+        others.map(async (workspace) => {
+          try {
+            return [
+              workspace.id,
+              await workspaceSummary(workspace.base),
+            ] as const;
+          } catch {
+            return [workspace.id, undefined] as const;
+          }
+        }),
       );
       if (live)
         setWaits(
@@ -334,7 +787,6 @@ export function useElsewhere(here: Here | null) {
       live = false;
       clearInterval(every);
       document.removeEventListener("visibilitychange", shown);
-      for (const [, connection] of connections) connection.dispose();
     };
     // The workspaces' addresses decide.
     // eslint-disable-next-line react-hooks/exhaustive-deps

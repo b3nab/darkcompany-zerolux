@@ -21,7 +21,6 @@ import {
   BlocksIcon,
   CheckIcon,
   ChevronsUpDownIcon,
-  FolderOpenIcon,
   LayoutDashboardIcon,
   LogOutIcon,
   MessagesSquareIcon,
@@ -47,6 +46,7 @@ import {
   workspaceAge,
   useUiPieces,
 } from "@zerolux/chat";
+import { multiWorkspace } from "@zerolux/chat";
 import type { Chat } from "@zerolux/chat";
 import { activeActors } from "./api";
 import type { Actor, Workspace } from "./api";
@@ -59,7 +59,7 @@ import {
   macKeys,
   useDesktopWorkspaces,
 } from "./desktop";
-import { useElsewhere, useHere, WorkspaceMark } from "./instance";
+import { pageOf, useElsewhere, useHere, WorkspaceMark } from "./instance";
 import { pieceIcon } from "./extension-view";
 import { stored } from "./stored";
 import { useTheme } from "./theme";
@@ -349,85 +349,58 @@ function Count({ count }: { count: number }) {
 
 const unreadDot = "size-1.5 shrink-0 rounded-full bg-foreground";
 
-/** A workspace to go to from the menu, with what waits in it. */
+/** A workspace, or another computer's ZeroLux, to go to from the menu, with what waits there. */
 type Choice = {
   key: string;
   name: string;
   here: boolean;
   requests: number;
   unread?: boolean;
-  missing?: boolean;
-  /** A browser opens it at its address, in a new tab with ⌘ or Ctrl. */
+  /** Its page, for a new tab with ⌘ or Ctrl. */
   href?: string;
-  /** The desktop opens it instead of this window's, or in a new window. */
-  open?: (newWindow: boolean) => void;
+  /** Opens it instead of this one, or in a new window. */
+  open: (newWindow: boolean) => void;
 };
 
 /**
- * The workspaces to go to: in a browser the kernel's, in the desktop app every one it knows,
- * by the computer that serves them.
+ * Where to go: the account's workspaces on this kernel and, in the desktop app, the other
+ * computers' ZeroLux it reaches.
  */
 function useChoices(): { label: string; choices: Choice[] }[] {
   const here = useHere();
   const elsewhere = useElsewhere(here);
   const desktop = useDesktopWorkspaces();
-  if (desktopConnection()) {
-    const groups = new Map<string, Choice[]>();
-    for (const workspace of desktop) {
-      const label = workspace.computer ?? "This computer";
-      groups.set(label, [
-        ...(groups.get(label) ?? []),
-        {
-          key: workspace.profile,
-          name: workspace.name,
-          here: workspace.here,
-          requests: workspace.requests,
-          missing: workspace.missing,
-          open: (newWindow) =>
-            void desktopSwitch(workspace.profile, newWindow).catch(() => {}),
-        },
-      ]);
-    }
-    return desktop.length > 1
-      ? [...groups].map(([label, choices]) => ({ label, choices }))
-      : [];
-  }
-  if (!here || here.instance.workspaces.length < 2) return [];
-  return [
-    {
-      label: globalThis.location?.host ?? "",
-      choices: here.instance.workspaces.map((workspace) => ({
+  const others = desktop.filter((one) => !one.here);
+  const own = desktop.find((one) => one.here);
+  const groups: { label: string; choices: Choice[] }[] = [];
+  if (here && (here.workspaces.length > 1 || others.length > 0))
+    groups.push({
+      label: own
+        ? (own.computer ?? "This computer")
+        : (globalThis.location?.host ?? ""),
+      choices: here.workspaces.map((workspace) => ({
         key: workspace.id,
         name: workspace.name,
         here: workspace.id === here.workspace.id,
         requests: elsewhere[workspace.id]?.requests ?? 0,
         unread: (elsewhere[workspace.id]?.unread ?? 0) > 0,
-        href: `/w/${encodeURIComponent(workspace.id)}/`,
+        href: desktopConnection() ? undefined : `${pageOf(workspace)}/`,
+        open: (newWindow) => here.open(workspace, newWindow),
       })),
-    },
-  ];
-}
-
-/** ⌃1…9 on a Mac, Alt+1…9 elsewhere: the desktop app's workspaces by place. */
-function useDesktopKeys(choices: Choice[]) {
-  const latest = useRef(choices);
-  latest.current = choices;
-  useEffect(() => {
-    if (!desktopConnection()) return;
-    const mac = macKeys();
-    const keys = (event: KeyboardEvent) => {
-      const at = /^Digit([1-9])$/.exec(event.code)?.[1];
-      const held = mac
-        ? event.ctrlKey && !event.altKey
-        : event.altKey && !event.ctrlKey;
-      const choice = at && latest.current[Number(at) - 1];
-      if (!choice || !held || event.metaKey || event.shiftKey) return;
-      event.preventDefault();
-      if (!choice.here) choice.open?.(false);
-    };
-    addEventListener("keydown", keys);
-    return () => removeEventListener("keydown", keys);
-  }, []);
+    });
+  if (others.length > 0)
+    groups.push({
+      label: "Other computers",
+      choices: others.map((one) => ({
+        key: one.profile,
+        name: one.name,
+        here: false,
+        requests: one.requests,
+        open: (newWindow) =>
+          void desktopSwitch(one.profile, newWindow).catch(() => {}),
+      })),
+    });
+  return groups;
 }
 
 /**
@@ -436,9 +409,9 @@ function useDesktopKeys(choices: Choice[]) {
  */
 export function WorkspaceMenu({ workspace }: { workspace: Workspace }) {
   const navigate = useNavigate();
+  const here = useHere();
   const groups = useChoices();
   const all = groups.flatMap((group) => group.choices);
-  useDesktopKeys(all);
   const members = activeActors(workspace.actors).length;
   const info = workspace.workspace;
   const { name } = info;
@@ -509,15 +482,15 @@ export function WorkspaceMenu({ workspace }: { workspace: Workspace }) {
                 return (
                   <DropdownMenuItem
                     key={choice.key}
-                    disabled={choice.missing}
                     render={
                       choice.href && !choice.here ? (
                         <a href={choice.href} />
                       ) : undefined
                     }
                     onClick={(event) => {
-                      if (!choice.here)
-                        choice.open?.(event.metaKey || event.ctrlKey);
+                      if (choice.here) return;
+                      event.preventDefault();
+                      choice.open(event.metaKey || event.ctrlKey);
                     }}
                   >
                     <WorkspaceMark name={choice.name} className="size-5" />
@@ -543,24 +516,24 @@ export function WorkspaceMenu({ workspace }: { workspace: Workspace }) {
             </DropdownMenuGroup>
           </Fragment>
         ))}
-        {desktop && (
+        {(desktop || (here && multiWorkspace(here.health))) && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem onClick={() => runMenuCommand("new-workspace")}>
-                <PlusIcon />
-                New Workspace…
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => runMenuCommand("open-folder")}>
-                <FolderOpenIcon />
-                Open Folder…
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => runMenuCommand("manage-workspaces")}
-              >
-                <SlidersHorizontalIcon />
-                Manage Workspaces…
-              </DropdownMenuItem>
+              {here && multiWorkspace(here.health) && (
+                <DropdownMenuItem onClick={() => here.create()}>
+                  <PlusIcon />
+                  New Workspace…
+                </DropdownMenuItem>
+              )}
+              {desktop && (
+                <DropdownMenuItem
+                  onClick={() => runMenuCommand("manage-workspaces")}
+                >
+                  <SlidersHorizontalIcon />
+                  Manage Workspaces…
+                </DropdownMenuItem>
+              )}
             </DropdownMenuGroup>
           </>
         )}

@@ -31,6 +31,7 @@ import { cn } from "cn";
 import type { Actor, Workspace } from "./api";
 import { AdministrationPage, MySettingsPage, ProfilePage } from "./Account";
 import { KeyboardShortcuts, MenuButton, useAppMenu } from "./app-menu";
+import { pageOf, useHere, WORKSPACES_PAGE } from "./instance";
 import { ExtensionsPage } from "./Extensions";
 import { Approvals, openApprovals } from "./Approvals";
 import { useAuthentication, useMe } from "./AuthGate";
@@ -101,7 +102,15 @@ export function App({
     return true;
   }, [side]);
   const navigate = useNavigate();
-  useDesktopEvent("zerolux-open", navigate);
+  const here = useHere();
+  // A page the desktop sends this window to: another workspace's, or the list, are the root's.
+  useDesktopEvent("zerolux-open", (path) => {
+    if (!path.startsWith("/w/") && !path.startsWith(WORKSPACES_PAGE))
+      return void navigate(path);
+    const base = here && pageOf(here.workspace);
+    if (base && path.startsWith(`${base}/`))
+      void navigate(path.slice(base.length));
+  });
   const [shortcuts, setShortcuts] = useState(false);
   // The menu's commands that are this window's own.
   const commands = useAppMenu((id) => {

@@ -1,22 +1,18 @@
 import { afterAll, afterEach, expect, test } from "bun:test";
-import type { KernelInstance } from "@zerolux/chat";
-import { place, WORKSPACES_PAGE } from "./instance";
+import type { AuthHealth, ServedWorkspace } from "@zerolux/chat";
+import { arrive, invitedTo, place, WORKSPACES_PAGE } from "./instance";
 
 const kernel = "http://192.0.2.10:4310";
-const served = (...names: string[]): KernelInstance => ({
-  kernel,
-  multi: true,
-  workspaces: names.map((name) => ({
+const served = (...names: string[]): ServedWorkspace[] =>
+  names.map((name) => ({
     id: name,
     name,
     base: `${kernel}/w/${name}`,
-  })),
-});
-const older: KernelInstance = {
-  kernel,
-  multi: false,
-  workspaces: [{ id: "aspen", name: "aspen", base: kernel }],
-};
+    owner: true,
+  }));
+const older: ServedWorkspace[] = [
+  { id: "aspen", name: "aspen", base: kernel, owner: true },
+];
 
 const kept = new Map<string, string>();
 const storage = globalThis.localStorage;
@@ -29,53 +25,194 @@ afterAll(() => {
   globalThis.localStorage = storage;
 });
 
-test("an older kernel's one workspace is at its origin, its pages at the root", () => {
-  expect(place(older, "/chats")).toEqual({
-    here: { instance: older, workspace: older.workspaces[0]! },
+test("an older kernel's one workspace is at its root", () => {
+  expect(place("/chats", "", older, false)).toEqual({
+    workspace: older[0]!,
     basename: "",
     address: undefined,
   });
   // A page address of a newer kernel, opened on an older one, loses its workspace.
-  expect(place(older, "/w/aspen/chats")).toMatchObject({ address: "/chats" });
-  expect(place(older, "/w/aspen")).toMatchObject({ address: "/" });
+  expect(place("/w/aspen/chats", "", older, false)).toMatchObject({
+    address: "/chats",
+  });
 });
 
-test("a browser is in the workspace its address names, its pages under it", () => {
-  const instance = served("aspen", "birch");
-  expect(place(instance, "/w/birch/chats/1")).toEqual({
-    here: { instance, workspace: instance.workspaces[1]! },
+test("the address names the workspace, and one the account is not in is not entered", () => {
+  const workspaces = served("aspen", "birch");
+  expect(place("/w/birch/chats/1", "", workspaces, true)).toEqual({
+    workspace: workspaces[1]!,
     basename: "/w/birch",
     address: undefined,
   });
-  expect(place(instance, "/w/cedar/chats")).toEqual({ choose: instance });
+  expect(place("/w/cedar/chats", "", workspaces, true)).toEqual({
+    choose: { creating: false },
+  });
 });
 
-test("a kernel's only workspace opens at once, its address gaining the workspace", () => {
-  const instance = served("aspen");
-  expect(place(instance, "/chats/1")).toMatchObject({
+test("at the root, the workspace chosen last or the only one opens, else they are listed", () => {
+  expect(place("/chats/1", "", served("aspen"), true)).toMatchObject({
     basename: "/w/aspen",
     address: "/w/aspen/chats/1",
   });
-  expect(place(instance, "/")).toMatchObject({ address: "/w/aspen/" });
-});
-
-test("of several workspaces, the one chosen last opens, else they are listed", () => {
-  const instance = served("aspen", "birch");
-  expect(place(instance, "/")).toEqual({ choose: instance });
-  kept.set(`zerolux.workspace.${kernel}`, "birch");
-  expect(place(instance, "/")).toMatchObject({ basename: "/w/birch" });
-  // Their list is asked for by its own address.
-  expect(place(instance, WORKSPACES_PAGE)).toEqual({ choose: instance });
-  kept.set(`zerolux.workspace.${kernel}`, "cedar");
-  expect(place(instance, "/")).toEqual({ choose: instance });
-});
-
-test("a desktop window is in its own workspace, whatever its address", () => {
-  const instance = served("aspen", "birch");
-  expect(place(instance, "/chats", "birch")).toEqual({
-    here: { instance, workspace: instance.workspaces[1]! },
-    basename: "",
+  const two = served("aspen", "birch");
+  expect(place("/", "", two, true)).toEqual({ choose: { creating: false } });
+  expect(place("/", "", two, true, "birch")).toMatchObject({
+    basename: "/w/birch",
   });
-  expect(place(instance, "/", "cedar")).toEqual({ choose: instance });
-  expect(place(older, "/", "aspen")).toMatchObject({ basename: "" });
+  // An account without workspaces makes its first one.
+  expect(place("/", "", [], true)).toEqual({ choose: { creating: true } });
+  expect(place(WORKSPACES_PAGE, "", two, true, "birch")).toEqual({
+    choose: { creating: false },
+  });
+  expect(place(WORKSPACES_PAGE, "?new", two, true)).toEqual({
+    choose: { creating: true },
+  });
+});
+
+test("a join link names its workspace and its invitation", () => {
+  expect(invitedTo("/w/birch/join", "?invite=token")).toEqual({
+    workspace: "birch",
+    token: "token",
+  });
+  expect(invitedTo("/join", "?invite=token")).toEqual({
+    workspace: undefined,
+    token: "token",
+  });
+  expect(invitedTo("/w/birch/join", "")).toBeUndefined();
+  expect(invitedTo("/w/birch/chats", "?invite=token")).toBeUndefined();
+});
+
+/** A kernel's sign-in, as `arrive` asks it, with the calls it was asked. */
+function gate({
+  multi = true,
+  account = true,
+  setup = false,
+  member = true,
+  names = ["aspen", "birch"],
+}: {
+  multi?: boolean;
+  account?: boolean;
+  setup?: boolean;
+  member?: boolean;
+  names?: string[];
+} = {}) {
+  const calls: string[] = [];
+  const health: AuthHealth = multi
+    ? {
+        api_version: 2,
+        capabilities: ["workspaces-v1", "instance-auth-v1"],
+        instance: { id: "instance" },
+        auth: { setup_required: false },
+      }
+    : {
+        api_version: 2,
+        capabilities: ["auth-v1"],
+        workspace: { id: "aspen", name: "aspen" },
+        auth: { setup_required: setup },
+      };
+  const user = { id: "u", name: "Owner", email: "owner@example.test" };
+  let joined = member;
+  return {
+    calls,
+    connection: {
+      kernel,
+      async restore() {
+        return {
+          health,
+          identity: account ? { user, setup_required: false } : null,
+        };
+      },
+      async workspaces() {
+        return multi ? served(...names) : older;
+      },
+      async identity(base: string) {
+        calls.push(`identity ${base}`);
+        return {
+          user,
+          setup_required: setup,
+          actor_id: joined ? "actor" : null,
+          owner: joined,
+        };
+      },
+      async claim(base: string, invite?: string) {
+        calls.push(`claim ${base} ${invite ?? ""}`.trim());
+        joined = true;
+        return { user, setup_required: false, actor_id: "actor", owner: true };
+      },
+      async invitation(base: string, token: string) {
+        calls.push(`invitation ${base} ${token}`);
+        return { workspace: "birch", invited_by: "Owner", expires_at: 0 };
+      },
+    } as unknown as Parameters<typeof arrive>[0],
+  };
+}
+
+test("without a sign-in the page signs in first, an invitation shown with it", async () => {
+  const { connection, calls } = gate({ account: false });
+  expect((await arrive(connection, "/", "", undefined)).stage.kind).toBe(
+    "sign-in",
+  );
+  const invited = await arrive(
+    connection,
+    "/w/birch/join",
+    "?invite=t",
+    invitedTo("/w/birch/join", "?invite=t"),
+  );
+  expect(invited.stage).toMatchObject({
+    kind: "sign-in",
+    invitation: { workspace: "birch" },
+  });
+  expect(calls).toEqual([`invitation ${kernel}/w/birch t`]);
+});
+
+test("signed in, the account's workspace opens, or the list when several", async () => {
+  const { connection } = gate();
+  expect((await arrive(connection, "/", "", undefined)).stage.kind).toBe(
+    "choose",
+  );
+  const opened = await arrive(connection, "/w/birch/chats", "", undefined);
+  expect(opened.stage).toMatchObject({
+    kind: "in",
+    workspace: { id: "birch" },
+    basename: "/w/birch",
+  });
+  expect(opened.address).toBeUndefined();
+  const remembered = await arrive(connection, "/", "", undefined, "aspen");
+  expect(remembered).toMatchObject({
+    stage: { kind: "in", workspace: { id: "aspen" } },
+    address: "/w/aspen/",
+  });
+});
+
+test("a join link's invitation is claimed in its workspace, which then opens", async () => {
+  const { connection, calls } = gate({ member: false });
+  const joined = await arrive(
+    connection,
+    "/w/birch/join",
+    "?invite=t",
+    invitedTo("/w/birch/join", "?invite=t"),
+  );
+  expect(calls[0]).toBe(`claim ${kernel}/w/birch t`);
+  expect(joined).toMatchObject({
+    stage: { kind: "in", workspace: { id: "birch" } },
+    address: "/w/birch/",
+  });
+});
+
+test("an account that is not a member of a workspace does not enter it", async () => {
+  const { connection } = gate({ member: false });
+  expect(
+    (await arrive(connection, "/w/aspen/", "", undefined)).stage,
+  ).toMatchObject({ kind: "choose", outside: { id: "aspen" } });
+});
+
+test("an older kernel's first account becomes its workspace's owner", async () => {
+  const { connection, calls } = gate({
+    multi: false,
+    setup: true,
+    member: false,
+  });
+  const arrived = await arrive(connection, "/chats", "", undefined);
+  expect(arrived.stage).toMatchObject({ kind: "in", basename: "" });
+  expect(calls).toEqual([`identity ${kernel}`, `claim ${kernel}`]);
 });

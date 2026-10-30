@@ -1,7 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
-import { AuthGate } from "./AuthGate";
 import { preloadRenderer } from "./components/message-text";
 import { keepDraftsIn, lookWith } from "@zerolux/chat";
 import { WorkspaceRoot } from "./instance";
@@ -51,9 +50,7 @@ createRoot(document.getElementById("root")!).render(
       <TrayPanel />
     ) : (
       <WorkspaceRoot>
-        <AuthGate>
-          <App />
-        </AuthGate>
+        <App />
       </WorkspaceRoot>
     )}
   </StrictMode>,

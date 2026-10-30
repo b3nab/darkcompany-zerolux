@@ -1,103 +1,56 @@
-import { expect, spyOn, test } from "bun:test";
-import * as React from "react";
+import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AuthHealth, AuthIdentity } from "@zerolux/chat";
-import { AuthGate } from "./AuthGate";
+import type { AuthHealth } from "@zerolux/chat";
+import { SignIn } from "./AuthGate";
 
-test("authentication mounts before any workspace hooks or private content", () => {
-  let mounted = false;
-  function PrivateWorkspace() {
-    mounted = true;
-    return <div>Private workspace data</div>;
-  }
-  const html = renderToStaticMarkup(
-    <AuthGate>
-      <PrivateWorkspace />
-    </AuthGate>,
-  );
-  expect(mounted).toBe(false);
-  expect(html).not.toContain('type="password"');
+const health = (setupRequired: boolean): AuthHealth => ({
+  api_version: 2,
+  capabilities: ["workspaces-v1", "instance-auth-v1"],
+  instance: { id: "aspen" },
+  auth: { setup_required: setupRequired },
 });
-
-/** Effects do not run during SSR. Seed the verified snapshot, checking each replaced
- * hook's initial value so a reordered hook cannot silently change the fixture. */
-function ready(setupRequired: boolean, identity: AuthIdentity | null = null) {
-  const health: AuthHealth = {
-    api_version: 2,
-    capabilities: ["auth-v1"],
-    workspace: { id: "fixture-workspace", name: "Fixture workspace" },
-    auth: { setup_required: setupRequired },
-  };
-  const useState = React.useState;
-  let call = 0;
-  const state = spyOn(React, "useState").mockImplementation(((
-    initial: unknown,
-  ) => {
-    switch (++call) {
-      case 2:
-        expect(initial).toBeUndefined();
-        return useState(health);
-      case 3:
-        expect(initial).toBeNull();
-        return useState(identity);
-      case 4:
-        expect(initial).toBe(true);
-        return useState(false);
-      default:
-        return useState(initial);
-    }
-  }) as typeof React.useState);
-  try {
-    return renderToStaticMarkup(
-      <AuthGate>
-        <div>Private workspace data</div>
-      </AuthGate>,
-    );
-  } finally {
-    state.mockRestore();
-  }
-}
 
 const inputIds = (html: string) =>
   [...html.matchAll(/<input\b[^>]*\bid="([^"]+)"/g)].map((match) => match[1]);
 
-test("an unclaimed workspace offers account creation with name, email, password and its confirmation", () => {
-  const html = ready(true);
-  expect(inputIds(html)).toEqual([
+const signIn = (setupRequired: boolean, invited = false) =>
+  renderToStaticMarkup(
+    <SignIn
+      health={health(setupRequired)}
+      invitation={
+        invited
+          ? { workspace: "birch", invited_by: "Owner", expires_at: 0 }
+          : undefined
+      }
+      place="192.0.2.10:4310"
+      busy={false}
+      error=""
+      submit={() => {}}
+    />,
+  );
+
+test("a kernel without accounts offers its first one, with name, email, password and its confirmation", () => {
+  expect(inputIds(signIn(true))).toEqual([
     "auth-name",
     "auth-email",
     "auth-password",
     "auth-confirmation",
   ]);
-  expect(html).not.toContain("Private workspace data");
 });
 
-test("a claimed workspace offers login without account creation", () => {
-  const html = ready(false);
-  expect(inputIds(html)).toEqual(["auth-email", "auth-password"]);
-  expect(html).not.toContain("Private workspace data");
+test("a kernel with accounts offers sign-in, and an invitation a new account", () => {
+  expect(inputIds(signIn(false))).toEqual(["auth-email", "auth-password"]);
+  expect(inputIds(signIn(false, true))).toEqual([
+    "auth-name",
+    "auth-email",
+    "auth-password",
+    "auth-confirmation",
+  ]);
 });
 
-test("an unbound account cannot claim after another account has become owner", () => {
-  const html = ready(true, {
-    user: { id: "fixture-user", name: "Other", email: "other@example.test" },
-    actor_id: null,
-    owner: false,
-    setup_required: false,
-  });
-  expect(html).not.toContain("Private workspace data");
-});
-
-test("a restored unbound account can finish enrollment without another field", () => {
-  const html = ready(true, {
-    user: { id: "fixture-user", name: "Owner", email: "owner@example.test" },
-    actor_id: null,
-    owner: false,
-    setup_required: true,
-  });
-  expect(inputIds(html)).toEqual([]);
-  expect(html).toContain("owner@example.test");
-  expect(html).toMatch(/<button[^>]*type="submit"[^>]*>/);
-  expect(html).not.toMatch(/<button[^>]*type="submit"[^>]* disabled=""/);
-  expect(html).not.toContain("Private workspace data");
+test("a new account cannot be submitted until its name and passwords are given", () => {
+  expect(signIn(true)).toMatch(/<button[^>]*type="submit"[^>]*disabled=""/);
+  expect(signIn(false)).not.toMatch(
+    /<button[^>]*type="submit"[^>]*disabled=""/,
+  );
 });

@@ -16,6 +16,7 @@ import {
   headline,
   limitName,
   money,
+  multiWorkspace,
   pace,
   permissionShown,
   planName,
@@ -82,7 +83,7 @@ interface Heard {
 
 /** A request with the workspace it comes from. */
 export interface Waiting {
-  workspace: TrayWorkspace;
+  workspace: TrayTarget;
   approval: Approval;
   agent: string;
   session?: ChatSession;
@@ -93,27 +94,93 @@ const notFound = (error: unknown) =>
   error instanceof ApiError && error.status === 404;
 
 /**
- * One workspace's kernel, heard with its sign-in: its people and agents, its sessions, the
- * requests of the sessions that are yours, and the subscriptions of its computer.
+ * A workspace the panel hears: one of an open ZeroLux's, at its base, with the ZeroLux's
+ * sign-in.
+ */
+export interface TrayTarget extends TrayWorkspace {
+  /** The ZeroLux and the workspace. */
+  key: string;
+  /** The workspace's pages, in its window: `/w/<id>`, or the root of an older kernel. */
+  page: string;
+  connection: AuthConnection;
+  signIn: boolean;
+}
+
+/**
+ * An open ZeroLux, signed in as its windows are: its workspaces, each to hear. The panel never
+ * signs in or out.
+ */
+function Discover({
+  instance,
+  attempt,
+  found,
+}: {
+  instance: TrayWorkspace;
+  attempt: number;
+  found: (profile: string, targets: TrayTarget[], error?: string) => void;
+}) {
+  const { kernel, profile, workspace: id } = instance;
+  useEffect(() => {
+    let stopped = false;
+    const connection = new AuthConnection(kernel, id ?? undefined, {
+      read: () => trayCredential(profile, id ?? ""),
+      write: async () => {},
+    });
+    void (async () => {
+      try {
+        const { health, identity } = await connection.restore();
+        if (requiresSignIn(health) && !identity) {
+          if (!stopped) found(profile, [], "Sign in from its window");
+          return;
+        }
+        const workspaces = await connection.workspaces();
+        const multi = multiWorkspace(health);
+        if (!stopped)
+          found(
+            profile,
+            workspaces.map((workspace) => ({
+              ...instance,
+              key: `${profile}|${workspace.id}`,
+              name: workspace.name,
+              kernel: workspace.base,
+              page: multi ? `/w/${encodeURIComponent(workspace.id)}` : "",
+              connection,
+              signIn: requiresSignIn(health),
+            })),
+          );
+      } catch (error) {
+        if (!stopped) found(profile, [], errorMessage(error));
+      }
+    })();
+    return () => {
+      stopped = true;
+      connection.dispose();
+    };
+    // `found` only reports.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kernel, profile, id, attempt]);
+  return null;
+}
+
+/**
+ * One workspace, heard at its base: its people and agents, its sessions, the requests of the
+ * sessions that are yours, and the subscriptions of its computer.
  */
 function Hear({
   workspace,
-  attempt,
   heard,
 }: {
-  workspace: TrayWorkspace;
-  /** Grows when the panel opens: a workspace that could not be heard is tried again. */
-  attempt: number;
-  heard: (profile: string, state: Heard) => void;
+  workspace: TrayTarget;
+  heard: (key: string, state: Heard) => void;
 }) {
-  const { kernel, profile, workspace: id } = workspace;
+  const { kernel, key, connection, signIn } = workspace;
   useEffect(() => {
     let stopped = false;
     let state: Heard = { live: false, actors: [], sessions: [], approvals: [] };
     let me: string | undefined;
     const set = (next: Partial<Heard>) => {
       state = { ...state, ...next };
-      if (!stopped) heard(profile, state);
+      if (!stopped) heard(key, state);
     };
     const mine = (approvals: Approval[], sessions: ChatSession[]) =>
       approvals
@@ -137,24 +204,15 @@ function Hear({
         (error: unknown) =>
           notFound(error) && set({ subscriptions: undefined }),
       );
-    // Signed in as the workspace's own window is; the panel never signs in or out.
-    const connection = new AuthConnection(kernel, id ?? undefined, {
-      read: (_, workspace) => trayCredential(profile, workspace),
-      write: async () => {},
-    });
     async function readAll() {
       try {
-        const { health, identity } = await connection.restore();
-        if (requiresSignIn(health) && !identity) {
-          set({ approvals: [], error: "Sign in from its window" });
-          return;
-        }
-        const [{ actors }, sessions, approvals] = await Promise.all([
+        const [identity, { actors }, sessions, approvals] = await Promise.all([
+          signIn ? connection.identity(kernel) : null,
           request<Workspace>(kernel, "/workspace"),
           readSessions(),
           readApprovals(),
         ]);
-        me = whoAmI(identity, actors, requiresSignIn(health)).me?.id;
+        me = whoAmI(identity, actors, signIn).me?.id;
         set({
           actors,
           sessions,
@@ -204,7 +262,7 @@ function Hear({
     };
     // `heard` only reports.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kernel, profile, id, attempt]);
+  }, [kernel, key, connection, signIn]);
   return null;
 }
 
@@ -529,7 +587,11 @@ const Label = ({ children, count }: { children: string; count?: number }) => (
  * menu always say what waits.
  */
 export function TrayPanel() {
-  const [workspaces, setWorkspaces] = useState<TrayWorkspace[]>([]);
+  const [instances, setInstances] = useState<TrayWorkspace[]>([]);
+  // Each open ZeroLux's workspaces, or why they cannot be heard.
+  const [found, setFound] = useState<
+    Record<string, { targets: TrayTarget[]; error?: string }>
+  >({});
   const [heard, setHeard] = useState<Record<string, Heard>>({});
   const [focus, setFocus] = useState(0);
   const [attempts, setAttempts] = useState<Record<string, number>>({});
@@ -540,7 +602,7 @@ export function TrayPanel() {
 
   useEffect(() => {
     const read = () =>
-      trayWorkspaces().then(setWorkspaces, (e: unknown) =>
+      trayWorkspaces().then(setInstances, (e: unknown) =>
         setError(errorMessage(e)),
       );
     void read();
@@ -552,6 +614,9 @@ export function TrayPanel() {
     };
   }, []);
 
+  const workspaces = instances.flatMap(
+    (instance) => found[instance.profile]?.targets ?? [],
+  );
   const active = workspaces.find((w) => w.active) ?? workspaces[0];
   // Extensions' rows read the workspace in front, as its own pages read theirs.
   setKernelUrl(active?.kernel ?? "");
@@ -564,7 +629,7 @@ export function TrayPanel() {
     [workspaces, active],
   );
   const waiting: Waiting[] = ordered.flatMap((workspace) => {
-    const state = heard[workspace.profile];
+    const state = heard[workspace.key];
     return (state?.approvals ?? []).map((approval) => ({
       workspace,
       approval,
@@ -578,7 +643,7 @@ export function TrayPanel() {
   const plans = [
     ...new Map(
       ordered.flatMap((workspace) =>
-        (heard[workspace.profile]?.subscriptions ?? []).map(
+        (heard[workspace.key]?.subscriptions ?? []).map(
           (subscription) =>
             [
               subscription.id,
@@ -588,7 +653,7 @@ export function TrayPanel() {
       ),
     ).values(),
   ];
-  const live = ordered.some((w) => heard[w.profile]?.live);
+  const live = ordered.some((w) => heard[w.key]?.live);
   const focused = Math.min(focus, Math.max(0, waiting.length - 1));
 
   async function answer(item: Waiting, choice: string) {
@@ -618,7 +683,10 @@ export function TrayPanel() {
     }
   }
   const open = (item: Waiting) =>
-    void trayOpen(item.workspace.profile, pageOf(item.approval));
+    void trayOpen(
+      item.workspace.profile,
+      `${item.workspace.page}${pageOf(item.approval)}`,
+    );
 
   // The mark and Linux's menu say what waits.
   const report: TrayReport = {
@@ -659,11 +727,11 @@ export function TrayPanel() {
   const known = useRef(new Map<string, Set<string>>());
   useEffect(() => {
     for (const workspace of ordered) {
-      const state = heard[workspace.profile];
+      const state = heard[workspace.key];
       if (!state || state.error) continue;
-      const before = known.current.get(workspace.profile);
+      const before = known.current.get(workspace.key);
       known.current.set(
-        workspace.profile,
+        workspace.key,
         new Set(state.approvals.map((approval) => approval.id)),
       );
       if (!before || document.hasFocus()) continue;
@@ -699,6 +767,10 @@ export function TrayPanel() {
   latest.current = waiting;
   const latestHeard = useRef(heard);
   latestHeard.current = heard;
+  const latestInstances = useRef(instances);
+  latestInstances.current = instances;
+  const latestFound = useRef(found);
+  latestFound.current = found;
   useEffect(() => {
     const find = ({ profile, id }: { profile: string; id: string }) =>
       latest.current.find(
@@ -724,8 +796,16 @@ export function TrayPanel() {
         setFocus(0);
         setAttempts((all) => {
           const next = { ...all };
-          for (const [profile, state] of Object.entries(latestHeard.current))
-            if (state.error) next[profile] = (next[profile] ?? 0) + 1;
+          for (const instance of latestInstances.current) {
+            const discovered = latestFound.current[instance.profile];
+            const failed =
+              discovered?.error ||
+              discovered?.targets.some(
+                (target) => latestHeard.current[target.key]?.error,
+              );
+            if (failed)
+              next[instance.profile] = (next[instance.profile] ?? 0) + 1;
+          }
           return next;
         });
         requestAnimationFrame(
@@ -825,8 +905,10 @@ export function TrayPanel() {
           <DropdownMenuContent align="start" className="w-56">
             {workspaces.map((workspace) => (
               <DropdownMenuItem
-                key={workspace.profile}
-                onClick={() => void trayOpen(workspace.profile)}
+                key={workspace.key}
+                onClick={() =>
+                  void trayOpen(workspace.profile, `${workspace.page}/`)
+                }
               >
                 <span className="min-w-0 flex-1 truncate">
                   {workspace.name}
@@ -868,11 +950,10 @@ export function TrayPanel() {
           ) : (
             waiting.map((item, at) => {
               const named =
-                workspaces.length > 1 &&
-                shownWorkspace !== item.workspace.profile;
-              shownWorkspace = item.workspace.profile;
+                workspaces.length > 1 && shownWorkspace !== item.workspace.key;
+              shownWorkspace = item.workspace.key;
               return (
-                <div key={`${item.workspace.profile}:${item.approval.id}`}>
+                <div key={`${item.workspace.key}:${item.approval.id}`}>
                   {named && (
                     <p className="px-3.5 pb-1 text-[11.5px] text-faint">
                       {item.workspace.name}
@@ -894,12 +975,23 @@ export function TrayPanel() {
           {/* A workspace that cannot be heard says why, in its own line. */}
           {ordered.map(
             (workspace) =>
-              heard[workspace.profile]?.error && (
+              heard[workspace.key]?.error && (
                 <p
-                  key={workspace.profile}
+                  key={workspace.key}
                   className="mx-3.5 mb-1.5 text-xs text-destructive"
                 >
-                  {workspace.name}: {heard[workspace.profile]!.error}
+                  {workspace.name}: {heard[workspace.key]!.error}
+                </p>
+              ),
+          )}
+          {instances.map(
+            (instance) =>
+              found[instance.profile]?.error && (
+                <p
+                  key={instance.profile}
+                  className="mx-3.5 mb-1.5 text-xs text-destructive"
+                >
+                  {instance.name}: {found[instance.profile]!.error}
                 </p>
               ),
           )}
@@ -941,14 +1033,21 @@ export function TrayPanel() {
           </>
         )}
       </footer>
+      {instances.map((instance) => (
+        <Discover
+          key={instance.profile}
+          instance={instance}
+          attempt={attempts[instance.profile] ?? 0}
+          found={(profile, targets, error) =>
+            setFound((all) => ({ ...all, [profile]: { targets, error } }))
+          }
+        />
+      ))}
       {workspaces.map((workspace) => (
         <Hear
-          key={workspace.profile}
+          key={workspace.key}
           workspace={workspace}
-          attempt={attempts[workspace.profile] ?? 0}
-          heard={(profile, state) =>
-            setHeard((all) => ({ ...all, [profile]: state }))
-          }
+          heard={(key, state) => setHeard((all) => ({ ...all, [key]: state }))}
         />
       ))}
     </div>

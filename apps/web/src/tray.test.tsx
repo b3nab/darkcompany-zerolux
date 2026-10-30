@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { AuthConnection } from "@zerolux/chat";
 import type { Approval, Subscription } from "@zerolux/chat";
 import { TrayPlan, TrayRequest, choicesOf } from "./TrayPanel";
 import type { Waiting } from "./TrayPanel";
@@ -25,10 +26,14 @@ const asking = (fields: Partial<Approval>): Approval => ({
 const waiting = (approval: Approval): Waiting => ({
   workspace: {
     profile: "p1",
-    workspace: "w1",
+    workspace: "i1",
     name: "General",
-    kernel: "http://192.0.2.10:4310",
+    kernel: "http://192.0.2.10:4310/w/w1",
     active: true,
+    key: "p1|w1",
+    page: "/w/w1",
+    connection: new AuthConnection("http://192.0.2.10:4310"),
+    signIn: true,
   },
   approval,
   agent: "aspen",
