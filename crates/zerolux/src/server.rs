@@ -24,6 +24,9 @@ use crate::{
     store::Store,
 };
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone)]
 pub struct ServerOptions {
     pub address: SocketAddr,
@@ -383,6 +386,13 @@ impl Shared {
         if new {
             exclude_from_git(&data_dir);
         }
+        // Surviving harness integrations may accept only an origin, without `/w/{id}`.
+        // Each workspace owns its own loopback listener; its authenticated rebind supplies
+        // this address again after a restart. No workspace is selected by a global default.
+        let harness_listener = TcpListener::bind(SocketAddr::new(self.address.ip(), 0))
+            .await
+            .context("Listen for this workspace's harnesses")?;
+        let harness_url = format!("http://{}", harness_listener.local_addr()?);
         let handoff = match (handoff, &options.database) {
             (Some(send), Location::Sqlite(database)) => Some(crate::handoff::Control {
                 configuration: crate::handoff::Configuration {
@@ -466,16 +476,17 @@ impl Shared {
             None => None,
         };
         let livekit = Arc::new(self.livekit.scoped(&workspace.id));
-        // Agents and joined computers call the workspace at its own address.
         let base_url = format!("{origin}/w/{}", workspace.id);
         let links = std::path::absolute(data_dir.join("links"))?;
-        let started = match self.runner.clone() {
-            Some(program) => {
-                ChatRuntime::start_with_runner(store.clone(), livekit, base_url, links, program)
-                    .await
-            }
-            None => ChatRuntime::start(store.clone(), livekit, base_url, links).await,
-        };
+        let started = ChatRuntime::start_hosted(
+            store.clone(),
+            livekit,
+            base_url,
+            harness_url,
+            links,
+            self.runner.clone(),
+        )
+        .await;
         let runtime = match started {
             Ok(runtime) => runtime,
             Err(error) => {
@@ -501,6 +512,7 @@ impl Shared {
             auth,
             lease,
             stopped,
+            (harness_listener, router.clone()),
         ));
         self.workspaces.write().expect("workspaces").insert(
             workspace.id.clone(),
@@ -556,7 +568,17 @@ async fn run_workspace(
     auth: Option<Arc<api::Auth>>,
     lease: Lease,
     mut stopped: watch::Receiver<bool>,
+    http: (TcpListener, axum::Router),
 ) -> Result<()> {
+    // The exact same router as `/w/{id}`, with the same bearer and origin checks.
+    let mut http = tokio::spawn(
+        axum::serve(
+            http.0,
+            http.1.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(stopping(stopped.clone()))
+        .into_future(),
+    );
     let relink = runtime.clone();
     let relinker = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(10));
@@ -649,7 +671,10 @@ async fn run_workspace(
             }
         }
     });
-    let _ = stopped.wait_for(|stop| *stop).await;
+    let served = tokio::select! {
+        result = &mut http => Some(result),
+        _ = stopped.wait_for(|stop| *stop) => None,
+    };
     for task in [
         relinker,
         sweeper,
@@ -665,12 +690,20 @@ async fn run_workspace(
         let _ = task.await;
     }
     let runtime_stopped = runtime.shutdown().await;
+    // Finish in-flight requests before closing their authentication service and lease.
+    let served = match served {
+        Some(result) => result,
+        None => http.await,
+    };
     if let Some(auth) = &auth {
         auth.service.shutdown().await;
     }
     // Released last, once everything else has stopped.
     drop(lease);
-    runtime_stopped
+    runtime_stopped?;
+    served
+        .context("Workspace harness HTTP task failed")?
+        .context("Workspace harness HTTP server failed")
 }
 
 /// A new workspace in a git repository stays out of its commits: `.git/info/exclude` is the
