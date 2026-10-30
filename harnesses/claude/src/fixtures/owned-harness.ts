@@ -241,7 +241,11 @@ launch(
   {
     start: ({ prompt, options }) => scripted(prompt, options),
     subscriber: (invalidate, lost) => new AgentLinkChild(invalidate, lost),
-    connect: chatRequest,
+    connect: (base, token) => {
+      const failure = join(workspace, "bind-failure");
+      if (existsSync(failure)) throw new Error(readFileSync(failure, "utf8"));
+      return chatRequest(base, token);
+    },
     // Both sessions created by this fixture and its independently started terminal.
     saved: async (id, dir) => {
       if (existsSync(tracePath)) return true;

@@ -7,6 +7,7 @@ use nix::{
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
 use std::{os::unix::fs::PermissionsExt, path::PathBuf, sync::Arc, time::Duration};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use zerolux::{
     api,
     chat_runtime::ChatRuntime,
@@ -58,6 +59,50 @@ impl Fixture {
             .lines()
             .filter_map(|line| serde_json::from_str(line).ok())
             .collect()
+    }
+    pub(crate) async fn control(&self, native: &str, mut request: Value) -> Value {
+        let record = std::fs::read_dir(self.dir.path().join("links/claude"))
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            .filter_map(|entry| {
+                serde_json::from_slice::<Value>(&std::fs::read(entry.path()).unwrap()).ok()
+            })
+            .find(|record| {
+                record["native_session_id"] == native
+                    && record["pid"]
+                        .as_i64()
+                        .and_then(|pid| i32::try_from(pid).ok())
+                        .is_some_and(|pid| pid > 0 && kill(Pid::from_raw(pid), None).is_ok())
+            })
+            .unwrap();
+        request["nonce"] = record["nonce"].clone();
+        let deadline = if request["method"] == "prepare" {
+            60
+        } else {
+            5
+        };
+        tokio::time::timeout(Duration::from_secs(deadline), async {
+            let mut socket =
+                zerolux::platform::Local::connect(record["endpoint"].as_str().unwrap())
+                    .await
+                    .unwrap();
+            socket
+                .write_all(format!("{request}\n").as_bytes())
+                .await
+                .unwrap();
+            let mut bytes = Vec::new();
+            socket
+                .take(64 * 1024)
+                .read_to_end(&mut bytes)
+                .await
+                .unwrap();
+            let response: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(response["ok"], true);
+            response
+        })
+        .await
+        .unwrap()
     }
     pub(crate) async fn wait_trace(&self, predicate: impl Fn(&[Value]) -> bool) -> Vec<Value> {
         tokio::time::timeout(Duration::from_secs(20), async {
