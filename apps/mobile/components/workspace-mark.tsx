@@ -42,11 +42,12 @@ export function WorkspaceMark({
 
 /** What waits in the workspaces that are not open: their requests and chats with unread messages. */
 export function useWaitingElsewhere() {
-  const { elsewhere } = useKernel();
-  return Object.values(elsewhere).reduce(
-    (sum, w) => sum + (w.state === "ready" ? w.requests + w.unread : 0),
-    0,
-  );
+  const { elsewhere, workspaces, current } = useKernel();
+  const open = current && keptKey(current);
+  return workspaces.reduce((sum, w) => {
+    const state = keptKey(w) === open ? undefined : elsewhere[keptKey(w)];
+    return sum + (state?.state === "ready" ? state.requests + state.unread : 0);
+  }, 0);
 }
 
 /** The open workspace's mark in a tab's header: it opens the workspaces, and counts what waits in the others. */

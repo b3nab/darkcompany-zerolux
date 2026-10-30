@@ -82,8 +82,9 @@ export default function Authenticate() {
 
   const current = kernel.current;
   const host = kernel.here ? new URL(kernel.here).host : undefined;
-  // The workspace to open once signed in, by the name it has on this phone; else the kernel.
+  // The workspace invited to, or to open once signed in by its name on this phone; else the kernel.
   const title =
+    (joining ? invitation?.workspace : undefined) ||
     (current ? keptName(current) : undefined) ||
     auth.health?.workspace?.name ||
     host ||
