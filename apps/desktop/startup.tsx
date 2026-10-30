@@ -2,12 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import {
-  EllipsisIcon,
-  FolderOpenIcon,
-  MonitorSmartphoneIcon,
-  PlusIcon,
-} from "lucide-react";
+import { EllipsisIcon, MonitorSmartphoneIcon, PlusIcon } from "lucide-react";
 import { Button } from "../web/src/components/ui/button";
 import { Input } from "../web/src/components/ui/input";
 import { Label } from "../web/src/components/ui/label";
@@ -30,16 +25,13 @@ import {
 } from "./workspace-settings";
 import type { Network } from "./workspace-settings";
 
+/** A ZeroLux the app reaches: this computer's own, or another computer's. */
 export type Profile = {
   id: string;
-  workspace_id: string | null;
+  instance_id: string | null;
   name: string;
-  source:
-    | { kind: "folder"; directory: string; database?: string }
-    | { kind: "existing"; url: string };
+  source: { kind: "local" } | { kind: "existing"; url: string };
   running: boolean;
-  /** Its folder is not where it was. */
-  missing: boolean;
   start_on_launch: boolean;
   dataDirectory: string | null;
   database: string | null;
@@ -61,7 +53,7 @@ export type DesktopState = {
   revision: number;
   profiles: Profile[];
   active: string | null;
-  /** The app's kernel, which serves the workspaces in this computer's folders. */
+  /** This computer's own ZeroLux. */
   kernel: { network: Network | null; running: boolean };
   computers: JoinedWorkspace[];
   ready: boolean;
@@ -71,10 +63,8 @@ export type DesktopState = {
 type Action =
   | { action: "list" }
   | { action: "open" | "forget"; id: string }
-  | { action: "add"; url: string; workspace?: string }
-  | { action: "create"; name: string; directory: string }
-  | { action: "open_folder"; directory: string }
-  | { action: "locate"; id: string; directory: string }
+  | { action: "add"; url: string }
+  | { action: "new_workspace" }
   | { action: "edit"; id: string; url: string }
   | { action: "adopt"; id: string; directory: string }
   | { action: "network"; network: Network }
@@ -94,7 +84,6 @@ const initial: DesktopState = {
 
 /** What the right side shows instead of the recent workspaces. */
 type Panel =
-  | { kind: "new" }
   | { kind: "connect" }
   | { kind: "edit" | "adopt" | "remove"; id: string }
   | { kind: "network" }
@@ -104,7 +93,6 @@ declare global {
   interface Window {
     zeroluxDesktopState?: (state: DesktopState) => void;
     zeroluxDesktopFocus?: (id: string) => void;
-    zeroluxDesktopIntent?: (intent: string) => void;
   }
 }
 
@@ -119,23 +107,17 @@ export function newerDesktopState(current: DesktopState, next: DesktopState) {
   return next.revision >= current.revision ? next : current;
 }
 
-/** The folder a workspace is kept in: the project, for its `.zerolux`. */
+/** The folder a kernel's data is kept in: the project, for its `.zerolux`. */
 export function projectFolder(directory: string) {
   return directory.replace(/[\\/]\.zerolux[\\/]?$/, "");
 }
 
-const folderName = (directory: string) =>
-  projectFolder(directory).split(/[\\/]/).filter(Boolean).pop() ?? "";
-
-/** Where a saved workspace is: its folder, or the computer serving it. */
+/** Where a ZeroLux is: this computer's data folder, or the other computer's address. */
 function whereIs(profile: Profile) {
   if (profile.source.kind === "existing")
     return new URL(profile.source.url).host;
   return profile.dataDirectory ? projectFolder(profile.dataDirectory) : "";
 }
-
-const chooseFolder = (start?: string | null) =>
-  invoke<string | null>("choose_folder", { start: start ?? null });
 
 function Choice({
   icon,
@@ -175,178 +157,48 @@ function Initial({ name }: { name: string }) {
   );
 }
 
-/** A new workspace: its folder, and its name. */
-function NewWorkspace({
-  disabled,
-  create,
-  cancel,
-}: {
-  disabled: boolean;
-  create: (name: string, directory: string) => Promise<boolean>;
-  cancel: () => void;
-}) {
-  const [directory, setDirectory] = useState("");
-  const [name, setName] = useState("");
-  const [error, setError] = useState("");
-  return (
-    <form
-      aria-label="New workspace"
-      className="flex flex-col gap-4"
-      onSubmit={async (event) => {
-        event.preventDefault();
-        if (!disabled && directory && name.trim())
-          await create(name.trim(), directory);
-      }}
-    >
-      <h2 className="text-base font-semibold">New workspace</h2>
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="new-folder">Folder</Label>
-        <div className="flex gap-2">
-          <Input
-            id="new-folder"
-            value={directory}
-            readOnly
-            placeholder="A project, a company, anything"
-          />
-          <Button
-            type="button"
-            variant="outline"
-            disabled={disabled}
-            onClick={async () => {
-              setError("");
-              try {
-                const chosen = await chooseFolder(directory);
-                if (!chosen) return;
-                setDirectory(chosen);
-                if (!name) setName(folderName(chosen));
-              } catch (error) {
-                setError(String(error));
-              }
-            }}
-          >
-            Choose…
-          </Button>
-        </div>
-      </div>
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="new-name">Name</Label>
-        <Input
-          id="new-name"
-          required
-          maxLength={200}
-          disabled={disabled}
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-        />
-      </div>
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-      <div className="flex gap-2">
-        <Button type="submit" disabled={disabled || !directory || !name.trim()}>
-          Create workspace
-        </Button>
-        <Button type="button" variant="ghost" onClick={cancel}>
-          Cancel
-        </Button>
-      </div>
-    </form>
-  );
-}
-
-/** A workspace of another computer: its kernel's address, then which of its workspaces. */
+/** Another computer's ZeroLux, at its kernel's address. */
 function Connect({
   disabled,
   connect,
   cancel,
 }: {
   disabled: boolean;
-  connect: (url: string, workspace?: string) => Promise<boolean>;
+  connect: (url: string) => Promise<boolean>;
   cancel: () => void;
 }) {
   const [address, setAddress] = useState("");
-  const [served, setServed] = useState<{ id: string; name: string }[]>();
-  const [error, setError] = useState("");
-  const [looking, setLooking] = useState(false);
   return (
-    <div className="flex flex-col gap-4">
+    <form
+      aria-label="Connect to another computer"
+      className="flex flex-col gap-4"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (!disabled) await connect(address);
+      }}
+    >
       <h2 className="text-base font-semibold">Connect to another computer</h2>
-      <form
-        aria-label="Kernel address"
-        className="flex flex-col gap-2"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          if (disabled || looking) return;
-          setError("");
-          setServed(undefined);
-          setLooking(true);
-          try {
-            const found = await invoke<{ id: string; name: string }[]>(
-              "kernel_workspaces",
-              { url: address },
-            );
-            if (found.length === 1) await connect(address, found[0]!.id);
-            else setServed(found);
-          } catch (error) {
-            setError(String(error));
-          } finally {
-            setLooking(false);
-          }
-        }}
-      >
+      <div className="flex flex-col gap-2">
         <Label htmlFor="address">Address</Label>
-        <div className="flex gap-2">
-          <Input
-            id="address"
-            type="url"
-            required
-            placeholder="http://192.0.2.10:4310"
-            disabled={disabled}
-            value={address}
-            onChange={(event) => {
-              setAddress(event.target.value);
-              setServed(undefined);
-            }}
-          />
-          <Button
-            type="submit"
-            disabled={disabled || looking || !address.trim()}
-          >
-            {looking ? "Looking…" : "Continue"}
-          </Button>
-        </div>
-      </form>
-      {served && (
-        <ul aria-label="Its workspaces" className="flex flex-col gap-1">
-          {served.length === 0 && (
-            <li className="text-sm text-muted-foreground">No workspaces.</li>
-          )}
-          {served.map((workspace) => (
-            <li key={workspace.id}>
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={() => void connect(address, workspace.id)}
-                className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-accent disabled:opacity-50"
-              >
-                <Initial name={workspace.name} />
-                <span className="truncate font-medium">{workspace.name}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-      <Button variant="ghost" className="self-start" onClick={cancel}>
-        Cancel
-      </Button>
-    </div>
+        <Input
+          id="address"
+          type="url"
+          required
+          placeholder="http://192.0.2.10:4310"
+          disabled={disabled}
+          value={address}
+          onChange={(event) => setAddress(event.target.value)}
+        />
+      </div>
+      <div className="flex gap-2">
+        <Button type="submit" disabled={disabled || !address.trim()}>
+          Connect
+        </Button>
+        <Button type="button" variant="ghost" onClick={cancel}>
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }
 
@@ -491,31 +343,31 @@ function Joined({
   );
 }
 
-/** A saved workspace: opened by a click; its folder found again or removed when it is gone. */
+/** A ZeroLux the app reaches, opened by a click. */
 function Recent({
   profile,
   active,
   disabled,
+  canAdopt,
   act,
   show,
 }: {
   profile: Profile;
   active: boolean;
   disabled: boolean;
+  /** This computer has no ZeroLux of its own yet: another's can become it. */
+  canAdopt: boolean;
   act: (action: Action) => Promise<boolean>;
   show: (panel: Panel) => void;
 }) {
-  const local = profile.source.kind === "folder";
+  const local = profile.source.kind === "local";
   return (
-    <li
-      data-missing={profile.missing || undefined}
-      className="group flex items-center gap-1 rounded-lg pr-1 transition-colors hover:bg-accent data-missing:hover:bg-transparent"
-    >
+    <li className="group flex items-center gap-1 rounded-lg pr-1 transition-colors hover:bg-accent">
       <button
         type="button"
-        disabled={disabled || profile.missing}
+        disabled={disabled}
         onClick={() => void act({ action: "open", id: profile.id })}
-        className="flex min-w-0 flex-1 items-center gap-3 px-2 py-2 text-left disabled:cursor-default group-data-missing:opacity-55"
+        className="flex min-w-0 flex-1 items-center gap-3 px-2 py-2 text-left"
       >
         <Initial name={profile.name} />
         <span className="flex min-w-0 flex-col">
@@ -524,9 +376,7 @@ function Recent({
             title={whereIs(profile)}
             className="truncate font-mono text-[11px] text-muted-foreground"
           >
-            {profile.missing
-              ? `${whereIs(profile)} · Not found`
-              : whereIs(profile)}
+            {whereIs(profile)}
           </span>
         </span>
         <span className="ml-auto flex items-center gap-2">
@@ -539,88 +389,54 @@ function Recent({
           )}
         </span>
       </button>
-      {profile.missing && (
-        <>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={disabled}
-            onClick={async () => {
-              const chosen = await chooseFolder(
-                profile.dataDirectory &&
-                  projectFolder(profile.dataDirectory).replace(
-                    /[\\/][^\\/]*$/,
-                    "",
-                  ),
-              ).catch(() => null);
-              if (chosen)
-                await act({
-                  action: "locate",
-                  id: profile.id,
-                  directory: chosen,
-                });
-            }}
-          >
-            Locate…
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={disabled}
-            onClick={() => show({ kind: "remove", id: profile.id })}
-          >
-            Remove
-          </Button>
-        </>
-      )}
-      {!profile.missing && (
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label={`${profile.name}, more`}
-                disabled={disabled}
-              />
-            }
-          >
-            <EllipsisIcon />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            {local ? (
-              <DropdownMenuCheckboxItem
-                checked={profile.start_on_launch}
-                onCheckedChange={(enabled) =>
-                  void act({ action: "startup", id: profile.id, enabled })
-                }
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label={`${profile.name}, more`}
+              disabled={disabled}
+            />
+          }
+        >
+          <EllipsisIcon />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          {local ? (
+            <DropdownMenuCheckboxItem
+              checked={profile.start_on_launch}
+              onCheckedChange={(enabled) =>
+                void act({ action: "startup", id: profile.id, enabled })
+              }
+            >
+              Start when ZeroLux opens
+            </DropdownMenuCheckboxItem>
+          ) : (
+            <>
+              <DropdownMenuItem
+                onClick={() => show({ kind: "edit", id: profile.id })}
               >
-                Start when ZeroLux opens
-              </DropdownMenuCheckboxItem>
-            ) : (
-              <>
-                <DropdownMenuItem
-                  onClick={() => show({ kind: "edit", id: profile.id })}
-                >
-                  Change address…
-                </DropdownMenuItem>
+                Change address…
+              </DropdownMenuItem>
+              {canAdopt && (
                 <DropdownMenuItem
                   onClick={() => show({ kind: "adopt", id: profile.id })}
                 >
                   Run with this app…
                 </DropdownMenuItem>
-              </>
-            )}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              variant="destructive"
-              onClick={() => show({ kind: "remove", id: profile.id })}
-            >
-              Remove…
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
+              )}
+            </>
+          )}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            variant="destructive"
+            onClick={() => show({ kind: "remove", id: profile.id })}
+          >
+            Remove…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </li>
   );
 }
@@ -687,22 +503,18 @@ export function WorkspaceManager({
     };
   }, []);
   useEffect(() => {
-    // A window asks to change its connection, or the menu for a new workspace; an address
-    // being edited or a choice in progress stays.
+    // A window asks to change its connection; an address being edited or a choice in
+    // progress stays.
     const busy = panel && panel.kind !== "edit";
     window.zeroluxDesktopFocus = (id) => {
       const profile = state.profiles.find((one) => one.id === id);
       if (!busy && profile?.source.kind === "existing")
         show({ kind: "edit", id });
     };
-    window.zeroluxDesktopIntent = (intent) => {
-      if (intent === "new" && !previewing) show({ kind: "new" });
-    };
     return () => {
       delete window.zeroluxDesktopFocus;
-      delete window.zeroluxDesktopIntent;
     };
-  }, [state.profiles, panel, previewing]);
+  }, [state.profiles, panel]);
 
   const cancel = () => setPanel(null);
   return (
@@ -720,18 +532,7 @@ export function WorkspaceManager({
             label="New Workspace…"
             keys={keyLabel("CmdOrCtrl+Shift+N")}
             disabled={disabled}
-            onClick={() => show({ kind: "new" })}
-          />
-          <Choice
-            icon={<FolderOpenIcon />}
-            label="Open Folder…"
-            keys={keyLabel("CmdOrCtrl+O")}
-            disabled={disabled}
-            onClick={async () => {
-              const chosen = await chooseFolder().catch(() => null);
-              if (chosen)
-                await done({ action: "open_folder", directory: chosen });
-            }}
+            onClick={() => void done({ action: "new_workspace" })}
           />
           <Choice
             icon={<MonitorSmartphoneIcon />}
@@ -787,21 +588,11 @@ export function WorkspaceManager({
             </p>
           )}
         </div>
-        {panel?.kind === "new" ? (
-          <NewWorkspace
-            disabled={disabled}
-            cancel={cancel}
-            create={(name, directory) =>
-              done({ action: "create", name, directory })
-            }
-          />
-        ) : panel?.kind === "connect" ? (
+        {panel?.kind === "connect" ? (
           <Connect
             disabled={disabled}
             cancel={cancel}
-            connect={(url, workspace) =>
-              done({ action: "add", url, workspace })
-            }
+            connect={(url) => done({ action: "add", url })}
           />
         ) : panel?.kind === "join" ? (
           <Joined state={state} disabled={disabled} act={act} cancel={cancel} />
@@ -864,9 +655,9 @@ export function WorkspaceManager({
           <div className="flex flex-col gap-3">
             <h2 className="text-base font-semibold">Remove {shown.name}?</h2>
             <p className="text-sm text-muted-foreground">
-              {shown.source.kind === "folder"
-                ? "Its folder and files stay where they are."
-                : "The workspace stays on its computer."}
+              {shown.source.kind === "local"
+                ? "Its workspaces and files stay where they are."
+                : "Its workspaces stay on their computer."}
             </p>
             <div className="flex gap-2">
               <Button
@@ -901,6 +692,9 @@ export function WorkspaceManager({
                   profile={profile}
                   active={state.active === profile.id}
                   disabled={disabled}
+                  canAdopt={
+                    !state.profiles.some((one) => one.source.kind === "local")
+                  }
                   act={act}
                   show={show}
                 />

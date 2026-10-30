@@ -78,12 +78,6 @@ static COMMANDS: &[Command] = &[
         Runs::App,
     ),
     command(
-        "open-folder",
-        "Open Folder…",
-        Some("CmdOrCtrl+O"),
-        Runs::App,
-    ),
-    command(
         "manage-workspaces",
         "Manage Workspaces…",
         Some("CmdOrCtrl+Shift+O"),
@@ -299,7 +293,6 @@ fn file(app: &AppHandle) -> tauri::Result<Submenu<Wry>> {
             of(app, "new-session"),
             PredefinedMenuItem::separator(app),
             of(app, "new-workspace"),
-            of(app, "open-folder"),
             of(app, "manage-workspaces"),
             PredefinedMenuItem::separator(app),
             PredefinedMenuItem::close_window(app, None),
@@ -596,20 +589,7 @@ pub fn run(app: &AppHandle, id: &str) {
     match id {
         "new-window" => crate::app::ask(app, crate::app::Action::NewWindow { id: None }),
         "manage-workspaces" => crate::app::show_manager(app, None),
-        "new-workspace" => crate::app::show_manager_to(app, "new"),
-        "open-folder" => {
-            let app = app.clone();
-            app.dialog().file().pick_folder(move |chosen| {
-                if let Some(Ok(directory)) = chosen.map(|chosen| chosen.into_path()) {
-                    crate::app::ask_and_tell(
-                        &app,
-                        crate::app::Action::OpenFolder {
-                            directory: directory.to_string_lossy().into_owned(),
-                        },
-                    );
-                }
-            });
-        }
+        "new-workspace" => crate::app::ask_and_tell(app, crate::app::Action::NewWorkspace),
         "check-updates" => {
             tauri::async_runtime::spawn(update(app.clone()));
         }

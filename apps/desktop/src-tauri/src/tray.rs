@@ -556,7 +556,7 @@ pub fn tray_workspaces(
                     .trim_end_matches('/')
                     .to_owned(),
                 profile: profile.id.clone(),
-                workspace: profile.workspace_id.clone(),
+                workspace: profile.instance_id.clone(),
                 name: profile.name.clone(),
                 active: view.active.as_deref() == Some(profile.id.as_str()),
             })

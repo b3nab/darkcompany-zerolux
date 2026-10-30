@@ -225,13 +225,13 @@ impl Updates {
         if semver::Version::parse(feed["version"].as_str().unwrap())? <= current {
             return Ok(None);
         }
-        for profile in crate::catalog::Catalog::load(&self.root)?.profiles {
-            if profile.directory().is_some() && profile.database()?.is_file() {
-                ensure!(
-                    feed["schema"] == zerolux::build::schema(),
-                    "This update changes the workspace schema; this pre-release cannot install it automatically"
-                );
-            }
+        if let Some(instance) = crate::catalog::Catalog::load(&self.root)?.instance
+            && instance.database().is_file()
+        {
+            ensure!(
+                feed["schema"] == zerolux::build::schema(),
+                "This update changes the workspace schema; this pre-release cannot install it automatically"
+            );
         }
         let candidate = app
             .updater_builder()

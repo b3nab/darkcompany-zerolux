@@ -36,10 +36,23 @@ pub fn page(url: &tauri::Url) -> bool {
         || (url.scheme() == "http" && host == Some("zerolux-ui.localhost"))
 }
 
-/// The kernel path a request names, when it is an extension's file under its key and nothing
-/// else: no way up, no other route.
+/// The kernel path a request names, when it is an extension's file under its key, in its
+/// workspace's `w/<id>` on a kernel of several, and nothing else: no way up, no other route.
 fn kernel_path(path: &str) -> Option<String> {
-    let (key, file) = path.strip_prefix('/')?.split_once('/')?;
+    let path = path.strip_prefix('/')?;
+    let (workspace, path) = match path.strip_prefix("w/") {
+        Some(rest) => {
+            let (id, rest) = rest.split_once('/')?;
+            (
+                id.bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                    .then(|| format!("w/{id}/"))?,
+                rest,
+            )
+        }
+        None => (String::new(), path),
+    };
+    let (key, file) = path.split_once('/')?;
     let plain = |part: &str| {
         !part.is_empty()
             && part != "."
@@ -51,7 +64,7 @@ fn kernel_path(path: &str) -> Option<String> {
     (key.len() == 64
         && key.bytes().all(|byte| byte.is_ascii_hexdigit())
         && file.split('/').all(plain))
-    .then(|| format!("api/extension-ui/{key}/{file}"))
+    .then(|| format!("{workspace}api/extension-ui/{key}/{file}"))
 }
 
 pub fn serve<R: Runtime>(
@@ -144,7 +157,13 @@ mod tests {
             kernel_path(&format!("/{KEY}/native/board.js")).as_deref(),
             Some(&*format!("api/extension-ui/{KEY}/native/board.js"))
         );
+        assert_eq!(
+            kernel_path(&format!("/w/aspen-1/{KEY}/index.html")).as_deref(),
+            Some(&*format!("w/aspen-1/api/extension-ui/{KEY}/index.html"))
+        );
         for path in [
+            format!("/w/../{KEY}/index.html"),
+            format!("/w/aspen/api/{KEY}/index.html"),
             format!("/{KEY}/../../auth/session"),
             format!("/{KEY}/%2e%2e/health"),
             format!("/{KEY}/./index.html"),

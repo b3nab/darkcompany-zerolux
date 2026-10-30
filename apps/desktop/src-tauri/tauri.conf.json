@@ -22,7 +22,6 @@
           "permissions": [
             "allow-workspace-action",
             "allow-workspace-adoption-preview",
-            "allow-kernel-workspaces",
             "allow-choose-folder",
             "allow-autostart-status",
             "allow-autostart-set"

@@ -1,6 +1,6 @@
 import { afterAll, afterEach, expect, test } from "bun:test";
 import type { AuthHealth, ServedWorkspace } from "@zerolux/chat";
-import { arrive, invitedTo, place, WORKSPACES_PAGE } from "./instance";
+import { arrive, filesIn, invitedTo, place, WORKSPACES_PAGE } from "./instance";
 
 const kernel = "http://192.0.2.10:4310";
 const served = (...names: string[]): ServedWorkspace[] =>
@@ -215,4 +215,11 @@ test("an older kernel's first account becomes its workspace's owner", async () =
   const arrived = await arrive(connection, "/chats", "", undefined);
   expect(arrived.stage).toMatchObject({ kind: "in", basename: "" });
   expect(calls).toEqual([`identity ${kernel}`, `claim ${kernel}`]);
+});
+
+test("a workspace keeps its files in the .zerolux of the folder chosen", () => {
+  expect(filesIn("/tmp/aspen")).toBe("/tmp/aspen/.zerolux");
+  expect(filesIn("/tmp/aspen/")).toBe("/tmp/aspen/.zerolux");
+  expect(filesIn("/tmp/aspen/.zerolux")).toBe("/tmp/aspen/.zerolux");
+  expect(filesIn("C:\\Projects\\aspen")).toBe("C:\\Projects\\aspen\\.zerolux");
 });

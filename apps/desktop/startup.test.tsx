@@ -8,11 +8,10 @@ const state: DesktopState = {
   profiles: [
     {
       id: "profile-a",
-      workspace_id: "workspace-a",
-      name: "Studio",
+      instance_id: "instance-a",
+      name: "studio.example",
       source: { kind: "existing", url: "https://studio.example/" },
       running: false,
-      missing: false,
       start_on_launch: false,
       dataDirectory: null,
       database: null,
@@ -20,27 +19,14 @@ const state: DesktopState = {
     },
     {
       id: "profile-b",
-      workspace_id: "workspace-b",
-      name: "Local",
-      source: { kind: "folder", directory: "/tmp/aspen/.zerolux" },
+      instance_id: "instance-b",
+      name: "This computer",
+      source: { kind: "local" },
       running: true,
-      missing: false,
       start_on_launch: true,
       dataDirectory: "/tmp/aspen/.zerolux",
       database: "/tmp/aspen/.zerolux/zerolux.db",
-      localUrl: "http://127.0.0.1:4311/w/workspace-b/",
-    },
-    {
-      id: "profile-c",
-      workspace_id: "workspace-c",
-      name: "Moved",
-      source: { kind: "folder", directory: "/tmp/birch/.zerolux" },
-      running: false,
-      missing: true,
-      start_on_launch: false,
-      dataDirectory: "/tmp/birch/.zerolux",
-      database: "/tmp/birch/.zerolux/zerolux.db",
-      localUrl: null,
+      localUrl: "http://127.0.0.1:4311/",
     },
   ],
   active: "profile-a",
@@ -60,24 +46,18 @@ const state: DesktopState = {
   error: null,
 };
 
-test("a workspace whose folder is gone cannot be opened, the others can", () => {
+test("every ZeroLux the app reaches opens with a click", () => {
   const html = renderToStaticMarkup(<WorkspaceManager initialState={state} />);
   const rows = html.split("<li").slice(1);
-  expect(rows).toHaveLength(3);
-  // Each row opens its workspace with its first button.
+  expect(rows).toHaveLength(2);
+  // Each row opens its ZeroLux with its first button.
   const opens = (row: string) =>
     !/^[^>]*disabled=""/.test(row.split("<button")[1] ?? "");
-  expect(rows.map(opens)).toEqual([true, true, false]);
-  expect(rows.map((row) => row.includes(`data-missing="true"`))).toEqual([
-    false,
-    false,
-    true,
-  ]);
+  expect(rows.map(opens)).toEqual([true, true]);
 });
 
-test("a workspace is kept in its project's folder", () => {
+test("a kernel's data is kept in its project's folder", () => {
   expect(projectFolder("/tmp/aspen/.zerolux")).toBe("/tmp/aspen");
-  expect(projectFolder("/tmp/aspen/.zerolux/")).toBe("/tmp/aspen");
   expect(projectFolder("/tmp/aspen")).toBe("/tmp/aspen");
 });
 
@@ -124,7 +104,6 @@ test("registry commands are restricted to the packaged manager, not workspace pa
   expect(of("manager").permissions).toEqual([
     "allow-workspace-action",
     "allow-workspace-adoption-preview",
-    "allow-kernel-workspaces",
     "allow-choose-folder",
     "allow-autostart-status",
     "allow-autostart-set",

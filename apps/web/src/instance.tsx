@@ -580,10 +580,25 @@ export function WorkspaceRoot({ children }: { children: ReactNode }) {
           })
         }
         startCreating={() => void choose(true)}
+        cancel={
+          stage.workspaces.length > 0
+            ? () => {
+                history.replaceState(null, "", WORKSPACES_PAGE);
+                setStage({ ...stage, creating: false });
+              }
+            : undefined
+        }
         signOut={() => void signOut()}
       />
     </Frame>
   );
+}
+
+/** Where a workspace keeps its files in a folder chosen: its `.zerolux`. */
+export function filesIn(folder: string) {
+  if (/[\\/]\.zerolux[\\/]?$/.test(folder)) return folder;
+  const separator = folder.includes("\\") ? "\\" : "/";
+  return `${folder.replace(/[\\/]+$/, "")}${separator}.zerolux`;
 }
 
 /** A workspace in a window or tab of its own. */
@@ -604,6 +619,7 @@ export function Workspaces({
   open,
   create,
   startCreating,
+  cancel,
   signOut,
 }: {
   place: string;
@@ -617,6 +633,8 @@ export function Workspaces({
   open: (workspace: ServedWorkspace, newWindow: boolean) => void;
   create: (name: string, folder?: string) => void;
   startCreating: () => void;
+  /** Back to the list, from making a new one. */
+  cancel?: () => void;
   signOut: () => void;
 }) {
   const [name, setName] = useState("");
@@ -647,7 +665,8 @@ export function Workspaces({
           className="flex flex-col gap-3"
           onSubmit={(event) => {
             event.preventDefault();
-            if (!busy && name.trim()) create(name.trim(), folder || undefined);
+            if (!busy && name.trim())
+              create(name.trim(), folder ? filesIn(folder) : undefined);
           }}
         >
           {folders && (
@@ -687,13 +706,21 @@ export function Workspaces({
             value={name}
             onChange={(event) => setName(event.target.value)}
           />
-          <Button
-            type="submit"
-            className="self-start"
-            disabled={busy || !name.trim()}
-          >
-            Create workspace
-          </Button>
+          <div className="flex gap-2">
+            <Button type="submit" disabled={busy || !name.trim()}>
+              Create workspace
+            </Button>
+            {cancel && (
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={busy}
+                onClick={cancel}
+              >
+                Cancel
+              </Button>
+            )}
+          </div>
         </form>
       ) : (
         <>

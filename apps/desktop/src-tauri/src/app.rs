@@ -21,10 +21,12 @@ use tauri_plugin_opener::OpenerExt;
 use tokio::sync::{mpsc, oneshot, watch};
 use zerolux::{
     claude_runner::{RunnerProgram, executable},
-    server::{Server, ServerHandle, ServerOptions, WorkspaceOptions},
+    server::{Server, ServerOptions},
 };
 
 const MANAGER: &str = "manager";
+/// The page of a ZeroLux's window where a new workspace is made.
+const NEW_WORKSPACE: &str = "/workspaces?new";
 /// The windows open at the last quit.
 const WINDOWS: &str = "windows.json";
 
@@ -54,8 +56,6 @@ pub(crate) struct ProfileView {
     #[serde(flatten)]
     pub(crate) profile: Profile,
     running: bool,
-    /// Its folder is not where it was: to locate, or to remove.
-    missing: bool,
     #[serde(rename = "dataDirectory")]
     data_directory: Option<PathBuf>,
     database: Option<PathBuf>,
@@ -70,27 +70,12 @@ pub(crate) enum Action {
     Open {
         id: String,
     },
-    /// A workspace of another computer's kernel: the one named, or its only one.
+    /// Another computer's ZeroLux, at its kernel's address.
     Add {
         url: String,
-        #[serde(default)]
-        workspace: Option<String>,
     },
-    /// A new workspace, in `directory`'s `.zerolux`; without one, in the app's own data.
-    Create {
-        name: String,
-        #[serde(default)]
-        directory: Option<String>,
-    },
-    /// The workspace already in a folder.
-    OpenFolder {
-        directory: String,
-    },
-    /// The folder a saved workspace moved to.
-    Locate {
-        id: String,
-        directory: String,
-    },
+    /// A new workspace, made in this computer's own ZeroLux, which starts with the first one.
+    NewWorkspace,
     Edit {
         id: String,
         url: String,
@@ -127,12 +112,14 @@ pub(crate) enum Action {
     },
     /// The app was brought back with no window open: its workspace comes back.
     Reopen,
-    /// A workspace from a window's switcher: in a window of its own, or instead of the one
+    /// Another ZeroLux from a window's switcher: in a window of its own, or instead of the one
     /// that asks, where it was.
     #[serde(skip)]
     Switch {
         id: String,
         replacing: Option<String>,
+        /// The page a new window opens on.
+        page: Option<String>,
     },
     /// Internal only: package activation is requested by the authenticated updater.
     #[serde(skip)]
@@ -170,16 +157,15 @@ async fn workspace_action(
         .map_err(|_| "The desktop is closing".to_owned())?
 }
 
-/// A workspace in a window's switcher.
+/// A ZeroLux in a window's switcher, beside the workspaces of the window's own.
 #[derive(Serialize)]
 struct Choice {
     profile: String,
     name: String,
     /// The window's own.
     here: bool,
-    /// The computer whose kernel serves it; none for this one.
+    /// The computer whose kernel it is; none for this one.
     computer: Option<String>,
-    missing: bool,
     /// The requests waiting there, where the tray hears it.
     requests: usize,
 }
@@ -211,7 +197,6 @@ fn desktop_workspaces(
                 .existing_url()
                 .and_then(|url| tauri::Url::parse(url).ok())
                 .and_then(|url| url.host_str().map(str::to_owned)),
-            missing: entry.missing,
             requests: waiting.get(&entry.profile.id).copied().unwrap_or_default(),
             name: entry.profile.name,
             profile: entry.profile.id,
@@ -219,38 +204,25 @@ fn desktop_workspaces(
         .collect())
 }
 
-/// A workspace from a window's switcher: instead of this window, or in a new one.
+/// Another ZeroLux from a window's switcher, instead of this window or in a new one; or a new
+/// window of this one's, on a page of its own.
 #[tauri::command]
-fn desktop_switch(window: WebviewWindow, profile: String, new_window: bool) -> Result<(), String> {
+fn desktop_switch(
+    window: WebviewWindow,
+    profile: String,
+    new_window: bool,
+    path: Option<String>,
+) -> Result<(), String> {
     workspace_window(&window)?;
     ask_and_tell(
         window.app_handle(),
         Action::Switch {
             id: profile,
             replacing: (!new_window).then(|| window.label().to_owned()),
+            page: path.as_deref().and_then(local::app_route),
         },
     );
     Ok(())
-}
-
-/// The workspaces a kernel at an address serves, to choose one to connect to.
-#[tauri::command]
-async fn kernel_workspaces(
-    window: WebviewWindow,
-    url: String,
-) -> Result<Vec<serde_json::Value>, String> {
-    if window.label() != MANAGER || !window.url().ok().as_ref().is_some_and(local::boot_page) {
-        return Err("Workspaces are connected from the desktop's local window only".into());
-    }
-    connection::served(&url)
-        .await
-        .map(|served| {
-            served
-                .into_iter()
-                .map(|workspace| serde_json::json!({"id": workspace.id, "name": workspace.name}))
-                .collect()
-        })
-        .map_err(|error| format!("{error:#}"))
 }
 
 #[derive(Serialize)]
@@ -269,7 +241,7 @@ async fn adoption_info(profile: &Profile, directory: &Path) -> Result<zerolux::h
         "Open this workspace once before adopting it, to preserve its previous drafts"
     );
     let workspace_id = profile
-        .workspace_id
+        .instance_id
         .as_deref()
         .context("The connection has no verified workspace identity")?;
     let info = zerolux::handoff::describe(directory).await?;
@@ -326,15 +298,12 @@ struct Lifecycle {
     phase: AtomicU8,
 }
 
-/// The app's kernel, running: one address for every workspace in this computer's folders.
+/// The app's kernel, running: this computer's ZeroLux, with all its workspaces.
 struct Kernel {
-    handle: ServerHandle,
     url: tauri::Url,
     network: zerolux::handoff::Network,
     stop: watch::Sender<bool>,
     task: tokio::task::JoinHandle<Result<()>>,
-    /// The workspace each profile is, by its ID on this kernel.
-    served: HashMap<String, String>,
 }
 
 struct WorkspaceView {
@@ -613,15 +582,6 @@ pub(crate) fn ask_and_tell(app: &tauri::AppHandle, action: Action) {
     });
 }
 
-/// The workspaces' window, at what the menu asked for: `new`, a new workspace.
-pub(crate) fn show_manager_to(app: &tauri::AppHandle, intent: &str) {
-    show_manager(app, None);
-    if let Some(window) = app.get_webview_window(MANAGER) {
-        let intent = serde_json::to_string(intent).expect("intent");
-        let _ = window.eval(format!("window.zeroluxDesktopIntent?.({intent})"));
-    }
-}
-
 pub(crate) fn show_manager(app: &tauri::AppHandle, profile: Option<&str>) {
     if let Some(window) = app.get_webview_window(MANAGER) {
         let _ = window.show();
@@ -631,26 +591,6 @@ pub(crate) fn show_manager(app: &tauri::AppHandle, profile: Option<&str>) {
             let _ = window.eval(format!("window.zeroluxDesktopFocus?.({id})"));
         }
     }
-}
-
-/// Where a workspace is kept in a folder chosen: its `.zerolux`, or the `.zerolux` chosen.
-fn workspace_folder(chosen: &Path) -> Result<PathBuf> {
-    ensure!(
-        chosen.is_absolute() && chosen.is_dir(),
-        "Choose a folder of this computer"
-    );
-    Ok(
-        if chosen.file_name() == Some(std::ffi::OsStr::new(".zerolux")) {
-            chosen.to_owned()
-        } else {
-            chosen.join(".zerolux")
-        },
-    )
-}
-
-/// A workspace's base on the app's kernel: `<kernel>/w/<id>/`.
-fn workspace_base(kernel: &tauri::Url, id: &str) -> tauri::Url {
-    kernel.join(&format!("w/{id}/")).expect("workspace base")
 }
 
 fn render(app: &tauri::AppHandle, view: &View) {
@@ -678,10 +618,8 @@ impl Host {
     }
 
     fn snapshot(&self, busy: bool, error: Option<String>) -> View {
-        let kernel = self
-            .kernel
-            .as_ref()
-            .filter(|kernel| !kernel.task.is_finished());
+        let kernel = self.running();
+        let instance = self.catalog.instance.as_ref();
         View {
             revision: 0,
             profiles: self
@@ -689,27 +627,27 @@ impl Host {
                 .profiles
                 .iter()
                 .map(|profile| {
-                    let served =
-                        kernel.and_then(|kernel| Some((kernel, kernel.served.get(&profile.id)?)));
+                    let local = profile.source == Source::Local;
                     ProfileView {
                         profile: profile.clone(),
-                        running: served.is_some(),
-                        missing: profile.missing(),
-                        data_directory: profile.directory().map(Path::to_owned),
-                        database: profile.database().ok(),
-                        local_url: served
-                            .map(|(kernel, id)| workspace_base(&kernel.url, id).to_string()),
+                        running: local && kernel.is_some(),
+                        data_directory: instance
+                            .filter(|_| local)
+                            .map(|instance| instance.directory.clone()),
+                        database: instance
+                            .filter(|_| local)
+                            .map(|instance| instance.database()),
+                        local_url: kernel
+                            .filter(|_| local)
+                            .map(|kernel| kernel.url.to_string()),
                     }
                 })
                 .collect(),
             active: self.active.clone(),
             kernel: KernelView {
-                network: kernel.map(|kernel| kernel.network.clone()).or_else(|| {
-                    self.catalog
-                        .instance
-                        .as_ref()
-                        .map(|instance| instance.network.clone())
-                }),
+                network: kernel
+                    .map(|kernel| kernel.network.clone())
+                    .or_else(|| instance.and_then(|instance| instance.network.clone())),
                 running: kernel.is_some(),
             },
             computers: self.computers.views(),
@@ -749,98 +687,32 @@ impl Host {
             .filter(|kernel| !kernel.task.is_finished())
     }
 
-    /// Serves a workspace of this computer's folders on the app's kernel, started with it if
-    /// need be: the kernel's address, and the workspace's ID there.
-    async fn serve(
-        &mut self,
-        profile: &Profile,
-        lease: Option<zerolux::lease::Lease>,
-    ) -> Result<(tauri::Url, String)> {
-        if let Some(kernel) = self.running()
-            && let Some(id) = kernel.served.get(&profile.id)
-        {
-            return Ok((kernel.url.clone(), id.clone()));
+    /// This computer's ZeroLux, started if need be, with the lease of its database when it was
+    /// taken over: its address.
+    async fn start(&mut self, lease: Option<zerolux::lease::Lease>) -> Result<tauri::Url> {
+        if let Some(kernel) = self.running() {
+            return Ok(kernel.url.clone());
         }
-        let database = profile.database()?;
-        let directory = profile
-            .directory()
-            .context("This is not a workspace of this computer")?
-            .to_owned();
-        // A saved workspace is never created again where its folder was.
-        ensure!(
-            profile.workspace_id.is_none() || database.is_file(),
-            "This workspace's folder is missing: locate it or remove it"
-        );
-        let options = WorkspaceOptions {
-            initial_workspace_name: (!database.is_file()).then(|| profile.name.clone()),
-            data_dir: directory,
-            database: zerolux::db::Location::Sqlite(database),
-        };
-        let id = match self.running() {
-            Some(kernel) => {
-                let handle = kernel.handle.clone();
-                let info = match lease {
-                    Some(lease) => handle.add_workspace_with_lease(options, lease).await,
-                    None => handle.add_workspace(options).await,
-                }
-                .context("Serve this workspace")?;
-                info.id
-            }
-            None => {
-                if let Some(previous) = self.kernel.take() {
-                    let _ = previous.task.await;
-                }
-                self.start(options, lease).await?
-            }
-        };
-        let kernel = self.kernel.as_mut().expect("the app's kernel");
-        kernel.served.insert(profile.id.clone(), id.clone());
-        let url = kernel.url.clone();
-        // The folder holds the workspace saved, and no other saved one.
-        let other = self
+        if let Some(previous) = self.kernel.take() {
+            let _ = previous.task.await;
+        }
+        let instance = self
             .catalog
-            .profiles
-            .iter()
-            .find(|other| other.id != profile.id && other.workspace_id.as_ref() == Some(&id))
-            .map(|other| other.name.clone());
-        if profile
-            .workspace_id
-            .as_ref()
-            .is_some_and(|expected| expected != &id)
-            || other.is_some()
-        {
-            self.unserve(&profile.id).await?;
-            match other {
-                Some(name) => anyhow::bail!("This folder's workspace is already saved as {name}"),
-                None => anyhow::bail!("This folder holds a different workspace"),
-            }
-        }
-        Ok((url, id))
-    }
-
-    /// Starts the app's kernel with its first workspace, at the address it keeps.
-    async fn start(
-        &mut self,
-        first: WorkspaceOptions,
-        lease: Option<zerolux::lease::Lease>,
-    ) -> Result<String> {
+            .instance
+            .clone()
+            .context("This computer has no ZeroLux of its own yet")?;
         let resources = self.resources()?;
-        let instance = self.catalog.instance.clone();
         let network = instance
-            .as_ref()
-            .map(|instance| instance.network.clone())
+            .network
+            .clone()
             .unwrap_or_else(|| zerolux::handoff::Network::local(0));
-        let livekit = match instance
-            .as_ref()
-            .and_then(|instance| instance.services.as_ref())
-        {
+        let livekit = match &instance.services {
             Some(file) => serde_json::from_slice::<zerolux::livekit::LiveKitConfig>(
                 &std::fs::read(self.root.root.join(file))
                     .context("Read the kernel's private service settings")?,
             )
             .context("Read the kernel's private service settings")?,
-            // Its own, apart from any workspace's folder.
-            None => zerolux::livekit::LiveKitConfig::from_env(self.root.root.join("kernel")),
+            None => zerolux::livekit::LiveKitConfig::from_env(instance.directory.clone()),
         };
         let options = ServerOptions {
             address: network.address(),
@@ -852,9 +724,8 @@ impl Host {
                     zerolux::api::PublicOrigin::new(origin, network.public_livekit_url.clone())
                 })
                 .transpose()?,
-            data_dir: first.data_dir,
-            database: first.database,
-            initial_workspace_name: first.initial_workspace_name,
+            data_dir: instance.directory.clone(),
+            database: zerolux::db::Location::Sqlite(instance.database()),
             web_dir: resources.join("web"),
             livekit: Some(livekit),
             runner: Some(RunnerProgram::bundled(&resources)),
@@ -869,39 +740,22 @@ impl Host {
             Some(lease) => Server::start_with_lease(options, lease).await,
             None => Server::start(options).await,
         }
-        .context("Start the app's kernel")?;
-        let handle = server.handle();
-        let started: Result<(String, zerolux::handoff::Network)> = async {
-            let id = handle
-                .workspaces()
-                .await?
-                .into_iter()
-                .next()
-                .context("The kernel started without its workspace")?
-                .id;
-            let network = zerolux::handoff::Network {
-                port: server.address().port(),
-                ..network
-            };
-            // The address stays the same across launches: the windows' storage is by origin.
-            if instance.as_ref().map(|instance| &instance.network) != Some(&network) {
-                let mut catalog = self.catalog.clone();
-                catalog.instance = Some(Instance {
-                    network: network.clone(),
-                    services: instance.and_then(|instance| instance.services),
-                });
-                self.save(catalog)?;
+        .context("Start this computer's ZeroLux")?;
+        let network = zerolux::handoff::Network {
+            port: server.address().port(),
+            ..network
+        };
+        // The address stays the same across launches: the windows' storage is by origin.
+        if instance.network.as_ref() != Some(&network) {
+            let mut catalog = self.catalog.clone();
+            if let Some(instance) = catalog.instance.as_mut() {
+                instance.network = Some(network.clone());
             }
-            Ok((id, network))
-        }
-        .await;
-        let (id, network) = match started {
-            Ok(started) => started,
-            Err(error) => {
+            if let Err(error) = self.save(catalog) {
                 server.shutdown().await?;
                 return Err(error);
             }
-        };
+        }
         let url: tauri::Url = server.url().parse().expect("bound kernel URL");
         let (stop, mut stopped) = watch::channel(false);
         let task = tokio::spawn(async move {
@@ -914,60 +768,35 @@ impl Host {
                 .await
         });
         self.kernel = Some(Kernel {
-            handle,
-            url,
+            url: url.clone(),
             network,
             stop,
             task,
-            served: HashMap::new(),
         });
-        Ok(id)
+        Ok(url)
     }
 
-    /// Stops the app's kernel and waits for it: the profiles it served, to serve again.
-    async fn stop_kernel(&mut self) -> Result<Vec<String>> {
+    /// Stops the app's kernel and waits for it; whether it was running.
+    async fn stop_kernel(&mut self) -> Result<bool> {
         let Some(kernel) = self.kernel.take() else {
-            return Ok(Vec::new());
+            return Ok(false);
         };
         kernel.stop.send_replace(true);
-        let served = kernel.served.into_keys().collect();
+        let running = !kernel.task.is_finished();
         kernel
             .task
             .await
             .context("Wait for the app's kernel to stop")??;
-        Ok(served)
+        Ok(running)
     }
 
-    /// Stops serving one workspace; its folder stays as it is. A kernel left with none stops
-    /// too, and leaves its address free.
-    async fn unserve(&mut self, id: &str) -> Result<()> {
-        let Some(kernel) = self.kernel.as_mut() else {
-            return Ok(());
+    /// The ZeroLux a profile reaches, verified, this computer's started first.
+    async fn verified(&mut self, profile: &Profile) -> Result<connection::VerifiedKernel> {
+        let url = match &profile.source {
+            Source::Existing { url } => connection::kernel_url(url)?,
+            Source::Local => self.start(None).await?,
         };
-        if let Some(workspace) = kernel.served.remove(id)
-            && !kernel.task.is_finished()
-        {
-            kernel.handle.remove_workspace(&workspace).await?;
-        }
-        if kernel.served.is_empty() {
-            self.stop_kernel().await?;
-        }
-        Ok(())
-    }
-
-    /// The workspace a profile is, verified on its kernel, served first when it is in a folder of
-    /// this computer.
-    async fn verified(&mut self, profile: &Profile) -> Result<connection::VerifiedWorkspace> {
-        let (url, expected) = match &profile.source {
-            Source::Existing { url } => {
-                (connection::kernel_url(url)?, profile.workspace_id.clone())
-            }
-            Source::Folder { .. } => {
-                let (url, id) = self.serve(profile, None).await?;
-                (url, Some(id))
-            }
-        };
-        connection::verify(url.as_str(), expected.as_deref()).await
+        connection::verify(url.as_str(), profile.instance_id.as_deref()).await
     }
 
     /// Forgets the windows their person closed.
@@ -980,6 +809,11 @@ impl Host {
     }
 
     async fn open(&mut self, id: &str) -> Result<()> {
+        self.open_on(id, None).await
+    }
+
+    /// A ZeroLux's window, a new one on `page` when it has none open.
+    async fn open_on(&mut self, id: &str, page: Option<&str>) -> Result<()> {
         self.prune();
         let mut profile = self.catalog.profile(id)?.clone();
         let verified = self.verified(&profile).await?;
@@ -989,11 +823,14 @@ impl Host {
             view.window.set_title(&profile.name)?;
         }
         if !self.windows.contains_key(id) {
-            self.restore_profile_views(&profile, &verified.base).await?;
+            self.restore_profile_views(&profile, &verified.url).await?;
         }
         if !self.windows.contains_key(id) {
             let saved = if profile.app_ui {
-                None
+                page.map(|path| SavedView {
+                    path: Some(path.to_owned()),
+                    ..Default::default()
+                })
             } else {
                 Some(SavedView {
                     can_leave: Some(true),
@@ -1003,7 +840,7 @@ impl Host {
                 })
             };
             let window = self
-                .build_view(&profile, &verified.base, saved.as_ref())
+                .build_view(&profile, &verified.url, saved.as_ref())
                 .await?;
             self.windows.insert(id.to_owned(), vec![window]);
         }
@@ -1032,7 +869,7 @@ impl Host {
 
     /// Another window of a workspace, a little below and to the right of the one before, as
     /// the system's own windows open; the first opens it.
-    async fn new_window(&mut self, id: Option<String>) -> Result<()> {
+    async fn new_window(&mut self, id: Option<String>, page: Option<String>) -> Result<()> {
         self.prune();
         let focused = self.app.webview_windows().into_values().find_map(|window| {
             window
@@ -1054,7 +891,13 @@ impl Host {
         }
         let profile = self.catalog.profile(&id)?.clone();
         let verified = self.verified(&profile).await?;
-        let view = self.build_view(&profile, &verified.base, None).await?;
+        let saved = page.map(|path| SavedView {
+            path: Some(path),
+            ..Default::default()
+        });
+        let view = self
+            .build_view(&profile, &verified.url, saved.as_ref())
+            .await?;
         if let Some(position) = self
             .windows
             .get(&id)
@@ -1187,7 +1030,7 @@ impl Host {
         let popup = self.app.clone();
         let profile_id = profile.id.clone();
         let popup_id = profile.id.clone();
-        let context = serde_json::json!({"profileId":profile.id,"workspaceId":profile.workspace_id,"managed":profile.directory().is_some(),"kernelUrl":url.as_str(),"platform":std::env::consts::OS});
+        let context = serde_json::json!({"profileId":profile.id,"instanceId":profile.instance_id,"managed":profile.source == Source::Local,"kernelUrl":url.as_str(),"platform":std::env::consts::OS});
         // Once per window, not again on a reload: its drafts and the page it was on.
         let restore = match saved {
             Some(saved) => {
@@ -1363,7 +1206,7 @@ impl Host {
             matches!(profile.source, Source::Existing { .. }),
             "An app-managed workspace's address cannot be changed"
         );
-        let verified = connection::verify(url, profile.workspace_id.as_deref()).await?;
+        let verified = connection::verify(url, profile.instance_id.as_deref()).await?;
         if profile.existing_url() == Some(verified.url.as_str()) {
             profile.observe(&verified)?;
             let mut catalog = self.catalog.clone();
@@ -1382,7 +1225,7 @@ impl Host {
             // Each window again at the new address, where it was, with its drafts.
             let mut replacements = Vec::new();
             for one in &saved {
-                match self.build_view(&profile, &verified.base, Some(one)).await {
+                match self.build_view(&profile, &verified.url, Some(one)).await {
                     Ok(view) => replacements.push(view),
                     Err(error) => {
                         for view in &replacements {
@@ -1458,29 +1301,18 @@ impl Host {
     }
 
     async fn adopt(&mut self, id: &str, directory: &Path) -> Result<()> {
-        for journal in Catalog::pending_adoptions(&self.root.root)? {
-            ensure!(
-                !self
-                    .running()
-                    .is_some_and(|kernel| kernel.served.contains_key(&journal.previous.id)),
-                "An ownership transfer is still being reconciled; restart the app before another transfer"
-            );
-        }
+        ensure!(
+            Catalog::pending_adoptions(&self.root.root)?.is_empty() || self.running().is_none(),
+            "An ownership transfer is still being reconciled; restart the app before another transfer"
+        );
         self.catalog.recover_adoptions(&self.root.root).await?;
+        // One ZeroLux of its own per computer: the CLI's becomes it, or this one stays.
+        ensure!(
+            self.catalog.instance.is_none(),
+            "This computer already runs its own ZeroLux: connect to the CLI's address instead"
+        );
         let previous = self.catalog.profile(id)?.clone();
         let info = adoption_info(&previous, directory).await?;
-        ensure!(
-            !self
-                .catalog
-                .profiles
-                .iter()
-                .filter(|profile| profile.id != id)
-                .any(|profile| {
-                    profile.directory() == Some(info.directory.as_path())
-                        || profile.database().ok().as_ref() == Some(&info.database)
-                }),
-            "These files are already managed by another saved connection"
-        );
         self.resources()?;
         self.prune();
         let result = self.adopt_prepared(&previous, info).await;
@@ -1519,7 +1351,7 @@ impl Host {
             ))?;
             info.validate(
                 &info.directory,
-                previous.workspace_id.as_deref().unwrap_or_default(),
+                previous.instance_id.as_deref().unwrap_or_default(),
             )?;
             let backup = self
                 .root
@@ -1551,22 +1383,16 @@ impl Host {
                 &private_name,
                 &transfer.configuration.livekit,
             )?;
-            // The app's first kernel keeps the CLI's address and services; one already set up
-            // serves the workspace at its own.
-            if self.catalog.instance.is_none() {
-                let mut catalog = self.catalog.clone();
-                catalog.instance = Some(Instance {
-                    network: info.network.clone(),
-                    services: Some(private_name.clone()),
-                });
-                self.save(catalog)?;
-            }
-            let mut profile = previous.adopted(&info)?;
-            let (url, id) = self.serve(&profile, Some(lease)).await?;
-            let verified = connection::verify(url.as_str(), Some(&id)).await?;
+            // The CLI's kernel becomes this app's, with its address and its services.
+            let mut catalog = self.catalog.clone();
+            catalog.instance = Some(Instance::taken_over(&info, &previous.id));
+            self.save(catalog)?;
+            let mut profile = previous.adopted()?;
+            let url = self.start(Some(lease)).await?;
+            let verified = connection::verify(url.as_str(), profile.instance_id.as_deref()).await?;
             profile.observe(&verified)?;
             let views = self
-                .replacement_views(&profile, &verified.base, &saved)
+                .replacement_views(&profile, &verified.url, &saved)
                 .await?;
             let mut catalog = self.catalog.clone();
             *catalog.profile_mut(&previous.id)? = profile;
@@ -1604,7 +1430,7 @@ impl Host {
                     for view in views {
                         let _ = view.close();
                     }
-                    self.unserve(&previous.id).await?;
+                    self.stop_kernel().await?;
                     journal.recover(&self.root.root, &mut self.catalog).await?;
                     self.restore_kernel(kernel_before)?;
                     if let Some(url) = &view_kernel {
@@ -1618,8 +1444,8 @@ impl Host {
             }
             Err(error) => {
                 let mut recovery = Vec::new();
-                if let Err(stopped) = self.unserve(&previous.id).await {
-                    recovery.push(format!("Stop serving the workspace here: {stopped:#}"));
+                if let Err(stopped) = self.stop_kernel().await {
+                    recovery.push(format!("Stop the attempted kernel: {stopped:#}"));
                 }
                 if let Err(restored) = self.restore_kernel(kernel_before) {
                     recovery.push(format!("Restore the kernel's address: {restored:#}"));
@@ -1655,13 +1481,17 @@ impl Host {
         Ok(())
     }
 
-    /// The app's kernel at another address: every workspace it serves comes back there, each
-    /// window where it was with its drafts. Nothing changes when one cannot.
+    /// The app's kernel at another address: its windows come back there, where they were, with
+    /// their drafts. Nothing changes when it cannot.
     async fn change_network(&mut self, network: zerolux::handoff::Network) -> Result<()> {
         network.validate()?;
         ensure!(network.port != 0, "Choose a port from 1 to 65535");
-        let before = self.catalog.instance.clone();
-        if before.as_ref().map(|instance| &instance.network) == Some(&network)
+        let before = self
+            .catalog
+            .instance
+            .clone()
+            .context("This computer has no ZeroLux of its own yet")?;
+        if before.network.as_ref() == Some(&network)
             && self
                 .running()
                 .is_none_or(|kernel| kernel.network == network)
@@ -1669,101 +1499,58 @@ impl Host {
             return Ok(());
         }
         let mut catalog = self.catalog.clone();
-        catalog.instance = Some(Instance {
-            network,
-            services: before
-                .as_ref()
-                .and_then(|instance| instance.services.clone()),
-        });
+        if let Some(instance) = catalog.instance.as_mut() {
+            instance.network = Some(network);
+        }
         if self.running().is_none() {
             return self.save(catalog);
         }
+        let profile = self
+            .catalog
+            .local()
+            .cloned()
+            .context("This computer's ZeroLux is not saved")?;
         self.prune();
-        let served: Vec<String> = self
-            .running()
-            .map(|kernel| kernel.served.keys().cloned().collect())
-            .unwrap_or_default();
         let result: Result<()> = async {
-            let mut saved = HashMap::new();
-            for id in &served {
-                saved.insert(id.clone(), self.prepare_views(id).await?);
-            }
+            let saved = self.prepare_views(&profile.id).await?;
             self.save(catalog)?;
             self.stop_kernel().await?;
-            match self.serve_again(&served, &saved).await {
-                Ok(views) => {
-                    for (id, views) in views {
-                        self.replace_views(&id, views)?;
-                    }
-                    Ok(())
-                }
+            let reopened: Result<Vec<WorkspaceView>> = async {
+                let verified = self.verified(&profile).await?;
+                self.replacement_views(&profile, &verified.url, &saved)
+                    .await
+            }
+            .await;
+            match reopened {
+                Ok(views) => self.replace_views(&profile.id, views),
                 Err(error) => {
                     self.stop_kernel().await?;
                     let mut catalog = self.catalog.clone();
-                    catalog.instance = before;
+                    catalog.instance = Some(before);
                     self.save(catalog)?;
-                    self.serve_again(&served, &HashMap::new())
+                    self.start(None)
                         .await
-                        .context("The previous address could not serve the workspaces again")?;
+                        .context("The previous address could not start again")?;
                     Err(error)
                 }
             }
         }
         .await;
-        for id in &served {
-            self.unfreeze(id);
-        }
+        self.unfreeze(&profile.id);
         result
-    }
-
-    /// The workspaces served before, served again by the kernel as it is now, with new windows
-    /// for those saved.
-    async fn serve_again(
-        &mut self,
-        served: &[String],
-        saved: &HashMap<String, Vec<SavedView>>,
-    ) -> Result<Vec<(String, Vec<WorkspaceView>)>> {
-        let mut replaced = Vec::new();
-        let result: Result<()> = async {
-            for id in served {
-                let profile = self.catalog.profile(id)?.clone();
-                let verified = self.verified(&profile).await?;
-                let views = self
-                    .replacement_views(
-                        &profile,
-                        &verified.base,
-                        saved.get(id).map(Vec::as_slice).unwrap_or_default(),
-                    )
-                    .await?;
-                replaced.push((id.clone(), views));
-            }
-            Ok(())
-        }
-        .await;
-        match result {
-            Ok(()) => Ok(replaced),
-            Err(error) => {
-                for (_, views) in replaced {
-                    for view in views {
-                        let _ = view.close();
-                    }
-                }
-                Err(error)
-            }
-        }
     }
 
     async fn perform(&mut self, action: Action) -> Result<()> {
         match action {
             Action::List => {}
             Action::Open { id } => self.open(&id).await?,
-            Action::Add { url, workspace } => {
-                let verified = connection::verify(&url, workspace.as_deref()).await?;
+            Action::Add { url } => {
+                let verified = connection::verify(&url, None).await?;
                 if let Some(saved) = self
                     .catalog
                     .profiles
                     .iter()
-                    .find(|profile| profile.workspace_id.as_ref() == Some(&verified.id))
+                    .find(|profile| profile.instance_id.as_ref() == Some(&verified.id))
                 {
                     let id = saved.id.clone();
                     return self.open(&id).await;
@@ -1773,73 +1560,11 @@ impl Host {
                 self.save(catalog)?;
                 self.open(&id).await?;
             }
-            Action::Create { name, directory } => {
-                let folder = match directory {
-                    Some(chosen) => workspace_folder(Path::new(&chosen))?,
-                    None => self
-                        .root
-                        .root
-                        .join("workspaces")
-                        .join(uuid::Uuid::new_v4().to_string()),
-                };
-                ensure!(
-                    !folder.join("zerolux.db").exists(),
-                    "This folder already has a workspace: open it instead"
-                );
+            Action::NewWorkspace => {
                 let mut catalog = self.catalog.clone();
-                let id = catalog.add_folder(&name, folder)?;
+                let id = catalog.add_local(self.root.root.join("instance"));
                 self.save(catalog)?;
-                self.open_new(&id).await?;
-            }
-            Action::OpenFolder { directory } => {
-                let folder = workspace_folder(Path::new(&directory))?;
-                ensure!(
-                    folder.join("zerolux.db").is_file(),
-                    "This folder has no workspace: create one in it"
-                );
-                if let Some(saved) = self
-                    .catalog
-                    .profiles
-                    .iter()
-                    .find(|profile| profile.directory() == Some(folder.as_path()))
-                {
-                    let id = saved.id.clone();
-                    return self.open(&id).await;
-                }
-                let name = folder
-                    .parent()
-                    .and_then(Path::file_name)
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "Workspace".into());
-                let mut catalog = self.catalog.clone();
-                let id = catalog.add_folder(&name, folder)?;
-                self.save(catalog)?;
-                self.open_new(&id).await?;
-            }
-            Action::Locate { id, directory } => {
-                let folder = workspace_folder(Path::new(&directory))?;
-                ensure!(
-                    folder.join("zerolux.db").is_file(),
-                    "This folder has no workspace"
-                );
-                let previous = self.catalog.profile(&id)?.clone();
-                ensure!(
-                    previous.directory().is_some(),
-                    "Only a workspace of this computer has a folder"
-                );
-                self.unserve(&id).await?;
-                let mut catalog = self.catalog.clone();
-                catalog.profile_mut(&id)?.source = Source::Folder {
-                    directory: folder,
-                    database: None,
-                };
-                self.save(catalog)?;
-                if let Err(error) = self.open(&id).await {
-                    let mut catalog = self.catalog.clone();
-                    *catalog.profile_mut(&id)? = previous;
-                    self.save(catalog)?;
-                    return Err(error);
-                }
+                self.open_at(&id, NEW_WORKSPACE).await?;
             }
             Action::Edit { id, url } => self.edit(&id, &url).await?,
             Action::Adopt { id, directory } => self.adopt(&id, Path::new(&directory)).await?,
@@ -1848,8 +1573,8 @@ impl Host {
                 let mut catalog = self.catalog.clone();
                 let profile = catalog.profile_mut(&id)?;
                 ensure!(
-                    profile.directory().is_some(),
-                    "Only a workspace of this computer can start with the app"
+                    profile.source == Source::Local,
+                    "Only this computer's ZeroLux can start with the app"
                 );
                 profile.start_on_launch = enabled;
                 self.save(catalog)?;
@@ -1859,9 +1584,13 @@ impl Host {
                 self.computers.join(&url, &code, &name, program).await?;
             }
             Action::Leave { id } => self.computers.leave(&id).await?,
-            Action::NewWindow { id } => self.new_window(id).await?,
+            Action::NewWindow { id } => self.new_window(id, None).await?,
             Action::Reopen => self.reopen().await?,
-            Action::Switch { id, replacing } => self.switch(&id, replacing.as_deref()).await?,
+            Action::Switch {
+                id,
+                replacing,
+                page,
+            } => self.switch(&id, replacing.as_deref(), page).await?,
             Action::InstallUpdate(pending) => self.install_update(*pending).await?,
             Action::Forget { id } => {
                 self.prune();
@@ -1869,7 +1598,9 @@ impl Host {
                     self.unfreeze(&id);
                     return Err(error);
                 }
-                if let Err(error) = self.unserve(&id).await {
+                if self.catalog.profile(&id)?.source == Source::Local
+                    && let Err(error) = self.stop_kernel().await
+                {
                     self.unfreeze(&id);
                     return Err(error);
                 }
@@ -1887,31 +1618,36 @@ impl Host {
                     self.active = None;
                 }
                 show_manager(&self.app, None);
-                // Browser storage and the workspace's folder are deliberately not deleted here.
+                // Browser storage and the kernel's files are deliberately not deleted here.
             }
         }
         Ok(())
     }
 
-    /// A workspace just saved, opened; one that cannot open is not kept.
-    async fn open_new(&mut self, id: &str) -> Result<()> {
-        let opened = self.open(id).await;
-        if opened.is_err() {
-            let _ = self.unserve(id).await;
-            let mut catalog = self.catalog.clone();
-            if catalog.forget(id).is_ok() {
-                let _ = self.save(catalog);
-            }
+    /// A ZeroLux's window on a page of its own, as New Workspace opens this computer's.
+    async fn open_at(&mut self, id: &str, page: &str) -> Result<()> {
+        let open = self.windows.contains_key(id);
+        self.open_on(id, Some(page)).await?;
+        // A window already open goes to the page itself.
+        if open && let Some(view) = self.windows.get(id).and_then(|views| views.last()) {
+            let _ =
+                tauri::Emitter::emit_to(&view.window, view.window.label(), "zerolux-open", page);
         }
-        opened
+        Ok(())
     }
 
-    /// A workspace from a window's switcher. In a window of its own; or instead of the window
-    /// that asks, where it was, once that one's sends are done. One already open comes forward.
-    async fn switch(&mut self, id: &str, replacing: Option<&str>) -> Result<()> {
+    /// Another ZeroLux from a window's switcher. In a window of its own; or instead of the
+    /// window that asks, where it was, once that one's sends are done. One already open comes
+    /// forward.
+    async fn switch(
+        &mut self,
+        id: &str,
+        replacing: Option<&str>,
+        page: Option<String>,
+    ) -> Result<()> {
         self.prune();
         let Some(label) = replacing else {
-            return self.new_window(Some(id.to_owned())).await;
+            return self.new_window(Some(id.to_owned()), page).await;
         };
         if self.windows.contains_key(id) {
             return self.activate(id);
@@ -1968,7 +1704,7 @@ impl Host {
             .cloned()
             .collect();
         for profile in profiles {
-            if let Err(error) = self.serve(&profile, None).await {
+            if let Err(error) = self.start(None).await {
                 self.startup_retry.insert(
                     profile.id.clone(),
                     (1, tokio::time::Instant::now() + Duration::from_secs(2)),
@@ -2016,7 +1752,7 @@ impl Host {
             if !profile.start_on_launch {
                 continue;
             }
-            if let Err(error) = self.serve(&profile, None).await {
+            if let Err(error) = self.start(None).await {
                 if attempt < 6 {
                     self.startup_retry.insert(
                         id,
@@ -2054,29 +1790,19 @@ impl Host {
                 let id = profile.id.clone();
                 return self.open(&id).await;
             }
-            return self
-                .perform(Action::Add {
-                    url,
-                    workspace: None,
-                })
-                .await;
+            return self.perform(Action::Add { url }).await;
         }
         if launch.local {
             if let Some(profile) = self
                 .catalog
                 .profiles
                 .iter()
-                .find(|profile| profile.directory().is_some())
+                .find(|profile| profile.source == Source::Local)
             {
                 let id = profile.id.clone();
                 return self.open(&id).await;
             }
-            return self
-                .perform(Action::Create {
-                    name: "Workspace".into(),
-                    directory: None,
-                })
-                .await;
+            return self.perform(Action::NewWorkspace).await;
         }
         if self.reopen_windows().await? {
             return Ok(());
@@ -2164,9 +1890,14 @@ impl Host {
             .catalog
             .profiles
             .iter()
-            .filter(|profile| profile.directory().is_some())
-            .map(|profile| Ok((profile.id.clone(), profile.database()?)))
-            .collect::<Result<_>>()?;
+            .filter(|profile| profile.source == Source::Local)
+            .filter_map(|profile| {
+                Some((
+                    profile.id.clone(),
+                    self.catalog.instance.as_ref()?.database(),
+                ))
+            })
+            .collect();
         let databases: Vec<_> = databases
             .into_iter()
             .filter(|(_, path)| path.is_file())
@@ -2187,7 +1918,7 @@ impl Host {
             .compare_exchange(0, 3, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| anyhow::anyhow!("The desktop is already closing"))?;
         self.prune();
-        let mut running = Vec::new();
+        let mut running = false;
         let mut leases = Vec::new();
         let mut stopped = false;
         let mut computers_stopped = false;
@@ -2278,12 +2009,8 @@ impl Host {
             ));
         }
         if stopped {
-            for id in running {
-                if let Ok(profile) = self.catalog.profile(&id).cloned()
-                    && let Err(error) = self.serve(&profile, None).await
-                {
-                    recovery.push(format!("{}: {error:#}", profile.name));
-                }
+            if running && let Err(error) = self.start(None).await {
+                recovery.push(format!("This computer's ZeroLux: {error:#}"));
             }
             if computers_stopped && let Ok(resources) = self.resources() {
                 self.computers = Links::start(
@@ -2380,7 +2107,7 @@ impl Host {
                 let verified = self.verified(&profile).await?;
                 profile.observe(&verified)?;
                 let views = self
-                    .replacement_views(&profile, &verified.base, &states)
+                    .replacement_views(&profile, &verified.url, &states)
                     .await?;
                 for view in &views {
                     view.window.show()?;
@@ -2518,7 +2245,6 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             crate::autostart::autostart_set,
             desktop_workspaces,
             desktop_switch,
-            kernel_workspaces,
             crate::menu::menu_commands,
             crate::menu::menu_sections,
             crate::menu::menu_run,

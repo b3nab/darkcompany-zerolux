@@ -1,8 +1,9 @@
-//! A workspace's sign-in, kept across restarts in the system's credential store: Keychain on
-//! macOS, Credential Manager on Windows, Secret Service on Linux. One entry per saved
-//! connection, read and written only by that connection's packaged page, and given back only
-//! for the workspace it was saved for. Where the store is missing or refuses, the page signs in
-//! again, as with no saved sign-in.
+//! A ZeroLux's sign-in, one for all its workspaces, kept across restarts in the system's
+//! credential store: Keychain on macOS, Credential Manager on Windows, Secret Service on Linux.
+//! One entry per saved connection, read and written only by that connection's packaged pages,
+//! and given back only for the identity it was saved for: the instance, or an older kernel's
+//! one workspace. Where the store is missing or refuses, the page signs in again, as with no
+//! saved sign-in.
 use serde::{Deserialize, Serialize};
 use tauri::WebviewWindow;
 
