@@ -66,7 +66,7 @@ async function start(line: string) {
       version: 1,
       pid: process.pid,
       address: server.url.origin,
-      workspace_id: config.workspace_id,
+      instance_id: config.instance_id,
     }),
   );
 }

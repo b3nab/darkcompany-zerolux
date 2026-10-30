@@ -146,12 +146,19 @@ fn build_identity() {
     println!("cargo::rustc-env=ZEROLUX_SOURCE_COMMIT={commit}");
     println!("cargo::rustc-env=ZEROLUX_SOURCE_DIRTY={dirty}");
     println!("cargo::rustc-env=ZEROLUX_BUILD_UNIX={seconds}");
+    // The schema is the embedded migration history: every version of both dialects.
     let mut schema = Sha256::new();
     for provider in ["sqlite", "postgres"] {
-        let path = root.join(format!(
-            "crates/zerolux/migrations/{provider}/0001_bootstrap.sql"
-        ));
-        schema.update(std::fs::read(path).expect("bootstrap schema"));
+        let history = root.join(format!("crates/zerolux/migrations/{provider}"));
+        let mut versions: Vec<PathBuf> = std::fs::read_dir(history)
+            .expect("migration history")
+            .map(|entry| entry.expect("a migration").path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "sql"))
+            .collect();
+        versions.sort();
+        for path in versions {
+            schema.update(std::fs::read(path).expect("a migration"));
+        }
     }
     println!(
         "cargo::rustc-env=ZEROLUX_BUILD_SCHEMA={:x}",

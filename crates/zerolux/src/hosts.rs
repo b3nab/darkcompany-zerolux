@@ -6,7 +6,7 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrde
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    entity::{actors, hosts},
+    entity::hosts,
     model::ChatIdentity,
     store::{Error, Result, Store, now_ms, random_token, text, token_hash},
 };
@@ -83,9 +83,10 @@ impl Store {
             .await
             .unwrap_or_else(|_| "This computer".into());
         let tx = self.write().await?;
-        match hosts::Entity::find_by_id(&id).one(&tx).await? {
+        match hosts::Entity::find_by_id(self.key(&id)).one(&tx).await? {
             Some(_) => {
                 hosts::ActiveModel {
+                    workspace_id: Set(self.workspace.clone()),
                     id: Set(id),
                     seen_at: Set(now),
                     ..Default::default()
@@ -94,13 +95,9 @@ impl Store {
                 .await?;
             }
             None => {
-                let owner = actors::Entity::find()
-                    .filter(actors::Column::Kind.eq("human"))
-                    .filter(actors::Column::InvitedBy.is_null())
-                    .one(&tx)
-                    .await?
-                    .ok_or(Error::NotFound)?;
+                let owner = self.owner().await?;
                 hosts::ActiveModel {
+                    workspace_id: Set(self.workspace.clone()),
                     id: Set(id),
                     name: Set(name),
                     person_id: Set(owner.id),
@@ -125,6 +122,7 @@ impl Store {
             return Err(Error::Forbidden);
         }
         Ok(hosts::Entity::find()
+            .filter(hosts::Column::WorkspaceId.eq(&self.workspace))
             .order_by_asc(hosts::Column::CreatedAt)
             .all(self.db())
             .await?
@@ -143,7 +141,7 @@ impl Store {
         if change.name.is_none() && change.open.is_none() {
             return Err(Error::Invalid("Nothing to change".into()));
         }
-        let row = hosts::Entity::find_by_id(id)
+        let row = hosts::Entity::find_by_id(self.key(id))
             .one(self.db())
             .await?
             .ok_or(Error::NotFound)?;
@@ -151,6 +149,7 @@ impl Store {
             return Err(Error::Forbidden);
         }
         let mut update = hosts::ActiveModel {
+            workspace_id: Set(row.workspace_id),
             id: Set(row.id),
             ..Default::default()
         };
@@ -204,6 +203,7 @@ impl Store {
         let code = random_token();
         let now = now_ms();
         let row = hosts::ActiveModel {
+            workspace_id: Set(self.workspace.clone()),
             id: Set(uuid::Uuid::new_v4().to_string()),
             name: Set(name),
             person_id: Set(who.actor()?.to_owned()),
@@ -225,12 +225,14 @@ impl Store {
         let secret = format!("{}{}", crate::host_link::SECRET_PREFIX, random_token());
         let tx = self.write().await?;
         let row = hosts::Entity::find()
+            .filter(hosts::Column::WorkspaceId.eq(&self.workspace))
             .filter(hosts::Column::LinkHash.eq(token_hash(code)))
             .filter(hosts::Column::LinkExpiresAt.gt(now_ms()))
             .one(&tx)
             .await?
             .ok_or(Error::NotFound)?;
         let mut update = hosts::ActiveModel {
+            workspace_id: Set(row.workspace_id.clone()),
             id: Set(row.id.clone()),
             secret_hash: Set(Some(token_hash(&secret))),
             link_hash: Set(None),
@@ -250,6 +252,7 @@ impl Store {
     /// The joined host a secret belongs to.
     pub async fn host_by_secret(&self, secret: &str) -> Result<Option<String>> {
         Ok(hosts::Entity::find()
+            .filter(hosts::Column::WorkspaceId.eq(&self.workspace))
             .filter(hosts::Column::SecretHash.eq(token_hash(secret)))
             .one(self.db())
             .await?
@@ -259,6 +262,7 @@ impl Store {
     /// A joined host connected again.
     pub async fn host_seen(&self, id: &str) -> Result<()> {
         hosts::ActiveModel {
+            workspace_id: Set(self.workspace.clone()),
             id: Set(id.to_owned()),
             seen_at: Set(now_ms()),
             ..Default::default()
@@ -271,7 +275,7 @@ impl Store {
     /// Its person removes a joined computer; its secret stops working at once. A kernel serving
     /// the workspace's database is not removed this way.
     pub async fn remove_host(&self, who: &ChatIdentity, id: &str) -> Result<()> {
-        let row = hosts::Entity::find_by_id(id)
+        let row = hosts::Entity::find_by_id(self.key(id))
             .one(self.db())
             .await?
             .ok_or(Error::NotFound)?;
@@ -283,13 +287,15 @@ impl Store {
                 "This computer runs a kernel of the workspace; stop that kernel instead".into(),
             ));
         }
-        hosts::Entity::delete_by_id(id).exec(self.db()).await?;
+        hosts::Entity::delete_by_id(self.key(id))
+            .exec(self.db())
+            .await?;
         Ok(())
     }
 
     /// The person whose computer a host is.
     pub async fn host_person(&self, id: &str) -> Result<Option<String>> {
-        Ok(hosts::Entity::find_by_id(id)
+        Ok(hosts::Entity::find_by_id(self.key(id))
             .one(self.db())
             .await?
             .map(|row| row.person_id))
@@ -304,7 +310,10 @@ impl Store {
             // A kernel without a host of its own is its owner's.
             return Ok(self.is_workspace_owner(who).await?.then_some(HostUse::Own));
         };
-        let Some(row) = hosts::Entity::find_by_id(id).one(self.db()).await? else {
+        let Some(row) = hosts::Entity::find_by_id(self.key(id))
+            .one(self.db())
+            .await?
+        else {
             return Ok(None);
         };
         Ok(if who.actor_id.as_ref() == Some(&row.person_id) {

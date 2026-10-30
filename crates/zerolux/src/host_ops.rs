@@ -34,6 +34,7 @@ impl RecordRef {
     /// The session as this computer's own code reads it.
     pub fn model(&self) -> sessions::Model {
         sessions::Model {
+            workspace_id: String::new(),
             id: self.id.clone(),
             actor_id: None,
             harness: self.harness.clone(),

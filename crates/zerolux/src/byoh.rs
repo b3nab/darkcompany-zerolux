@@ -16,14 +16,16 @@ impl Store {
             &tx,
             sql(
                 &tx,
-                "INSERT INTO actors (id, name, kind, owner_id, harness, created_at)
-                SELECT $1, $2, 'agent', id, $3, $4 FROM actors WHERE id = $5 AND kind = 'human' AND archived = FALSE RETURNING *",
+                                "INSERT INTO actors (workspace_id, id, name, kind, owner_id, harness, created_at)
+                SELECT workspace_id, $1, $2, 'agent', id, $3, $4 FROM actors
+                WHERE workspace_id = $6 AND id = $5 AND kind = 'human' AND archived = FALSE RETURNING *",
                 [
                     Uuid::new_v4().to_string().into(),
                     name.into(),
                     input.harness.id().into(),
                     now_ms().into(),
                     input.owner_id.into(),
+                    (&self.workspace).into(),
                 ],
             ),
         )

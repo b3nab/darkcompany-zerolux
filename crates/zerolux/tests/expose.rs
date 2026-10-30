@@ -7,12 +7,15 @@ use serde_json::{Value, json};
 use zerolux::{
     api::{self, Exposed},
     model::SetOwnerName,
-    store::Store,
 };
+
+#[path = "support/db.rs"]
+mod db;
 
 const EXPOSED: &str = "192.0.2.7:4310";
 
 struct Kernel {
+    _database: db::TestDatabase,
     _dir: tempfile::TempDir,
     client: Client,
     /// Both servers bind loopback; connection metadata simulates a separate device.
@@ -32,7 +35,8 @@ impl Drop for Kernel {
 impl Kernel {
     async fn start() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("test.db")).await.unwrap();
+        let database = db::TestDatabase::new(dir.path().join("test.db")).await;
+        let store = database.open().await;
         store
             .set_owner_name(SetOwnerName {
                 name: "Test owner".into(),
@@ -65,6 +69,7 @@ impl Kernel {
             }));
         }
         Self {
+            _database: database,
             _dir: dir,
             client: Client::builder().no_proxy().build().unwrap(),
             local: urls.pop().unwrap(),
@@ -204,9 +209,9 @@ async fn loopback_still_checks_host_origin_and_never_turns_an_invalid_bearer_int
 #[tokio::test]
 async fn an_exposed_kernel_refuses_a_request_of_unknown_origin() {
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(&dir.path().join("test.db")).await.unwrap();
+    let database = db::TestDatabase::new(dir.path().join("test.db")).await;
     let router = api::router_exposed(
-        store,
+        database.open().await,
         dir.path().join("web"),
         None,
         Some(Exposed::new(EXPOSED.parse().unwrap())),

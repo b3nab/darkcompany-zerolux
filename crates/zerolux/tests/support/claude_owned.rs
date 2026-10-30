@@ -15,12 +15,14 @@ use zerolux::{
     harness::Harness,
     livekit::{LiveKit, LiveKitConfig},
     model::{ChatSessionStatus, HireChatSession, SendChatMessage, SetOwnerName},
-    store::Store,
+    store::{Instance, Store},
 };
 
 pub(crate) struct Fixture {
     pub(crate) dir: tempfile::TempDir,
     pub(crate) program: RunnerProgram,
+    /// The fixture's workspace, made by the first kernel started on it.
+    workspace: tokio::sync::OnceCell<String>,
 }
 impl Fixture {
     pub(crate) fn new() -> Self {
@@ -51,7 +53,11 @@ impl Fixture {
             pi_entry: None,
             sdk_executable: None,
         };
-        Self { dir, program }
+        Self {
+            dir,
+            program,
+            workspace: Default::default(),
+        }
     }
     pub(crate) fn trace(&self) -> Vec<Value> {
         std::fs::read_to_string(self.dir.path().join("workspace/runner-trace.jsonl"))
@@ -151,7 +157,20 @@ pub(crate) struct Kernel {
 impl Kernel {
     pub(crate) async fn start(fixture: &Fixture, port: u16) -> Self {
         let root = fixture.dir.path();
-        let store = Store::open(&root.join("chat.db")).await.unwrap();
+        let instance = Instance::open(&zerolux::db::Location::Sqlite(root.join("chat.db")))
+            .await
+            .unwrap();
+        let workspace = fixture
+            .workspace
+            .get_or_init(|| async {
+                instance
+                    .create_workspace("owner-account", "Owner", "Workspace", None)
+                    .await
+                    .unwrap()
+                    .id
+            })
+            .await;
+        let store = instance.store(workspace);
         store
             .set_owner_name(SetOwnerName {
                 name: "Owner".into(),

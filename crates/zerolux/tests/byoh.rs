@@ -4,12 +4,14 @@ use serde_json::{Value, json};
 use sqlx::sqlite::SqlitePoolOptions;
 use zerolux::{
     api,
+    db::Location,
     model::{Actor, SetOwnerName, Workspace},
-    store::Store,
+    store::Instance,
 };
 
 struct Kernel {
     dir: tempfile::TempDir,
+    workspace: String,
     owner: Actor,
     url: String,
     client: Client,
@@ -18,7 +20,15 @@ struct Kernel {
 impl Kernel {
     async fn start() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("test.db")).await.unwrap();
+        let instance = Instance::open(&Location::Sqlite(dir.path().join("test.db")))
+            .await
+            .unwrap();
+        let workspace = instance
+            .create_workspace("owner-account", "Owner", "Workspace", None)
+            .await
+            .unwrap()
+            .id;
+        let store = instance.store(&workspace);
         let owner = store
             .set_owner_name(SetOwnerName {
                 name: "Test owner".into(),
@@ -33,6 +43,7 @@ impl Kernel {
         });
         Self {
             dir,
+            workspace,
             owner,
             url,
             client: Client::builder().no_proxy().build().unwrap(),
@@ -146,7 +157,10 @@ async fn the_schema_is_whole_and_the_data_outlives_a_reopen() {
             .unwrap()
             .is_empty()
     );
-    let store = Store::open(&path).await.unwrap();
+    let store = Instance::open(&Location::Sqlite(path))
+        .await
+        .unwrap()
+        .store(&kernel.workspace);
     let workspace = store.workspace().await.unwrap();
     assert!(!workspace.onboarding_required);
     assert_eq!(workspace.actors.len(), 2);

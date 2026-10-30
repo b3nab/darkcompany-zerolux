@@ -1,6 +1,6 @@
 //! The owner of a fixture kernel started as a process: the real authentication service runs
-//! from this checkout with this machine's `bun`, and the owner signs up with the setup
-//! credential the kernel wrote in its data directory.
+//! from this checkout with this machine's `bun`; the owner is the instance's first account
+//! and makes its workspace.
 #![allow(dead_code)]
 
 use std::{
@@ -32,12 +32,56 @@ pub fn bun_dir() -> PathBuf {
         .expect("bun is installed")
 }
 
-/// A kernel's first workspace: the address its people and agents call.
-pub async fn workspace(kernel: &str) -> String {
-    let health: serde_json::Value = Client::builder()
-        .no_proxy()
-        .build()
+/// The fixture owner's workspace on a kernel, kept in `folder` (the kernel's data directory,
+/// as a CLI's own workspace is): made by the first call, found again after a restart. The
+/// address its people and agents call.
+pub async fn workspace(kernel: &str, folder: &Path) -> String {
+    let owner = client(kernel, Duration::from_secs(20)).await;
+    let listed: serde_json::Value = owner
+        .get(format!("{kernel}/api/workspaces"))
+        .send()
+        .await
         .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = match listed["workspaces"].as_array().unwrap().as_slice() {
+        [] => {
+            let created: serde_json::Value = owner
+                .post(format!("{kernel}/api/workspaces"))
+                .json(&json!({ "name": "Fixture", "folder": std::path::absolute(folder).unwrap() }))
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            created["workspace"]["id"].as_str().unwrap().to_owned()
+        }
+        [only] => only["id"].as_str().unwrap().to_owned(),
+        _ => panic!("the fixture owner has one workspace"),
+    };
+    format!("{kernel}/w/{id}")
+}
+
+/// A client that is the fixture owner: the instance's first account, signed up, or signed in
+/// again when that already happened (a restarted kernel). One sign-in for every workspace at
+/// `base`'s kernel.
+pub async fn client(base: &str, timeout: Duration) -> Client {
+    let kernel = reqwest::Url::parse(base)
+        .unwrap()
+        .origin()
+        .ascii_serialization();
+    let anonymous = Client::builder()
+        .no_proxy()
+        .timeout(timeout)
+        .build()
+        .unwrap();
+    let health: serde_json::Value = anonymous
         .get(format!("{kernel}/api/health"))
         .send()
         .await
@@ -45,32 +89,9 @@ pub async fn workspace(kernel: &str) -> String {
         .json()
         .await
         .unwrap();
-    let id = health["workspaces"][0]["id"]
-        .as_str()
-        .expect("the kernel serves a workspace");
-    format!("{kernel}/w/{id}")
-}
-
-/// A client that is the owner: the first account, signed up and claimed, or signed in again
-/// when that already happened (a restarted kernel).
-pub async fn client(base: &str, timeout: Duration) -> Client {
-    let anonymous = Client::builder()
-        .no_proxy()
-        .timeout(timeout)
-        .build()
-        .unwrap();
-    let health: serde_json::Value = anonymous
-        .get(format!("{base}/api/health"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let first = health["auth"]["setup_required"] == true;
-    let response = if first {
+    let response = if health["auth"]["setup_required"] == true {
         anonymous
-            .post(format!("{base}/api/auth/sign-up/email"))
+            .post(format!("{kernel}/api/auth/sign-up/email"))
             .json(&json!({ "name": "Fixture owner", "email": EMAIL, "password": PASSWORD }))
             .send()
             .await
@@ -79,7 +100,7 @@ pub async fn client(base: &str, timeout: Duration) -> Client {
             .unwrap()
     } else {
         anonymous
-            .post(format!("{base}/api/auth/sign-in/email"))
+            .post(format!("{kernel}/api/auth/sign-in/email"))
             .json(&json!({ "email": EMAIL, "password": PASSWORD }))
             .send()
             .await
@@ -93,22 +114,12 @@ pub async fn client(base: &str, timeout: Duration) -> Client {
         reqwest::header::AUTHORIZATION,
         format!("Bearer {token}").parse().unwrap(),
     );
-    let owner = Client::builder()
+    Client::builder()
         .no_proxy()
         .timeout(timeout)
         .default_headers(headers)
         .build()
-        .unwrap();
-    if first {
-        owner
-            .post(format!("{base}/api/auth/claim"))
-            .send()
-            .await
-            .unwrap()
-            .error_for_status()
-            .unwrap();
-    }
-    owner
+        .unwrap()
 }
 
 fn token_of(response: &reqwest::Response) -> String {

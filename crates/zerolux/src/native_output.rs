@@ -456,6 +456,7 @@ async fn watch_once(
     let sessions = {
         let tx = store.read().await?;
         sessions::Entity::find()
+            .filter(sessions::Column::WorkspaceId.eq(store.workspace_id()))
             .filter(sessions::Column::StoppedAt.is_null())
             .all(&tx)
             .await?

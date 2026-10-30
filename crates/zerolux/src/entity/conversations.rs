@@ -4,6 +4,8 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "conversations")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
+    pub workspace_id: String,
+    #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub id: String,
     #[sea_orm(column_type = "Text")]
     pub kind: String,
@@ -24,16 +26,23 @@ pub struct Model {
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
+        belongs_to = "super::workspace::Entity",
+        from = "Column::WorkspaceId",
+        to = "super::workspace::Column::Id",
+        fk_name = "conversations_workspace_id_fkey"
+    )]
+    Workspace,
+    #[sea_orm(
         belongs_to = "Entity",
-        from = "Column::ParentId",
-        to = "Column::Id",
+        from = "(Column::WorkspaceId, Column::ParentId)",
+        to = "(Column::WorkspaceId, Column::Id)",
         fk_name = "conversations_parent_id_fkey"
     )]
     Parent,
     #[sea_orm(
         belongs_to = "super::messages::Entity",
-        from = "Column::RootMessageId",
-        to = "super::messages::Column::Id",
+        from = "(Column::WorkspaceId, Column::RootMessageId)",
+        to = "(super::messages::Column::WorkspaceId, super::messages::Column::Id)",
         fk_name = "conversations_root_message_id_fkey"
     )]
     RootMessage,
@@ -63,6 +72,7 @@ impl super::schema::Definition for Entity {
             Index::create()
                 .name("one_open_thread_per_root")
                 .table(Entity)
+                .col(Column::WorkspaceId)
                 .col(Column::RootMessageId)
                 .unique()
                 .and_where(Expr::col(Column::ClosedAt).is_null())

@@ -174,7 +174,7 @@ async fn identities_are_scoped_tokens_are_not_exposed_and_stop_revokes_cached_id
             .unwrap()
             .is_object()
     );
-    let stored = entity::sessions::Entity::find_by_id(&aspen.session.id)
+    let stored = entity::sessions::Entity::find_by_id(f.store.key(&aspen.session.id))
         .one(f.store.db())
         .await
         .unwrap()

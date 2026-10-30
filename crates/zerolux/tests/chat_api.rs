@@ -219,7 +219,7 @@ async fn child_kernel_discovers_and_hires_an_isolated_native_session_over_http()
             eprintln!("fixture kernel: {line}");
         }
     });
-    let base = owner::workspace(&format!("http://127.0.0.1:{port}")).await;
+    let base = owner::workspace(&format!("http://127.0.0.1:{port}"), dir.path()).await;
     let url = format!("{base}/api");
     let client = owner::client(&base, Duration::from_secs(20)).await;
     let discovery = client
@@ -2299,13 +2299,14 @@ async fn a_computer_joins_as_a_host_and_answers_over_its_channel() {
     );
     // Its process there ends.
     use sea_orm::EntityTrait as _;
-    let pid = zerolux::entity::background_commands::Entity::find_by_id(command_id.as_str())
-        .one(kernel.store.db())
-        .await
-        .unwrap()
-        .unwrap()
-        .pid
-        .unwrap() as u32;
+    let pid =
+        zerolux::entity::background_commands::Entity::find_by_id(kernel.store.key(&command_id))
+            .one(kernel.store.db())
+            .await
+            .unwrap()
+            .unwrap()
+            .pid
+            .unwrap() as u32;
     let mut alive = true;
     for _ in 0..100 {
         alive = zerolux::platform::alive(pid);

@@ -24,11 +24,11 @@ enum Command {
         expose: Option<IpAddr>,
         #[arg(long, default_value_t = 4310)]
         port: u16,
-        /// Where this kernel keeps links, sockets, secrets and LiveKit assets. With a SQLite
-        /// database given by path, its directory.
+        /// Where this kernel keeps its LiveKit assets and the folders of workspaces made
+        /// without one. With a SQLite database given by path, its directory.
         #[arg(long, env = "ZEROLUX_DATA_DIR")]
         data_dir: Option<PathBuf>,
-        /// The workspace's data: a SQLite file, or a postgresql:// URL.
+        /// The instance's data, all its workspaces': a SQLite file, or a postgresql:// URL.
         #[arg(long, env = "ZEROLUX_DATABASE", default_value = ".zerolux/zerolux.db")]
         database: String,
         /// The web app's files: by default the ones a release packages with the kernel, or the
@@ -243,7 +243,6 @@ pub async fn run() -> anyhow::Result<()> {
                 expose,
                 data_dir,
                 database,
-                initial_workspace_name: None,
                 web_dir,
                 livekit: None,
                 public: match public_origin {

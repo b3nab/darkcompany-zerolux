@@ -1,5 +1,5 @@
 //! The kernel's database: one SeaORM connection over the same pool the store queries, and
-//! the migrations that shape it. SQLite is the local workspace's database; PostgreSQL the
+//! the migrations that shape it. SQLite is a local instance's database; PostgreSQL the
 //! server's. Both run the same migrations.
 //!
 //! Opening is one serialized write transaction: validation of what is already there and
@@ -24,7 +24,7 @@ mod migrations;
 /// One lock for every kernel migrating the same PostgreSQL database.
 const MIGRATION_LOCK: i64 = 0x5a45_524f_4c55_5831; // "ZEROLUX1"
 
-/// Where a workspace keeps its data: a SQLite file, or a PostgreSQL server by URL. Neither
+/// Where an instance keeps its data: a SQLite file, or a PostgreSQL server by URL. Neither
 /// `Display` nor `Debug` shows the URL's credentials, query or fragment.
 #[derive(Clone, PartialEq, Eq)]
 pub enum Location {
@@ -153,7 +153,7 @@ async fn migrate<M: MigratorTrait>(db: &DatabaseConnection) -> Result<(), Error>
         .await
         .map_err(|error| match error {
             DbErr::Migration(reason) => Error::Schema(format!(
-                "This workspace database was migrated by a newer ZeroLux or has an incomplete migration history; it is not opened: {reason}"
+                "This database was migrated by a newer ZeroLux or has an incomplete migration history; it is not opened: {reason}"
             )),
             other => schema(other),
         })?;

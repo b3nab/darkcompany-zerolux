@@ -4,6 +4,8 @@ use sea_orm::entity::prelude::*;
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "extensions")]
 pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
+    pub workspace_id: String,
     /// `publisher.name`.
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub id: String,
@@ -31,7 +33,15 @@ pub struct Model {
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {}
+pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::workspace::Entity",
+        from = "Column::WorkspaceId",
+        to = "super::workspace::Column::Id",
+        fk_name = "extensions_workspace_id_fkey"
+    )]
+    Workspace,
+}
 
 impl ActiveModelBehavior for ActiveModel {}
 

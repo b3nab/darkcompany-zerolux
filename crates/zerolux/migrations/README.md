@@ -16,9 +16,9 @@ The development command:
    pinned SHA-256. No account, cloud service or global installation is needed.
 2. Runs the Rust `schema-export` example once for both entity-derived schemas,
    so SQLite and PostgreSQL come from the same compiled snapshot. It never opens
-   a workspace or starts the kernel.
+   a database or starts the kernel.
 3. Runs Atlas `migrate diff` for SQLite in memory and PostgreSQL in an ephemeral
-   container on the local Docker engine. It never uses `DATABASE_URL`, a workspace
+   container on the local Docker engine. It never uses `DATABASE_URL`, an instance's
    connection or the shared test fixture. Docker must be available locally.
 4. Stages both dialects, assigns the same next version, updates Atlas's checksums,
    and generates `registry.rs` after publishing both SQL artifacts. Source/history
@@ -40,19 +40,19 @@ Subsequent schema changes must append new generated versions.
 This is a new baseline, not an incremental upgrade of the retired history.
 Existing databases with retired migration versions are not automatically rebased;
 the kernel still refuses unknown applied versions. Before activating this baseline
-on an existing workspace, its data and migration history require a separately
+on an existing database, its data and migration history require a separately
 approved alignment. Never clear its ledger and replay bootstrap over existing data.
 
 The kernel embeds this history and applies it with SeaORM Migration. It neither
 runs Atlas nor computes a schema diff. All pending migrations and ledger entries
-commit together, under the existing workspace migration lock. Unknown applied
+commit together, under the existing database migration lock. Unknown applied
 versions fail closed. SQLite uses a private migration connection for table
 rebuilds and checks foreign keys before commit; the store's separate connection
 pool always has foreign keys enabled.
 
 A failed migration rolls back. Automatic `down` migrations are intentionally
 refused: recovery from a committed incompatible upgrade requires restoring the
-workspace backup together with its matching kernel. Backup creation and update
+database backup together with its matching kernel. Backup creation and update
 activation remain responsibilities of the product updater, not this generator.
 
 `--register` regenerates only the embedded Rust registry from the two histories.

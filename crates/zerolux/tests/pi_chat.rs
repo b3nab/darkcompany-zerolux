@@ -142,7 +142,7 @@ async fn gui_hire_livekit_wake_and_reply_with_a_fake_pi_host() {
         assert!(Instant::now() < deadline, "fixture kernel did not start");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let base = owner::workspace(&base).await;
+    let base = owner::workspace(&base, root.path()).await;
     let client = owner::client(&base, Duration::from_secs(65)).await;
     let discovery = api(&client, &base, "/sessions/discover", None).await;
     let pi = discovery["sessions"]
@@ -320,7 +320,7 @@ async fn kernel(host: &Host, database: &Path, port: u16) -> Kernel {
         assert!(Instant::now() < deadline, "fixture kernel did not start");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let base = owner::workspace(&base).await;
+    let base = owner::workspace(&base, database.parent().unwrap()).await;
     let client = owner::client(&base, Duration::from_secs(65)).await;
     Kernel {
         base,

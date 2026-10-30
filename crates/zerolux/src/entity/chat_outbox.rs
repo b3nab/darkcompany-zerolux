@@ -4,6 +4,8 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "chat_outbox")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
+    pub workspace_id: String,
+    #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub event_id: String,
     #[sea_orm(column_type = "Text")]
     pub payload_json: String,
@@ -14,7 +16,15 @@ pub struct Model {
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {}
+pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::workspace::Entity",
+        from = "Column::WorkspaceId",
+        to = "super::workspace::Column::Id",
+        fk_name = "chat_outbox_workspace_id_fkey"
+    )]
+    Workspace,
+}
 
 impl ActiveModelBehavior for ActiveModel {}
 
@@ -29,6 +39,7 @@ impl super::schema::Definition for Entity {
             Index::create()
                 .name("chat_outbox_pending")
                 .table(Entity)
+                .col(Column::WorkspaceId)
                 .col(Column::CreatedAt)
                 .and_where(Expr::col(Column::PublishedAt).is_null())
                 .take(),

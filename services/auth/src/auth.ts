@@ -58,7 +58,7 @@ function credentials(input: Headers) {
   return headers;
 }
 
-/** The kernel holds its workspace lease throughout migration and this service's lifetime. */
+/** The kernel holds its database lease throughout migration and this service's lifetime. */
 export async function createAuth(input: AuthConfig) {
   const config = parseConfig(input);
   const database =
@@ -95,7 +95,7 @@ export async function createAuth(input: AuthConfig) {
     emailAndPassword: { enabled: true },
     plugins: [bearer({ requireSignature: true })],
     advanced: {
-      cookiePrefix: `zerolux-${config.workspace_id}`,
+      cookiePrefix: `zerolux-${config.instance_id}`,
       useSecureCookies: config.base_url.startsWith("https:"),
       database: { generateId: "uuid" },
       ipAddress: { ipAddressHeaders: ["x-zerolux-client-ip"] },
@@ -117,7 +117,7 @@ export async function createAuth(input: AuthConfig) {
     }
     // The library plans migrations but does not transaction-wrap their DDL. Use its
     // public adapter and pass the transaction back to the same migration API. The
-    // kernel's workspace lease serializes startup; failed DDL leaves no partial schema.
+    // kernel's database lease serializes startup; failed DDL leaves no partial schema.
     const { kysely, databaseType } = await createKyselyAdapter(options);
     if (!kysely || !databaseType) throw new Error("Unsupported auth database");
     await kysely.transaction().execute(async (transaction) => {
@@ -145,12 +145,18 @@ export async function createAuth(input: AuthConfig) {
           return json({ error: "Untrusted authentication origin" }, 403);
         const path = new URL(request.url).pathname;
         if (path === "/internal/health" && request.method === "GET")
-          return json({ version: 1, workspace_id: config.workspace_id });
+          return json({ version: 1, instance_id: config.instance_id });
         const headers = credentials(request.headers);
         const authorization = headers.get("authorization");
         if (authorization && !/^Bearer [^\s,]+$/i.test(authorization))
           return json({ error: "Invalid authorization" }, 401);
         try {
+          if (path === "/internal/accounts" && request.method === "GET") {
+            const context = await auth.$context;
+            return json({
+              exists: (await context.internalAdapter.countTotalUsers()) > 0,
+            });
+          }
           if (path === "/internal/session" && request.method === "GET") {
             const found = await auth.api.getSession({
               headers,
@@ -177,7 +183,7 @@ export async function createAuth(input: AuthConfig) {
             path === "/api/auth/sign-up/email" &&
             request.headers.get(ENROLL_HEADER) !== "1"
           )
-            return json({ error: "Workspace enrollment is required" }, 403);
+            return json({ error: "Enrollment is required" }, 403);
           // Reconstruct the public request without trusting forwarded host/proto headers.
           const url = new URL(request.url);
           const body =

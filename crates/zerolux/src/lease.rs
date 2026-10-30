@@ -1,6 +1,6 @@
-//! One running kernel per SQLite workspace, whatever started it (CLI, desktop, a second
+//! One running kernel per SQLite database, whatever started it (CLI, desktop, a second
 //! copy of either): `<database>.lock` next to the file, so every alias of the same data
-//! meets the same lease, held until cleanup ends. A PostgreSQL workspace is served by as
+//! meets the same lease, held until cleanup ends. A PostgreSQL instance is served by as
 //! many kernels as are started for it; each keeps to its own agent sessions.
 
 use std::path::Path;
@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 
 use crate::db::Location;
 
-/// Held for the kernel's lifetime; dropping it releases the workspace.
+/// Held for the kernel's lifetime; dropping it releases the database.
 pub struct Lease(Option<std::fs::File>, Option<std::path::PathBuf>);
 
 impl Lease {
@@ -29,7 +29,7 @@ impl Lease {
                 Location::Sqlite(path) => self.1.as_ref() == Some(&dunce::canonicalize(path)?),
                 Location::Postgres(_) => self.1.is_none(),
             },
-            "The database lease belongs to a different workspace"
+            "The database lease belongs to a different database"
         );
         Ok(())
     }
@@ -68,7 +68,7 @@ fn file(database: &Path) -> Result<(std::fs::File, std::path::PathBuf)> {
         use std::os::unix::fs::MetadataExt;
         anyhow::ensure!(
             metadata.nlink() <= 1,
-            "The database {} has more than one hard link; a workspace must have one path",
+            "The database {} has more than one hard link; a database must have one path",
             real.display()
         );
     }

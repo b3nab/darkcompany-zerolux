@@ -2,7 +2,7 @@ import { isAbsolute } from "node:path";
 
 export interface AuthConfig {
   version: 1;
-  workspace_id: string;
+  instance_id: string;
   database:
     | { kind: "sqlite"; path: string }
     | { kind: "postgres"; url: string };
@@ -63,8 +63,8 @@ export function parseConfig(value: unknown): AuthConfig {
   const c = value as Partial<AuthConfig>;
   if (
     c.version !== 1 ||
-    typeof c.workspace_id !== "string" ||
-    !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(c.workspace_id) ||
+    typeof c.instance_id !== "string" ||
+    !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(c.instance_id) ||
     typeof c.secret !== "string" ||
     c.secret.length < 32 ||
     typeof c.control_token !== "string" ||

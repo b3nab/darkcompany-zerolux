@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "actors")]
 pub struct Model {
+    #[serde(skip_serializing, default)]
+    #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
+    pub workspace_id: String,
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub id: String,
     #[sea_orm(column_type = "Text")]
@@ -20,7 +23,8 @@ pub struct Model {
     #[sea_orm(default_value = false)]
     pub name_confirmed: bool,
     pub created_at: i64,
-    /// The subject of the human account bound to this actor, for the owner.
+    /// The subject of the human account bound to this person: one person per account in a
+    /// workspace.
     #[serde(skip_serializing, default)]
     #[sea_orm(column_type = "Text")]
     pub auth_subject: Option<String>,
@@ -34,17 +38,27 @@ pub struct Model {
     pub approval_policy: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub sandbox: Option<String>,
-    /// For a person who joined by invitation, who invited them; none for the workspace's owner.
+    /// For a person who joined by invitation, who invited them.
     #[sea_orm(column_type = "Text")]
     pub invited_by: Option<String>,
+    /// A person's role: `owner`, who set the workspace up, or `member`. None for an agent.
+    #[sea_orm(column_type = "Text")]
+    pub role: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
+        belongs_to = "super::workspace::Entity",
+        from = "Column::WorkspaceId",
+        to = "super::workspace::Column::Id",
+        fk_name = "actors_workspace_id_fkey"
+    )]
+    Workspace,
+    #[sea_orm(
         belongs_to = "Entity",
-        from = "Column::OwnerId",
-        to = "Column::Id",
+        from = "(Column::WorkspaceId, Column::OwnerId)",
+        to = "(Column::WorkspaceId, Column::Id)",
         fk_name = "actors_owner_id_fkey"
     )]
     Owner,
@@ -69,6 +83,12 @@ impl super::schema::Definition for Entity {
                     .eq("agent")
                     .and(Expr::col(Column::OwnerId).is_not_null())),
         );
+        table.check(Expr::col(Column::Role).is_in(["owner", "member"]));
+        table.check(
+            Expr::col(Column::Kind)
+                .eq("human")
+                .eq(Expr::col(Column::Role).is_not_null()),
+        );
         if backend == sea_orm::DatabaseBackend::Sqlite {
             table.check(Expr::col(Column::Archived).is_in([0, 1]));
             table.check(Expr::col(Column::NameConfirmed).is_in([0, 1]));
@@ -77,16 +97,16 @@ impl super::schema::Definition for Entity {
             Index::create()
                 .name("one_workspace_owner")
                 .table(Entity)
-                .col(Column::Kind)
+                .col(Column::WorkspaceId)
                 .unique()
-                .and_where(Expr::col(Column::Kind).eq("human"))
-                .and_where(Expr::col(Column::InvitedBy).is_null())
+                .and_where(Expr::col(Column::Role).eq("owner"))
                 .take(),
         );
         indexes.push(
             Index::create()
                 .name("one_actor_per_subject")
                 .table(Entity)
+                .col(Column::WorkspaceId)
                 .col(Column::AuthSubject)
                 .unique()
                 .and_where(Expr::col(Column::AuthSubject).is_not_null())

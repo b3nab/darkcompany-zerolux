@@ -119,10 +119,11 @@ async fn host_notices_task(
             continue;
         };
         // Only about the host's own sessions.
-        let Ok(row) =
-            <crate::entity::sessions::Entity as sea_orm::EntityTrait>::find_by_id(session)
-                .one(store.db())
-                .await
+        let Ok(row) = <crate::entity::sessions::Entity as sea_orm::EntityTrait>::find_by_id(
+            store.key(session),
+        )
+        .one(store.db())
+        .await
         else {
             continue;
         };

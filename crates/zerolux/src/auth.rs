@@ -1,7 +1,8 @@
-//! Human identity: the Better Auth service, a child of this kernel. It identifies a user
-//! and keeps their sessions; the kernel binds that subject to the owner and authorizes every
-//! request itself. The service listens on loopback only and answers no one without the
-//! control token this process made for it. See `docs/foundations.md` for the contract.
+//! Human identity: the Better Auth service, a child of this kernel, one for the instance. It
+//! identifies an account and keeps its sessions; in each workspace the kernel finds the person
+//! bound to that account and authorizes every request itself. The service listens on loopback
+//! only and answers no one without the control token this process made for it. See
+//! `docs/foundations.md` for the contract.
 //!
 //! The kernel never reads the service's tables, and the service never reads the kernel's.
 //! An unavailable service never becomes owner access: the request fails.
@@ -91,12 +92,12 @@ pub struct AuthService {
 }
 
 impl AuthService {
-    /// Starts the service for `workspace_id` on the same database as the kernel, with the
-    /// workspace's `secret`. `base_url` is the origin its clients sign in at; `trusted_origins`
-    /// the other exact origins they come from.
+    /// Starts the service for the instance `instance_id` on the same database as the kernel,
+    /// with the instance's `secret`. `base_url` is the origin its clients sign in at;
+    /// `trusted_origins` the other exact origins they come from.
     pub async fn start(
         entry: &AuthEntry,
-        workspace_id: &str,
+        instance_id: &str,
         database: &Location,
         secret: &str,
         base_url: &str,
@@ -112,7 +113,7 @@ impl AuthService {
         };
         let config = serde_json::json!({
             "version": 1,
-            "workspace_id": workspace_id,
+                        "instance_id": instance_id,
             "database": database,
             "base_url": base_url,
             "trusted_origins": trusted_origins,
@@ -214,6 +215,31 @@ impl AuthService {
             );
         }
         Ok(response.json().await?)
+    }
+
+    /// Whether the instance has any account yet: until then, signing up needs no invitation.
+    pub async fn has_accounts(&self) -> Result<bool> {
+        #[derive(Deserialize)]
+        struct Accounts {
+            exists: bool,
+        }
+        let response = self
+            .private(
+                reqwest::Method::GET,
+                "/internal/accounts",
+                &HeaderMap::new(),
+                None,
+                None,
+                false,
+            )
+            .await?;
+        if response.status() != StatusCode::OK {
+            bail!(
+                "The authentication service answered {} to an accounts check",
+                response.status()
+            );
+        }
+        Ok(response.json::<Accounts>().await?.exists)
     }
 
     /// Better Auth's own endpoint for a public request: status, cookies and the signed token

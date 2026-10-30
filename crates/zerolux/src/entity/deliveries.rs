@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "deliveries")]
 pub struct Model {
+    #[serde(skip_serializing, default)]
+    #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
+    pub workspace_id: String,
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub id: String,
     #[sea_orm(column_type = "Text")]
@@ -25,23 +28,30 @@ pub struct Model {
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
+        belongs_to = "super::workspace::Entity",
+        from = "Column::WorkspaceId",
+        to = "super::workspace::Column::Id",
+        fk_name = "deliveries_workspace_id_fkey"
+    )]
+    Workspace,
+    #[sea_orm(
         belongs_to = "super::messages::Entity",
-        from = "Column::MessageId",
-        to = "super::messages::Column::Id",
+        from = "(Column::WorkspaceId, Column::MessageId)",
+        to = "(super::messages::Column::WorkspaceId, super::messages::Column::Id)",
         fk_name = "deliveries_message_id_fkey"
     )]
     Message,
     #[sea_orm(
         belongs_to = "super::actors::Entity",
-        from = "Column::ActorId",
-        to = "super::actors::Column::Id",
+        from = "(Column::WorkspaceId, Column::ActorId)",
+        to = "(super::actors::Column::WorkspaceId, super::actors::Column::Id)",
         fk_name = "deliveries_actor_id_fkey"
     )]
     Actor,
     #[sea_orm(
         belongs_to = "super::sessions::Entity",
-        from = "Column::SessionId",
-        to = "super::sessions::Column::Id",
+        from = "(Column::WorkspaceId, Column::SessionId)",
+        to = "(super::sessions::Column::WorkspaceId, super::sessions::Column::Id)",
         fk_name = "deliveries_session_id_fkey"
     )]
     Session,
@@ -61,6 +71,7 @@ impl super::schema::Definition for Entity {
             Index::create()
                 .name("deliveries_message_id_actor_id_key")
                 .unique()
+                .col(Column::WorkspaceId)
                 .col(Column::MessageId)
                 .col(Column::ActorId),
         );
@@ -68,6 +79,7 @@ impl super::schema::Definition for Entity {
             Index::create()
                 .name("deliveries_session")
                 .table(Entity)
+                .col(Column::WorkspaceId)
                 .col(Column::SessionId)
                 .col(Column::Status)
                 .col(Column::CreatedAt)

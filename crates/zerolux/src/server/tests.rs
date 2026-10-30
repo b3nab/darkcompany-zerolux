@@ -50,40 +50,51 @@ async fn session(workspace: &api::Hosted) -> IssuedChatSession {
         .unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn harness_origins_isolate_tokens_and_close_before_the_workspace_lease_is_released() {
-    let directory = tempfile::tempdir().unwrap();
-    let a_dir = directory.path().join("a");
-    let server = Server::start(ServerOptions {
+fn options(directory: &std::path::Path) -> ServerOptions {
+    ServerOptions {
         address: "127.0.0.1:0".parse().unwrap(),
         expose: None,
-        data_dir: a_dir.clone(),
-        database: Location::Sqlite(a_dir.join("zerolux.db")),
-        initial_workspace_name: None,
-        web_dir: directory.path().join("web"),
+        data_dir: directory.join("kernel"),
+        database: Location::Sqlite(directory.join("kernel/zerolux.db")),
+        web_dir: directory.join("web"),
         // No LiveKit process, native harness, account or model is started.
         livekit: Some(LiveKitConfig {
             url: Some("ws://127.0.0.1:0".into()),
             api_key: Some("fixture".into()),
             api_secret: Some("fixture".into()),
-            data_dir: directory.path().join("livekit"),
+            data_dir: directory.join("livekit"),
         }),
         public: None,
         runner: None,
         auth: None,
-    })
-    .await
-    .unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn harness_origins_isolate_tokens_and_close_before_the_database_lease_is_released() {
+    let directory = tempfile::tempdir().unwrap();
+    let server = Server::start(options(directory.path())).await.unwrap();
     let handle = server.handle();
-    let a_id = handle.workspaces().await.unwrap()[0].id.clone();
-    let b_id = handle
-        .add_workspace(WorkspaceOptions::in_folder(
-            directory.path().join("b"),
-            None,
-        ))
+    // A new database starts with no workspace.
+    assert!(handle.workspaces().await.unwrap().is_empty());
+    let a_id = handle
+        .create_workspace("subject", "Owner", "A", Some(&directory.path().join("a")))
         .await
         .unwrap()
         .id;
+    let b_id = handle
+        .create_workspace("subject", "Owner", "B", None)
+        .await
+        .unwrap()
+        .id;
+    // Each workspace keeps its files in its folder; by default in the kernel's data directory.
+    assert!(directory.path().join("a/host-id").is_file());
+    assert!(
+        directory
+            .path()
+            .join(format!("kernel/workspaces/{b_id}/host-id"))
+            .is_file()
+    );
     let a_session = session(&hosted(&server, &a_id)).await;
     let b_session = session(&hosted(&server, &b_id)).await;
     let (a_origin, a_address) = harness_origin(&server, &a_id);
@@ -160,11 +171,16 @@ async fn harness_origins_isolate_tokens_and_close_before_the_workspace_lease_is_
             .status(),
         404
     );
-    let again = handle
-        .add_workspace(WorkspaceOptions::in_folder(a_dir, None))
-        .await
-        .unwrap();
-    assert_eq!(again.id, a_id);
+    assert_eq!(inbox(b_origin, b_session.token.clone()).await.status(), 200);
+    assert_eq!(handle.workspaces().await.unwrap().len(), 1);
+    server.shutdown().await.unwrap();
+    let _b_released = TcpListener::bind(b_address).await.unwrap();
+
+    // Started again on the same database, the kernel serves every workspace, each from a new
+    // harness origin, with the same data.
+    let server = Server::start(options(directory.path())).await.unwrap();
+    let handle = server.handle();
+    assert_eq!(handle.workspaces().await.unwrap().len(), 2);
     let (new_origin, new_address) = harness_origin(&server, &a_id);
     assert_ne!(new_address, a_address);
     let response = inbox(new_origin, a_session.token.clone()).await;
@@ -173,9 +189,7 @@ async fn harness_origins_isolate_tokens_and_close_before_the_workspace_lease_is_
         response.json::<Value>().await.unwrap()["session"]["id"],
         a_session.session.id
     );
-    assert_eq!(inbox(b_origin, b_session.token.clone()).await.status(), 200);
     server.shutdown().await.unwrap();
     let _a_released = TcpListener::bind(new_address).await.unwrap();
-    let _b_released = TcpListener::bind(b_address).await.unwrap();
     drop(occupied);
 }

@@ -9,19 +9,43 @@ use sqlx::{
 };
 use zerolux::{
     api,
+    db::Location,
     model::{Actor, Workspace},
-    store::{Store, now_ms},
+    store::{Instance, Store, now_ms},
 };
 
+/// A new workspace in the database at `path`, made with its owner, as an account makes it.
+async fn create(path: &Path) -> String {
+    Instance::open(&Location::Sqlite(path.to_owned()))
+        .await
+        .unwrap()
+        .create_workspace("owner-account", "Ada Lovelace", "Workspace", None)
+        .await
+        .unwrap()
+        .id
+}
+
+async fn open(path: &Path, workspace: &str) -> Store {
+    Instance::open(&Location::Sqlite(path.to_owned()))
+        .await
+        .unwrap()
+        .store(workspace)
+}
+
 struct Server {
+    workspace: String,
     owner_id: String,
     url: String,
     client: Client,
     task: tokio::task::JoinHandle<()>,
 }
 impl Server {
-    async fn open(path: &Path) -> Self {
-        let store = Store::open(path).await.unwrap();
+    async fn create(path: &Path) -> Self {
+        Self::open(path, &create(path).await).await
+    }
+
+    async fn open(path: &Path, workspace: &str) -> Self {
+        let store = open(path, workspace).await;
         let owner_id = store
             .workspace()
             .await
@@ -38,6 +62,7 @@ impl Server {
             axum::serve(listener, app).await.unwrap();
         });
         Self {
+            workspace: workspace.to_owned(),
             owner_id,
             url,
             task,
@@ -90,7 +115,9 @@ impl Drop for Server {
 }
 
 async fn migrated_database(path: &Path) -> SqlitePool {
-    let store = Store::open(path).await.unwrap();
+    let instance = Instance::open(&Location::Sqlite(path.to_owned()))
+        .await
+        .unwrap();
     let pool = SqlitePoolOptions::new()
         .connect_with(
             SqliteConnectOptions::new()
@@ -100,32 +127,28 @@ async fn migrated_database(path: &Path) -> SqlitePool {
         )
         .await
         .unwrap();
-    drop(store);
+    drop(instance);
     pool
 }
 
 #[tokio::test]
-async fn first_run_requires_owner_name_and_has_no_placeholder_agent() {
+async fn a_new_workspace_has_its_named_owner_and_no_placeholder_agent() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("new.db");
-    let server = Server::open(&path).await;
+    let server = Server::create(&path).await;
     let workspace = server.workspace().await;
-    assert!(workspace.onboarding_required);
+    // The owner is the account that made it, named after it: there is nothing to set up.
+    assert!(!workspace.onboarding_required);
     assert_eq!(workspace.actors.len(), 1);
     assert_eq!(workspace.actors[0].kind, "human");
+    assert_eq!(workspace.actors[0].name, "Ada Lovelace");
+    assert_eq!(workspace.actors[0].role.as_deref(), Some("owner"));
     assert_eq!(
         uuid::Uuid::parse_str(&workspace.actors[0].id)
             .unwrap()
             .get_version_num(),
         4
     );
-    for (route, body) in [(
-        "/actors",
-        json!({"name":"pi", "harness":"pi", "owner_id":server.owner_id}),
-    )] {
-        let response = server.post(route, body).await;
-        assert_eq!(response.status(), StatusCode::CONFLICT, "{route}");
-    }
     for name in [
         "".to_owned(),
         " \t\n\u{2003}".to_owned(),
@@ -142,7 +165,7 @@ async fn first_run_requires_owner_name_and_has_no_placeholder_agent() {
                 .status(),
             StatusCode::BAD_REQUEST
         );
-        assert!(server.workspace().await.onboarding_required);
+        assert_eq!(server.workspace().await.actors[0].name, "Ada Lovelace");
     }
     let owner: Actor = server
         .post("/onboarding/owner", json!({"name":"  Élodie 李  "}))
@@ -157,7 +180,11 @@ async fn first_run_requires_owner_name_and_has_no_placeholder_agent() {
     let actor = server.hire().await;
     assert_eq!(actor.owner_id.as_deref(), Some(owner.id.as_str()));
     assert!(!actor.archived);
-    let reopened = Store::open(&path).await.unwrap().workspace().await.unwrap();
+    let reopened = open(&path, &server.workspace)
+        .await
+        .workspace()
+        .await
+        .unwrap();
     assert!(!reopened.onboarding_required);
     assert_eq!(
         reopened
@@ -172,30 +199,48 @@ async fn first_run_requires_owner_name_and_has_no_placeholder_agent() {
 }
 
 #[tokio::test]
-async fn owner_uuid_is_unique_per_database_and_stable_across_concurrent_opens() {
+async fn concurrent_first_opens_make_one_instance_and_each_workspace_has_one_owner() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("concurrent.db");
-    let (a, b) = tokio::join!(Store::open(&path), Store::open(&path));
-    let a = a.unwrap().workspace().await.unwrap();
-    let b = b.unwrap().workspace().await.unwrap();
-    assert_eq!(a.actors.len(), 1);
-    assert_eq!(b.actors.len(), 1);
-    assert_eq!(a.actors[0].id, b.actors[0].id);
-    let id = uuid::Uuid::parse_str(&a.actors[0].id).unwrap();
+    let location = Location::Sqlite(path.clone());
+    // Nothing exists yet: both opens migrate and make the instance at once.
+    let (a, b) = tokio::join!(Instance::open(&location), Instance::open(&location));
+    let (a, b) = (a.unwrap(), b.unwrap());
+    assert_eq!(a.id(), b.id());
+    assert_eq!(a.auth_secret(), b.auth_secret());
+    let id = uuid::Uuid::parse_str(a.id()).unwrap();
     assert_eq!(id.get_version_num(), 4);
     assert_eq!(id.get_variant(), uuid::Variant::RFC4122);
-    let independent = Store::open(&dir.path().join("other.db"))
-        .await
-        .unwrap()
-        .workspace()
+    let independent = Instance::open(&Location::Sqlite(dir.path().join("other.db")))
         .await
         .unwrap();
-    assert_ne!(a.actors[0].id, independent.actors[0].id);
+    assert_ne!(a.id(), independent.id());
+    // Each workspace is born with its owner, in the same instant, by the same transaction.
+    let first = a
+        .create_workspace("owner-account", "Owner", "First", None)
+        .await
+        .unwrap();
+    let second = b
+        .create_workspace("owner-account", "Owner", "Second", None)
+        .await
+        .unwrap();
+    let first = a.store(&first.id).workspace().await.unwrap();
+    let second = b.store(&second.id).workspace().await.unwrap();
+    assert_eq!(first.workspace.created_at, first.actors[0].created_at);
+    assert_ne!(first.actors[0].id, second.actors[0].id);
     let pool = migrated_database(&path).await;
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM instance")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
+    // The schema itself refuses a second owner of a workspace.
     assert!(
         sqlx::query(
-            "INSERT INTO actors (id, name, kind, created_at) VALUES (?, 'Second owner', 'human', 1)"
+            "INSERT INTO actors (workspace_id, id, name, kind, role, created_at)
+            VALUES (?, ?, 'Second owner', 'human', 'owner', 1)"
         )
+        .bind(&first.workspace.id)
         .bind(uuid::Uuid::new_v4().to_string())
         .execute(&pool)
         .await
@@ -207,7 +252,7 @@ async fn owner_uuid_is_unique_per_database_and_stable_across_concurrent_opens() 
 async fn renaming_owner_preserves_uuid_and_existing_agent_ownership() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rename.db");
-    let server = Server::open(&path).await;
+    let server = Server::create(&path).await;
     server.name_owner().await;
     let agent = server.hire().await;
     let owner: Actor = server
@@ -220,7 +265,11 @@ async fn renaming_owner_preserves_uuid_and_existing_agent_ownership() {
         .unwrap();
     assert_eq!(owner.id, server.owner_id);
     assert_eq!(owner.name, "Updated name");
-    let reopened = Store::open(&path).await.unwrap().workspace().await.unwrap();
+    let reopened = open(&path, &server.workspace)
+        .await
+        .workspace()
+        .await
+        .unwrap();
     assert!(!reopened.onboarding_required);
     assert_eq!(reopened.actors.len(), 2);
     assert_eq!(
@@ -260,9 +309,9 @@ async fn the_workspace_and_every_actor_carry_a_creation_date() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dates.db");
     let before = now_ms();
-    let server = Server::open(&path).await;
+    let server = Server::create(&path).await;
     let workspace = server.workspace().await;
-    // Day 1: created with the owner on the first start, named neutrally until the owner renames it.
+    // Day 1: created with its owner, named as its owner named it.
     assert_eq!(workspace.workspace.name, "Workspace");
     assert!(workspace.workspace.created_at >= before);
     assert_eq!(
@@ -314,8 +363,9 @@ async fn the_workspace_and_every_actor_carry_a_creation_date() {
         );
     }
     // Reopening keeps the same workspace row: identity and day 1 are never regenerated.
+    let id = server.workspace.clone();
     drop(server);
-    let reopened = Server::open(&path).await.workspace().await;
+    let reopened = Server::open(&path, &id).await.workspace().await;
     assert_eq!(reopened.workspace.id, workspace.workspace.id);
     assert_eq!(reopened.workspace.name, "Dark Company");
     assert_eq!(
@@ -325,45 +375,19 @@ async fn the_workspace_and_every_actor_carry_a_creation_date() {
 }
 
 #[tokio::test]
-async fn concurrent_first_opens_create_one_workspace_with_one_date() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("concurrent-workspace.db");
-    // Nothing exists yet: both opens migrate and bootstrap at once.
-    let (a, b) = tokio::join!(Store::open(&path), Store::open(&path));
-    let a = a.unwrap().workspace().await.unwrap();
-    let b = b.unwrap().workspace().await.unwrap();
-    assert_eq!(a.workspace.id, b.workspace.id);
-    assert_eq!(a.workspace.created_at, b.workspace.created_at);
-    // The owner and the workspace were born in the same instant, by the same open.
-    assert_eq!(a.workspace.created_at, a.actors[0].created_at);
-    let pool = migrated_database(&path).await;
-    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspace")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(rows, 1);
-    // The schema itself refuses a second company.
-    assert!(
-        sqlx::query("INSERT INTO workspace (id, name, created_at) VALUES ('second', 'Other', 1)")
-            .execute(&pool)
-            .await
-            .is_err()
-    );
-}
-
-#[tokio::test]
 async fn only_the_owner_renames_the_workspace_and_names_are_bytes_bounded() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rename.db");
-    let server = Server::open(&path).await;
+    let server = Server::create(&path).await;
     server.name_owner().await;
     let agent = server.hire().await;
     // An agent session, with the token the kernel would have issued to it.
     let pool = migrated_database(&path).await;
     let token = "agent-token";
     let hash = format!("{:x}", sha2::Sha256::digest(token.as_bytes()));
-    sqlx::query("INSERT INTO sessions (id, actor_id, harness, native_session_id, title, workspace, native_locator_json, token_hash, status, created_at, owner_id)
-        VALUES ('s1', ?, 'pi', 'native', 'pi', '/w', '{}', ?, 'connected', 1, ?)")
+    sqlx::query("INSERT INTO sessions (workspace_id, id, actor_id, harness, native_session_id, title, workspace, native_locator_json, token_hash, status, created_at, owner_id)
+        VALUES (?, 's1', ?, 'pi', 'native', 'pi', '/w', '{}', ?, 'connected', 1, ?)")
+        .bind(&server.workspace)
         .bind(&agent.id)
         .bind(&hash)
         .bind(agent.owner_id.as_deref())
@@ -422,9 +446,10 @@ async fn only_the_owner_renames_the_workspace_and_names_are_bytes_bounded() {
 async fn carried_over_dates_survive_reopen_rename_and_relink() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("carried.db");
-    let server = Server::open(&path).await;
+    let server = Server::create(&path).await;
     server.name_owner().await;
     let agent = server.hire().await;
+    let id = server.workspace.clone();
     drop(server);
     // What a data pass writes for rows that predate the dates: the dates it found.
     let pool = migrated_database(&path).await;
@@ -451,7 +476,7 @@ async fn carried_over_dates_survive_reopen_rename_and_relink() {
     );
     pool.close().await;
 
-    let server = Server::open(&path).await;
+    let server = Server::open(&path, &id).await;
     let dated = |workspace: &Workspace| {
         let owner = workspace.actors.iter().find(|a| a.kind == "human").unwrap();
         let hired = workspace.actors.iter().find(|a| a.id == agent.id).unwrap();
@@ -502,7 +527,7 @@ async fn a_database_of_a_newer_kernel_is_refused_without_change() {
             .fetch_all(&pool)
             .await
             .unwrap();
-    match Store::open(&path).await {
+    match Instance::open(&Location::Sqlite(path.clone())).await {
         Err(error) => assert!(error.to_string().contains("m9999_unknown"), "{error}"),
         Ok(_) => panic!("A database of a newer kernel must not be opened"),
     }

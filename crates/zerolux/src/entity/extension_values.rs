@@ -5,6 +5,8 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "extension_values")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
+    pub workspace_id: String,
+    #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub extension_id: String,
     /// `setting`, `secret` or `value`.
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
@@ -19,9 +21,16 @@ pub struct Model {
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
+        belongs_to = "super::workspace::Entity",
+        from = "Column::WorkspaceId",
+        to = "super::workspace::Column::Id",
+        fk_name = "extension_values_workspace_id_fkey"
+    )]
+    Workspace,
+    #[sea_orm(
         belongs_to = "super::extensions::Entity",
-        from = "Column::ExtensionId",
-        to = "super::extensions::Column::Id",
+        from = "(Column::WorkspaceId, Column::ExtensionId)",
+        to = "(super::extensions::Column::WorkspaceId, super::extensions::Column::Id)",
         on_delete = "Cascade",
         fk_name = "extension_values_extension_id_fkey"
     )]

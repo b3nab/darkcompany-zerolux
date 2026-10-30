@@ -12,7 +12,7 @@ use zerolux::{
     api::PublicOrigin,
     livekit::LiveKitConfig,
     server::{Server, ServerOptions},
-    store::Store,
+    store::Instance,
 };
 
 mod support {
@@ -23,6 +23,28 @@ mod support {
             .output()
             .is_ok()
     }
+}
+
+/// A new workspace of the kernel, with its owner: its ID.
+async fn made(server: &Server) -> String {
+    server
+        .handle()
+        .create_workspace("owner-account", "Owner", "Company", None)
+        .await
+        .unwrap()
+        .id
+}
+
+/// A workspace kept in the kernel's data directory itself, as the CLI's: the one it hands over.
+async fn home_workspace(config: &ServerOptions) -> String {
+    std::fs::create_dir_all(&config.data_dir).unwrap();
+    Instance::open(&config.database)
+        .await
+        .unwrap()
+        .create_workspace("owner-account", "Owner", "Home", Some(&config.data_dir))
+        .await
+        .unwrap()
+        .id
 }
 
 async fn handoff_info(
@@ -51,12 +73,14 @@ async fn handoff_commits_the_same_files_host_and_port_without_releasing_the_back
     std::fs::write(dir.path().join("data/storage/kept.txt"), "same files").unwrap();
     let mut config = options(dir.path(), "127.0.0.1:0".parse().unwrap());
     config.database = zerolux::db::Location::Sqlite(dir.path().join("separate-db/company.sqlite"));
+    let home = home_workspace(&config).await;
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let original = config.clone();
     let cli = tokio::spawn(zerolux::server::serve_cli_until(original, async {
         let _ = stopped.await;
     }));
     let info = handoff_info(&config.data_dir, None).await;
+    assert_eq!(info.workspace_id, home);
     let profile = uuid::Uuid::new_v4().to_string();
     assert_eq!(
         info.database,
@@ -79,18 +103,10 @@ async fn handoff_commits_the_same_files_host_and_port_without_releasing_the_back
         .unwrap()
         .unwrap();
     drop(stop);
-    let health: Value = reqwest::Client::builder()
-        .no_proxy()
-        .build()
-        .unwrap()
-        .get(format!("{}/api/health", embedded.url()))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(health["workspaces"][0]["id"], info.workspace_id);
+    assert_eq!(
+        embedded.handle().workspaces().await.unwrap()[0].id,
+        info.workspace_id
+    );
     assert_eq!(embedded.address(), info.network.address());
     assert_eq!(
         std::fs::read_to_string(config.data_dir.join("host-id"))
@@ -116,6 +132,7 @@ async fn handoff_disconnect_resumes_the_cli_and_stale_descriptions_cannot_stop_i
     }
     let dir = tempfile::tempdir().unwrap();
     let config = options(dir.path(), "127.0.0.1:0".parse().unwrap());
+    home_workspace(&config).await;
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let cli = tokio::spawn(zerolux::server::serve_cli_until(config.clone(), async {
         let _ = stopped.await;
@@ -159,6 +176,7 @@ async fn handoff_commit_survives_a_lost_acknowledgement_and_its_receipt_is_profi
     }
     let dir = tempfile::tempdir().unwrap();
     let mut config = options(dir.path(), "127.0.0.1:0".parse().unwrap());
+    home_workspace(&config).await;
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let cli = tokio::spawn(zerolux::server::serve_cli_until(config.clone(), async {
         let _ = stopped.await;
@@ -222,7 +240,6 @@ fn options(dir: &std::path::Path, address: SocketAddr) -> ServerOptions {
         expose: None,
         data_dir: dir.join("data"),
         database: zerolux::db::Location::Sqlite(dir.join("data/zerolux.db")),
-        initial_workspace_name: None,
         web_dir: dir.join("web"),
         // Always the managed local LiveKit, whatever LIVEKIT_* is set in the environment.
         livekit: Some(LiveKitConfig {
@@ -250,7 +267,7 @@ async fn start_serves_the_api_and_shutdown_releases_the_port_and_the_data() {
     let address = server.address();
     assert_ne!(address.port(), 0, "an OS-assigned port is reported back");
     assert_eq!(server.url(), format!("http://{address}"));
-    // The database directory was created and the owner bootstrapped, like the CLI does.
+    // The database directory was created and the instance made, like the CLI does.
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let health: Value = client
         .get(format!("{}/api/health", server.url()))
@@ -264,8 +281,13 @@ async fn start_serves_the_api_and_shutdown_releases_the_port_and_the_data() {
         .unwrap();
     assert_eq!(health["name"], "zerolux");
     assert_eq!(health["api_version"], zerolux::api::API_VERSION);
-    assert!(health["workspaces"][0]["id"].is_string());
+    assert!(health["instance"]["id"].is_string());
     assert!(dir.path().join("data/zerolux.db").is_file());
+    let workspace = server
+        .handle()
+        .create_workspace("owner-account", "Owner", "Company", None)
+        .await
+        .unwrap();
 
     server.shutdown().await.unwrap();
     // Released: the same port binds again at once, and nothing answers there.
@@ -278,13 +300,16 @@ async fn start_serves_the_api_and_shutdown_releases_the_port_and_the_data() {
             .await
             .is_err()
     );
-    // The data outlives the server: reopening finds the same owner.
-    let store = Store::open(&dir.path().join("data/zerolux.db"))
-        .await
-        .unwrap();
-    let workspace = store.workspace().await.unwrap();
-    assert_eq!(workspace.workspace.id, health["workspaces"][0]["id"]);
-    assert_eq!(workspace.actors.len(), 1);
+    // The data outlives the server: reopening finds the same instance, workspace and owner.
+    let instance = Instance::open(&zerolux::db::Location::Sqlite(
+        dir.path().join("data/zerolux.db"),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(instance.id(), health["instance"]["id"]);
+    let reopened = instance.store(&workspace.id).workspace().await.unwrap();
+    assert_eq!(reopened.workspace.name, "Company");
+    assert_eq!(reopened.actors.len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -316,27 +341,39 @@ async fn one_kernel_serves_several_workspaces_each_in_its_own_folder() {
             assert!(response.status().is_success(), "{}", response.status());
         }
     };
-    // A second workspace in a folder of its own, a git repository: its data stays out of git.
+    let handle = server.handle();
+    // A new database starts with no workspace; each one is made with its owner.
+    assert!(handle.workspaces().await.unwrap().is_empty());
+    let a = handle
+        .create_workspace("owner-account", "Aspen", "First", None)
+        .await
+        .unwrap()
+        .id;
+    // A workspace in a folder of its own, in a git repository: its data stays out of git.
     let project = dir.path().join("project");
     std::fs::create_dir_all(project.join(".git/info")).unwrap();
-    let options_b = zerolux::server::WorkspaceOptions::in_folder(
-        project.join(".zerolux"),
-        Some("Project".into()),
-    );
-    let b = server
-        .handle()
-        .add_workspace(options_b.clone())
+    let b = handle
+        .create_workspace(
+            "owner-account",
+            "Birch",
+            "Project",
+            Some(&project.join(".zerolux")),
+        )
         .await
         .unwrap();
-    let a = server.handle().workspaces().await.unwrap()[0].id.clone();
     assert_ne!(a, b.id);
-    assert!(project.join(".zerolux/zerolux.db").is_file());
+    assert!(project.join(".zerolux/host-id").is_file());
+    assert!(
+        !project.join(".zerolux/zerolux.db").exists(),
+        "one database"
+    );
     let exclude = std::fs::read_to_string(project.join(".git/info/exclude")).unwrap();
     assert!(exclude.lines().any(|line| line == "/.zerolux/"));
 
-    // The kernel names its workspaces; each answers at its own address with its own data.
-    let (_, health) = get(format!("{}/api/health", server.url())).await;
-    let listed: Vec<&str> = health["workspaces"]
+    // Without sign-in, the kernel's workspaces are all the local owner's; each answers at its
+    // own address with its own data.
+    let (_, listed) = get(format!("{}/api/workspaces", server.url())).await;
+    let listed: Vec<&str> = listed["workspaces"]
         .as_array()
         .unwrap()
         .iter()
@@ -344,7 +381,7 @@ async fn one_kernel_serves_several_workspaces_each_in_its_own_folder() {
         .collect();
     assert_eq!(listed, [a.as_str(), b.id.as_str()]);
     for (id, owner) in [(&a, "aspen"), (&b.id, "birch")] {
-        let url = server.handle().workspace_url(id);
+        let url = handle.workspace_url(id);
         let (status, own) = get(format!("{url}/api/health")).await;
         assert_eq!(status, 200);
         assert_eq!(own["workspace"]["id"], id.as_str());
@@ -356,7 +393,7 @@ async fn one_kernel_serves_several_workspaces_each_in_its_own_folder() {
     }
     let actors = |id: String| {
         let get = &get;
-        let url = server.handle().workspace_url(&id);
+        let url = handle.workspace_url(&id);
         async move { get(format!("{url}/api/workspace")).await.1["actors"].clone() }
     };
     assert_eq!(actors(a.clone()).await[0]["name"], "aspen");
@@ -365,46 +402,47 @@ async fn one_kernel_serves_several_workspaces_each_in_its_own_folder() {
     assert_eq!(own[0]["name"], "birch");
     let (status, _) = get(format!("{}/w/no-such-workspace/api/health", server.url())).await;
     assert_eq!(status, 404);
-    // The same folder is served once.
+    // A folder is one workspace's.
     assert!(
-        server
-            .handle()
-            .add_workspace(options_b.clone())
+        handle
+            .create_workspace(
+                "owner-account",
+                "Birch",
+                "Again",
+                Some(&project.join(".zerolux"))
+            )
             .await
             .is_err()
     );
 
-    // Removed, it is no longer served; its folder and lease are left as they are.
-    server.handle().remove_workspace(&b.id).await.unwrap();
-    let (status, _) = get(format!(
-        "{}/api/health",
-        server.handle().workspace_url(&b.id)
-    ))
-    .await;
+    // Removed, it is no longer served; its folder and data are left as they are.
+    handle.remove_workspace(&b.id).await.unwrap();
+    let (status, _) = get(format!("{}/api/health", handle.workspace_url(&b.id))).await;
     assert_eq!(status, 404);
-    assert!(project.join(".zerolux/zerolux.db").is_file());
-    // Opened again with the lease its opener already holds, the folder is the same workspace
-    // with its data.
-    let lease = zerolux::lease::Lease::acquire(&options_b.database).expect("its lease is released");
-    let handle = server.handle();
-    let again = handle
-        .add_workspace_with_lease(options_b, lease)
+    assert!(project.join(".zerolux/host-id").is_file());
+    // The first workspace goes too, and the kernel keeps serving neither.
+    handle.remove_workspace(&a).await.unwrap();
+    assert!(handle.workspaces().await.unwrap().is_empty());
+    let (_, listed) = get(format!("{}/api/workspaces", server.url())).await;
+    assert_eq!(listed["workspaces"], serde_json::json!([]));
+    server.shutdown().await.unwrap();
+    // Stopped, the kernel makes no more workspaces.
+    assert!(
+        handle
+            .create_workspace("owner-account", "Aspen", "Later", None)
+            .await
+            .is_err()
+    );
+    // Started again, it serves every workspace of its database, with its data.
+    let server = Server::start(options(dir.path(), "127.0.0.1:0".parse().unwrap()))
         .await
         .unwrap();
-    assert_eq!(again.id, b.id);
-    assert_eq!(actors(b.id.clone()).await[0]["name"], "birch");
-    // The first workspace goes too, and the kernel keeps serving the other.
-    handle.remove_workspace(&a).await.unwrap();
-    let (_, health) = get(format!("{}/api/health", server.url())).await;
-    assert_eq!(health["workspaces"].as_array().unwrap().len(), 1);
-    assert_eq!(health["workspaces"][0]["id"], b.id.as_str());
-    let (status, _) = get(format!("{}/api/health", handle.workspace_url(&b.id))).await;
+    let handle = server.handle();
+    assert_eq!(handle.workspaces().await.unwrap().len(), 2);
+    let (status, own) = get(format!("{}/api/workspace", handle.workspace_url(&b.id))).await;
     assert_eq!(status, 200);
+    assert_eq!(own["actors"][0]["name"], "birch");
     server.shutdown().await.unwrap();
-    // Stopped, the kernel takes no more workspaces.
-    let options_c =
-        zerolux::server::WorkspaceOptions::in_folder(dir.path().join("other/.zerolux"), None);
-    assert!(handle.add_workspace(options_c).await.is_err());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -501,7 +539,7 @@ async fn one_kernel_serves_a_workspace_at_a_time_and_the_lease_ends_with_it() {
     let error = Server::start(options(dir.path(), "127.0.0.1:0".parse().unwrap()))
         .await
         .err()
-        .expect("the workspace is leased");
+        .expect("the database is leased");
     assert!(lease_contended(&error), "{error:#}");
     // An alias of the same data is the same workspace: a symlinked directory meets the lease.
     let alias = dir.path().join("alias");
@@ -539,12 +577,14 @@ async fn one_kernel_serves_a_workspace_at_a_time_and_the_lease_ends_with_it() {
         .err()
         .expect("a hard-linked database is refused");
     std::fs::remove_file(linked.path().join("data/zerolux.db")).unwrap();
-    // Plain store access is not a kernel: maintenance and tests keep working alongside.
-    let store = Store::open(&dir.path().join("data/zerolux.db"))
-        .await
-        .unwrap();
-    assert_eq!(store.workspace().await.unwrap().actors.len(), 1);
-    drop(store);
+    // Plain database access is not a kernel: maintenance and tests keep working alongside.
+    let instance = Instance::open(&zerolux::db::Location::Sqlite(
+        dir.path().join("data/zerolux.db"),
+    ))
+    .await
+    .unwrap();
+    assert!(instance.workspaces().await.unwrap().is_empty());
+    drop(instance);
     first.shutdown().await.unwrap();
     assert!(dir.path().join("data/zerolux.db.lock").is_file());
     let second = Server::start(options(dir.path(), "127.0.0.1:0".parse().unwrap()))
@@ -622,7 +662,7 @@ async fn the_public_origin_is_served_by_authority_with_its_own_livekit_address()
     .unwrap();
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let base = server.url();
-    let workspace = format!("/w/{}", server.handle().workspaces().await.unwrap()[0].id);
+    let workspace = format!("/w/{}", made(&server).await);
     let via_proxy = |path: &str| {
         // What a reverse proxy on this computer forwards: the public Host, the public Origin.
         client
@@ -699,9 +739,7 @@ async fn the_public_origin_is_served_by_authority_with_its_own_livekit_address()
     })
     .await
     .unwrap();
-    let base = server
-        .handle()
-        .workspace_url(&server.handle().workspaces().await.unwrap()[0].id);
+    let base = server.handle().workspace_url(&made(&server).await);
     let refused = client
         .get(format!("{base}/api/livekit/token"))
         .header("host", "company.example")
@@ -729,9 +767,7 @@ async fn the_desktop_app_origin_is_accepted_as_the_request_it_makes_with_explici
     .unwrap();
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let base = server.url();
-    let workspace = server
-        .handle()
-        .workspace_url(&server.handle().workspaces().await.unwrap()[0].id);
+    let workspace = server.handle().workspace_url(&made(&server).await);
     for origin in ["tauri://localhost", "http://tauri.localhost"] {
         // A local kernel: the desktop's page is a local request, tagged for the browser.
         let response = client

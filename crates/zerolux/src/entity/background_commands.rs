@@ -6,6 +6,8 @@ use sea_orm::entity::prelude::*;
 #[sea_orm(table_name = "background_commands")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
+    pub workspace_id: String,
+    #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub id: String,
     #[sea_orm(column_type = "Text")]
     pub session_id: String,
@@ -29,9 +31,16 @@ pub struct Model {
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
+        belongs_to = "super::workspace::Entity",
+        from = "Column::WorkspaceId",
+        to = "super::workspace::Column::Id",
+        fk_name = "background_commands_workspace_id_fkey"
+    )]
+    Workspace,
+    #[sea_orm(
         belongs_to = "super::sessions::Entity",
-        from = "Column::SessionId",
-        to = "super::sessions::Column::Id",
+        from = "(Column::WorkspaceId, Column::SessionId)",
+        to = "(super::sessions::Column::WorkspaceId, super::sessions::Column::Id)",
         on_delete = "Cascade",
         fk_name = "background_commands_session_id_fkey"
     )]
@@ -52,6 +61,7 @@ impl super::schema::Definition for Entity {
             Index::create()
                 .name("background_commands_by_session")
                 .table(Entity)
+                .col(Column::WorkspaceId)
                 .col(Column::SessionId)
                 .col(Column::StartedAt)
                 .to_owned(),

@@ -29,7 +29,7 @@ use crate::{
     chat_runtime::ChatRuntime,
     codex::CodexStartFailure,
     model::*,
-    store::{Error, Store},
+    store::{Error, Membership, Store},
 };
 
 /// An additional address served by the kernel.
@@ -105,19 +105,31 @@ impl Exposed {
     }
 }
 
-/// Human sign-in: the authentication service. Without it (tests, embedders) requests
-/// without credentials are the local owner's, as before any account existed.
+/// Human sign-in: the instance's authentication service. Without it (tests, embedders)
+/// requests without credentials are each workspace's owner's.
 pub struct Auth {
     pub service: Arc<AuthService>,
+    /// The first account signs up alone: until it exists, signing up needs no invitation.
+    first: tokio::sync::Mutex<()>,
+}
+
+impl Auth {
+    pub fn new(service: AuthService) -> Self {
+        Self {
+            service: Arc::new(service),
+            first: tokio::sync::Mutex::default(),
+        }
+    }
 }
 
 /// Who a request is from, as the middleware established it.
 #[derive(Clone)]
 enum Identity {
-    /// An agent's session, by its kernel-issued token; or the owner, with the sign-in
-    /// behind them when there is an authentication service.
+    /// An agent's session, by its kernel-issued token; or a person of the workspace, with the
+    /// sign-in behind them when there is an authentication service.
     Known(ChatIdentity, Option<HumanSession>),
-    /// A signed-in account not bound to the owner: may ask who it is and claim, nothing else.
+    /// A signed-in account that is not a person of the workspace: may ask who it is and claim
+    /// with an invitation, nothing else.
     Unbound(HumanSession),
     /// No credentials: the health endpoint and the sign-in endpoints only.
     Anonymous,
@@ -166,7 +178,7 @@ pub type Workspaces = std::sync::RwLock<std::collections::HashMap<String, Arc<Ho
 
 #[derive(Clone)]
 struct InstanceState {
-    workspaces: Arc<Workspaces>,
+    kernel: crate::server::ServerHandle,
     gate: Gate,
     web_dir: Arc<PathBuf>,
 }
@@ -177,21 +189,27 @@ impl FromRef<InstanceState> for Gate {
     }
 }
 
-/// The kernel's own addresses: what it is and which workspaces it serves, each workspace's
-/// API under `/w/{id}/api`, and the web app.
-pub fn instance_router(
-    workspaces: Arc<Workspaces>,
+/// The kernel's own addresses: what the instance is, its accounts' sign-in and workspaces,
+/// each workspace's API under `/w/{id}/api`, and the web app.
+pub(crate) fn instance_router(
+    kernel: crate::server::ServerHandle,
     web_dir: PathBuf,
     exposed: Option<Arc<Exposed>>,
     public: Option<Arc<PublicOrigin>>,
 ) -> Router {
     let state = InstanceState {
-        workspaces,
+        kernel,
         gate: Gate { exposed, public },
         web_dir: Arc::new(web_dir),
     };
     let api = Router::new()
         .route("/health", get(instance_health))
+        .route("/auth/identity", get(account_identity))
+        .route("/auth/{*rest}", axum::routing::any(account_auth))
+        .route(
+            "/workspaces",
+            get(account_workspaces).post(create_workspace),
+        )
         // A service comes back here from a sign-in, whichever workspace started it.
         .route("/extensions/oauth/callback", get(instance_signed_in))
         .fallback(|| async {
@@ -212,31 +230,159 @@ pub fn instance_router(
         .with_state(state)
 }
 
-/// What this kernel is, and the workspaces it serves.
-async fn instance_health(State(state): State<InstanceState>) -> Result<Json<Value>, Error> {
-    let stores: Vec<Store> = state
-        .workspaces
-        .read()
-        .expect("workspaces")
-        .values()
-        .map(|hosted| hosted.store.clone())
-        .collect();
-    let mut workspaces = Vec::with_capacity(stores.len());
-    for store in stores {
-        workspaces.push(store.workspace_info().await?);
+/// Whether the instance has no account yet. Without sign-in it never needs one.
+async fn setup_required(auth: Option<&Auth>) -> Result<bool, ApiFailure> {
+    match auth {
+        None => Ok(false),
+        Some(auth) => match auth.service.has_accounts().await {
+            Ok(exists) => Ok(!exists),
+            Err(error) => {
+                tracing::error!(error = format!("{error:#}"), "Accounts check failed");
+                Err(failure(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Sign-in is unavailable right now",
+                ))
+            }
+        },
     }
-    workspaces.sort_by_key(|workspace| workspace.created_at);
+}
+
+/// What this kernel is: its instance, and whether its first account is still to be made.
+/// Its workspaces are listed to their people only.
+async fn instance_health(State(state): State<InstanceState>) -> Result<Json<Value>, ApiFailure> {
     Ok(Json(json!({
         "name": "zerolux",
         "version": crate::build::version(),
         "build": crate::build::info(),
         "api_version": API_VERSION,
-        "capabilities": ["workspaces-v1"],
-        "workspaces": workspaces,
+        "capabilities": ["workspaces-v1", "instance-auth-v1"],
+        "instance": { "id": state.kernel.instance().id() },
+        "auth": { "setup_required": setup_required(state.kernel.auth().as_deref()).await? },
     })))
 }
 
-/// `/w/{id}/…` goes to that workspace, as it receives it: without `/w/{id}`. Any other
+/// The signed-in account behind a request's cookie or signed bearer token, at the instance.
+async fn account(
+    state: &InstanceState,
+    headers: &HeaderMap,
+    peer: Option<IpAddr>,
+) -> Result<HumanSession, ApiFailure> {
+    let auth = state
+        .kernel
+        .auth()
+        .ok_or_else(|| failure(StatusCode::NOT_FOUND, "This kernel runs without sign-in"))?;
+    let token = bearer(headers)?;
+    if token.as_deref().is_some_and(|token| {
+        is_agent_token(token) || token.starts_with(crate::host_link::SECRET_PREFIX)
+    }) {
+        return Err(Error::Unauthorized.into());
+    }
+    match auth.service.session(headers, peer).await {
+        Ok(Some(session)) => Ok(session),
+        Ok(None) => Err(Error::Unauthorized.into()),
+        Err(error) => {
+            tracing::error!(error = format!("{error:#}"), "Session check failed");
+            Err(failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Sign-in is unavailable right now",
+            ))
+        }
+    }
+}
+
+/// The signed-in account, at the instance.
+async fn account_identity(
+    State(state): State<InstanceState>,
+    request: Request,
+) -> Result<Json<Value>, ApiFailure> {
+    let session = account(&state, request.headers(), peer(&request)).await?;
+    Ok(Json(json!({
+        "user": { "id": session.subject, "name": session.name, "email": session.email },
+        // The account exists: the instance has one.
+        "setup_required": false,
+    })))
+}
+
+/// The workspaces the account is a person of, among those this kernel serves, oldest first.
+/// Without sign-in, every one: they are all the local owner's.
+async fn account_workspaces(
+    State(state): State<InstanceState>,
+    request: Request,
+) -> Result<Json<Value>, ApiFailure> {
+    let instance = state.kernel.instance();
+    let mut workspaces = match state.kernel.auth() {
+        Some(_) => {
+            let session = account(&state, request.headers(), peer(&request)).await?;
+            instance.memberships(&session.subject).await?
+        }
+        None => instance
+            .workspaces()
+            .await?
+            .into_iter()
+            .map(|workspace| Membership {
+                id: workspace.id,
+                name: workspace.name,
+                created_at: workspace.created_at,
+                owner: true,
+            })
+            .collect(),
+    };
+    let served = state.kernel.all_hosted();
+    workspaces.retain(|workspace| {
+        served
+            .iter()
+            .any(|hosted| hosted.store.workspace_id() == workspace.id)
+    });
+    Ok(Json(json!({ "workspaces": workspaces })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewWorkspace {
+    name: String,
+    /// On the kernel's computer; by default in the kernel's data directory.
+    #[serde(default)]
+    folder: Option<PathBuf>,
+}
+
+/// A new workspace, served at once, the signed-in account its owner.
+async fn create_workspace(
+    State(state): State<InstanceState>,
+    request: Request,
+) -> Result<Json<Value>, ApiFailure> {
+    let session = account(&state, request.headers(), peer(&request)).await?;
+    let ChatJson(input) = ChatJson::<NewWorkspace>::from_request(request, &state)
+        .await
+        .map_err(|response| ApiFailure(Box::new(response)))?;
+    if input
+        .folder
+        .as_deref()
+        .is_some_and(|folder| !folder.is_absolute())
+    {
+        return Err(Error::Invalid("The folder must be an absolute path".into()).into());
+    }
+    let workspace = state
+        .kernel
+        .create_workspace(
+            &session.subject,
+            &session.name,
+            &input.name,
+            input.folder.as_deref(),
+        )
+        .await
+        .map_err(said)?;
+    Ok(Json(json!({
+        "workspace": Membership {
+            id: workspace.id,
+            name: workspace.name,
+            created_at: workspace.created_at,
+            owner: true,
+        },
+    })))
+}
+
+/// `/w/{id}/…` goes to that workspace, as it receives it: without `/w/{id}`; its sign-in
+/// endpoints are the instance's, but for who the account is there and joining it. Any other
 /// address is the web app's.
 async fn workspace_or_web(State(state): State<InstanceState>, mut request: Request) -> Response {
     use tower::ServiceExt;
@@ -248,12 +394,7 @@ async fn workspace_or_web(State(state): State<InstanceState>, mut request: Reque
         };
     };
     let (id, rest) = rest.split_once('/').unwrap_or((rest, ""));
-    let hosted = state
-        .workspaces
-        .read()
-        .expect("workspaces")
-        .get(id)
-        .cloned();
+    let hosted = state.kernel.hosted(id);
     let Some(hosted) = hosted else {
         return refused(
             StatusCode::NOT_FOUND,
@@ -274,6 +415,12 @@ async fn workspace_or_web(State(state): State<InstanceState>, mut request: Reque
         }
         Err(_) => return refused(StatusCode::BAD_REQUEST, "Invalid address"),
     }
+    let own = rest
+        .strip_prefix("api/auth/")
+        .map(|auth| auth.split('/').next().unwrap_or_default());
+    if own.is_some_and(|own| !matches!(own, "identity" | "claim" | "invites")) {
+        return account_auth(State(state), request).await;
+    }
     match hosted.router.clone().oneshot(request).await {
         Ok(response) => response,
         Err(never) => match never {},
@@ -285,15 +432,11 @@ async fn instance_signed_in(
     State(state): State<InstanceState>,
     Query(query): Query<SignedIn>,
 ) -> Response {
-    let runtimes: Vec<Arc<ChatRuntime>> = state
-        .workspaces
-        .read()
-        .expect("workspaces")
-        .values()
-        .map(|hosted| hosted.runtime.clone())
-        .collect();
-    let runtime = runtimes
+    let runtime = state
+        .kernel
+        .all_hosted()
         .into_iter()
+        .map(|hosted| hosted.runtime.clone())
         .find(|runtime| runtime.extensions.waits_for(&query.state));
     let page = match runtime {
         Some(runtime) => {
@@ -575,8 +718,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         // Where another service sends a person back from signing in for an extension.
         .route("/extensions/oauth/callback", get(extension_signed_in))
         // A file an extension's card shows, by its digest: what is there cannot change.
-        .route("/extensions/assets/{sha256}", get(extension_asset))
-        .route("/auth/{*rest}", axum::routing::any(auth_proxy));
+        .route("/extensions/assets/{sha256}", get(extension_asset));
     let api = open
         .merge(domain)
         .fallback(|| async {
@@ -655,29 +797,13 @@ async fn no_store(request: Request, next: Next) -> Response {
 }
 
 /// Who the request is from. A bearer token is an agent's (kernel-issued) or a signed-in
-/// account's (signed by the authentication service); a cookie is an account's. Without the
-/// authentication service, a request without credentials is the local owner's.
+/// account's (signed by the authentication service); a cookie is an account's, the person it
+/// is in this workspace. Without the authentication service, a request without credentials is
+/// the workspace owner's.
 async fn identify(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
-    let headers = request.headers().get_all(axum::http::header::AUTHORIZATION);
-    if headers.iter().count() > 1 {
-        return Error::Unauthorized.into_response();
-    }
-    let token = match headers.iter().next() {
-        None => None,
-        Some(header) => {
-            let Some((scheme, token)) =
-                header.to_str().ok().and_then(|value| value.split_once(' '))
-            else {
-                return Error::Unauthorized.into_response();
-            };
-            if !scheme.eq_ignore_ascii_case("bearer")
-                || token.is_empty()
-                || token.chars().any(char::is_whitespace)
-            {
-                return Error::Unauthorized.into_response();
-            }
-            Some(token.to_owned())
-        }
+    let token = match bearer(request.headers()) {
+        Ok(token) => token,
+        Err(failure) => return failure.into_response(),
     };
     let identity = match (&state.auth, token.as_deref()) {
         // A joined computer's secret: its channel checks it, and it is nobody else.
@@ -743,13 +869,34 @@ async fn identify(State(state): State<AppState>, mut request: Request, next: Nex
     response
 }
 
+/// The request's one bearer token, if any; anything else in `Authorization` is refused.
+fn bearer(headers: &HeaderMap) -> Result<Option<String>, ApiFailure> {
+    let headers = headers.get_all(header::AUTHORIZATION);
+    if headers.iter().count() > 1 {
+        return Err(Error::Unauthorized.into());
+    }
+    let Some(header) = headers.iter().next() else {
+        return Ok(None);
+    };
+    match header.to_str().ok().and_then(|value| value.split_once(' ')) {
+        Some((scheme, token))
+            if scheme.eq_ignore_ascii_case("bearer")
+                && !token.is_empty()
+                && !token.chars().any(char::is_whitespace) =>
+        {
+            Ok(Some(token.to_owned()))
+        }
+        _ => Err(Error::Unauthorized.into()),
+    }
+}
+
 /// An agent's token is 64 hex digits of the kernel's; a signed session token is not.
 fn is_agent_token(token: &str) -> bool {
     token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// The domain: someone known. An account not bound to the owner is told so; no one is
-/// told anything.
+/// The domain: someone known. An account that is not a person of the workspace is told so;
+/// no one is told anything.
 async fn require_identity(
     Extension(identity): Extension<Identity>,
     mut request: Request,
@@ -765,7 +912,7 @@ async fn require_identity(
         }
         Identity::Unbound(_) => refused(
             StatusCode::FORBIDDEN,
-            "This account is not the workspace owner",
+            "This account is not a person of this workspace",
         ),
         Identity::Anonymous => Error::Unauthorized.into_response(),
     }
@@ -2943,21 +3090,22 @@ async fn workspace(State(store): State<Store>) -> Result<Json<Workspace>, Error>
     Ok(Json(store.workspace().await?))
 }
 /// The HTTP API's generation, for information: clients decide by `capabilities`, never by
-/// refusing a number. 2: the domain requires a signed-in, bound account (`auth-v1`).
-pub const API_VERSION: u32 = 2;
+/// refusing a number. 3: one sign-in for the instance and all its workspaces
+/// (`instance-auth-v1`).
+pub const API_VERSION: u32 = 3;
 
-/// The invitation a signup comes with, once the workspace has its owner.
+/// The invitation a signup comes with, once the instance has its first account.
 const INVITE_HEADER: &str = "x-zerolux-invite";
 
-/// Reachable without credentials: what this kernel is, the company it runs, and whether an
-/// account still has to be bound to its owner.
-async fn health(State(state): State<AppState>) -> Result<Json<Value>, Error> {
+/// Reachable without credentials: what this kernel is, the company it runs, and whether the
+/// instance still has to make its first account.
+async fn health(State(state): State<AppState>) -> Result<Json<Value>, ApiFailure> {
     let workspace = state.store.workspace_info().await?;
     let mut capabilities = vec!["byoh-v1", "owner-onboarding-v1", "chat-v1", "people-v1"];
     let auth = match &state.auth {
-        Some(_) => {
+        Some(auth) => {
             capabilities.push("auth-v1");
-            Some(json!({ "setup_required": !state.store.owner_bound().await? }))
+            Some(json!({ "setup_required": setup_required(Some(auth)).await? }))
         }
         None => None,
     };
@@ -2983,37 +3131,29 @@ fn failure(status: StatusCode, message: &str) -> ApiFailure {
     ApiFailure(Box::new(refused(status, message)))
 }
 
-/// `owner`: whether the account is the workspace's owner, rather than a person who joined.
-fn identity_json(
-    session: &HumanSession,
-    actor_id: Option<&str>,
-    owner: bool,
-    setup_required: bool,
-) -> Value {
+/// `owner`: whether the account is the workspace's owner, rather than a member. Signed in,
+/// the instance has an account: its setup is done.
+fn identity_json(session: &HumanSession, actor_id: Option<&str>, owner: bool) -> Value {
     json!({
         "user": { "id": session.subject, "name": session.name, "email": session.email },
         "actor_id": actor_id,
         "owner": owner,
-        "setup_required": setup_required,
+        "setup_required": false,
     })
 }
 
-/// Who the signed-in account is to this workspace: the owner, or not bound yet.
+/// Who the signed-in account is in this workspace: its owner, a member, or not a person of it.
 async fn auth_identity(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
 ) -> Result<Json<Value>, ApiFailure> {
     auth_of(&state)?;
-    let setup_required = !state.store.owner_bound().await?;
     match identity {
-        Identity::Unbound(session) => {
-            Ok(Json(identity_json(&session, None, false, setup_required)))
-        }
+        Identity::Unbound(session) => Ok(Json(identity_json(&session, None, false))),
         Identity::Known(who, Some(session)) if who.is_person() => Ok(Json(identity_json(
             &session,
             who.actor_id.as_deref(),
             state.store.is_workspace_owner(&who).await?,
-            setup_required,
         ))),
         Identity::Known(..) => Err(Error::Forbidden.into()),
         Identity::Anonymous => Err(Error::Unauthorized.into()),
@@ -3026,8 +3166,7 @@ struct Claim {
     invite: Option<String>,
 }
 
-/// Binds the signed-in account to a person: the first account to claim is the owner; a later
-/// one joins as a new person with an invitation.
+/// Makes the signed-in account a member of this workspace, with an invitation.
 async fn auth_claim(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
@@ -3038,61 +3177,44 @@ async fn auth_claim(
         Claim::default()
     } else {
         serde_json::from_slice(&body)
-            .map_err(|_| failure(StatusCode::BAD_REQUEST, "Send an invitation, or nothing"))?
+            .map_err(|_| failure(StatusCode::BAD_REQUEST, "Send an invitation"))?
     };
     let session = match identity {
         Identity::Unbound(session) => session,
         Identity::Known(who, _) if who.is_person() => {
             return Err(failure(
                 StatusCode::CONFLICT,
-                "This account is already the owner",
+                "This account is already a person of this workspace",
             ));
         }
         Identity::Known(..) => return Err(Error::Forbidden.into()),
         Identity::Anonymous => return Err(Error::Unauthorized.into()),
     };
-    if let Some(invite) = claim.invite {
-        let person = state
-            .store
-            .join(&invite, &session.subject, &session.name)
-            .await
-            .map_err(|error| match error {
-                Error::NotFound => invitation_gone(),
-                other => other.into(),
-            })?;
-        return Ok(Json(identity_json(
-            &session,
-            Some(&person.id),
-            false,
-            false,
-        )));
-    }
-    let owner = state
+    let Some(invite) = claim.invite else {
+        return Err(failure(
+            StatusCode::FORBIDDEN,
+            "Join this workspace with an invitation",
+        ));
+    };
+    let person = state
         .store
-        .bind_owner(&session.subject, &session.name)
+        .join(&invite, &session.subject, &session.name)
         .await
         .map_err(|error| match error {
-            Error::Conflict => failure(
-                StatusCode::FORBIDDEN,
-                "This workspace already has its owner; join it with an invitation",
-            ),
+            Error::NotFound => invitation_gone(),
             other => other.into(),
         })?;
-    Ok(Json(identity_json(&session, Some(&owner.id), true, false)))
+    Ok(Json(identity_json(&session, Some(&person.id), false)))
 }
 
-/// Better Auth's own endpoints, through the kernel: sign-in, sign-out, sessions, password.
-/// Signing up is open until the owner has an account, and closed after. What ends or may
-/// end sessions also disconnects the person's realtime clients: the ones still signed in
-/// come back on their own.
-async fn auth_proxy(
-    State(state): State<AppState>,
-    Extension(identity): Extension<Identity>,
-    mut request: Request,
-) -> Response {
-    let auth = match auth_of(&state) {
-        Ok(auth) => auth,
-        Err(failure) => return failure.into_response(),
+/// Better Auth's own endpoints, through the kernel, at the instance and at each workspace's
+/// base: sign-in, sign-out, sessions, password. Signing up is open until the instance has its
+/// first account; after it, for a person with an invitation to one of its workspaces. What
+/// ends or may end sessions also disconnects the account's realtime clients in every
+/// workspace: the ones still signed in come back on their own.
+async fn account_auth(State(state): State<InstanceState>, mut request: Request) -> Response {
+    let Some(auth) = state.kernel.auth() else {
+        return refused(StatusCode::NOT_FOUND, "This kernel runs without sign-in");
     };
     // The path as the service will see it: normalized, so nothing dodges the signup check.
     let path = request
@@ -3118,28 +3240,44 @@ async fn auth_proxy(
         )
     );
     let peer = peer(&request);
-    let enroll = if signup {
-        // Open for the owner's account; after it, for a person with an invitation.
+    // Whose sessions may end, asked before they do.
+    let revoking = match revokes {
+        true => auth
+            .service
+            .session(request.headers(), peer)
+            .await
+            .ok()
+            .flatten(),
+        false => None,
+    };
+    let mut first = None;
+    if signup {
         let invite = request
             .headers()
             .get(INVITE_HEADER)
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
-        match (state.store.owner_bound().await, &invite) {
-            (Ok(false), _) => {}
-            (Ok(true), None) => {
-                return refused(
-                    StatusCode::FORBIDDEN,
-                    "This workspace already has its owner; sign in, or join it with an invitation",
-                );
+        let held = auth.first.lock().await;
+        let workspace = match setup_required(Some(&auth)).await {
+            Err(failure) => return failure.into_response(),
+            Ok(true) => {
+                first = Some(held);
+                None
             }
-            (Ok(true), Some(invite)) => match state.store.invitation(invite).await {
-                Ok(_) => {}
-                Err(Error::NotFound) => return invitation_gone().into_response(),
-                Err(error) => return error.into_response(),
-            },
-            (Err(error), _) => return error.into_response(),
-        }
+            Ok(false) => {
+                let Some(invite) = &invite else {
+                    return refused(
+                        StatusCode::FORBIDDEN,
+                        "This kernel already has its accounts; sign in, or join with an invitation",
+                    );
+                };
+                match state.kernel.instance().invited_to(invite).await {
+                    Ok(Some(workspace)) => Some(workspace),
+                    Ok(None) => return invitation_gone().into_response(),
+                    Err(error) => return error.into_response(),
+                }
+            }
+        };
         // The name, as the kernel checks it: a signup the claim would refuse is refused
         // here, before an account exists.
         let (parts, body) = request.into_parts();
@@ -3151,31 +3289,45 @@ async fn auth_proxy(
             .ok()
             .and_then(|v| v.get("name").and_then(Value::as_str).map(str::to_owned))
             .unwrap_or_default();
-        let checked = match invite {
-            Some(_) => state.store.person_name(&name).await,
+        let checked = match &workspace {
+            Some(workspace) => {
+                state
+                    .kernel
+                    .instance()
+                    .store(workspace)
+                    .person_name(&name)
+                    .await
+            }
             None => crate::store::owner_name(&name),
         };
         if let Err(error) = checked {
             return error.into_response();
         }
         request = Request::from_parts(parts, Body::from(bytes));
-        true
-    } else {
-        false
-    };
-    match auth.service.proxy(request, enroll, peer).await {
+    }
+    let proxied = auth.service.proxy(request, signup, peer).await;
+    drop(first);
+    match proxied {
         Ok(response) => {
-            if revokes
-                && response.status().is_success()
-                && let Identity::Known(who, _) = identity
-                && who.is_person()
-                && let Some(runtime) = &state.runtime
-                && let Err(error) = runtime.disconnect_clients(who.addressee()).await
+            if response.status().is_success()
+                && let Some(session) = revoking
             {
-                tracing::error!(
-                    error = format!("{error:#}"),
-                    "Disconnecting realtime clients failed"
-                );
+                for hosted in state.kernel.all_hosted() {
+                    let person = match hosted.store.actor_for_subject(&session.subject).await {
+                        Ok(Some(person)) => person,
+                        Ok(None) => continue,
+                        Err(error) => {
+                            tracing::error!(error = %error, "Finding the person to disconnect failed");
+                            continue;
+                        }
+                    };
+                    if let Err(error) = hosted.runtime.disconnect_clients(&person.id).await {
+                        tracing::error!(
+                            error = format!("{error:#}"),
+                            "Disconnecting realtime clients failed"
+                        );
+                    }
+                }
             }
             response
         }
@@ -3188,6 +3340,7 @@ async fn auth_proxy(
         }
     }
 }
+
 async fn set_owner_name(
     State(store): State<Store>,
     Extension(who): Extension<ChatIdentity>,

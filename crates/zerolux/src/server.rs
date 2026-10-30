@@ -1,12 +1,12 @@
 //! The kernel lifecycle shared by the CLI and embedders. No desktop dependencies.
 //!
-//! One kernel serves one or more workspaces at one address, each under `/w/{id}`: each
-//! workspace is its own folder of data, with its own database, sign-in and agents.
+//! One kernel serves one instance at one address: its database, its accounts' sign-in, and
+//! its workspaces, each under `/w/{id}` with a folder of files of its own.
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     future::Future,
     net::{IpAddr, SocketAddr},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -21,7 +21,7 @@ use crate::{
     lease::Lease,
     livekit::{LiveKit, LiveKitConfig},
     model::WorkspaceInfo,
-    store::Store,
+    store::Instance,
 };
 
 #[cfg(test)]
@@ -31,14 +31,11 @@ mod tests;
 pub struct ServerOptions {
     pub address: SocketAddr,
     pub expose: Option<IpAddr>,
-    /// Where the first workspace keeps what is local to it: links, sockets, secrets; and where
-    /// this kernel keeps its LiveKit assets.
+    /// Where this kernel keeps its LiveKit assets, and the folders of the workspaces made
+    /// without one, in `workspaces/<id>`.
     pub data_dir: PathBuf,
-    /// The first workspace's data: a SQLite file (usually in `data_dir`) or a PostgreSQL server.
+    /// The instance's data: a SQLite file (usually in `data_dir`) or a PostgreSQL server.
     pub database: Location,
-    /// An embedder's name for a new workspace, before its first account is bound.
-    /// Existing workspace connections leave this unset.
-    pub initial_workspace_name: Option<String>,
     pub web_dir: PathBuf,
     /// An explicit configuration avoids inheriting service credentials in embedders/tests.
     /// `None` retains the CLI's LIVEKIT_* environment configuration.
@@ -48,28 +45,8 @@ pub struct ServerOptions {
     pub public: Option<Arc<api::PublicOrigin>>,
     pub runner: Option<crate::claude_runner::RunnerProgram>,
     /// Human sign-in through the authentication service started from here. `None` (tests,
-    /// embedders) runs the kernel as it ran before accounts: the local owner is implicit.
+    /// embedders) runs the kernel without accounts: each workspace's owner is implicit.
     pub auth: Option<crate::auth::AuthEntry>,
-}
-
-/// Another workspace for a running kernel: a folder of its own, usually `<folder>/.zerolux`.
-#[derive(Clone)]
-pub struct WorkspaceOptions {
-    pub data_dir: PathBuf,
-    pub database: Location,
-    /// Its name, when the folder holds no workspace yet.
-    pub initial_workspace_name: Option<String>,
-}
-
-impl WorkspaceOptions {
-    /// The workspace kept in `data_dir`, in its SQLite database there.
-    pub fn in_folder(data_dir: PathBuf, initial_workspace_name: Option<String>) -> Self {
-        Self {
-            database: Location::Sqlite(data_dir.join("zerolux.db")),
-            data_dir,
-            initial_workspace_name,
-        }
-    }
 }
 
 /// Dropping requests shutdown; `shutdown`/`run_until` also wait for cleanup.
@@ -87,19 +64,24 @@ pub struct ServerHandle {
     shared: Arc<Shared>,
 }
 
-/// What every workspace of a kernel shares: its addresses, services and programs.
+/// What every workspace of a kernel shares: its instance, addresses, services and programs.
 struct Shared {
     address: SocketAddr,
     expose: Option<IpAddr>,
     exposed: Option<Arc<api::Exposed>>,
     public: Option<Arc<api::PublicOrigin>>,
     web_dir: PathBuf,
+    data_dir: PathBuf,
+    database: Location,
     runner: Option<crate::claude_runner::RunnerProgram>,
-    auth: Option<crate::auth::AuthEntry>,
+    instance: Instance,
+    auth: Option<Arc<api::Auth>>,
     livekit: Arc<LiveKit>,
     livekit_config: LiveKitConfig,
     workspaces: Arc<api::Workspaces>,
     running: tokio::sync::Mutex<HashMap<String, Running>>,
+    /// Workspaces this kernel stopped serving: served again when it starts again.
+    removed: std::sync::Mutex<HashSet<String>>,
     stopped: watch::Receiver<bool>,
 }
 
@@ -153,18 +135,33 @@ impl Server {
         tokio::fs::create_dir_all(&options.data_dir)
             .await
             .context("Create the data directory")?;
-        // One running kernel per SQLite workspace: the lease comes before migrations and
-        // before anything is started for the workspace. Held until cleanup ends.
+        // One running kernel per SQLite database: the lease comes before migrations and
+        // before anything is started for its workspaces. Held until cleanup ends.
         let lease = match lease {
             Some(lease) => lease,
             None => Lease::acquire(&options.database)?,
         };
+        let instance = Instance::open(&options.database)
+            .await
+            .context("Open the database")?;
         let livekit_config = options
             .livekit
             .clone()
             .unwrap_or_else(|| LiveKitConfig::from_env(options.data_dir.clone()));
         let livekit =
             Arc::new(LiveKit::start_exposed(livekit_config.clone(), options.expose).await?);
+        let auth = match &options.auth {
+            Some(entry) => match sign_in(entry, &instance, &options, address).await {
+                Ok(auth) => Some(Arc::new(auth)),
+                Err(error) => {
+                    if let Err(cleanup) = livekit.shutdown().await {
+                        tracing::error!(%cleanup, "LiveKit cleanup failed after startup error");
+                    }
+                    return Err(error);
+                }
+            },
+            None => None,
+        };
         let (stop, stopped) = watch::channel(false);
         let shared = Arc::new(Shared {
             address,
@@ -174,28 +171,27 @@ impl Server {
                 .map(|listener| api::Exposed::new(listener.local_addr().expect("bound listener"))),
             public: options.public.clone(),
             web_dir: options.web_dir.clone(),
+            data_dir: options.data_dir.clone(),
+            database: options.database.clone(),
             runner: options.runner.clone(),
-            auth: options.auth.clone(),
-            livekit: livekit.clone(),
+            instance,
+            auth,
+            livekit,
             livekit_config,
             workspaces: Arc::default(),
             running: tokio::sync::Mutex::default(),
+            removed: std::sync::Mutex::default(),
             stopped: stopped.clone(),
         });
-        let first = WorkspaceOptions {
-            data_dir: options.data_dir,
-            database: options.database,
-            initial_workspace_name: options.initial_workspace_name,
-        };
-        if let Err(error) = shared.serve(first, lease, handoff).await {
-            if let Err(cleanup) = livekit.shutdown().await {
-                tracing::error!(%cleanup, "LiveKit cleanup failed after startup error");
-            }
+        if let Err(error) = shared.serve_all(handoff).await {
+            shared.stop_everything().await.ok();
             return Err(error);
         }
         let request_stop = stop.clone();
         let app = api::instance_router(
-            shared.workspaces.clone(),
+            ServerHandle {
+                shared: shared.clone(),
+            },
             shared.web_dir.clone(),
             shared.exposed.clone(),
             shared.public.clone(),
@@ -204,6 +200,23 @@ impl Server {
         tracing::info!(%address, "ZeroLux kernel ready");
         let instance = shared.clone();
         let task = tokio::spawn(async move {
+            // Kernels sharing a PostgreSQL database serve the workspaces the others make.
+            let joined = instance.database.is_postgres().then(|| {
+                let instance = instance.clone();
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(Duration::from_secs(10));
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        interval.tick().await;
+                        if let Err(error) = instance.serve_all(None).await {
+                            tracing::warn!(
+                                error = format!("{error:#}"),
+                                "A workspace is not served"
+                            );
+                        }
+                    }
+                })
+            });
             let mut servers = tokio::task::JoinSet::new();
             if let Some(listener) = exposed {
                 tracing::info!(address = %listener.local_addr().expect("bound listener"), "Also serving the owner's other devices (unauthenticated)");
@@ -229,11 +242,15 @@ impl Server {
                     result = Err(error);
                 }
             }
-            let workspaces_stopped = instance.stop_all().await;
-            let livekit_stopped = instance.livekit.shutdown().await;
+            if let Some(joined) = joined {
+                joined.abort();
+                let _ = joined.await;
+            }
+            let stopped = instance.stop_everything().await;
+            // Released last, once everything else has stopped.
+            drop(lease);
             result?;
-            workspaces_stopped?;
-            livekit_stopped
+            stopped
         });
         Ok(Self {
             address,
@@ -252,7 +269,7 @@ impl Server {
         format!("http://{}", self.address)
     }
 
-    /// Adds, removes and lists its workspaces, even while `run_until` holds the server.
+    /// Creates, removes and lists its workspaces, even while `run_until` holds the server.
     pub fn handle(&self) -> ServerHandle {
         ServerHandle {
             shared: self.shared.clone(),
@@ -275,6 +292,53 @@ impl Server {
     }
 }
 
+/// The instance's sign-in: its one authentication service, on its database, with its secret,
+/// for the exact origins clients sign in from: this computer, the exposed address, the public
+/// origin and the desktop app. Cookies are set for the public origin when there is one.
+async fn sign_in(
+    entry: &crate::auth::AuthEntry,
+    instance: &Instance,
+    options: &ServerOptions,
+    address: SocketAddr,
+) -> Result<api::Auth> {
+    let origin = format!("http://{address}");
+    let mut origins = vec![
+        origin.clone(),
+        format!("http://localhost:{}", address.port()),
+        "tauri://localhost".to_owned(),
+        "http://tauri.localhost".to_owned(),
+    ];
+    if let Some(expose) = options.expose {
+        origins.push(format!(
+            "http://{}",
+            SocketAddr::new(expose, address.port())
+        ));
+    }
+    let canonical = match &options.public {
+        Some(public) => public.origin().to_owned(),
+        None => origin,
+    };
+    // Kernels of one instance start their services one at a time: the service migrates its
+    // own tables on start. PostgreSQL only; SQLite has one kernel.
+    let turn = match &options.database {
+        Location::Postgres(_) => Some(instance.write().await?),
+        Location::Sqlite(_) => None,
+    };
+    let service = crate::auth::AuthService::start(
+        entry,
+        instance.id(),
+        &options.database,
+        instance.auth_secret(),
+        &canonical,
+        &origins,
+    )
+    .await?;
+    if let Some(turn) = turn {
+        turn.commit().await?;
+    }
+    Ok(api::Auth::new(service))
+}
+
 impl ServerHandle {
     /// The kernel's own address; each workspace is under `/w/{id}` there.
     pub fn url(&self) -> String {
@@ -286,49 +350,81 @@ impl ServerHandle {
         format!("{}/w/{id}", self.url())
     }
 
+    /// The instance this kernel serves.
+    pub fn instance(&self) -> &Instance {
+        &self.shared.instance
+    }
+
     /// The workspaces this kernel serves, oldest first.
     pub async fn workspaces(&self) -> Result<Vec<WorkspaceInfo>> {
-        let stores: Vec<Store> = self
+        let mut infos = Vec::new();
+        for hosted in self.all_hosted() {
+            infos.push(hosted.store.workspace_info().await?);
+        }
+        infos.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+        Ok(infos)
+    }
+
+    /// A new workspace, served at once: its owner is the account `subject`, named
+    /// `account_name`. Its `folder` is on this computer; by default `workspaces/<id>` in the
+    /// kernel's data directory.
+    pub async fn create_workspace(
+        &self,
+        subject: &str,
+        account_name: &str,
+        name: &str,
+        folder: Option<&Path>,
+    ) -> Result<WorkspaceInfo> {
+        if *self.shared.stopped.borrow() {
+            bail!("The kernel is stopping");
+        }
+        if let Some(folder) = folder {
+            tokio::fs::create_dir_all(folder)
+                .await
+                .context("Create the workspace's folder")?;
+        }
+        let workspace = self
             .shared
+            .instance
+            .create_workspace(subject, account_name, name, folder)
+            .await?;
+        self.shared.serve(&workspace, None).await?;
+        Ok(workspace)
+    }
+
+    /// Stops serving a workspace until the kernel starts again. Its data and folder stay as
+    /// they are.
+    pub async fn remove_workspace(&self, id: &str) -> Result<()> {
+        self.shared.stop_one(id).await?;
+        self.shared
+            .removed
+            .lock()
+            .expect("removed")
+            .insert(id.to_owned());
+        Ok(())
+    }
+
+    pub(crate) fn auth(&self) -> Option<Arc<api::Auth>> {
+        self.shared.auth.clone()
+    }
+
+    pub(crate) fn hosted(&self, id: &str) -> Option<Arc<api::Hosted>> {
+        self.shared
+            .workspaces
+            .read()
+            .expect("workspaces")
+            .get(id)
+            .cloned()
+    }
+
+    pub(crate) fn all_hosted(&self) -> Vec<Arc<api::Hosted>> {
+        self.shared
             .workspaces
             .read()
             .expect("workspaces")
             .values()
-            .map(|hosted| hosted.store.clone())
-            .collect();
-        let mut infos = Vec::with_capacity(stores.len());
-        for store in stores {
-            infos.push(store.workspace_info().await?);
-        }
-        infos.sort_by_key(|info| info.created_at);
-        Ok(infos)
-    }
-
-    /// Serves one more workspace: the one in its folder, or a new one there.
-    pub async fn add_workspace(&self, options: WorkspaceOptions) -> Result<WorkspaceInfo> {
-        if *self.shared.stopped.borrow() {
-            bail!("The kernel is stopping");
-        }
-        tokio::fs::create_dir_all(&options.data_dir)
-            .await
-            .context("Create the workspace's folder")?;
-        let lease = Lease::acquire(&options.database)?;
-        self.shared.serve(options, lease, None).await
-    }
-
-    /// The same, continuing a lease already held, as after an offline backup or a handover.
-    pub async fn add_workspace_with_lease(
-        &self,
-        options: WorkspaceOptions,
-        lease: Lease,
-    ) -> Result<WorkspaceInfo> {
-        lease.ensure_for(&options.database)?;
-        self.shared.serve(options, lease, None).await
-    }
-
-    /// Stops serving a workspace, the first one too. Its folder and data stay as they are.
-    pub async fn remove_workspace(&self, id: &str) -> Result<()> {
-        self.shared.stop_one(id).await
+            .cloned()
+            .collect()
     }
 }
 
@@ -343,48 +439,64 @@ async fn stopping(mut stopped: watch::Receiver<bool>) {
 }
 
 impl Shared {
-    /// Starts serving the workspace in `options.data_dir`, whose lease is held: until it is
-    /// removed or the kernel stops.
-    async fn serve(
-        self: &Arc<Self>,
-        options: WorkspaceOptions,
-        lease: Lease,
+    /// Serves every workspace of the instance this kernel does not serve yet, but those it was
+    /// asked to stop serving. The workspace kept in the data directory itself may be handed
+    /// over to another kernel through `handoff`.
+    async fn serve_all(
+        &self,
         handoff: Option<tokio::sync::mpsc::Sender<crate::handoff::Request>>,
-    ) -> Result<WorkspaceInfo> {
+    ) -> Result<()> {
+        let home = dunce::canonicalize(&self.data_dir)?;
+        for workspace in self.instance.workspaces().await? {
+            if self
+                .removed
+                .lock()
+                .expect("removed")
+                .contains(&workspace.id)
+            {
+                continue;
+            }
+            let folder = self.data_dir.join(&workspace.folder);
+            let handoff = handoff
+                .clone()
+                .filter(|_| dunce::canonicalize(&folder).is_ok_and(|folder| folder == home));
+            self.serve(&workspace, handoff)
+                .await
+                .with_context(|| format!("Serve the workspace {}", workspace.name))?;
+        }
+        Ok(())
+    }
+
+    /// Starts serving a workspace, in its folder: until it is removed or the kernel stops.
+    async fn serve(
+        &self,
+        workspace: &WorkspaceInfo,
+        handoff: Option<tokio::sync::mpsc::Sender<crate::handoff::Request>>,
+    ) -> Result<()> {
+        // One start at a time: a workspace is served once.
+        let mut running = self.running.lock().await;
         if *self.stopped.borrow() {
             bail!("The kernel is stopping");
         }
-        let data_dir = options.data_dir;
-        let new = !data_dir.join("host-id").exists();
-        let store = Store::open_at(&options.database)
-            .await
-            .context("Open the database")?;
-        if let Some(name) = options.initial_workspace_name
-            && !store.owner_bound().await?
-        {
-            store
-                .set_workspace_name(crate::model::SetWorkspaceName { name })
-                .await
-                .context("Name the new workspace")?;
+        if running.contains_key(&workspace.id) {
+            return Ok(());
         }
+        let folder = std::path::absolute(self.data_dir.join(&workspace.folder))?;
+        tokio::fs::create_dir_all(&folder)
+            .await
+            .context("Create the workspace's folder")?;
+        let new = !folder.join("host-id").exists();
         // This kernel's host: the agent sessions it starts live here, and only it links them.
-        let host_id = host_id(&data_dir).await?;
-        let store = store
+        let host_id = host_id(&folder).await?;
+        let store = self
+            .instance
+            .store(&workspace.id)
             .hosted(host_id.clone())
-            .with_people(data_dir.join("people"));
+            .with_people(folder.join("people"));
         store.register_host().await?;
         store.adopt_read_positions().await?;
-        let workspace = store.workspace_info().await?;
-        if self
-            .workspaces
-            .read()
-            .expect("workspaces")
-            .contains_key(&workspace.id)
-        {
-            bail!("This kernel already serves this workspace");
-        }
         if new {
-            exclude_from_git(&data_dir);
+            exclude_from_git(&folder);
         }
         // Surviving harness integrations may accept only an origin, without `/w/{id}`.
         // Each workspace owns its own loopback listener; its authenticated rebind supplies
@@ -393,7 +505,7 @@ impl Shared {
             .await
             .context("Listen for this workspace's harnesses")?;
         let harness_url = format!("http://{}", harness_listener.local_addr()?);
-        let handoff = match (handoff, &options.database) {
+        let handoff = match (handoff, &self.database) {
             (Some(send), Location::Sqlite(database)) => Some(crate::handoff::Control {
                 configuration: crate::handoff::Configuration {
                     info: crate::handoff::Info {
@@ -403,7 +515,7 @@ impl Shared {
                         host_id,
                         version: crate::build::version().to_owned(),
                         schema: crate::build::schema().to_owned(),
-                        directory: dunce::canonicalize(&data_dir)?,
+                        directory: dunce::canonicalize(&folder)?,
                         database: dunce::canonicalize(database)?,
                         network: crate::handoff::Network {
                             listen: self.address.ip(),
@@ -428,89 +540,30 @@ impl Shared {
             }),
             _ => None,
         };
-        let origin = format!("http://{}", self.address);
-        let auth = match &self.auth {
-            Some(entry) => {
-                // The exact origins clients sign in from: this computer, the exposed address,
-                // the public origin and the desktop app. Cookies are set for the public origin
-                // when there is one.
-                let mut origins = vec![
-                    origin.clone(),
-                    format!("http://localhost:{}", self.address.port()),
-                    "tauri://localhost".to_owned(),
-                    "http://tauri.localhost".to_owned(),
-                ];
-                if let Some(expose) = self.expose {
-                    origins.push(format!(
-                        "http://{}",
-                        SocketAddr::new(expose, self.address.port())
-                    ));
-                }
-                let canonical = match &self.public {
-                    Some(public) => public.origin().to_owned(),
-                    None => origin.clone(),
-                };
-                let secret = store.auth_secret().await?;
-                // Kernels of one workspace start their services one at a time: the service
-                // migrates its own tables on start. PostgreSQL only; SQLite has one host.
-                let turn = match &options.database {
-                    Location::Postgres(_) => Some(store.write().await?),
-                    Location::Sqlite(_) => None,
-                };
-                let service = crate::auth::AuthService::start(
-                    entry,
-                    &workspace.id,
-                    &options.database,
-                    &secret,
-                    &canonical,
-                    &origins,
-                )
-                .await?;
-                if let Some(turn) = turn {
-                    turn.commit().await?;
-                }
-                Some(Arc::new(api::Auth {
-                    service: Arc::new(service),
-                }))
-            }
-            None => None,
-        };
         let livekit = Arc::new(self.livekit.scoped(&workspace.id));
-        let base_url = format!("{origin}/w/{}", workspace.id);
-        let links = std::path::absolute(data_dir.join("links"))?;
-        let started = ChatRuntime::start_hosted(
+        let base_url = format!("http://{}/w/{}", self.address, workspace.id);
+        let runtime = ChatRuntime::start_hosted(
             store.clone(),
             livekit,
             base_url,
             harness_url,
-            links,
+            folder.join("links"),
             self.runner.clone(),
         )
-        .await;
-        let runtime = match started {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                if let Some(auth) = &auth {
-                    auth.service.shutdown().await;
-                }
-                return Err(error);
-            }
-        };
+        .await?;
         let router = api::router_public(
             store.clone(),
             self.web_dir.clone(),
             Some(runtime.clone()),
             self.exposed.clone(),
             self.public.clone(),
-            auth.clone(),
+            self.auth.clone(),
         );
         let (stop, stopped) = watch::channel(false);
         let task = tokio::spawn(run_workspace(
             runtime.clone(),
-            data_dir,
+            folder,
             handoff,
-            auth,
-            lease,
             stopped,
             (harness_listener, router.clone()),
         ));
@@ -522,12 +575,9 @@ impl Shared {
                 router,
             }),
         );
-        self.running
-            .lock()
-            .await
-            .insert(workspace.id.clone(), Running { stop, task });
+        running.insert(workspace.id.clone(), Running { stop, task });
         tracing::info!(workspace = workspace.id, "Serving the workspace");
-        Ok(workspace)
+        Ok(())
     }
 
     async fn stop_one(&self, id: &str) -> Result<()> {
@@ -542,7 +592,8 @@ impl Shared {
         running.task.await.context("Workspace task failed")?
     }
 
-    async fn stop_all(&self) -> Result<()> {
+    /// Stops every workspace, then the instance's sign-in and LiveKit.
+    async fn stop_everything(&self) -> Result<()> {
         let running: Vec<_> = self.running.lock().await.drain().collect();
         self.workspaces.write().expect("workspaces").clear();
         let mut result = Ok(());
@@ -555,18 +606,22 @@ impl Shared {
                 result = Err(error);
             }
         }
-        result
+        // In-flight requests are finished by now.
+        if let Some(auth) = &self.auth {
+            auth.service.shutdown().await;
+        }
+        let livekit = self.livekit.shutdown().await;
+        result?;
+        livekit
     }
 }
 
 /// A workspace's own work while it is served: its agents' links, schedules, extensions and
-/// local channel. Its sign-in and lease end with it.
+/// local channel.
 async fn run_workspace(
     runtime: Arc<ChatRuntime>,
     data_dir: PathBuf,
     handoff: Option<crate::handoff::Control>,
-    auth: Option<Arc<api::Auth>>,
-    lease: Lease,
     mut stopped: watch::Receiver<bool>,
     http: (TcpListener, axum::Router),
 ) -> Result<()> {
@@ -690,16 +745,10 @@ async fn run_workspace(
         let _ = task.await;
     }
     let runtime_stopped = runtime.shutdown().await;
-    // Finish in-flight requests before closing their authentication service and lease.
     let served = match served {
         Some(result) => result,
         None => http.await,
     };
-    if let Some(auth) = &auth {
-        auth.service.shutdown().await;
-    }
-    // Released last, once everything else has stopped.
-    drop(lease);
     runtime_stopped?;
     served
         .context("Workspace harness HTTP task failed")?

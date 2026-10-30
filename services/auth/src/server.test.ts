@@ -58,7 +58,7 @@ async function fixture(entrypoint: string) {
   const root = await mkdtemp(join(tmpdir(), "zerolux-auth-process-"));
   const config: AuthConfig = {
     version: 1,
-    workspace_id: randomUUID(),
+    instance_id: randomUUID(),
     database: { kind: "sqlite", path: join(root, "workspace.db") },
     base_url: "http://127.0.0.1:4310",
     trusted_origins: [],
@@ -100,7 +100,7 @@ async function fixture(entrypoint: string) {
         type: string;
         version: number;
         pid: number;
-        workspace_id: string;
+        instance_id: string;
         address: string;
       };
     } finally {
@@ -121,7 +121,7 @@ describe.each(["source", "bundle"])("%s", (mode) => {
     expect(state.type).toBe("ready");
     expect(state.version).toBe(1);
     expect(state.pid).toBe(child.pid);
-    expect(state.workspace_id).toBe(config.workspace_id);
+    expect(state.instance_id).toBe(config.instance_id);
     expect(new URL(state.address).hostname).toBe("127.0.0.1");
     expect((await fetch(state.address + "/internal/health")).status).toBe(401);
     const headers = { [CONTROL_HEADER]: config.control_token };
@@ -131,7 +131,7 @@ describe.each(["source", "bundle"])("%s", (mode) => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       version: 1,
-      workspace_id: config.workspace_id,
+      instance_id: config.instance_id,
     });
     const signup = await fetch(state.address + "/api/auth/sign-up/email", {
       method: "POST",
@@ -173,11 +173,11 @@ describe.each(["source", "bundle"])("%s", (mode) => {
     if (output) {
       const state = JSON.parse(output) as {
         type: string;
-        workspace_id: string;
+        instance_id: string;
         address: string;
       };
       expect(state.type).toBe("ready");
-      expect(state.workspace_id).toBe(config.workspace_id);
+      expect(state.instance_id).toBe(config.instance_id);
       await expect(fetch(state.address + "/internal/health")).rejects.toThrow();
     }
   }, 20_000);

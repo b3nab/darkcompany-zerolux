@@ -370,7 +370,7 @@ impl Extensions {
     }
 
     async fn row(&self, id: &str) -> Result<extensions::Model> {
-        Ok(extensions::Entity::find_by_id(id)
+        Ok(extensions::Entity::find_by_id(self.store.key(id))
             .one(self.store.db())
             .await?
             .ok_or(Error::NotFound)?)
@@ -379,6 +379,7 @@ impl Extensions {
     /// The workspace's extensions, as they are now.
     pub async fn list(&self) -> Result<Vec<Installed>> {
         let rows = extensions::Entity::find()
+            .filter(extensions::Column::WorkspaceId.eq(self.store.workspace_id()))
             .order_by_asc(extensions::Column::Id)
             .all(self.store.db())
             .await?;
@@ -550,7 +551,7 @@ impl Extensions {
             .map_err(|_| Error::Invalid(format!("The folder has no {}", manifest::FILE)))?;
         let manifest = Manifest::parse(&text)?;
         let id = manifest.extension.id.clone();
-        let existing = extensions::Entity::find_by_id(&id)
+        let existing = extensions::Entity::find_by_id(self.store.key(&id))
             .one(self.store.db())
             .await?;
         if let Some(existing) = &existing {
@@ -561,6 +562,7 @@ impl Extensions {
         }
         let now = now_ms();
         let row = extensions::ActiveModel {
+            workspace_id: Set(self.store.workspace_id().to_owned()),
             id: Set(id.clone()),
             version: Set(manifest.extension.version.clone()),
             source: Set(folder.to_string_lossy().into_owned()),
@@ -586,7 +588,10 @@ impl Extensions {
     /// installed of it; an index that cannot be read is listed with its error.
     pub async fn offers(&self, who: &ChatIdentity) -> Result<Value> {
         ensure!(who.is_person(), Error::Forbidden);
-        let rows = extensions::Entity::find().all(self.store.db()).await?;
+        let rows = extensions::Entity::find()
+            .filter(extensions::Column::WorkspaceId.eq(self.store.workspace_id()))
+            .all(self.store.db())
+            .await?;
         let installed: HashMap<String, String> = rows
             .iter()
             .map(|row| (row.id.clone(), row.version.clone()))
@@ -794,13 +799,14 @@ impl Extensions {
         let manifest = Manifest::parse(&text)?;
         let id = manifest.extension.id.clone();
         let now = now_ms();
-        let existing = extensions::Entity::find_by_id(&id)
+        let existing = extensions::Entity::find_by_id(self.store.key(&id))
             .one(self.store.db())
             .await?;
         if existing.is_some() {
             self.stop(&id).await;
         }
         let row = extensions::ActiveModel {
+            workspace_id: Set(self.store.workspace_id().to_owned()),
             id: Set(id.clone()),
             version: Set(manifest.extension.version.clone()),
             source: Set(folder.to_string_lossy().into_owned()),
@@ -844,6 +850,7 @@ impl Extensions {
         let result = self.load(&row).await;
         let now = now_ms();
         let mut update = extensions::ActiveModel {
+            workspace_id: Set(self.store.workspace_id().to_owned()),
             id: Set(id.to_owned()),
             updated_at: Set(now),
             ..Default::default()
@@ -992,6 +999,7 @@ impl Extensions {
         }
         self.stop(id).await;
         extensions::ActiveModel {
+            workspace_id: Set(self.store.workspace_id().to_owned()),
             id: Set(id.to_owned()),
             enabled: Set(false),
             error: Set(None),
@@ -1013,10 +1021,11 @@ impl Extensions {
             Error::Invalid("Disable the extension before removing it".into())
         );
         extension_values::Entity::delete_many()
+            .filter(extension_values::Column::WorkspaceId.eq(self.store.workspace_id()))
             .filter(extension_values::Column::ExtensionId.eq(id))
             .exec(self.store.db())
             .await?;
-        extensions::Entity::delete_by_id(id)
+        extensions::Entity::delete_by_id(self.store.key(id))
             .exec(self.store.db())
             .await?;
         let folder = self.folder(id);
@@ -1033,6 +1042,7 @@ impl Extensions {
     /// disabled is left alone.
     pub async fn reload_changed(&self) {
         let rows = match extensions::Entity::find()
+            .filter(extensions::Column::WorkspaceId.eq(self.store.workspace_id()))
             .filter(extensions::Column::Dev.eq(true))
             .all(self.store.db())
             .await
@@ -1102,6 +1112,7 @@ impl Extensions {
 
     pub async fn start_enabled(&self) {
         let Ok(rows) = extensions::Entity::find()
+            .filter(extensions::Column::WorkspaceId.eq(self.store.workspace_id()))
             .filter(extensions::Column::Enabled.eq(true))
             .all(self.store.db())
             .await
@@ -1138,6 +1149,7 @@ impl Extensions {
                     }
                 };
                 let _ = extensions::ActiveModel {
+                    workspace_id: Set(row.workspace_id.clone()),
                     id: Set(row.id.clone()),
                     error: Set(error),
                     ..Default::default()
@@ -1148,6 +1160,7 @@ impl Extensions {
             if still.is_empty() || still.len() == before {
                 for row in still {
                     let _ = extensions::ActiveModel {
+                        workspace_id: Set(row.workspace_id.clone()),
                         id: Set(row.id.clone()),
                         error: Set(Some("Its dependencies are not enabled".into())),
                         ..Default::default()
@@ -1172,6 +1185,7 @@ impl Extensions {
 
     async fn values(&self, id: &str, kind: &str) -> Result<HashMap<String, Value>> {
         let rows = extension_values::Entity::find()
+            .filter(extension_values::Column::WorkspaceId.eq(self.store.workspace_id()))
             .filter(extension_values::Column::ExtensionId.eq(id))
             .filter(extension_values::Column::Kind.eq(kind))
             .all(self.store.db())
@@ -1206,6 +1220,7 @@ impl Extensions {
             };
             // Readers must see the previous or the new value, never a gap between them.
             extension_values::Entity::insert(extension_values::ActiveModel {
+                workspace_id: Set(self.store.workspace_id().to_owned()),
                 extension_id: Set(id.to_owned()),
                 kind: Set(kind.to_owned()),
                 key: Set(key.to_owned()),
@@ -1214,6 +1229,7 @@ impl Extensions {
             })
             .on_conflict(
                 OnConflict::columns([
+                    extension_values::Column::WorkspaceId,
                     extension_values::Column::ExtensionId,
                     extension_values::Column::Kind,
                     extension_values::Column::Key,
@@ -1228,6 +1244,7 @@ impl Extensions {
             .await?;
         } else {
             extension_values::Entity::delete_many()
+                .filter(extension_values::Column::WorkspaceId.eq(self.store.workspace_id()))
                 .filter(extension_values::Column::ExtensionId.eq(id))
                 .filter(extension_values::Column::Kind.eq(kind))
                 .filter(extension_values::Column::Key.eq(key))
@@ -1417,6 +1434,7 @@ impl Extensions {
         };
         let error = result.as_ref().err().map(|error| format!("{error:#}"));
         let _ = extension_calls::ActiveModel {
+            workspace_id: Set(self.store.workspace_id().to_owned()),
             id: Set(uuid::Uuid::new_v4().to_string()),
             extension_id: Set(extension.to_owned()),
             action: Set(action.to_owned()),
@@ -1668,6 +1686,7 @@ impl process::Kernel for Extensions {
             "secrets.list" => {
                 let prefix = format!("{VAULT}{}", text("prefix"));
                 let mut names: Vec<String> = extension_values::Entity::find()
+                    .filter(extension_values::Column::WorkspaceId.eq(self.store.workspace_id()))
                     .filter(extension_values::Column::ExtensionId.eq(&extension))
                     .filter(extension_values::Column::Kind.eq("secret"))
                     .all(self.store.db())

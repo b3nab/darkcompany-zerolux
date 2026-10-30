@@ -86,7 +86,7 @@ impl Store {
     }
 
     async fn schedule_row(&self, who: &ChatIdentity, id: &str) -> Result<schedules::Model> {
-        let row = schedules::Entity::find_by_id(id)
+        let row = schedules::Entity::find_by_id(self.key(id))
             .one(self.db())
             .await?
             .ok_or(Error::NotFound)?;
@@ -116,6 +116,7 @@ impl Store {
                 .collect(),
         };
         Ok(schedules::Entity::find()
+            .filter(schedules::Column::WorkspaceId.eq(&self.workspace))
             .filter(schedules::Column::SessionId.is_in(readable))
             .order_by_asc(schedules::Column::CreatedAt)
             .all(self.db())
@@ -136,6 +137,7 @@ impl Store {
         let now = now_ms();
         let next = next_run(&input.cron, now)?;
         Ok(schedules::ActiveModel {
+            workspace_id: Set(self.workspace.clone()),
             id: Set(uuid::Uuid::new_v4().to_string()),
             session_id: Set(session.to_owned()),
             cron: Set(input.cron.trim().to_owned()),
@@ -171,6 +173,7 @@ impl Store {
             None
         };
         let mut change = schedules::ActiveModel {
+            workspace_id: Set(row.workspace_id.clone()),
             id: Set(row.id.clone()),
             cron: Set(cron),
             enabled: Set(enabled),
@@ -185,7 +188,7 @@ impl Store {
 
     pub async fn delete_schedule(&self, who: &ChatIdentity, id: &str) -> Result<()> {
         self.schedule_row(who, id).await?;
-        let deleted = schedules::Entity::delete_by_id(id)
+        let deleted = schedules::Entity::delete_by_id(self.key(id))
             .exec(self.db())
             .await?
             .rows_affected;
@@ -198,6 +201,7 @@ impl Store {
     /// Schedules whose time has come.
     pub(crate) async fn due_schedules(&self, now: i64) -> Result<Vec<Schedule>> {
         Ok(schedules::Entity::find()
+            .filter(schedules::Column::WorkspaceId.eq(&self.workspace))
             .filter(schedules::Column::Enabled.eq(true))
             .filter(schedules::Column::NextRunAt.lte(now))
             .all(self.db())
@@ -214,7 +218,10 @@ impl Store {
         at: i64,
         error: Option<String>,
     ) -> Result<()> {
-        let Some(row) = schedules::Entity::find_by_id(id).one(self.db()).await? else {
+        let Some(row) = schedules::Entity::find_by_id(self.key(id))
+            .one(self.db())
+            .await?
+        else {
             return Ok(());
         };
         let next = next_run(&row.cron, at).ok();
@@ -222,6 +229,7 @@ impl Store {
             .col_expr(schedules::Column::LastRunAt, Expr::value(Some(at)))
             .col_expr(schedules::Column::LastError, Expr::value(error))
             .col_expr(schedules::Column::NextRunAt, Expr::value(next))
+            .filter(schedules::Column::WorkspaceId.eq(&self.workspace))
             .filter(schedules::Column::Id.eq(id))
             .exec(self.db())
             .await?;

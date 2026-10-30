@@ -1846,9 +1846,8 @@ async fn a_sign_in_comes_back_to_the_kernel_and_reaches_the_workspace_that_start
     let server = zerolux::server::Server::start(zerolux::server::ServerOptions {
         address: "127.0.0.1:0".parse().unwrap(),
         expose: None,
-        data_dir: dir.path().join("first"),
-        database: zerolux::db::Location::Sqlite(dir.path().join("first/zerolux.db")),
-        initial_workspace_name: None,
+        data_dir: dir.path().join("kernel"),
+        database: zerolux::db::Location::Sqlite(dir.path().join("kernel/zerolux.db")),
         web_dir: dir.path().join("web"),
         livekit: Some(LiveKitConfig {
             url: None,
@@ -1862,12 +1861,13 @@ async fn a_sign_in_comes_back_to_the_kernel_and_reaches_the_workspace_that_start
     })
     .await
     .unwrap();
-    let second = server
-        .handle()
-        .add_workspace(zerolux::server::WorkspaceOptions::in_folder(
-            dir.path().join("second"),
-            None,
-        ))
+    let handle = server.handle();
+    handle
+        .create_workspace("owner-account", "Owner", "First", None)
+        .await
+        .unwrap();
+    let second = handle
+        .create_workspace("owner-account", "Owner", "Second", None)
         .await
         .unwrap();
     let client = Client::builder().no_proxy().build().unwrap();

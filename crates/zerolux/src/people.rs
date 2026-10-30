@@ -1,5 +1,6 @@
-//! The workspace's people: its owner, who set it up, and whoever joins by invitation. Each
-//! brings their own agents and sessions; chats and meetings are shared.
+//! The workspace's people: its owner, who set it up, and its members, who join by invitation
+//! with the account they already have. Each brings their own agents and sessions; chats and
+//! meetings are shared.
 
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set, prelude::Expr,
@@ -8,9 +9,12 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
-    entity::{actors, invites, workspace},
+    entity::{actors, invites},
     model::{Actor, ChatIdentity},
-    store::{Error, Result, Store, now_ms, owner_name, random_token, scalar, sql, token_hash},
+    store::{
+        Error, MEMBER, OWNER, Result, Store, now_ms, owner_name, random_token, scalar, sql,
+        token_hash,
+    },
 };
 
 /// How long an invitation can be used.
@@ -44,14 +48,13 @@ pub struct Invitation {
 }
 
 impl Store {
-    /// Whether `who` is the person who set the workspace up.
+    /// Whether `who` is the workspace's owner.
     pub async fn is_workspace_owner(&self, who: &ChatIdentity) -> Result<bool> {
         if !who.is_person() {
             return Ok(false);
         }
-        Ok(actors::Entity::find_by_id(who.actor()?)
-            .filter(actors::Column::Kind.eq("human"))
-            .filter(actors::Column::InvitedBy.is_null())
+        Ok(actors::Entity::find_by_id(self.key(who.actor()?))
+            .filter(actors::Column::Role.eq(OWNER))
             .one(&self.db)
             .await?
             .is_some())
@@ -72,6 +75,7 @@ impl Store {
         let now = now_ms();
         let tx = self.write().await?;
         let row = invites::ActiveModel {
+            workspace_id: Set(self.workspace.clone()),
             id: Set(Uuid::new_v4().to_string()),
             token_hash: Set(token_hash(&token)),
             created_by: Set(who.actor()?.to_owned()),
@@ -90,6 +94,7 @@ impl Store {
     pub async fn invites(&self, who: &ChatIdentity) -> Result<Vec<Invite>> {
         self.workspace_owner_only(who).await?;
         Ok(invites::Entity::find()
+            .filter(invites::Column::WorkspaceId.eq(&self.workspace))
             .filter(invites::Column::AcceptedBy.is_null())
             .filter(invites::Column::ExpiresAt.gt(now_ms()))
             .order_by_asc(invites::Column::CreatedAt)
@@ -105,6 +110,7 @@ impl Store {
         self.workspace_owner_only(who).await?;
         let tx = self.write().await?;
         let removed = invites::Entity::delete_many()
+            .filter(invites::Column::WorkspaceId.eq(&self.workspace))
             .filter(invites::Column::Id.eq(id))
             .filter(invites::Column::AcceptedBy.is_null())
             .exec(&tx)
@@ -119,10 +125,12 @@ impl Store {
     }
 
     async fn usable_invite<C: sea_orm::ConnectionTrait>(
+        &self,
         db: &C,
         token: &str,
     ) -> Result<invites::Model> {
         invites::Entity::find()
+            .filter(invites::Column::WorkspaceId.eq(&self.workspace))
             .filter(invites::Column::TokenHash.eq(token_hash(token)))
             .filter(invites::Column::AcceptedBy.is_null())
             .filter(invites::Column::ExpiresAt.gt(now_ms()))
@@ -133,12 +141,9 @@ impl Store {
 
     /// The invitation behind `token`, while it can still be used.
     pub async fn invitation(&self, token: &str) -> Result<Invitation> {
-        let invite = Self::usable_invite(&self.db, token).await?;
-        let workspace = workspace::Entity::find()
-            .one(&self.db)
-            .await?
-            .ok_or(Error::NotFound)?;
-        let by = actors::Entity::find_by_id(&invite.created_by)
+        let invite = self.usable_invite(&self.db, token).await?;
+        let workspace = self.workspace_info().await?;
+        let by = actors::Entity::find_by_id(self.key(&invite.created_by))
             .one(&self.db)
             .await?
             .ok_or(Error::NotFound)?;
@@ -156,8 +161,9 @@ impl Store {
             &self.db,
             sql(
                 &self.db,
-                "SELECT EXISTS(SELECT 1 FROM actors WHERE archived=FALSE AND lower(name)=lower($1))",
-                [name.clone().into()],
+                "SELECT EXISTS(SELECT 1 FROM actors
+                WHERE workspace_id=$1 AND archived=FALSE AND lower(name)=lower($2))",
+                [(&self.workspace).into(), name.clone().into()],
             ),
         )
         .await?;
@@ -169,13 +175,14 @@ impl Store {
         Ok(name)
     }
 
-    /// The signed-in account joins the workspace as a new person, under its account's name,
+    /// The signed-in account joins the workspace as a new member, under its account's name,
     /// with an invitation that is then used up.
     pub async fn join(&self, token: &str, subject: &str, account_name: &str) -> Result<Actor> {
         let name = self.person_name(account_name).await?;
         let tx = self.write().await?;
-        let invite = Self::usable_invite(&tx, token).await?;
+        let invite = self.usable_invite(&tx, token).await?;
         if actors::Entity::find()
+            .filter(actors::Column::WorkspaceId.eq(&self.workspace))
             .filter(actors::Column::AuthSubject.eq(subject))
             .one(&tx)
             .await?
@@ -185,6 +192,7 @@ impl Store {
         }
         let now = now_ms();
         let person = actors::ActiveModel {
+            workspace_id: Set(self.workspace.clone()),
             id: Set(Uuid::new_v4().to_string()),
             name: Set(name),
             kind: Set("human".into()),
@@ -200,6 +208,7 @@ impl Store {
             approval_policy: Set(None),
             sandbox: Set(None),
             invited_by: Set(Some(invite.created_by.clone())),
+            role: Set(Some(MEMBER.into())),
         }
         .insert(&tx)
         .await?;
@@ -209,6 +218,7 @@ impl Store {
                 Expr::value(Some(person.id.clone())),
             )
             .col_expr(invites::Column::AcceptedAt, Expr::value(Some(now)))
+            .filter(invites::Column::WorkspaceId.eq(&self.workspace))
             .filter(invites::Column::Id.eq(&invite.id))
             .filter(invites::Column::AcceptedBy.is_null())
             .exec(&tx)

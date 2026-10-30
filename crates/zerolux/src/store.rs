@@ -5,7 +5,7 @@ use std::{
 
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbErr,
-    EntityTrait, FromQueryResult, QueryFilter, QueryOrder, RuntimeErr, SqliteTransactionMode,
+    EntityTrait, FromQueryResult, QueryFilter, QueryOrder, RuntimeErr, Set, SqliteTransactionMode,
     Statement, TransactionOptions, TransactionTrait,
     sea_query::{Expr, Value},
 };
@@ -13,13 +13,15 @@ use uuid::Uuid;
 
 use crate::{
     db::Location,
-    entity::{actors, workspace},
+    entity::{actors, instance, invites, workspace},
     model::*,
 };
 
 pub const LEASE_MS: i64 = 90_000;
-/// The one writer at a time of a workspace on PostgreSQL ("ZEROLUXW").
-const WORKSPACE_WRITE_LOCK: i64 = 0x5a45_524f_4c55_5857;
+/// The one writer at a time of a workspace on PostgreSQL ("ZLXW"), keyed by its ID.
+const WORKSPACE_WRITE_LOCK: i32 = 0x5a4c_5857;
+/// The one writer at a time of the instance's own rows on PostgreSQL ("ZEROLUXI").
+const INSTANCE_WRITE_LOCK: i64 = 0x5a45_524f_4c55_5849;
 pub const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, thiserror::Error)]
@@ -68,12 +70,33 @@ impl Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// The workspace's data. Every write of the domain happens in a `write()` transaction:
-/// one writer at a time on either database, so what a transaction checked still holds when
-/// it commits. Reads go through `read()` for a snapshot, or straight to `db` for one query.
+/// The instance: one database, its identity and sign-in secret, and its workspaces. Each
+/// workspace's data is reached through its own `Store`.
+#[derive(Clone)]
+pub struct Instance {
+    db: DatabaseConnection,
+    id: String,
+    auth_secret: String,
+}
+
+/// A workspace the signed-in account is a person of.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, FromQueryResult)]
+pub struct Membership {
+    pub id: String,
+    pub name: String,
+    pub created_at: i64,
+    /// The account is its owner, rather than a member who joined.
+    pub owner: bool,
+}
+
+/// One workspace's data. Every statement reads or writes only its rows. Every write of the
+/// domain happens in a `write()` transaction: one writer at a time of the workspace, so what
+/// a transaction checked still holds when it commits. Reads go through `read()` for a
+/// snapshot, or straight to `db` for one query.
 #[derive(Clone)]
 pub struct Store {
     pub(crate) db: DatabaseConnection,
+    pub(crate) workspace: String,
     /// The kernel host this store serves: agent sessions it creates live here, and only
     /// these are recovered and relinked by it. `None` for a store without a host (tests).
     pub(crate) host: Option<String>,
@@ -161,10 +184,239 @@ pub(crate) async fn execute<C: ConnectionTrait>(db: &C, statement: Statement) ->
     Ok(db.execute_raw(statement).await?.rows_affected())
 }
 
+/// A transaction that will write. Writers take turns, as they always have on SQLite: there
+/// `BEGIN IMMEDIATE` takes the write lock at once; on PostgreSQL the transaction takes the
+/// advisory lock of the workspace, or of the instance, first. Either way a check made inside
+/// the transaction still holds when its write commits, and readers are never blocked.
+async fn begin_write(
+    db: &DatabaseConnection,
+    workspace: Option<&str>,
+) -> Result<DatabaseTransaction> {
+    let tx = db
+        .begin_with_options(TransactionOptions {
+            isolation_level: None,
+            access_mode: None,
+            sqlite_transaction_mode: Some(SqliteTransactionMode::Immediate),
+        })
+        .await?;
+    if tx.get_database_backend() == sea_orm::DatabaseBackend::Postgres {
+        let lock = match workspace {
+            Some(id) => sql(
+                &tx,
+                "SELECT pg_advisory_xact_lock($1, hashtext($2))",
+                [WORKSPACE_WRITE_LOCK.into(), id.into()],
+            ),
+            None => sql(
+                &tx,
+                "SELECT pg_advisory_xact_lock($1)",
+                [INSTANCE_WRITE_LOCK.into()],
+            ),
+        };
+        tx.execute_raw(lock).await?;
+    }
+    Ok(tx)
+}
+
+/// A workspace's name: no control characters.
+fn workspace_name(value: &str) -> Result<String> {
+    let name = text(value, "Workspace name", 200, true)?;
+    if name.chars().any(char::is_control) {
+        return Err(Error::Invalid(
+            "Enter the workspace name without control characters".into(),
+        ));
+    }
+    Ok(name)
+}
+
+impl Instance {
+    /// Opens the database, brings its schema up to date and makes the instance's row the first
+    /// time. Two processes may open a new database at once. SQLite reports the switch to WAL as
+    /// locked without waiting, so opening waits and tries again.
+    pub async fn open(location: &Location) -> Result<Self> {
+        let mut attempts = 0;
+        loop {
+            match Self::open_once(location).await {
+                Err(error) if attempts < 50 && error.is_locked() => {
+                    attempts += 1;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                opened => return opened,
+            }
+        }
+    }
+
+    async fn open_once(location: &Location) -> Result<Self> {
+        let db = crate::db::connect(location).await?;
+        // Made once, by whichever kernel opens the database first; never regenerated.
+        let tx = begin_write(&db, None).await?;
+        let row = match instance::Entity::find().one(&tx).await? {
+            Some(row) => row,
+            None => {
+                instance::ActiveModel {
+                    id: Set(Uuid::new_v4().to_string()),
+                    auth_secret: Set(random_token()),
+                    created_at: Set(now_ms()),
+                }
+                .insert(&tx)
+                .await?
+            }
+        };
+        tx.commit().await?;
+        Ok(Self {
+            db,
+            id: row.id,
+            auth_secret: row.auth_secret,
+        })
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Better Auth's signing secret, the same for every kernel serving this instance.
+    pub fn auth_secret(&self) -> &str {
+        &self.auth_secret
+    }
+
+    pub fn db(&self) -> &DatabaseConnection {
+        &self.db
+    }
+
+    /// The data of the workspace `workspace_id`.
+    pub fn store(&self, workspace_id: &str) -> Store {
+        Store {
+            db: self.db.clone(),
+            workspace: workspace_id.to_owned(),
+            host: None,
+            people: None,
+        }
+    }
+
+    /// A transaction that changes the instance's own rows, such as its workspaces.
+    pub async fn write(&self) -> Result<DatabaseTransaction> {
+        begin_write(&self.db, None).await
+    }
+
+    /// A new workspace and its owner, the account `subject`, named after the account: both in
+    /// one transaction. Its `folder` is a path on the kernel's computer; by default
+    /// `workspaces/<id>`, in the kernel's data directory.
+    pub async fn create_workspace(
+        &self,
+        subject: &str,
+        account_name: &str,
+        name: &str,
+        folder: Option<&Path>,
+    ) -> Result<WorkspaceInfo> {
+        let name = workspace_name(name)?;
+        let owner = owner_name(account_name)?;
+        let id = Uuid::new_v4().to_string();
+        let folder = match folder {
+            Some(folder) => folder.to_owned(),
+            None => Path::new("workspaces").join(&id),
+        };
+        let folder = folder
+            .to_str()
+            .filter(|folder| !folder.is_empty())
+            .ok_or_else(|| Error::Invalid("Name the workspace's folder with a UTF-8 path".into()))?
+            .to_owned();
+        let now = now_ms();
+        let tx = self.write().await?;
+        if workspace::Entity::find()
+            .filter(workspace::Column::Folder.eq(&folder))
+            .one(&tx)
+            .await?
+            .is_some()
+        {
+            return Err(Error::Conflict);
+        }
+        let workspace = workspace::ActiveModel {
+            id: Set(id.clone()),
+            name: Set(name),
+            created_at: Set(now),
+            folder: Set(folder),
+        }
+        .insert(&tx)
+        .await?;
+        actors::ActiveModel {
+            workspace_id: Set(id),
+            id: Set(Uuid::new_v4().to_string()),
+            name: Set(owner),
+            kind: Set("human".into()),
+            owner_id: Set(None),
+            harness: Set(None),
+            archived: Set(false),
+            name_confirmed: Set(true),
+            created_at: Set(now),
+            auth_subject: Set(Some(subject.to_owned())),
+            model: Set(None),
+            effort: Set(None),
+            permission_mode: Set(None),
+            approval_policy: Set(None),
+            sandbox: Set(None),
+            invited_by: Set(None),
+            role: Set(Some(OWNER.into())),
+        }
+        .insert(&tx)
+        .await?;
+        tx.commit().await?;
+        Ok(workspace)
+    }
+
+    /// Every workspace of the instance, oldest first.
+    pub async fn workspaces(&self) -> Result<Vec<WorkspaceInfo>> {
+        Ok(workspace::Entity::find()
+            .order_by_asc(workspace::Column::CreatedAt)
+            .order_by_asc(workspace::Column::Id)
+            .all(&self.db)
+            .await?)
+    }
+
+    /// The workspaces the account `subject` is a person of, oldest first.
+    pub async fn memberships(&self, subject: &str) -> Result<Vec<Membership>> {
+        fetch_all(
+            &self.db,
+            sql(
+                &self.db,
+                "SELECT w.id,w.name,w.created_at,a.role='owner' AS owner FROM workspace w
+                JOIN actors a ON a.workspace_id=w.id
+                WHERE a.auth_subject=$1 AND a.kind='human' AND a.archived=FALSE
+                ORDER BY w.created_at,w.id",
+                [subject.into()],
+            ),
+        )
+        .await
+    }
+
+    /// The workspace holding a usable invitation with `token`, whichever it is.
+    pub async fn invited_to(&self, token: &str) -> Result<Option<String>> {
+        Ok(invites::Entity::find()
+            .filter(invites::Column::TokenHash.eq(token_hash(token)))
+            .filter(invites::Column::AcceptedBy.is_null())
+            .filter(invites::Column::ExpiresAt.gt(now_ms()))
+            .one(&self.db)
+            .await?
+            .map(|invite| invite.workspace_id))
+    }
+}
+
+/// The role of the person who set a workspace up; the others are members.
+pub(crate) const OWNER: &str = "owner";
+pub(crate) const MEMBER: &str = "member";
+
 impl Store {
     /// The database as SeaORM sees it.
     pub fn db(&self) -> &DatabaseConnection {
         &self.db
+    }
+
+    /// The workspace whose rows this store reads and writes.
+    pub fn workspace_id(&self) -> &str {
+        &self.workspace
+    }
+
+    /// The primary key of this workspace's row `id`.
+    pub fn key(&self, id: &str) -> (String, String) {
+        (self.workspace.clone(), id.to_owned())
     }
 
     /// The same store, serving the kernel host `host_id`.
@@ -184,28 +436,9 @@ impl Store {
         self
     }
 
-    /// A transaction that will write. Writers take turns, as they always have on SQLite: there
-    /// `BEGIN IMMEDIATE` takes the write lock at once; on PostgreSQL the transaction takes the
-    /// workspace's advisory lock first. Either way a check made inside the transaction still
-    /// holds when its write commits, and readers are never blocked.
+    /// A transaction that will write this workspace's rows: one writer of it at a time.
     pub async fn write(&self) -> Result<DatabaseTransaction> {
-        let tx = self
-            .db
-            .begin_with_options(TransactionOptions {
-                isolation_level: None,
-                access_mode: None,
-                sqlite_transaction_mode: Some(SqliteTransactionMode::Immediate),
-            })
-            .await?;
-        if tx.get_database_backend() == sea_orm::DatabaseBackend::Postgres {
-            tx.execute_raw(sql(
-                &tx,
-                "SELECT pg_advisory_xact_lock($1)",
-                [WORKSPACE_WRITE_LOCK.into()],
-            ))
-            .await?;
-        }
-        Ok(tx)
+        begin_write(&self.db, Some(&self.workspace)).await
     }
 
     /// A consistent read of several tables: one snapshot, on both databases.
@@ -222,86 +455,14 @@ impl Store {
             .await?)
     }
 
-    /// Two processes may open a new database at once. SQLite reports the switch to WAL as
-    /// locked without waiting, so opening waits and tries again.
-    pub async fn open(path: &Path) -> Result<Self> {
-        Self::open_at(&Location::Sqlite(path.to_path_buf())).await
-    }
-
-    pub async fn open_at(location: &Location) -> Result<Self> {
-        let mut attempts = 0;
-        loop {
-            match Self::open_once(location).await {
-                Err(error) if attempts < 50 && error.is_locked() => {
-                    attempts += 1;
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-                opened => return opened,
-            }
-        }
-    }
-
-    async fn open_once(location: &Location) -> Result<Self> {
-        let store = Self {
-            db: crate::db::connect(location).await?,
-            host: None,
-            people: None,
-        };
-        // The workspace and its owner are born together, by one open: both inserts in one
-        // write transaction, so concurrent first opens cannot split them across two
-        // instants. Existing identity, name, dates and ownership links are never regenerated.
-        let now = now_ms();
-        let tx = store.write().await?;
-        if workspace::Entity::find().one(&tx).await?.is_none() {
-            workspace::ActiveModel {
-                id: sea_orm::Set(Uuid::new_v4().to_string()),
-                name: sea_orm::Set("Workspace".into()),
-                created_at: sea_orm::Set(now),
-                only_one: sea_orm::Set(1),
-                auth_secret: sea_orm::Set(None),
-            }
-            .insert(&tx)
-            .await?;
-        }
-        if actors::Entity::find()
-            .filter(actors::Column::Kind.eq("human"))
-            .filter(actors::Column::InvitedBy.is_null())
-            .one(&tx)
-            .await?
-            .is_none()
-        {
-            actors::ActiveModel {
-                id: sea_orm::Set(Uuid::new_v4().to_string()),
-                name: sea_orm::Set("Local owner".into()),
-                kind: sea_orm::Set("human".into()),
-                owner_id: sea_orm::Set(None),
-                harness: sea_orm::Set(None),
-                archived: sea_orm::Set(false),
-                name_confirmed: sea_orm::Set(false),
-                created_at: sea_orm::Set(now),
-                auth_subject: sea_orm::Set(None),
-                model: sea_orm::Set(None),
-                effort: sea_orm::Set(None),
-                permission_mode: sea_orm::Set(None),
-                approval_policy: sea_orm::Set(None),
-                sandbox: sea_orm::Set(None),
-                invited_by: sea_orm::Set(None),
-            }
-            .insert(&tx)
-            .await?;
-        }
-        tx.commit().await?;
-        Ok(store)
-    }
-
     pub async fn set_owner_name(&self, input: SetOwnerName) -> Result<Actor> {
         let name = owner_name(&input.name)?;
         let tx = self.write().await?;
         let owner = actors::Entity::update_many()
             .col_expr(actors::Column::Name, Expr::value(name))
             .col_expr(actors::Column::NameConfirmed, Expr::value(true))
-            .filter(actors::Column::Kind.eq("human"))
-            .filter(actors::Column::InvitedBy.is_null())
+            .filter(actors::Column::WorkspaceId.eq(&self.workspace))
+            .filter(actors::Column::Role.eq(OWNER))
             .exec_with_returning(&tx)
             .await?
             .pop()
@@ -310,109 +471,39 @@ impl Store {
         Ok(owner)
     }
 
-    /// Whether a human account is bound to the owner yet: until then signing up is open and
-    /// nobody is signed in as the owner; the first account to claim is the owner.
-    pub async fn owner_bound(&self) -> Result<bool> {
-        Ok(self.owner().await?.auth_subject.is_some())
-    }
-
-    /// The workspace's Better Auth secret: made once, by whichever kernel opens the workspace
-    /// first, and used by every kernel serving it.
-    pub async fn auth_secret(&self) -> Result<String> {
-        let tx = self.write().await?;
-        let workspace = workspace::Entity::find()
-            .one(&tx)
-            .await?
-            .ok_or(Error::NotFound)?;
-        if let Some(secret) = workspace.auth_secret {
-            return Ok(secret);
-        }
-        let secret = random_token();
-        workspace::Entity::update_many()
-            .col_expr(
-                workspace::Column::AuthSecret,
-                Expr::value(Some(secret.clone())),
-            )
-            .exec(&tx)
-            .await?;
-        tx.commit().await?;
-        Ok(secret)
-    }
-
-    /// The actor a signed-in subject is: the owner, once bound; nobody otherwise.
+    /// The person a signed-in subject is in this workspace; nobody when it is not a member.
     pub async fn actor_for_subject(&self, subject: &str) -> Result<Option<Actor>> {
         Ok(actors::Entity::find()
+            .filter(actors::Column::WorkspaceId.eq(&self.workspace))
             .filter(actors::Column::AuthSubject.eq(subject))
             .filter(actors::Column::Archived.eq(false))
             .one(&self.db)
             .await?)
     }
 
-    /// Binds a signed-in subject to the owner, once: the first account to claim is the
-    /// owner. A confirmed name stays; otherwise the account's name becomes the owner's, with
-    /// the same checks as naming oneself. The same subject binding again is no change;
-    /// another subject after that is a conflict: the owner is one.
-    pub async fn bind_owner(&self, subject: &str, account_name: &str) -> Result<Actor> {
-        let tx = self.write().await?;
-        let owner = actors::Entity::find()
-            .filter(actors::Column::Kind.eq("human"))
-            .filter(actors::Column::InvitedBy.is_null())
-            .one(&tx)
-            .await?
-            .ok_or(Error::NotFound)?;
-        match owner.auth_subject.as_deref() {
-            Some(bound) if bound == subject => return Ok(owner),
-            Some(_) => return Err(Error::Conflict),
-            None => {}
-        }
-        let mut update = actors::Entity::update_many()
-            .col_expr(
-                actors::Column::AuthSubject,
-                Expr::value(Some(subject.to_owned())),
-            )
-            .filter(actors::Column::Id.eq(&owner.id))
-            .filter(actors::Column::AuthSubject.is_null());
-        if !owner.name_confirmed {
-            let name = owner_name(account_name)?;
-            update = update
-                .col_expr(actors::Column::Name, Expr::value(name))
-                .col_expr(actors::Column::NameConfirmed, Expr::value(true));
-        }
-        let owner = update
-            .exec_with_returning(&tx)
-            .await?
-            .pop()
-            .ok_or(Error::Conflict)?;
-        tx.commit().await?;
-        Ok(owner)
-    }
-
-    async fn owner(&self) -> Result<Actor> {
+    /// The workspace's owner, by role.
+    pub(crate) async fn owner(&self) -> Result<Actor> {
         actors::Entity::find()
-            .filter(actors::Column::Kind.eq("human"))
-            .filter(actors::Column::InvitedBy.is_null())
+            .filter(actors::Column::WorkspaceId.eq(&self.workspace))
+            .filter(actors::Column::Role.eq(OWNER))
             .one(&self.db)
             .await?
             .ok_or(Error::NotFound)
     }
 
     pub async fn workspace_info(&self) -> Result<WorkspaceInfo> {
-        workspace::Entity::find()
+        workspace::Entity::find_by_id(&self.workspace)
             .one(&self.db)
             .await?
             .ok_or(Error::NotFound)
     }
 
     pub async fn set_workspace_name(&self, input: SetWorkspaceName) -> Result<WorkspaceInfo> {
-        let name = text(&input.name, "Workspace name", 200, true)?;
-        if name.chars().any(char::is_control) {
-            return Err(Error::Invalid(
-                "Enter the workspace name without control characters".into(),
-            ));
-        }
+        let name = workspace_name(&input.name)?;
         let tx = self.write().await?;
         let workspace = workspace::Entity::update_many()
             .col_expr(workspace::Column::Name, Expr::value(name))
+            .filter(workspace::Column::Id.eq(&self.workspace))
             .exec_with_returning(&tx)
             .await?
             .pop()
@@ -430,18 +521,19 @@ impl Store {
 
     pub async fn workspace(&self) -> Result<Workspace> {
         let tx = self.read().await?;
-        let workspace = workspace::Entity::find()
+        let workspace = workspace::Entity::find_by_id(&self.workspace)
             .one(&tx)
             .await?
             .ok_or(Error::NotFound)?;
         let actors = actors::Entity::find()
+            .filter(actors::Column::WorkspaceId.eq(&self.workspace))
             .order_by_desc(actors::Column::Kind)
             .order_by_asc(actors::Column::Name)
             .all(&tx)
             .await?;
         let onboarding_required = !actors
             .iter()
-            .find(|actor| actor.kind == "human" && actor.invited_by.is_none())
+            .find(|actor| actor.role.as_deref() == Some(OWNER))
             .ok_or(Error::NotFound)?
             .name_confirmed;
         tx.commit().await?;

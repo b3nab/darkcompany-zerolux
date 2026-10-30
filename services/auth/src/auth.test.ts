@@ -50,7 +50,7 @@ async function createFixture(backend: Backend) {
   });
   const config: AuthConfig = {
     version: 1,
-    workspace_id: randomUUID(),
+    instance_id: randomUUID(),
     database: { kind: "sqlite", path: join(root, "workspace.db") },
     base_url: "http://127.0.0.1:4310",
     trusted_origins: ["tauri://localhost", "http://tauri.localhost"],
@@ -229,6 +229,7 @@ describe.each(backends)("%s", (backend) => {
     const f = await fixture();
     for (const path of [
       "/internal/health",
+      "/internal/accounts",
       "/internal/session",
       "/api/auth/get-session",
     ])
@@ -246,6 +247,19 @@ describe.each(backends)("%s", (backend) => {
     ).toBe(403);
     expect((await f.call("/internal/health")).status).toBe(200);
     expect((await f.call("/api/auth/not-an-endpoint")).status).toBe(404);
+  });
+
+  test("the instance has accounts once the first one signs up", async () => {
+    const f = await fixture();
+    const accounts = async () =>
+      (
+        (await (await f.call("/internal/accounts")).json()) as {
+          exists: boolean;
+        }
+      ).exists;
+    expect(await accounts()).toBe(false);
+    await f.signup();
+    expect(await accounts()).toBe(true);
   });
 
   test("real Better Auth accepts its cookie or signed bearer, never a raw token or bearer fallback", async () => {
@@ -376,16 +390,16 @@ describe.each(backends)("%s", (backend) => {
     ).toEqual(before);
   });
 
-  test("workspace cookie names and signing secrets isolate two kernels on the same hostname", async () => {
+  test("instance cookie names and signing secrets isolate two kernels on the same hostname", async () => {
     const a = await fixture(),
       b = await fixture();
     const alice = await a.signup(),
       bob = await b.signup();
     expect(alice.cookie).toContain(
-      `zerolux-${a.config.workspace_id}.session_token`,
+      `zerolux-${a.config.instance_id}.session_token`,
     );
     expect(bob.cookie).toContain(
-      `zerolux-${b.config.workspace_id}.session_token`,
+      `zerolux-${b.config.instance_id}.session_token`,
     );
     expect(await identity(b, { cookie: alice.cookie })).toBeNull();
     expect(

@@ -593,6 +593,7 @@ mod tests {
     async fn outbox(store: &Store, event_id: &str, payload: &str, recipients: &str) {
         use sea_orm::{ActiveModelTrait, Set};
         crate::entity::chat_outbox::ActiveModel {
+            workspace_id: Set(store.workspace_id().into()),
             event_id: Set(event_id.into()),
             payload_json: Set(payload.into()),
             recipient_actor_ids_json: Set(recipients.into()),
@@ -740,7 +741,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn publisher_drains_at_startup_and_keeps_failed_notices_pending() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("test.db")).await.unwrap();
+        let instance =
+            crate::store::Instance::open(&crate::db::Location::Sqlite(dir.path().join("test.db")))
+                .await
+                .unwrap();
+        let workspace = instance
+            .create_workspace("subject", "Owner", "Workspace", None)
+            .await
+            .unwrap();
+        let store = instance.store(&workspace.id);
         for (event_id, recipients) in [("nobody", "[]"), ("someone", r#"["actor"]"#)] {
             outbox(
                 &store,

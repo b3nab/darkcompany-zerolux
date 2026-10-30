@@ -56,7 +56,7 @@ impl From<commands::Model> for BackgroundCommand {
 impl ChatRuntime {
     /// The joined computer a session's background commands run on, or none for the kernel's.
     async fn background_host(&self, session: &str) -> Result<Option<String>> {
-        let row = crate::entity::sessions::Entity::find_by_id(session)
+        let row = crate::entity::sessions::Entity::find_by_id(self.store.key(session))
             .one(self.store.db())
             .await?
             .ok_or(Error::NotFound)?;
@@ -98,7 +98,7 @@ impl ChatRuntime {
         id: &str,
         need: Access,
     ) -> Result<commands::Model> {
-        let row = commands::Entity::find_by_id(id)
+        let row = commands::Entity::find_by_id(self.store.key(id))
             .one(self.store.db())
             .await?
             .ok_or(Error::NotFound)?;
@@ -123,6 +123,7 @@ impl ChatRuntime {
         );
         let session = self.store.chat_session(&owner, session).await?;
         let running = commands::Entity::find()
+            .filter(commands::Column::WorkspaceId.eq(self.store.workspace_id()))
             .filter(commands::Column::SessionId.eq(&session.id))
             .filter(commands::Column::Status.eq("running"))
             .all(self.store.db())
@@ -151,6 +152,7 @@ impl ChatRuntime {
                 .as_i64(),
         };
         let row = commands::ActiveModel {
+            workspace_id: Set(self.store.workspace_id().to_owned()),
             id: Set(id.clone()),
             session_id: Set(session.id.clone()),
             command: Set(command.to_owned()),
@@ -177,6 +179,7 @@ impl ChatRuntime {
     ) -> Result<Vec<BackgroundCommand>> {
         self.background_access(who, session, Access::Read).await?;
         Ok(commands::Entity::find()
+            .filter(commands::Column::WorkspaceId.eq(self.store.workspace_id()))
             .filter(commands::Column::SessionId.eq(session))
             .order_by_desc(commands::Column::StartedAt)
             .all(self.store.db())
@@ -219,6 +222,7 @@ impl ChatRuntime {
             }
         }
         let row = commands::ActiveModel {
+            workspace_id: Set(row.workspace_id.clone()),
             id: Set(row.id.clone()),
             status: Set("stopped".into()),
             ended_at: Set(Some(now_ms())),
@@ -233,6 +237,7 @@ impl ChatRuntime {
     /// Looks at the running background commands: those that ended are recorded, and their sessions told.
     pub async fn check_background(&self) -> Result<()> {
         let running = commands::Entity::find()
+            .filter(commands::Column::WorkspaceId.eq(self.store.workspace_id()))
             .filter(commands::Column::Status.eq("running"))
             .all(self.store.db())
             .await?;
@@ -245,6 +250,7 @@ impl ChatRuntime {
                 Ended::Lost => ("lost", None),
             };
             let row = commands::ActiveModel {
+                workspace_id: Set(row.workspace_id.clone()),
                 id: Set(row.id.clone()),
                 status: Set(status.into()),
                 exit_code: Set(code),
@@ -317,6 +323,7 @@ impl ChatRuntime {
             Err(error) => (None, Some(format!("{error:#}"))),
         };
         commands::ActiveModel {
+            workspace_id: Set(row.workspace_id.clone()),
             id: Set(row.id.clone()),
             told_at: Set(told),
             error: Set(error),
@@ -369,6 +376,7 @@ impl ChatRuntime {
     pub async fn tell_agent(&self, actor_id: &str, text: &str) -> Result<String> {
         use crate::entity::sessions;
         let session = sessions::Entity::find()
+            .filter(sessions::Column::WorkspaceId.eq(self.store.workspace_id()))
             .filter(sessions::Column::ActorId.eq(actor_id))
             .filter(sessions::Column::StoppedAt.is_null())
             .filter(sessions::Column::Status.is_in(["connected", "attention"]))

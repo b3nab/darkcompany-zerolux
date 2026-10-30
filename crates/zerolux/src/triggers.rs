@@ -164,7 +164,7 @@ impl Store {
     }
 
     async fn trigger_row(&self, who: &ChatIdentity, id: &str) -> Result<triggers::Model> {
-        let row = triggers::Entity::find_by_id(id)
+        let row = triggers::Entity::find_by_id(self.key(id))
             .one(self.db())
             .await?
             .ok_or(Error::NotFound)?;
@@ -179,6 +179,7 @@ impl Store {
         }
         self.chat_session(who, session).await?;
         Ok(triggers::Entity::find()
+            .filter(triggers::Column::WorkspaceId.eq(&self.workspace))
             .filter(triggers::Column::SessionId.eq(session))
             .order_by_asc(triggers::Column::CreatedAt)
             .all(self.db())
@@ -199,6 +200,7 @@ impl Store {
             return Err(Error::Invalid("A session waits for its CI: `ci`".into()));
         }
         Ok(triggers::ActiveModel {
+            workspace_id: Set(self.workspace.clone()),
             id: Set(uuid::Uuid::new_v4().to_string()),
             session_id: Set(session.to_owned()),
             event: Set(input.event),
@@ -226,6 +228,7 @@ impl Store {
             return Err(Error::Invalid("Nothing to change".into()));
         }
         let mut change = triggers::ActiveModel {
+            workspace_id: Set(row.workspace_id),
             id: Set(row.id),
             ..Default::default()
         };
@@ -243,13 +246,16 @@ impl Store {
 
     pub async fn delete_trigger(&self, who: &ChatIdentity, id: &str) -> Result<()> {
         self.trigger_row(who, id).await?;
-        triggers::Entity::delete_by_id(id).exec(self.db()).await?;
+        triggers::Entity::delete_by_id(self.key(id))
+            .exec(self.db())
+            .await?;
         Ok(())
     }
 
     /// The triggers that wait.
     pub(crate) async fn enabled_triggers(&self) -> Result<Vec<triggers::Model>> {
         Ok(triggers::Entity::find()
+            .filter(triggers::Column::WorkspaceId.eq(&self.workspace))
             .filter(triggers::Column::Enabled.eq(true))
             .all(self.db())
             .await?)
@@ -264,6 +270,7 @@ impl Store {
         error: Option<String>,
     ) -> Result<()> {
         let mut change = triggers::ActiveModel {
+            workspace_id: Set(self.workspace.clone()),
             id: Set(id.to_owned()),
             last_error: Set(error),
             ..Default::default()

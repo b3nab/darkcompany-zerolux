@@ -13,6 +13,7 @@ pub mod extension_calls;
 pub mod extension_values;
 pub mod extensions;
 pub mod hosts;
+pub mod instance;
 pub mod invites;
 pub mod messages;
 pub mod read_positions;

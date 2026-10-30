@@ -66,8 +66,9 @@ pub fn sql(backend: DatabaseBackend) -> String {
         )+};
     }
     export!(
-        actors,
+        instance,
         workspace,
+        actors,
         sessions,
         conversations,
         conversation_members,

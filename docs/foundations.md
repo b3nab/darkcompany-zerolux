@@ -1,7 +1,7 @@
 # Authentication and database foundations
 
 Better Auth for sign-in, a Rust kernel on SeaORM, and both SQLite and PostgreSQL
-as supported databases. SQLite is a product choice for local workspaces, not a
+as supported databases. SQLite is a product choice for a local instance, not a
 temporary backend. Redis, ClickHouse, another domain API and a general
 storage-plugin framework are outside this design.
 
@@ -11,15 +11,23 @@ storage-plugin framework are outside this design.
   Its Rust runner executes the workspace suite without the PG variable (SQLite),
   then the kernel suite with the explicit test PG URL. The auth suite exercises
   both in the same run. A PG-only run must not replace SQLite coverage.
-- Use temporary databases and fake harnesses. Do not migrate a live workspace,
+- Use temporary databases and fake harnesses. Do not migrate a live instance,
   touch personal sessions or deploy a candidate as part of development.
 
 ## Persistence
 
-The kernel owns domain tables and authorization. Better Auth owns its prefixed
-`auth_*` tables through its supported adapter; Rust does not query those tables.
-Both use the selected workspace database. Kernel migration and ownership locking
-precede starting the auth service, so only one service migrates a workspace.
+An instance is one database: SQLite on the desktop, PostgreSQL in the cloud. It
+holds the `instance` row (its ID and Better Auth secret), its workspaces and their
+data. The kernel owns domain tables and authorization. Better Auth owns its
+prefixed `auth_*` tables through its supported adapter; Rust does not query those
+tables. Kernel migration and ownership locking precede starting the auth service,
+so only one service migrates an instance.
+
+Every domain table carries `workspace_id`, part of its primary key. Every relation
+between domain tables is a composite foreign key `(workspace_id, x_id)`, and every
+unique constraint is per workspace: two workspaces cannot reference each other,
+even by mistake. A `Store` is always one workspace's, and every statement filters
+or sets its `workspace_id`.
 Both migration paths wrap their DDL in a transaction. The service passes a
 transaction from Better Auth's pinned public Kysely adapter to `getMigrations`;
 a late index/DDL failure rolls back its earlier schema changes too.
@@ -61,16 +69,16 @@ fails closed, rather than being marked migrated.
 
 SQLite and PostgreSQL have the same domain contract, not necessarily identical
 SQL. Every domain write happens in a `Store::write()` transaction: one writer at
-a time per workspace (SQLite's immediate transaction; a PostgreSQL advisory
-lock), so a check made inside the transaction still holds when it commits.
-Reads take one snapshot. A SQLite workspace is served by one kernel (a lock file
-next to the database). A PostgreSQL workspace is served by any number of kernels:
-the Better Auth secret lives in the `workspace` row, so a sign-in on one kernel
-is valid on all; each agent session records the host
-(`chat_sessions.host_id`, from `<data-dir>/host-id`) whose native process it is,
-and only that kernel recovers and relinks it. Kernels of one workspace start
-their authentication services one at a time. Several kernels need one external
-LiveKit so notices reach every client.
+a time (SQLite's immediate transaction for the whole database; a PostgreSQL
+advisory lock per workspace), so a check made inside the transaction still holds
+when it commits. Reads take one snapshot. A SQLite instance is served by one
+kernel (a lock file next to the database). A PostgreSQL instance is served by any
+number of kernels, each serving all its workspaces: the Better Auth secret lives
+in the `instance` row, so a sign-in on one kernel is valid on all; each agent
+session records the host (`sessions.host_id`, from the workspace folder's
+`host-id`) whose native process it is, and only that kernel recovers and relinks
+it. Kernels of one instance start their authentication services one at a time.
+Several kernels need one external LiveKit so notices reach every client.
 
 ### Native agent data and control
 
@@ -93,8 +101,9 @@ Sessions expire after seven days. Clients call public `get-session` on startup,
 return to the foreground and hourly while active; Better Auth refreshes sessions
 when due (one-day update age). Private authorization checks never extend them.
 
-- Web uses HttpOnly session cookies. Cookies are named per workspace, since
-  cookies do not distinguish two ports on the same host.
+- Web uses HttpOnly session cookies, named per instance (`zerolux-<instance id>`),
+  since cookies do not distinguish two ports on the same host. One sign-in at the
+  kernel works in all its workspaces.
 - Desktop/mobile use the signed session token in `set-auth-token`, not the raw
   token in a JSON response. A token belongs to the kernel it signed in to,
   checked by the kernel's id before it is sent, and goes to that kernel's
@@ -104,18 +113,21 @@ when due (one-day update age). Private authorization checks never extend them.
   persistent token store is part of this work.
 - Native agents retain their separate session-scoped credentials and permissions.
   Neither a browser cookie nor a human account becomes an agent credential.
-- Better Auth identifies a user. The kernel binds that subject to a domain actor
-  and authorizes the action. Registration alone grants no workspace privileges.
-- Registration is open until the owner has an account. The first authenticated
-  account to complete the claim binds to the existing owner actor, and registration
-  then closes. Concurrent claims cannot replace the owner. Existing names/history
-  remain. Complete registration before exposing a new workspace to untrusted users.
+- Better Auth identifies an account, one per person in the instance. In each
+  workspace the kernel finds the human actor bound to that subject (one per
+  account) and authorizes the action. An account that is not a person of a
+  workspace reaches nothing of it but who it is there and the claim.
+- Registration is open until the instance has an account; then it closes.
+  Complete registration before exposing a new instance to untrusted users. A
+  signed-in account creates workspaces, as their owner (`role = owner`).
 - After that, people join by invitation: the owner creates one, valid once for seven
-  days; the person signs up with it and claims it, becoming a new human actor whose
-  `invited_by` names the owner. The owner is the human without `invited_by`.
-- `/api/health` remains public for connection identity and setup status. Domain
-  endpoints require a bound human identity or their existing scoped agent token.
-  No implicit owner identity for a request without credentials.
+  days; the person signs up with it, or uses the account they already have, and
+  claims it, becoming a new human actor with `role = member`. `invited_by` names
+  who invited them; the owner is found by role.
+- `/api/health` remains public for connection identity and setup status, at the
+  kernel and at each workspace. Domain endpoints require a bound human identity or
+  their existing scoped agent token. No implicit owner identity for a request
+  without credentials.
 - Web, desktop and mobile support one kernel on the owner's own computer, with
   mobile connected over the LAN. HTTP through the existing explicit `--expose`
   address is supported; public origins require HTTPS. HTTP does not encrypt
@@ -127,33 +139,43 @@ when due (one-day update age). Private authorization checks never extend them.
 
 ### Client-facing kernel contract
 
-- `/api/health` adds capability `auth-v1` and
-  `auth: {setup_required: boolean}`. The breaking authentication requirement
-  is announced by `api_version` 2; clients never refuse a kernel by its version,
+- The kernel's `GET /api/health`: `{name, version, build, api_version,
+  capabilities: ["workspaces-v1", "instance-auth-v1"], instance: {id}, auth:
+  {setup_required}}`, `setup_required` while the instance has no account. Its
+  workspaces are not listed there. Clients never refuse a kernel by its version,
   they use the capabilities it declares.
-- `GET /api/auth/identity` requires a valid human session and returns
-  `{user: {id, name, email}, actor_id: string | null, owner: boolean, setup_required: boolean}`;
-  `owner` tells the workspace's owner from a person who joined.
-  It allows an unbound account to see that enrollment is required, not domain data.
+- `GET /api/auth/identity` at the kernel requires a valid human session:
+  `{user: {id, name, email}, setup_required}`. At a workspace's base,
+  `<base>/api/auth/identity` returns `{user, actor_id: string | null, owner:
+  boolean, setup_required}`; `owner` tells the workspace's owner from a member. It
+  allows an account that is not a person there to see so, not domain data.
+- `GET /api/workspaces`, signed in: `{workspaces: [{id, name, created_at,
+  owner}]}`, the account's workspaces, oldest first. `POST /api/workspaces {name,
+  folder?}`, signed in: `{workspace: {id, name, created_at, owner: true}}`, the
+  account its owner. The folder is an absolute path on the kernel's computer; by
+  default `<data dir>/workspaces/<id>`.
 - `POST /api/auth/sign-up/email` accepts name, email and password while
-  `auth.setup_required` is true. Once the owner is bound it needs the header
-  `x-zerolux-invite: <token>` of a usable invitation, and a name no member has;
-  without one it returns 403, with a used, withdrawn or expired one 410. Better Auth applies its database-backed rate limiter.
-  An account is not privileged until bound. The kernel must not hold a write
-  transaction across the sidecar call: both components write the same SQLite database.
-- `POST /api/auth/claim` has no request body, or `{invite}`. Under a valid human
-  session it atomically binds the first claiming account to the existing owner, or
-  with an invitation makes the account a new person and uses the invitation up; it
-  returns the identity response. Clients claim after signup. Keeping claim separate allows
-  recovery through sign-in if registration succeeded but enrollment was interrupted.
+  `auth.setup_required` is true. After that it needs the header
+  `x-zerolux-invite: <token>` of a usable invitation to any workspace of the
+  instance, and a name no member of it has; without one it returns 403, with a
+  used, withdrawn or expired one 410. Better Auth applies its database-backed rate
+  limiter. An account is not privileged until bound. The kernel must not hold a
+  write transaction across the sidecar call: both components write the same
+  SQLite database.
+- `POST <base>/api/auth/claim {invite}`: under a valid human session that is not
+  a person of the workspace, makes the account a new member and uses the
+  invitation up; it returns the identity response. Clients claim after signup, or
+  with an account they already have.
 - Sign-in/out, get-session, list/revoke sessions and change-password use the
-  matching Better Auth endpoints under `/api/auth`. Preserve its HTTP statuses,
-  cookies and `set-auth-token`; do not turn an auth failure into a success envelope.
-- `GET /api/auth/invites/{token}` needs no account: `{invitation: {workspace,
-  invited_by, expires_at}}` while it can be used, 410 otherwise. The owner creates
-  invitations with `POST /api/invites` (`{invite: {id, created_by, created_at,
-  expires_at}, token}`; the token is in this answer only), lists unused ones with
-  `GET /api/invites` and withdraws one with `DELETE /api/invites/{id}`.
+  matching Better Auth endpoints under `/api/auth`, at the kernel or at a
+  workspace's base. Preserve its HTTP statuses, cookies and `set-auth-token`; do
+  not turn an auth failure into a success envelope.
+- `GET <base>/api/auth/invites/{token}` needs no account: `{invitation:
+  {workspace, invited_by, expires_at}}` while it can be used, 410 otherwise. The
+  owner creates invitations with `POST /api/invites` (`{invite: {id, created_by,
+  created_at, expires_at}, token}`; the token is in this answer only), lists
+  unused ones with `GET /api/invites` and withdraws one with
+  `DELETE /api/invites/{id}`.
 - Desktop CORS must allow `authorization`, `content-type` and `x-zerolux-invite`, and expose
   `set-auth-token` for the known app origins.
 
@@ -167,12 +189,12 @@ Secrets are not command-line arguments. Configuration:
 ```typescript
 {
   version: 1;
-  workspace_id: string; // workspace UUID
+  instance_id: string; // instance UUID
   database: { kind: "sqlite"; path: string }
           | { kind: "postgres"; url: string };
   base_url: string; // kernel origin: HTTPS, or loopback/LAN HTTP
   trusted_origins: string[]; // exact configured client origins
-  secret: string; // stable per-workspace Better Auth signing secret, >=32 bytes
+  secret: string; // stable per-instance Better Auth signing secret, >=32 bytes
   control_token: string; // private random credential for this kernel process
 }
 ```
@@ -186,7 +208,7 @@ schema validation/migration it prints one line:
   "version": 1,
   "pid": 123,
   "address": "http://127.0.0.1:45678",
-  "workspace_id": "…"
+  "instance_id": "…"
 }
 ```
 
@@ -203,7 +225,8 @@ IP/protocol headers are considered only when the actual peer is an explicitly
 configured trusted reverse proxy; otherwise they are ignored. A private subnet
 is not automatically a trusted proxy.
 
-- `GET /internal/health`: readiness/version/workspace identity, no secrets.
+- `GET /internal/health`: readiness/version/instance identity, no secrets.
+- `GET /internal/accounts`: `{exists}`, whether the instance has an account.
 - `GET /internal/session`: validate incoming Cookie **or** signed Authorization
   bearer through `auth.api.getSession`, with `disableCookieCache` and
   `disableRefresh`. Returns `null` or
@@ -214,11 +237,11 @@ is not automatically a trusted proxy.
   authentication routes, preserving status, Set-Cookie and `set-auth-token`,
   never exposing private `/internal/*` routes. Signup additionally requires
   `x-zerolux-auth-enroll: 1`, injected **only** after the kernel checks that the
-  owner has no account yet, or that the signup carries a usable invitation. Requests cannot grant themselves that permission.
+  instance has no account yet, or that the signup carries a usable invitation. Requests cannot grant themselves that permission.
 
 Use bounded startup/HTTP/shutdown deadlines. Stop the auth child on kernel
 shutdown; an auth outage must not kill, restart or duplicate native agent work.
-The Better Auth secret is a column of the `workspace` row (never serialized to
+The Better Auth secret is a column of the `instance` row (never serialized to
 clients). It does not belong in the repository or logs.
 
 ## Acceptance
@@ -227,13 +250,14 @@ clients). It does not belong in the repository or logs.
   histories, pending/uncertain delivery states or owner Stop decisions.
 - SQLite and PostgreSQL pass the same relevant persistence, concurrency,
   authentication and API authorization scenarios, including failure paths; two
-  kernels on one PostgreSQL workspace share sign-in and keep to their own agent
-  sessions.
+  kernels on one PostgreSQL instance share sign-in, serve each other's workspaces
+  and keep to their own agent sessions.
 - Real Better Auth with temporary SQLite/PostgreSQL databases: enrollment,
-  sign-in, cookie/bearer validation, logout/revocation, restart continuity and
-  isolation across workspaces. No external identity provider or model calls.
+  sign-in, cookie/bearer validation, logout/revocation, restart continuity,
+  invitations of existing accounts and isolation across workspaces. No external
+  identity provider or model calls.
 - Forged, missing, expired or revoked credentials cannot obtain owner access;
-  an authenticated but unbound subject cannot access the workspace.
+  an authenticated account that is not a person of a workspace reaches nothing of it.
 - Web, desktop and mobile can authenticate and sign out; a connection change
   never sends one workspace's credentials to another.
 - Backup/restore and schema-upgrade failure behavior are documented and tested.
@@ -251,4 +275,4 @@ installed source (not only examples from another release):
 
 `getMigrations` is exported by `better-auth/db/migration`. Its migration runner
 executes statements sequentially; the kernel serializes the services' starts
-across kernels of one PostgreSQL workspace.
+across kernels of one PostgreSQL instance.

@@ -9,13 +9,11 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub name: String,
     pub created_at: i64,
+    /// Where its files are (links, people, `host-id`, storage, extensions), on each kernel
+    /// serving it: an absolute path, or one relative to the kernel's data directory.
     #[serde(skip_serializing, default)]
-    #[sea_orm(unique, default_value = 1)]
-    pub only_one: i64,
-    /// Better Auth's signing secret, shared by the kernels serving this workspace.
-    #[serde(skip_serializing, default)]
-    #[sea_orm(column_type = "Text")]
-    pub auth_secret: Option<String>,
+    #[sea_orm(column_type = "Text", unique)]
+    pub folder: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -23,13 +21,4 @@ pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
 
-impl super::schema::Definition for Entity {
-    fn constraints(
-        _: sea_orm::DatabaseBackend,
-        table: &mut sea_orm::sea_query::TableCreateStatement,
-        _: &mut Vec<sea_orm::sea_query::IndexCreateStatement>,
-    ) {
-        use sea_orm::sea_query::{Expr, ExprTrait};
-        table.check(Expr::col(Column::OnlyOne).eq(1));
-    }
-}
+impl super::schema::Definition for Entity {}
