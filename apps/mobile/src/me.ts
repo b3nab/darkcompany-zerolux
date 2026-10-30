@@ -18,7 +18,7 @@ export function useMe() {
   const actors = activeActors(workspace?.actors ?? []);
   const signIn = auth?.health ? requiresSignIn(auth.health) : true;
   return {
-    ...whoAmI(auth?.identity, actors, signIn),
+    ...whoAmI(auth?.member, actors, signIn),
     email: auth?.identity?.user.email,
   };
 }

@@ -122,13 +122,7 @@ export function Elsewhere() {
           <Pressable
             key={keptKey(w)}
             accessibilityRole="button"
-            onPress={() =>
-              void kernel.open(w.kernel, {
-                id: w.id,
-                name: w.name,
-                base: w.base,
-              })
-            }
+            onPress={() => void kernel.open(w.kernel, w)}
             className={cn(
               "min-h-14 flex-row items-center gap-3 px-3.5 py-2.5 active:bg-accent",
               i > 0 && "border-t border-border",

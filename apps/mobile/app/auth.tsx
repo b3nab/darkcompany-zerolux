@@ -10,13 +10,14 @@ import { Text } from "@/components/ui/text";
 import { WorkspaceMark } from "@/components/workspace-mark";
 import { useAuthentication } from "../src/auth";
 import { setPendingInvite, usePendingInvite } from "../src/invite";
-import { keptName, useKernel, useSession } from "../src/kernel";
+import { keptName, useKernel, useOpenSession } from "../src/kernel";
 
+/** Signing in to the open kernel, once for all its workspaces: as its first account, or invited. */
 export default function Authenticate() {
   const auth = useAuthentication();
   const kernel = useKernel();
   const router = useRouter();
-  const { chat } = useSession();
+  const session = useOpenSession();
   const [existing, setExisting] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -32,70 +33,62 @@ export default function Authenticate() {
   useEffect(() => {
     if (!invite || !health || !read) return;
     let current = true;
-    read(invite).then(
+    read(invite.base, invite.token).then(
       (next) => current && setInvitation(next),
       (e: unknown) => current && setInviteError(errorMessage(e)),
     );
     return () => {
       current = false;
     };
-    // Read again when the workspace is verified again, not at every render.
+    // Read again when the kernel is verified again, not at every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [invite, health]);
-  // In the workspace, the invitation is used.
-  const member = auth?.identity?.actor_id;
-  useEffect(() => {
-    if (member) setPendingInvite(null);
-  }, [member]);
   if (!auth) return null;
-  const joining = invite && !inviteError ? invite : undefined;
-  const enrollment =
-    auth.identity?.setup_required ?? auth.health?.auth.setup_required ?? false;
-  const signup =
-    (enrollment || Boolean(joining)) && !existing && !auth.identity;
+  const joining = invite && !inviteError ? invite.token : undefined;
+  const setup = auth.health?.auth.setup_required ?? false;
+  const signup = (setup || Boolean(joining)) && !existing;
   const invalid =
-    !auth.identity &&
-    (!email.trim() ||
-      !password ||
-      (signup &&
-        (Boolean(ownerNameError(name)) ||
-          !password ||
-          confirmation !== password)));
+    !email.trim() ||
+    !password ||
+    (signup &&
+      (Boolean(ownerNameError(name)) ||
+        !password ||
+        confirmation !== password));
 
   async function submit() {
     if (!auth || auth.busy || auth.loading || invalid || !auth.health) return;
     setError("");
-    const accepted = auth.identity
-      ? await auth.claim(joining)
-      : signup
-        ? await auth.signUp(name, email, password, joining)
-        : await auth.signIn(email, password, joining);
+    const accepted = signup
+      ? await auth.signUp(name, email, password, joining)
+      : await auth.signIn(email, password);
     if (accepted) {
       setPassword("");
       setConfirmation("");
     }
   }
   async function changeKernel() {
-    if (!chat.canLeave()) {
+    if (session && !session.chat.canLeave()) {
       setError(
         "Sign in and resolve pending chat messages before changing kernels.",
       );
       return;
     }
     try {
-      if (kernel.current) await kernel.forget(kernel.current);
+      if (kernel.here) await kernel.forget(kernel.here);
     } catch (error) {
       setError(errorMessage(error));
     }
   }
 
   const current = kernel.current;
-  // The name given on this phone, else the workspace's own.
+  const host = kernel.here ? new URL(kernel.here).host : undefined;
+  // The workspace to open once signed in, by the name it has on this phone; else the kernel.
   const title =
-    current?.alias ||
-    auth.health?.workspace.name ||
-    (current ? keptName(current) : "Your workspace");
-  const host = current ? new URL(current.kernel).host : undefined;
+    (current ? keptName(current) : undefined) ||
+    auth.health?.workspace?.name ||
+    host ||
+    "ZeroLux";
+  const others = kernel.kernels.length > 1;
   // Its kernel did not answer: said in a line, the network's own words left out.
   const offline = !auth.loading && !auth.health && Boolean(auth.error);
   return (
@@ -125,120 +118,100 @@ export default function Authenticate() {
             {offline
               ? `${host ?? "The kernel"} is not reachable.`
               : auth.loading
-                ? "Verifying the workspace…"
+                ? "Verifying the kernel…"
                 : invite && inviteError
                   ? `This invitation can no longer be used (${inviteError}). Ask for a new one.`
                   : joining
-                    ? auth.identity
-                      ? "Join this workspace with the account you are signed in to."
-                      : invitation
-                        ? `${invitation.invited_by} invited you.`
-                        : "Reading the invitation…"
-                    : auth.identity
-                      ? enrollment
-                        ? "Bind your account to this workspace’s owner."
-                        : "This account is not a member of this workspace. Sign out to use another account."
-                      : signup
-                        ? "Create your account to become this workspace’s owner."
-                        : "Sign in to your workspace."}
+                    ? invitation
+                      ? `${invitation.invited_by} invited you to ${invitation.workspace}.`
+                      : "Reading the invitation…"
+                    : signup
+                      ? "Create the first account on this kernel."
+                      : `Sign in to ${host ?? "the kernel"}.`}
           </Text>
         </View>
         {auth.health && !auth.loading && (
           <>
-            {auth.identity ? (
-              <Text className="text-sm text-muted-foreground">
-                {auth.identity.user.email}
+            {signup && (
+              <View className="gap-2">
+                <Text className="text-sm">Your name</Text>
+                <Input
+                  accessibilityLabel="Your name"
+                  value={name}
+                  onChangeText={setName}
+                  autoComplete="name"
+                  editable={!auth.busy}
+                />
+                {name && ownerNameError(name) ? (
+                  <Text className="text-sm text-destructive">
+                    {ownerNameError(name)}
+                  </Text>
+                ) : null}
+              </View>
+            )}
+            <View className="gap-2">
+              <Text className="text-sm">Email</Text>
+              <Input
+                accessibilityLabel="Email"
+                value={email}
+                onChangeText={setEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="email"
+                editable={!auth.busy}
+              />
+            </View>
+            <View className="gap-2">
+              <Text className="text-sm">Password</Text>
+              <Input
+                accessibilityLabel="Password"
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete={signup ? "new-password" : "current-password"}
+                editable={!auth.busy}
+                onSubmitEditing={() => void submit()}
+              />
+            </View>
+            {signup && (
+              <View className="gap-2">
+                <Text className="text-sm">Confirm password</Text>
+                <Input
+                  accessibilityLabel="Confirm password"
+                  value={confirmation}
+                  onChangeText={setConfirmation}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  autoComplete="new-password"
+                  editable={!auth.busy}
+                  onSubmitEditing={() => void submit()}
+                />
+                {confirmation && confirmation !== password ? (
+                  <Text className="text-sm text-destructive">
+                    The passwords do not match.
+                  </Text>
+                ) : null}
+              </View>
+            )}
+            <Button
+              disabled={auth.busy || Boolean(invalid)}
+              onPress={() => void submit()}
+            >
+              <Text>
+                {auth.busy
+                  ? "Please wait…"
+                  : signup
+                    ? joining
+                      ? "Join"
+                      : "Create account"
+                    : "Sign in"}
               </Text>
-            ) : (
-              <>
-                {signup && (
-                  <View className="gap-2">
-                    <Text className="text-sm">Your name</Text>
-                    <Input
-                      accessibilityLabel="Your name"
-                      value={name}
-                      onChangeText={setName}
-                      autoComplete="name"
-                      editable={!auth.busy}
-                    />
-                    {name && ownerNameError(name) ? (
-                      <Text className="text-sm text-destructive">
-                        {ownerNameError(name)}
-                      </Text>
-                    ) : null}
-                  </View>
-                )}
-                <View className="gap-2">
-                  <Text className="text-sm">Email</Text>
-                  <Input
-                    accessibilityLabel="Email"
-                    value={email}
-                    onChangeText={setEmail}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    autoComplete="email"
-                    editable={!auth.busy}
-                  />
-                </View>
-                <View className="gap-2">
-                  <Text className="text-sm">Password</Text>
-                  <Input
-                    accessibilityLabel="Password"
-                    value={password}
-                    onChangeText={setPassword}
-                    secureTextEntry
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    autoComplete={signup ? "new-password" : "current-password"}
-                    editable={!auth.busy}
-                    onSubmitEditing={() => void submit()}
-                  />
-                </View>
-                {signup && (
-                  <View className="gap-2">
-                    <Text className="text-sm">Confirm password</Text>
-                    <Input
-                      accessibilityLabel="Confirm password"
-                      value={confirmation}
-                      onChangeText={setConfirmation}
-                      secureTextEntry
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      autoComplete="new-password"
-                      editable={!auth.busy}
-                      onSubmitEditing={() => void submit()}
-                    />
-                    {confirmation && confirmation !== password ? (
-                      <Text className="text-sm text-destructive">
-                        The passwords do not match.
-                      </Text>
-                    ) : null}
-                  </View>
-                )}
-              </>
-            )}
-            {(!auth.identity || enrollment || joining) && (
-              <Button
-                disabled={auth.busy || Boolean(invalid)}
-                onPress={() => void submit()}
-              >
-                <Text>
-                  {auth.busy
-                    ? "Please wait…"
-                    : auth.identity
-                      ? joining
-                        ? "Join workspace"
-                        : "Claim workspace"
-                      : signup
-                        ? joining
-                          ? "Join"
-                          : "Create account"
-                        : "Sign in"}
-                </Text>
-              </Button>
-            )}
-            {!auth.identity && (enrollment || joining) && (
+            </Button>
+            {(setup || joining) && (
               <Button
                 variant="ghost"
                 disabled={auth.busy}
@@ -252,15 +225,6 @@ export default function Authenticate() {
                     ? "Create an account instead"
                     : "Already created an account? Sign in"}
                 </Text>
-              </Button>
-            )}
-            {auth.identity && (
-              <Button
-                variant="outline"
-                disabled={auth.busy}
-                onPress={() => void auth.signOut()}
-              >
-                <Text>Sign out</Text>
               </Button>
             )}
           </>
@@ -279,7 +243,7 @@ export default function Authenticate() {
             <Text>{offline ? "Try again" : "Verify connection again"}</Text>
           </Button>
         )}
-        {kernel.workspaces.length > 1 ? (
+        {others ? (
           <Button
             variant="ghost"
             disabled={auth.busy}
@@ -292,8 +256,7 @@ export default function Authenticate() {
           variant="ghost"
           disabled={auth.busy}
           onPress={() => {
-            if (!invite && kernel.workspaces.length > 1)
-              return router.push("/workspace-add");
+            if (!invite && others) return router.push("/workspace-add");
             setPendingInvite(null);
             void changeKernel();
           }}
@@ -301,8 +264,8 @@ export default function Authenticate() {
           <Text>
             {invite
               ? "Use another link"
-              : kernel.workspaces.length > 1
-                ? "Add workspace"
+              : others
+                ? "Connect a kernel"
                 : "Connect to another kernel"}
           </Text>
         </Button>

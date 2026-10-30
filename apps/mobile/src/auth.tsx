@@ -14,7 +14,7 @@ import {
   credentialStorageKey,
   errorMessage,
   requiresSignIn,
-  workspaceSummary,
+  type AccountIdentity,
   type AuthHealth,
   type AuthDevice,
   type AuthIdentity,
@@ -23,11 +23,10 @@ import {
 } from "@zerolux/chat";
 
 // Expo SDK 57: this device's keychain/Keystore, never AsyncStorage or a cookie jar.
-const storage: AuthStorage = {
-  read: (kernel, workspace) =>
-    SecureStore.getItemAsync(credentialStorageKey(kernel, workspace)),
-  async write(kernel, workspace, token) {
-    const key = credentialStorageKey(kernel, workspace);
+export const storage: AuthStorage = {
+  read: (kernel) => SecureStore.getItemAsync(credentialStorageKey(kernel)),
+  async write(kernel, token) {
+    const key = credentialStorageKey(kernel);
     if (token === null) await SecureStore.deleteItemAsync(key);
     else
       await SecureStore.setItemAsync(key, token, {
@@ -37,65 +36,47 @@ const storage: AuthStorage = {
 };
 
 /**
- * What waits in a workspace that is not open, read with the sign-in this phone keeps for it:
- * the workspace's identity is verified before the sign-in is sent, as for the open one.
+ * Keeps a sign-in this phone had for a workspace of `kernel`, from before one sign-in served
+ * all of a kernel's workspaces: the first found becomes the kernel's, the others go. Answers
+ * whose it was.
  */
-export async function readElsewhere(
-  base: string,
-  workspaceId: string,
-): Promise<
-  { state: "ready"; requests: number; unread: number } | { state: "signed-out" }
-> {
-  const client = new AuthConnection(base, workspaceId, storage);
-  // A kernel that answers its health but not the rest is out of reach all the same.
-  const late = new AbortController();
-  const timer = setTimeout(() => late.abort(), 10_000);
-  try {
-    const { health, identity } = await client.restore();
-    if (requiresSignIn(health) && !identity?.actor_id)
-      return { state: "signed-out" };
-    return { state: "ready", ...(await workspaceSummary(base, late.signal)) };
-  } finally {
-    clearTimeout(timer);
-    client.dispose();
+export async function adoptSignIn(kernel: string, workspaceIds: string[]) {
+  let adopted: string | undefined;
+  for (const id of workspaceIds) {
+    const key = credentialStorageKey(kernel, id);
+    const token = await SecureStore.getItemAsync(key);
+    if (!token) continue;
+    if (!adopted) {
+      await storage.write(kernel, token);
+      adopted = id;
+    }
+    await SecureStore.deleteItemAsync(key);
   }
-}
-
-/**
- * Signs this phone out of a workspace that is not open: the kernel ends the session when it
- * answers, and the phone forgets its sign-in either way.
- */
-export async function signOutElsewhere(base: string, workspaceId: string) {
-  const client = new AuthConnection(base, workspaceId, storage);
-  try {
-    const { identity } = await client.restore();
-    if (identity) await client.signOut();
-  } catch {
-    // Unreachable, or already signed out: what the phone keeps goes all the same.
-  } finally {
-    client.dispose();
-    await storage.write(base, workspaceId, null);
-  }
+  return adopted;
 }
 
 interface Authentication {
   health?: AuthHealth;
-  identity: AuthIdentity | null;
+  /** The account signed in on this kernel. */
+  identity: AccountIdentity | null;
+  /** That account in the open workspace, the person it is there: `undefined` while it is read. */
+  member: AuthIdentity | null | undefined;
   loading: boolean;
   busy: boolean;
   error: string;
   refresh(): Promise<void>;
-  /** With an invitation, a person who joins; without, the owner. */
-  signIn(email: string, password: string, invite?: string): Promise<boolean>;
+  signIn(email: string, password: string): Promise<boolean>;
+  /** A new account: the kernel's first, or a person's who joins with an invitation. */
   signUp(
     name: string,
     email: string,
     password: string,
     invite?: string,
   ): Promise<boolean>;
-  claim(invite?: string): Promise<boolean>;
+  /** The account joins a workspace: with an invitation, or as an older kernel's owner. */
+  join(base: string, invite?: string): Promise<boolean>;
   /** What an invitation says, before any account: refused once it cannot be used. */
-  invitation(token: string): Promise<Invitation>;
+  invitation(base: string, token: string): Promise<Invitation>;
   signOut(): Promise<boolean>;
   guard(canLeave: () => boolean): () => void;
   /** Your account, straight from the kernel: callers show their own errors. */
@@ -110,21 +91,26 @@ interface Authentication {
 const Context = createContext<Authentication | null>(null);
 export const useAuthentication = () => use(Context);
 
-/** Keeps the root navigator mounted; Stack.Protected gates every private screen. */
+/**
+ * One kernel's sign-in, with the connection the phone keeps for it, and the account's person
+ * in the open workspace. Keeps the root navigator mounted; Stack.Protected gates every private
+ * screen.
+ */
 export function AuthenticationProvider({
-  kernel,
-  workspaceId,
+  client,
+  base,
+  onVerified,
   children,
 }: {
-  kernel: string;
-  workspaceId?: string;
+  client: AuthConnection;
+  /** The open workspace's base, once one is open. */
+  base?: string;
+  onVerified(health: AuthHealth): void;
   children: ReactNode;
 }) {
-  const [client] = useState(
-    () => new AuthConnection(kernel, workspaceId, storage),
-  );
   const [health, setHealth] = useState<AuthHealth>();
-  const [identity, setIdentity] = useState<AuthIdentity | null>(null);
+  const [identity, setIdentity] = useState<AccountIdentity | null>(null);
+  const [member, setMember] = useState<AuthIdentity | null>();
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -132,6 +118,8 @@ export function AuthenticationProvider({
   const working = useRef(false);
   const version = useRef(0);
   const canLeave = useRef<() => boolean>(() => true);
+  const verified = useRef(onVerified);
+  verified.current = onVerified;
 
   const refresh = useCallback(async () => {
     if (working.current) return;
@@ -139,16 +127,16 @@ export function AuthenticationProvider({
     try {
       const result = await client.restore();
       if (!live.current || current !== version.current) return;
+      verified.current(result.health);
       setHealth(result.health);
       setIdentity(result.identity);
       setError("");
     } catch (error) {
-      if (
-        live.current &&
-        current === version.current &&
-        !(error instanceof Error && error.name === "AbortError")
-      )
-        setError(errorMessage(error));
+      if (!live.current || current !== version.current) return;
+      // Another read of the same kernel took over: this one is read again.
+      if (error instanceof Error && error.name === "AbortError")
+        setTimeout(() => void refresh(), 0);
+      else setError(errorMessage(error));
     } finally {
       if (live.current && current === version.current) setLoading(false);
     }
@@ -177,9 +165,23 @@ export function AuthenticationProvider({
       stop();
       subscription.remove();
       clearInterval(timer);
-      client.dispose();
     };
   }, [client, refresh]);
+
+  // The account's person in the open workspace, read again with every sign-in.
+  const signedIn = health && requiresSignIn(health) ? identity : undefined;
+  useEffect(() => {
+    if (!base || !signedIn) return setMember(null);
+    let current = true;
+    setMember(undefined);
+    client.identity(base).then(
+      (next) => current && setMember(next),
+      () => current && setMember(null),
+    );
+    return () => {
+      current = false;
+    };
+  }, [client, base, signedIn]);
 
   const guard = useCallback((check: () => boolean) => {
     canLeave.current = check;
@@ -188,10 +190,7 @@ export function AuthenticationProvider({
     };
   }, []);
 
-  async function perform(
-    action: () => Promise<AuthIdentity | null>,
-    leaving = false,
-  ) {
+  async function perform(action: () => Promise<void>, leaving = false) {
     if (working.current) return false;
     if (leaving && !canLeave.current()) {
       setError("Wait for pending chat messages before signing out.");
@@ -202,18 +201,8 @@ export function AuthenticationProvider({
     setBusy(true);
     setError("");
     try {
-      const next = await action();
-      if (!live.current) return false;
-      setIdentity(next);
-      if (next)
-        setHealth(
-          (previous) =>
-            previous && {
-              ...previous,
-              auth: { setup_required: next.setup_required },
-            },
-        );
-      return true;
+      await action();
+      return live.current;
     } catch (error) {
       if (live.current) setError(errorMessage(error));
       return false;
@@ -222,37 +211,45 @@ export function AuthenticationProvider({
       if (live.current) setBusy(false);
     }
   }
+  const account = (next: AccountIdentity) => {
+    if (!live.current) return;
+    setIdentity(next);
+    setHealth(
+      (previous) =>
+        previous && {
+          ...previous,
+          auth: { setup_required: next.setup_required },
+        },
+    );
+  };
 
   return (
     <Context
       value={{
         health,
         identity,
+        member,
         loading,
         busy,
         error,
         refresh,
         guard,
-        signIn: (email, password, invite) =>
-          perform(async () => {
-            const next = await client.signIn(email, password);
-            // An account not in the workspace yet joins with the invitation, or becomes its owner.
-            return next.actor_id
-              ? next
-              : invite
-                ? client.claim(invite)
-                : next.setup_required
-                  ? client.claim()
-                  : next;
-          }),
+        signIn: (email, password) =>
+          perform(async () => account(await client.signIn(email, password))),
         signUp: (name, email, password, invite) =>
-          perform(() => client.signUp(name, email, password, invite)),
-        claim: (invite) => perform(() => client.claim(invite)),
-        invitation: (token) => client.invitation(token),
+          perform(async () =>
+            account(await client.signUp(name, email, password, invite)),
+          ),
+        join: (where, invite) =>
+          perform(async () => {
+            const next = await client.claim(where, invite);
+            if (live.current && where === base) setMember(next);
+          }),
+        invitation: (where, token) => client.invitation(where, token),
         signOut: () =>
           perform(async () => {
             await client.signOut();
-            return null;
+            if (live.current) setIdentity(null);
           }, true),
         changePassword: (current, next, others) =>
           client.changePassword(current, next, others),

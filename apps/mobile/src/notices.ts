@@ -70,12 +70,7 @@ function useNoticeWorkspace() {
       const target = now.current.workspaces.find(
         (w) => keptKey(w) === workspace,
       );
-      if (target)
-        void now.current.open(target.kernel, {
-          id: target.id,
-          name: target.name,
-          base: target.base,
-        });
+      if (target) void now.current.open(target.kernel, target);
       else Notifications.clearLastNotificationResponse();
       return true;
     },

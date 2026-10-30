@@ -47,7 +47,9 @@ const realtime = {
 
 /** What is yours and this phone's: notifications, your devices, the look and the kernel. */
 export default function MySettings() {
-  const { current, forget } = useKernel();
+  const { here, kernels, forget } = useKernel();
+  const multi = kernels.find((k) => k.kernel === here)?.multi;
+  const host = here ? new URL(here).host : "";
   const router = useRouter();
   const { chat, version } = useSession();
   const auth = useAuthentication();
@@ -56,15 +58,15 @@ export default function MySettings() {
   const check = <CheckIcon color={muted} size={18} strokeWidth={2} />;
   const [connectionError, setConnectionError] = useState("");
   async function remove() {
-    if (!current) return;
+    if (!here) return;
     if (!chat.canLeave()) {
       setConnectionError(
-        "Wait for pending chat messages before removing this workspace.",
+        "Wait for pending chat messages before removing this kernel.",
       );
       return;
     }
     try {
-      await forget(current);
+      await forget(here);
     } catch (error) {
       setConnectionError(errorMessage(error));
     }
@@ -125,34 +127,39 @@ export default function MySettings() {
               </Text>
             </View>
             <Text className="font-mono text-[13px] text-faint">
-              {current ? new URL(current.kernel).host : ""}
+              {host}
               {version ? ` · v${version}` : ""}
             </Text>
           </View>
           <View className="gap-2 border-t border-border px-4 py-3">
+            {multi ? (
+              <Button
+                variant="outline"
+                disabled={auth?.busy}
+                onPress={() => router.push("/workspace-new")}
+              >
+                <Text>New workspace</Text>
+              </Button>
+            ) : null}
             <Button
               variant="outline"
               disabled={auth?.busy}
               onPress={() => router.push("/workspace-add")}
             >
-              <Text>Add workspace</Text>
+              <Text>Connect a kernel</Text>
             </Button>
             <Button
               variant="ghost"
               disabled={auth?.busy}
               onPress={() =>
-                Alert.alert(
-                  "Remove this workspace from this phone?",
-                  undefined,
-                  [
-                    { text: "Cancel", style: "cancel" },
-                    {
-                      text: "Remove",
-                      style: "destructive",
-                      onPress: () => void remove(),
-                    },
-                  ],
-                )
+                Alert.alert(`Remove ${host} from this phone?`, undefined, [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Remove",
+                    style: "destructive",
+                    onPress: () => void remove(),
+                  },
+                ])
               }
             >
               <Text className="text-destructive">Remove from this phone</Text>

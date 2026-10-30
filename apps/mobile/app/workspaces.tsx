@@ -3,9 +3,9 @@ import { CheckIcon, PlusIcon } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Alert, Pressable, ScrollView, View } from "react-native";
 import { useCSSVariable } from "uniwind";
-import { errorMessage } from "@zerolux/chat";
+import { errorMessage, requiresSignIn } from "@zerolux/chat";
 import type { MenuEntry } from "@zerolux/ui";
-import { RowMenu } from "@/components/action-menu";
+import { Menu, RowMenu } from "@/components/action-menu";
 import { PageSheet } from "@/components/page-sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,29 +16,44 @@ import {
   WorkspaceMark,
 } from "@/components/workspace-mark";
 import { cn } from "@/lib/utils";
-import { keptKey, keptName, useKernel } from "../src/kernel";
-import type { ElsewhereState, KeptWorkspace } from "../src/kernel";
+import { useAuthentication } from "../src/auth";
+import { keptKey, keptName, useKernel, useOpenSession } from "../src/kernel";
+import type { ElsewhereState, KeptWorkspace, KernelState } from "../src/kernel";
 
-/** What a kept workspace says under its name: here, what waits in it, or why it cannot be read. */
+/** What a workspace says under its name: here, what waits in it, or why it cannot be read. */
 const line = (open: boolean, state?: ElsewhereState) =>
   open ? "Here now" : elsewhereLine(state);
 
 /**
- * The workspaces on this phone, by kernel: the open one, what waits in the others, the ones
- * to sign in to again or out of reach, and what each kernel serves besides. A tap opens one,
- * staying signed in to all.
+ * The kernels on this phone, each signed in to once, with the account's workspaces on them:
+ * the open one, what waits in the others, and a new one. A tap opens a workspace, staying
+ * signed in to every kernel.
  */
 export default function Workspaces() {
   const kernel = useKernel();
+  const auth = useAuthentication();
+  const session = useOpenSession();
   const router = useRouter();
   const tick = String(useCSSVariable("--color-agent-foreground"));
   const ink = String(useCSSVariable("--color-foreground"));
+  const muted = String(useCSSVariable("--color-muted-foreground"));
   const [renaming, setRenaming] = useState<KeptWorkspace>();
   const [error, setError] = useState("");
   const look = kernel.look;
   useEffect(() => look(), [look]);
-  const kernels = [...new Set(kernel.workspaces.map((w) => w.kernel))];
   const current = kernel.current && keptKey(kernel.current);
+  const unsigned = Boolean(auth?.health && !requiresSignIn(auth.health));
+  // The open kernel is as its sign-in says; the others as last read.
+  const stateOf = (origin: string): KernelState | undefined =>
+    origin !== kernel.here
+      ? kernel.states[origin]
+      : auth?.identity || unsigned
+        ? "ready"
+        : auth?.health
+          ? "signed-out"
+          : auth?.error
+            ? "offline"
+            : undefined;
 
   async function act(work: () => Promise<void>) {
     setError("");
@@ -50,53 +65,57 @@ export default function Workspaces() {
   }
   function open(workspace: KeptWorkspace) {
     if (keptKey(workspace) === current) return router.back();
-    void act(() =>
-      kernel.open(workspace.kernel, {
-        id: workspace.id,
-        name: workspace.name,
-        base: workspace.base,
-      }),
-    );
+    void act(() => kernel.open(workspace.kernel, workspace));
   }
-  const menu = (w: KeptWorkspace): MenuEntry[] => {
-    const here = keptKey(w) === current;
-    const state = kernel.elsewhere[keptKey(w)];
+  const workspaceMenu = (w: KeptWorkspace): MenuEntry[] => [
+    ...(keptKey(w) === current
+      ? []
+      : [
+          {
+            title: `Switch to ${keptName(w)}`,
+            icon: "arrow-right-left",
+            onPress: () => open(w),
+          },
+        ]),
+    {
+      title: "Rename on this phone",
+      icon: "pencil",
+      onPress: () => setRenaming(w),
+    },
+  ];
+  const kernelMenu = (origin: string, state?: KernelState): MenuEntry[] => {
+    const host = new URL(origin).host;
+    const here = origin === kernel.here;
     return [
-      ...(here
-        ? []
-        : [
-            {
-              title: `Switch to ${keptName(w)}`,
-              icon: "arrow-right-left",
-              onPress: () => open(w),
-            },
-          ]),
-      {
-        title: "Rename on this phone",
-        icon: "pencil",
-        onPress: () => setRenaming(w),
-      },
-      ...(here || state?.state === "signed-out"
-        ? []
-        : [
+      ...(state === "ready" && !unsigned
+        ? [
             {
               title: "Sign out",
               icon: "log-out",
-              onPress: () => void act(() => kernel.signOut(w)),
+              onPress: () =>
+                void act(async () => {
+                  if (!here) return kernel.signOut(origin);
+                  if (session && !session.chat.canLeave())
+                    throw new Error(
+                      "Wait for pending chat messages before signing out.",
+                    );
+                  await auth?.signOut();
+                }),
             },
-          ]),
-      { divider: true },
+            { divider: true as const },
+          ]
+        : []),
       {
         title: "Remove from this phone",
         icon: "trash-2",
         tone: "danger" as const,
         onPress: () =>
-          Alert.alert(`Remove ${keptName(w)} from this phone?`, undefined, [
+          Alert.alert(`Remove ${host} from this phone?`, undefined, [
             { text: "Cancel", style: "cancel" },
             {
               text: "Remove",
               style: "destructive",
-              onPress: () => void act(() => kernel.forget(w)),
+              onPress: () => void act(() => kernel.forget(origin)),
             },
           ]),
       },
@@ -111,42 +130,54 @@ export default function Workspaces() {
         {error ? (
           <Text className="text-sm text-destructive">{error}</Text>
         ) : null}
-        {kernels.map((origin) => {
+        {kernel.kernels.map(({ kernel: origin, multi }) => {
           const mine = kernel.workspaces.filter((w) => w.kernel === origin);
-          const offline = mine.every(
-            (w) =>
-              keptKey(w) !== current &&
-              kernel.elsewhere[keptKey(w)]?.state === "offline",
-          );
-          const more = kernel.available[origin] ?? [];
+          const state = stateOf(origin);
+          const host = new URL(origin).host;
           return (
             <View key={origin} className="gap-1.5 pt-3">
-              <View className="flex-row items-center gap-2 px-0.5">
+              <View className="flex-row items-center gap-2 pl-0.5">
                 <View
                   className={cn(
                     "size-1.5 rounded-full",
-                    offline ? "bg-faint" : "bg-success",
+                    state === "ready" ? "bg-success" : "bg-faint",
                   )}
                 />
-                <Text className="font-mono text-[12px] text-muted-foreground">
-                  {new URL(origin).host}
-                  {offline ? " · offline" : ""}
+                <Text
+                  numberOfLines={1}
+                  className="min-w-0 flex-1 font-mono text-[12px] text-muted-foreground"
+                >
+                  {host}
+                  {state === "offline"
+                    ? " · offline"
+                    : state === "signed-out"
+                      ? " · signed out"
+                      : ""}
                 </Text>
+                {state === "signed-out" ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    hitSlop={8}
+                    onPress={() => void act(() => kernel.openKernel(origin))}
+                  >
+                    <Text className="text-[14px] font-semibold text-human-foreground">
+                      Sign in
+                    </Text>
+                  </Pressable>
+                ) : null}
+                <Menu label={host} items={kernelMenu(origin, state)} />
               </View>
               <View className="overflow-hidden rounded-md border border-border bg-card">
                 {mine.map((w, i) => {
                   const here = keptKey(w) === current;
-                  const state = kernel.elsewhere[keptKey(w)];
-                  const dimmed =
-                    !here &&
-                    (state?.state === "signed-out" ||
-                      state?.state === "offline");
+                  const status = kernel.elsewhere[keptKey(w)];
+                  const dimmed = !here && state !== "ready";
                   const waiting =
-                    state?.state === "ready"
-                      ? state.requests + state.unread
+                    status?.state === "ready"
+                      ? status.requests + status.unread
                       : 0;
                   return (
-                    <RowMenu key={keptKey(w)} items={menu(w)}>
+                    <RowMenu key={keptKey(w)} items={workspaceMenu(w)}>
                       <Pressable
                         accessibilityRole="button"
                         accessibilityState={{ selected: here }}
@@ -175,15 +206,11 @@ export default function Workspaces() {
                             numberOfLines={1}
                             className="text-[13px] text-muted-foreground"
                           >
-                            {line(here, state)}
+                            {line(here, status)}
                           </Text>
                         </View>
                         {here ? (
                           <CheckIcon color={tick} size={18} strokeWidth={2.2} />
-                        ) : state?.state === "signed-out" ? (
-                          <Text className="text-[14px] font-semibold text-human-foreground">
-                            Sign in
-                          </Text>
                         ) : waiting ? (
                           <Waiting count={waiting} />
                         ) : null}
@@ -191,25 +218,28 @@ export default function Workspaces() {
                     </RowMenu>
                   );
                 })}
-                {more.map((w) => (
+                {multi && state === "ready" ? (
                   <Pressable
-                    key={w.id}
                     accessibilityRole="button"
-                    onPress={() => void act(() => kernel.open(origin, w))}
-                    className="min-h-14 flex-row items-center gap-3 border-t border-border bg-card px-3.5 py-2.5 active:bg-accent"
+                    onPress={() =>
+                      router.push({
+                        pathname: "/workspace-new",
+                        params: { kernel: origin },
+                      })
+                    }
+                    className={cn(
+                      "min-h-12 flex-row items-center gap-3 bg-card px-3.5 py-2.5 active:bg-accent",
+                      mine.length > 0 && "border-t border-border",
+                    )}
                   >
-                    <WorkspaceMark id={w.id} name={w.name} />
-                    <Text
-                      numberOfLines={1}
-                      className="min-w-0 flex-1 text-[15px] font-medium"
-                    >
-                      {w.name}
-                    </Text>
-                    <Text className="text-[14px] font-semibold text-human-foreground">
-                      Add
+                    <View className="size-9 items-center justify-center">
+                      <PlusIcon color={muted} size={18} strokeWidth={2} />
+                    </View>
+                    <Text className="text-[15px] text-muted-foreground">
+                      New workspace
                     </Text>
                   </Pressable>
-                ))}
+                ) : null}
               </View>
             </View>
           );
@@ -220,7 +250,7 @@ export default function Workspaces() {
             onPress={() => router.push("/workspace-add")}
           >
             <PlusIcon color={ink} size={17} strokeWidth={2} />
-            <Text>Add workspace</Text>
+            <Text>Connect a kernel</Text>
           </Button>
         </View>
       </ScrollView>

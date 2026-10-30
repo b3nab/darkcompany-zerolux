@@ -1,8 +1,8 @@
 import "../global.css";
 import { PortalHost } from "@rn-primitives/portal";
-import { Stack } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { AppState } from "react-native";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -45,14 +45,28 @@ export default function Layout() {
 
 function Navigator() {
   const background = useCSSVariable("--color-background");
-  const { url } = useKernel();
+  const { url, here } = useKernel();
   const auth = useAuthentication();
-  // Signed in, or a kernel without sign-in at all.
-  const authorized = Boolean(
-    url &&
-    (auth?.identity?.actor_id ||
-      (auth?.health && !requiresSignIn(auth.health))),
-  );
+  const unsigned = Boolean(auth?.health && !requiresSignIn(auth.health));
+  // Signed in to the open kernel, or a kernel without sign-in at all.
+  const signedIn = Boolean(here && (auth?.identity || unsigned));
+  // In the open workspace, as its person.
+  const authorized = Boolean(url && (auth?.member?.actor_id || unsigned));
+  // A change of access opens where it leads, also from a sheet left open over a screen it closed.
+  const router = useRouter();
+  const access = authorized
+    ? "/"
+    : signedIn
+      ? "/start"
+      : here
+        ? "/auth"
+        : "/connect";
+  const was = useRef(access);
+  useEffect(() => {
+    if (was.current === access) return;
+    was.current = access;
+    router.replace(access);
+  }, [access, router]);
   return (
     <Stack
       screenOptions={{
@@ -100,14 +114,18 @@ function Navigator() {
         <Stack.Screen name="piece" />
         <Stack.Screen name="action" options={{ presentation: "modal" }} />
       </Stack.Protected>
-      <Stack.Protected guard={Boolean(url) && !authorized}>
+      <Stack.Protected guard={Boolean(here) && !signedIn}>
         <Stack.Screen name="auth" />
       </Stack.Protected>
-      <Stack.Protected guard={!url}>
+      {/* Signed in: the kernel's workspaces to open, join or create. */}
+      <Stack.Protected guard={signedIn && !authorized}>
+        <Stack.Screen name="start" />
+      </Stack.Protected>
+      <Stack.Protected guard={!here}>
         <Stack.Screen name="connect" />
       </Stack.Protected>
-      {/* The workspaces on this phone, open or still to sign in to. */}
-      <Stack.Protected guard={Boolean(url)}>
+      {/* The kernels and workspaces on this phone, open or still to sign in to. */}
+      <Stack.Protected guard={Boolean(here)}>
         <Stack.Screen
           name="workspaces"
           options={{
@@ -118,6 +136,10 @@ function Navigator() {
         />
         <Stack.Screen
           name="workspace-add"
+          options={{ presentation: "modal" }}
+        />
+        <Stack.Screen
+          name="workspace-new"
           options={{ presentation: "modal" }}
         />
       </Stack.Protected>
