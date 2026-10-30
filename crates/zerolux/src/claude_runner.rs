@@ -478,7 +478,13 @@ impl RunnerLink {
                 "Runner control response too large"
             );
             let response: Value = serde_json::from_slice(&bytes)?;
-            ensure!(response["ok"] == true, "Runner control request was refused");
+            ensure!(
+                response["ok"] == true,
+                "{}",
+                response["error"]
+                    .as_str()
+                    .unwrap_or("Runner control request was refused")
+            );
             Ok(response)
         })
         .await
