@@ -96,8 +96,9 @@ when due (one-day update age). Private authorization checks never extend them.
 - Web uses HttpOnly session cookies. Cookies are named per workspace, since
   cookies do not distinguish two ports on the same host.
 - Desktop/mobile use the signed session token in `set-auth-token`, not the raw
-  token in a JSON response. Tokens are scoped to their verified workspace
-  connection and never transferred to a different kernel. Mobile uses Expo
+  token in a JSON response. A token belongs to the kernel it signed in to,
+  checked by the kernel's id before it is sent, and goes to that kernel's
+  workspaces only, never to a different kernel. Mobile uses Expo
   SecureStore; desktop keeps the token only in the current window's memory and
   signs in again when a window is recreated. No desktop keychain command or
   persistent token store is part of this work.

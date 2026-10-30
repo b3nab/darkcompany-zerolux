@@ -1,34 +1,39 @@
 // In-memory request credentials only. Persistence belongs to each native client's secure store.
 export interface RequestCredential {
-  workspaceId: string;
   token: string | null;
   native: boolean; // native clients never fall back to a browser cookie
 }
 const credentials = new Map<string, RequestCredential>();
 const listeners = new Map<string, Set<() => void>>();
-const key = (kernel: string) => kernel.replace(/\/+$/, "");
+/** A kernel's origin, from any address on it: every workspace's base finds the same sign-in. */
+export function kernelOrigin(address: string) {
+  try {
+    return new URL(address, globalThis.location?.origin).origin;
+  } catch {
+    return address.replace(/\/+$/, "");
+  }
+}
 
-export const requestCredential = (kernel: string) =>
-  credentials.get(key(kernel));
+export const requestCredential = (address: string) =>
+  credentials.get(kernelOrigin(address));
 export function bindCredential(
   kernel: string,
-  workspaceId: string,
   token: string | null,
   native = token !== null,
 ) {
-  const value = { workspaceId, token, native };
-  credentials.set(key(kernel), value);
+  const value = { token, native };
+  credentials.set(kernelOrigin(kernel), value);
   return value;
 }
 export function clearCredential(kernel: string, expected?: RequestCredential) {
-  const origin = key(kernel);
+  const origin = kernelOrigin(kernel);
   // A late 401 from an older login must not clear a newer login.
   if (expected && credentials.get(origin) !== expected) return;
   credentials.delete(origin);
   for (const listener of listeners.get(origin) ?? []) listener();
 }
 export function authenticationRequired(kernel: string, listener: () => void) {
-  const origin = key(kernel);
+  const origin = kernelOrigin(kernel);
   const all = listeners.get(origin) ?? new Set();
   all.add(listener);
   listeners.set(origin, all);

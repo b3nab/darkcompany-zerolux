@@ -1,5 +1,4 @@
 import { afterEach, expect, test } from "bun:test";
-import { readInstance } from "./auth";
 import { request, setKernelFetch } from "./client";
 import { pieceUrl } from "./extension-ui";
 import type { UiPiece } from "./extension-ui";
@@ -20,68 +19,6 @@ afterEach(() => {
   delete (globalThis as { localStorage?: unknown }).localStorage;
 });
 
-/** A kernel that answers its root health with `health`, noting what was asked and how. */
-function answering(health: unknown) {
-  const asked: { url: string; init?: RequestInit }[] = [];
-  setKernelFetch(async (url, init) => {
-    asked.push({ url, init });
-    return Response.json(health);
-  });
-  return asked;
-}
-
-test("a kernel with workspaces-v1 lists its workspaces, each at its base, read with no credentials", async () => {
-  const asked = answering({
-    name: "zerolux",
-    version: "0.0.2",
-    api_version: 2,
-    capabilities: ["workspaces-v1"],
-    workspaces: [
-      { id: "ws-a", name: "Aspen", created_at: 1 },
-      { id: "ws-b", name: "Birch", created_at: 2 },
-    ],
-  });
-  const instance = await readInstance(`${kernel}/w/ws-b`);
-  expect(instance).toEqual({
-    kernel,
-    multi: true,
-    version: "0.0.2",
-    workspaces: [
-      { id: "ws-a", name: "Aspen", base: `${kernel}/w/ws-a` },
-      { id: "ws-b", name: "Birch", base: `${kernel}/w/ws-b` },
-    ],
-  });
-  expect(asked.map((a) => a.url)).toEqual([`${kernel}/api/health`]);
-  expect(asked[0]!.init?.credentials).toBe("omit");
-  expect(asked[0]!.init?.redirect).toBe("error");
-});
-
-test("a kernel without workspaces-v1 is one workspace, at its origin", async () => {
-  answering({
-    api_version: 1,
-    capabilities: ["auth-v1"],
-    workspace: { id: "ws-a", name: "Aspen" },
-    auth: { setup_required: false },
-  });
-  const instance = await readInstance(kernel);
-  expect(instance.multi).toBe(false);
-  expect(instance.workspaces).toEqual([
-    { id: "ws-a", name: "Aspen", base: kernel },
-  ]);
-});
-
-test("an answer that is not a kernel's is refused", async () => {
-  for (const health of [
-    null,
-    { capabilities: ["workspaces-v1"] },
-    { capabilities: ["workspaces-v1"], workspaces: [{ id: "", name: "x" }] },
-    { capabilities: [] },
-  ]) {
-    answering(health);
-    await expect(readInstance(kernel)).rejects.toThrow();
-  }
-});
-
 test("a workspace's base and an address's kernel and workspace", () => {
   expect(workspaceBase(kernel, "ws a")).toBe(`${kernel}/w/ws%20a`);
   expect(workspaceBase(`${kernel}/w/ws-a`, "ws-b")).toBe(`${kernel}/w/ws-b`);
@@ -92,20 +29,18 @@ test("a workspace's base and an address's kernel and workspace", () => {
   expect(workspaceAddress(kernel)).toEqual({ kernel, workspaceId: undefined });
 });
 
-test("the workspace opened is the one chosen last while it is served, else the only one", () => {
-  const instance = (ids: string[]) => ({
-    kernel,
-    multi: true,
-    workspaces: ids.map((id) => ({
+test("the workspace opened is the one chosen last while it is there, else the only one", () => {
+  const workspaces = (ids: string[]) =>
+    ids.map((id) => ({
       id,
       name: id,
       base: workspaceBase(kernel, id),
-    })),
-  });
-  expect(pickWorkspace(instance(["a", "b"]), "b")?.id).toBe("b");
-  expect(pickWorkspace(instance(["a", "b"]), "gone")).toBeUndefined();
-  expect(pickWorkspace(instance(["a", "b"]))).toBeUndefined();
-  expect(pickWorkspace(instance(["a"]), "gone")?.id).toBe("a");
+      owner: true,
+    }));
+  expect(pickWorkspace(workspaces(["a", "b"]), "b")?.id).toBe("b");
+  expect(pickWorkspace(workspaces(["a", "b"]), "gone")).toBeUndefined();
+  expect(pickWorkspace(workspaces(["a", "b"]))).toBeUndefined();
+  expect(pickWorkspace(workspaces(["a"]), "gone")?.id).toBe("a");
 });
 
 test("the workspace chosen is remembered per kernel, and nothing breaks without storage", () => {

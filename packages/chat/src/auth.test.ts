@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import {
   AuthConnection,
   credentialStorageKey,
+  kernelId,
   probeKernel,
   type AuthStorage,
 } from "./auth";
@@ -13,78 +14,126 @@ const originalFetch = globalThis.fetch;
 const clients: AuthConnection[] = [];
 afterEach(() => {
   for (const client of clients.splice(0)) client.dispose();
-  for (const origin of ["https://company.example", "https://other.example"])
+  for (const origin of [
+    "https://company.example",
+    "https://other.example",
+    "http://192.168.1.10:4310",
+  ])
     clearCredential(origin);
   globalThis.fetch = originalFetch;
   setKernelFetch();
 });
 
-function fixture(
+const KERNEL = "https://company.example";
+
+/**
+ * A fake kernel: `instance` signs in once for all its workspaces at /w/<id>; `older` serves one
+ * workspace at its origin with its own sign-in; `unsigned` has no sign-in at all.
+ */
+function fixture({
   native = true,
-  expected = "workspace-a",
-  kernel = "https://company.example",
-) {
+  expected = "instance-a",
+  kernel = KERNEL,
+  kind = "instance" as "instance" | "older" | "unsigned",
+} = {}) {
   const saved = new Map<string, string>();
   const reads: string[] = [];
   const calls: { url: string; init: RequestInit }[] = [];
   const state = {
-    workspace: "workspace-a",
+    kind,
+    id: "instance-a",
+    accounts: false,
     signed: false,
-    bound: false,
-    setup: true,
+    members: new Set<string>(),
+    workspaces: [] as { id: string; name: string; owner: boolean }[],
     unavailable: false,
     nativeHeader: true,
     identityUnauthorized: false,
     claimUnavailable: false,
-    legacy: false,
   };
   const storage: AuthStorage = {
-    async read(kernel, id) {
-      const key = credentialStorageKey(kernel, id);
+    async read(kernel) {
+      const key = credentialStorageKey(kernel);
       reads.push(key);
       return saved.get(key) ?? null;
     },
-    async write(kernel, id, token) {
-      const key = credentialStorageKey(kernel, id);
+    async write(kernel, token) {
+      const key = credentialStorageKey(kernel);
       if (token) saved.set(key, token);
       else saved.delete(key);
     },
   };
-  const identity = () => ({
-    user: { id: "auth-subject", name: "Owner", email: "owner@example.test" },
-    actor_id: state.bound ? "existing-owner" : null,
-    setup_required: state.setup,
-  });
+  const user = {
+    id: "auth-subject",
+    name: "Owner",
+    email: "owner@example.test",
+  };
+  // An older kernel's one workspace is the kernel itself: bound once its owner claims it.
+  const person = (id: string) => {
+    const owned = state.workspaces.find((w) => w.id === id)?.owner ?? false;
+    return {
+      user,
+      actor_id: state.members.has(id) ? `person-${id}` : null,
+      owner: state.members.has(id) && (state.kind === "older" || owned),
+      setup_required: state.kind === "older" && !state.members.has(id),
+    };
+  };
   globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
     calls.push({ url, init });
-    const path = new URL(url).pathname;
+    const full = new URL(url).pathname;
+    const scoped = /^\/w\/([^/]+)(\/api\/.*)$/.exec(full);
+    const workspace = scoped ? decodeURIComponent(scoped[1]!) : undefined;
+    const path = scoped ? scoped[2]! : full;
+    const json = init.body ? (JSON.parse(String(init.body)) as unknown) : {};
     if (state.unavailable)
       return Response.json({ error: "Unavailable" }, { status: 503 });
     if (path === "/api/health")
-      return state.legacy
-        ? Response.json({
-            api_version: 1,
-            capabilities: ["chat-v1"],
-            workspace: { id: state.workspace, name: "Company" },
-          })
-        : Response.json({
-            api_version: 2,
-            capabilities: ["auth-v1", "chat-v1"],
-            workspace: { id: state.workspace, name: "Company" },
-            auth: { setup_required: state.setup },
-          });
+      return Response.json(
+        state.kind === "instance"
+          ? {
+              api_version: 3,
+              capabilities: ["workspaces-v1", "instance-auth-v1"],
+              instance: { id: state.id },
+              auth: { setup_required: !state.accounts },
+            }
+          : state.kind === "older"
+            ? {
+                api_version: 2,
+                capabilities: ["auth-v1", "chat-v1"],
+                workspace: { id: state.id, name: "Company" },
+                auth: { setup_required: !state.members.has(state.id) },
+              }
+            : {
+                api_version: 1,
+                capabilities: ["chat-v1"],
+                workspace: { id: state.id, name: "Company" },
+              },
+      );
     if (path === "/api/auth/get-session")
       return Response.json(
         state.signed ? { session: { id: "session" } } : null,
       );
-    if (path === "/api/auth/identity")
-      return state.identityUnauthorized
-        ? Response.json({ error: "Unauthorized" }, { status: 401 })
-        : Response.json(identity());
-    if (path === "/api/auth/sign-up/email" && !state.setup)
-      return Response.json({ error: "Sign in instead" }, { status: 403 });
+    if (path === "/api/auth/identity") {
+      if (state.identityUnauthorized || !state.signed)
+        return Response.json({ error: "Unauthorized" }, { status: 401 });
+      if (workspace) return Response.json(person(workspace));
+      return Response.json(
+        state.kind === "older"
+          ? person(state.id)
+          : { user, setup_required: !state.accounts },
+      );
+    }
+    const invited =
+      new Headers(init.headers).get("x-zerolux-invite") === "invite-1";
+    if (path === "/api/auth/sign-up/email") {
+      const open =
+        state.kind === "older" ? !state.members.has(state.id) : !state.accounts;
+      if (!open && !invited)
+        return Response.json({ error: "Sign in instead" }, { status: 403 });
+    }
     if (["/api/auth/sign-in/email", "/api/auth/sign-up/email"].includes(path)) {
       state.signed = true;
+      state.accounts = true;
       return Response.json(
         { token: "raw-not-for-native-storage" },
         {
@@ -99,11 +148,37 @@ function fixture(
         return Response.json({ error: "Unavailable" }, { status: 503 });
       if (!state.signed)
         return Response.json({ error: "Unauthorized" }, { status: 401 });
-      if (!state.setup)
-        return Response.json({ error: "Owner already bound" }, { status: 403 });
-      state.bound = true;
-      state.setup = false;
-      return Response.json(identity());
+      const id = workspace ?? state.id;
+      const invite = (json as { invite?: string }).invite;
+      if (state.members.has(id) || (!invite && state.kind === "instance"))
+        return Response.json({ error: "Not this way" }, { status: 409 });
+      if (invite && invite !== "invite-1")
+        return Response.json({ error: "Gone" }, { status: 410 });
+      state.members.add(id);
+      return Response.json(person(id));
+    }
+    if (path.startsWith("/api/auth/invites/"))
+      return Response.json({
+        invitation: { workspace: "Birch", invited_by: "Owner", expires_at: 1 },
+      });
+    if (path === "/api/workspaces" && !workspace) {
+      if (!state.signed)
+        return Response.json({ error: "Unauthorized" }, { status: 401 });
+      if (init.method === "POST") {
+        const created = {
+          id: `ws-${state.workspaces.length + 1}`,
+          name: (json as { name: string }).name,
+          owner: true,
+        };
+        state.workspaces.push(created);
+        state.members.add(created.id);
+        return Response.json({ workspace: { ...created, created_at: 1 } });
+      }
+      return Response.json({
+        workspaces: state.workspaces
+          .filter((w) => state.members.has(w.id))
+          .map((w) => ({ ...w, created_at: 1 })),
+      });
     }
     if (path === "/api/auth/list-sessions")
       return Response.json([
@@ -122,44 +197,40 @@ function fixture(
     native ? storage : undefined,
   );
   clients.push(client);
-  return { client, state, calls, saved, reads, storage };
+  const sent = (path: string) =>
+    calls.filter((call) => new URL(call.url).pathname === path);
+  const bearer = (call: { init: RequestInit } | undefined) =>
+    call ? new Headers(call.init.headers).get("authorization") : undefined;
+  return { client, state, calls, saved, reads, storage, sent, bearer };
 }
 
-test("a native connection verifies workspace identity before loading or sending any credential", async () => {
+test("a native connection verifies the kernel's identity before loading or sending any credential", async () => {
   const f = fixture();
-  f.saved.set(
-    credentialStorageKey("https://company.example", "workspace-a"),
-    "saved.session",
-  );
+  f.saved.set(credentialStorageKey(KERNEL), "saved.session");
   f.state.signed = true;
   await f.client.restore();
-  expect(f.calls[0]!.url).toBe("https://company.example/api/health");
+  expect(f.calls[0]!.url).toBe(`${KERNEL}/api/health`);
   expect(f.calls[0]!.init.credentials).toBe("omit");
   expect(f.calls[0]!.init.headers).toBeUndefined();
   expect(f.reads).toHaveLength(1);
-  expect(new Headers(f.calls[1]!.init.headers).get("authorization")).toBe(
-    "Bearer saved.session",
-  );
+  expect(f.bearer(f.calls[1])).toBe("Bearer saved.session");
 });
 
-test("a reused address serving another workspace never receives the saved credential", async () => {
+test("a reused address serving another kernel never receives the saved credential", async () => {
   const f = fixture();
-  f.saved.set(
-    credentialStorageKey("https://company.example", "workspace-a"),
-    "saved.session",
-  );
-  f.state.workspace = "workspace-b";
+  f.saved.set(credentialStorageKey(KERNEL), "saved.session");
+  f.state.id = "instance-b";
   await expect(f.client.restore()).rejects.toThrow();
   expect(f.reads).toHaveLength(0);
   expect(f.calls).toHaveLength(1);
   expect(f.calls[0]!.init.credentials).toBe("omit");
 });
 
-test("a changed workspace disconnects an active credential and cannot accept a subsequent password", async () => {
-  const f = fixture(true, ""); // Even a connection without an externally supplied expected ID pins its first identity.
+test("a changed kernel identity disconnects an active credential and cannot accept a subsequent password", async () => {
+  const f = fixture({ expected: "" }); // Without an expected ID, the first identity is pinned.
   await f.client.restore();
   await f.client.signIn("owner@example.test", "fixture password");
-  f.state.workspace = "workspace-b";
+  f.state.id = "instance-b";
   for (let i = 0; i < 2; i++)
     await expect(f.client.restore()).rejects.toThrow();
   const count = f.calls.length;
@@ -170,11 +241,185 @@ test("a changed workspace disconnects an active credential and cannot accept a s
     f.client.signUp("Owner", "owner@example.test", "do not send this"),
   ).rejects.toThrow();
   expect(f.calls).toHaveLength(count);
-  await request("https://company.example", "/workspace");
-  expect(new Headers(f.calls.at(-1)!.init.headers).has("authorization")).toBe(
-    false,
-  );
+  await request(`${KERNEL}/w/ws-1`, "/workspace");
+  expect(f.bearer(f.calls.at(-1))).toBeNull();
   expect(f.calls.at(-1)!.init.credentials).toBe("omit");
+});
+
+test("the first kernels with several workspaces, which signed in to each apart, are refused before any credential", async () => {
+  const f = fixture();
+  f.saved.set(credentialStorageKey(KERNEL), "saved.session");
+  globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
+    f.calls.push({ url, init });
+    return Response.json({
+      api_version: 2,
+      capabilities: ["workspaces-v1", "auth-v1"],
+      workspaces: [{ id: "ws-1", name: "Aspen", created_at: 1 }],
+    });
+  }) as unknown as typeof fetch;
+  await expect(f.client.restore()).rejects.toThrow();
+  expect(f.reads).toHaveLength(0);
+  expect(f.calls).toHaveLength(1);
+});
+
+test("an answer that is not a kernel's is refused", async () => {
+  for (const health of [
+    null,
+    { capabilities: [] },
+    { capabilities: ["instance-auth-v1"], auth: { setup_required: false } },
+    { capabilities: ["instance-auth-v1"], instance: { id: "instance-a" } },
+  ]) {
+    globalThis.fetch = (async () =>
+      Response.json(health)) as unknown as typeof fetch;
+    await expect(probeKernel(KERNEL)).rejects.toThrow();
+  }
+});
+
+test("the first account signs up at the kernel's root and creates a workspace it owns, at its base", async () => {
+  const f = fixture();
+  const { health } = await f.client.restore();
+  expect(health.auth.setup_required).toBe(true);
+  expect(kernelId(health)).toBe("instance-a");
+  const account = await f.client.signUp(
+    " Owner ",
+    " owner@example.test ",
+    "test password only",
+  );
+  expect(account.user.email).toBe("owner@example.test");
+  expect(await f.client.workspaces()).toEqual([]);
+  const created = await f.client.createWorkspace(" Aspen ");
+  expect(created).toEqual({
+    id: "ws-1",
+    name: "Aspen",
+    base: `${KERNEL}/w/ws-1`,
+    owner: true,
+  });
+  expect(await f.client.workspaces()).toEqual([created]);
+  expect((await f.client.identity(created.base)).actor_id).toBe("person-ws-1");
+  const signup = f.sent("/api/auth/sign-up/email")[0]!;
+  expect(JSON.parse(String(signup.init.body))).toEqual({
+    name: "Owner",
+    email: "owner@example.test",
+    password: "test password only",
+  });
+  expect([...new Headers(signup.init.headers).keys()]).toEqual([
+    "content-type",
+  ]);
+  const create = f
+    .sent("/api/workspaces")
+    .find((c) => c.init.method === "POST")!;
+  expect(JSON.parse(String(create.init.body))).toEqual({ name: "Aspen" });
+  expect(f.bearer(create)).toBe("Bearer signed.session");
+});
+
+test("a workspace is created in a folder of the kernel's computer when one is given", async () => {
+  const f = fixture();
+  await f.client.restore();
+  await f.client.signUp("Owner", "owner@example.test", "fixture password");
+  await f.client.createWorkspace("Birch", "/projects/birch");
+  const create = f
+    .sent("/api/workspaces")
+    .find((c) => c.init.method === "POST")!;
+  expect(JSON.parse(String(create.init.body))).toEqual({
+    name: "Birch",
+    folder: "/projects/birch",
+  });
+});
+
+test("one sign-in serves every workspace of its kernel, and no other kernel", async () => {
+  const f = fixture();
+  await f.client.restore();
+  await f.client.signIn("owner@example.test", "test password only");
+  expect(f.saved.get(credentialStorageKey(KERNEL))).toBe("signed.session");
+  await request(`${KERNEL}/w/ws-1`, "/workspace");
+  await request(`${KERNEL}/w/ws-2`, "/workspace");
+  await request("https://other.example/w/ws-1", "/workspace");
+  await request(KERNEL, "/health");
+  const recent = f.calls.slice(-4);
+  expect(recent.map(f.bearer)).toEqual([
+    "Bearer signed.session",
+    "Bearer signed.session",
+    null,
+    null,
+  ]);
+  expect(recent.every((c) => c.init.credentials === "omit")).toBe(true);
+  expect(f.calls.every((c) => c.init.redirect === "error")).toBe(true);
+});
+
+test("a refused credential in any workspace signs the device out of the whole kernel", async () => {
+  const f = fixture();
+  await f.client.restore();
+  await f.client.signIn("owner@example.test", "test password only");
+  let required = 0;
+  f.client.onRequired(() => required++);
+  globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
+    f.calls.push({ url, init });
+    return Response.json({ error: "Expired" }, { status: 401 });
+  }) as unknown as typeof fetch;
+  await expect(request(`${KERNEL}/w/ws-2`, "/workspace")).rejects.toThrow();
+  expect(required).toBe(1);
+  await expect(request(`${KERNEL}/w/ws-1`, "/workspace")).rejects.toThrow();
+  expect(f.bearer(f.calls.at(-1))).toBeNull();
+});
+
+test("a new person signs up with an invitation at the root and joins its workspace with a claim there", async () => {
+  const f = fixture();
+  f.state.accounts = true;
+  f.state.workspaces.push({ id: "ws-2", name: "Birch", owner: false });
+  await f.client.restore();
+  const base = `${KERNEL}/w/ws-2`;
+  expect((await f.client.invitation(base, "invite-1")).workspace).toBe("Birch");
+  await expect(
+    f.client.signUp("Maple", "maple@example.test", "fixture password"),
+  ).rejects.toMatchObject({ status: 403 });
+  await f.client.signUp(
+    "Maple",
+    "maple@example.test",
+    "fixture password",
+    "invite-1",
+  );
+  const joined = await f.client.claim(base, "invite-1");
+  expect(joined.actor_id).toBe("person-ws-2");
+  expect(joined.owner).toBe(false);
+  expect((await f.client.workspaces()).map((w) => w.id)).toEqual(["ws-2"]);
+  const signup = f.sent("/api/auth/sign-up/email").at(-1)!;
+  expect(new Headers(signup.init.headers).get("x-zerolux-invite")).toBe(
+    "invite-1",
+  );
+  const claim = f.sent("/w/ws-2/api/auth/claim")[0]!;
+  expect(JSON.parse(String(claim.init.body))).toEqual({ invite: "invite-1" });
+  expect(f.bearer(claim)).toBe("Bearer signed.session");
+  expect(f.sent("/w/ws-2/api/auth/invites/invite-1")).toHaveLength(1);
+});
+
+test("an account already signed in joins another workspace with only a claim", async () => {
+  const f = fixture();
+  f.state.accounts = true;
+  f.state.workspaces.push(
+    { id: "ws-1", name: "Aspen", owner: true },
+    { id: "ws-2", name: "Birch", owner: false },
+  );
+  f.state.members.add("ws-1");
+  await f.client.restore();
+  await f.client.signIn("owner@example.test", "fixture password");
+  await f.client.claim(`${KERNEL}/w/ws-2`, "invite-1");
+  expect(f.sent("/api/auth/sign-up/email")).toHaveLength(0);
+  expect(await f.client.workspaces()).toEqual([
+    { id: "ws-1", name: "Aspen", base: `${KERNEL}/w/ws-1`, owner: true },
+    { id: "ws-2", name: "Birch", base: `${KERNEL}/w/ws-2`, owner: false },
+  ]);
+});
+
+test("a workspace on another kernel never gets this kernel's sign-in", async () => {
+  const f = fixture();
+  await f.client.restore();
+  await f.client.signIn("owner@example.test", "fixture password");
+  const count = f.calls.length;
+  const elsewhere = "https://other.example/w/ws-1";
+  await expect(f.client.identity(elsewhere)).rejects.toThrow();
+  await expect(f.client.claim(elsewhere, "invite-1")).rejects.toThrow();
+  await expect(f.client.invitation(elsewhere, "invite-1")).rejects.toThrow();
+  expect(f.calls).toHaveLength(count);
 });
 
 test("revocation between get-session and identity forgets the expired native credential", async () => {
@@ -184,10 +429,8 @@ test("revocation between get-session and identity forgets the expired native cre
   f.state.identityUnauthorized = true;
   expect((await f.client.restore()).identity).toBeNull();
   expect(f.saved.size).toBe(0);
-  await request("https://company.example", "/workspace");
-  expect(new Headers(f.calls.at(-1)!.init.headers).has("authorization")).toBe(
-    false,
-  );
+  await request(`${KERNEL}/w/ws-1`, "/workspace");
+  expect(f.bearer(f.calls.at(-1))).toBeNull();
 });
 
 test("the selected native transport carries auth and domain requests with no redirects or cookies", async () => {
@@ -197,38 +440,17 @@ test("the selected native transport carries auth and domain requests with no red
   globalThis.fetch = (() => {
     throw new Error("The RN/XHR compatibility transport must not be used");
   }) as unknown as typeof fetch;
-  await probeKernel("https://company.example");
+  await probeKernel(`${KERNEL}/w/ws-1`);
   await f.client.restore();
   await f.client.signIn("owner@example.test", "fixture password");
-  await request("https://company.example", "/workspace");
+  await request(`${KERNEL}/w/ws-1`, "/workspace");
   expect(
     f.calls.every(
       (c) => c.init.redirect === "error" && c.init.credentials === "omit",
     ),
   ).toBe(true);
-  expect(new Headers(f.calls.at(-1)!.init.headers).get("authorization")).toBe(
-    "Bearer signed.session",
-  );
-});
-
-test("native login stores only the signed response header and scopes API requests to its kernel", async () => {
-  const f = fixture();
-  expect((await f.client.restore()).identity).toBeNull();
-  await f.client.signIn("owner@example.test", "test password only");
-  expect(
-    f.saved.get(credentialStorageKey("https://company.example", "workspace-a")),
-  ).toBe("signed.session");
-  await request("https://company.example", "/workspace");
-  await request("https://other.example", "/workspace");
-  await request("https://company.example", "/health");
-  const recent = f.calls.slice(-3);
-  expect(new Headers(recent[0]!.init.headers).get("authorization")).toBe(
-    "Bearer signed.session",
-  );
-  expect(new Headers(recent[1]!.init.headers).has("authorization")).toBe(false);
-  expect(new Headers(recent[2]!.init.headers).has("authorization")).toBe(false);
-  expect(recent.every((c) => c.init.credentials === "omit")).toBe(true);
-  expect(f.calls.every((c) => c.init.redirect === "error")).toBe(true);
+  expect(f.calls[0]!.url).toBe(`${KERNEL}/api/health`);
+  expect(f.bearer(f.calls.at(-1))).toBe("Bearer signed.session");
 });
 
 test("your account changes its password, lists its devices and signs one out, with its own credential", async () => {
@@ -242,8 +464,7 @@ test("your account changes its password, lists its devices and signs one out, wi
   );
   const { devices, current } = await f.client.devices();
   await f.client.signOutDevice("other-token");
-  const sent = (path: string) =>
-    f.calls.find((call) => new URL(call.url).pathname === path)!;
+  const sent = (path: string) => f.sent(path)[0]!;
   expect(
     JSON.parse(String(sent("/api/auth/change-password").init.body)),
   ).toEqual({
@@ -255,17 +476,13 @@ test("your account changes its password, lists its devices and signs one out, wi
   expect(current).toBe("session");
   expect(
     JSON.parse(String(sent("/api/auth/revoke-session").init.body)),
-  ).toEqual({
-    token: "other-token",
-  });
+  ).toEqual({ token: "other-token" });
   for (const path of [
     "/api/auth/change-password",
     "/api/auth/list-sessions",
     "/api/auth/revoke-session",
   ])
-    expect(new Headers(sent(path).init.headers).get("authorization")).toBe(
-      "Bearer signed.session",
-    );
+    expect(f.bearer(sent(path))).toBe("Bearer signed.session");
 });
 
 test("a missing native token header is an error, never an apparent successful login", async () => {
@@ -278,90 +495,20 @@ test("a missing native token header is an error, never an apparent successful lo
   expect(f.saved.size).toBe(0);
 });
 
-test("signup sends only account details and claims the existing owner with a bodyless POST", async () => {
-  const f = fixture();
-  await f.client.restore();
-  const identity = await f.client.signUp(
-    " Owner ",
-    " owner@example.test ",
-    "test password only",
-  );
-  expect(identity.actor_id).toBe("existing-owner");
-  expect(identity.setup_required).toBe(false);
-  const signup = f.calls.find((c) => c.url.endsWith("/sign-up/email"))!;
-  expect(signup.init.method).toBe("POST");
-  expect(JSON.parse(signup.init.body as string)).toEqual({
-    name: "Owner",
-    email: "owner@example.test",
-    password: "test password only",
-  });
-  expect([...new Headers(signup.init.headers).keys()]).toEqual([
-    "content-type",
-  ]);
-  const claim = f.calls.find((c) => c.url.endsWith("/claim"))!;
-  expect(claim.init.method).toBe("POST");
-  expect(claim.init.body).toBeUndefined();
-  expect(Object.fromEntries(new Headers(claim.init.headers))).toEqual({
-    authorization: "Bearer signed.session",
-  });
-});
-
-test("an interrupted claim can finish after signing in without registering again", async () => {
-  const f = fixture();
-  await f.client.restore();
-  f.state.claimUnavailable = true;
-  await expect(
-    f.client.signUp("Owner", "owner@example.test", "fixture password"),
-  ).rejects.toMatchObject({ status: 503 });
-  expect(f.state.bound).toBe(false);
-  f.state.claimUnavailable = false;
-  const signedIn = await f.client.signIn(
-    "owner@example.test",
-    "fixture password",
-  );
-  expect(signedIn.actor_id).toBeNull();
-  expect((await f.client.claim()).actor_id).toBe("existing-owner");
-  expect(f.calls.filter((c) => c.url.endsWith("/sign-up/email"))).toHaveLength(
-    1,
-  );
-});
-
-test("closed registration stays a failure and never attempts a claim", async () => {
-  const f = fixture();
-  f.state.setup = false;
-  const restored = await f.client.restore();
-  expect(restored.health.auth.setup_required).toBe(false);
-  await expect(
-    f.client.signUp("Other", "other@example.test", "fixture password"),
-  ).rejects.toMatchObject({ status: 403 });
-  expect(f.calls.some((c) => c.url.endsWith("/claim"))).toBe(false);
-  expect(f.saved.size).toBe(0);
-});
-
-test("browser signup claims through its cookie session without a request body", async () => {
-  const f = fixture(false);
-  await f.client.restore();
-  expect(
-    (await f.client.signUp("Owner", "owner@example.test", "fixture password"))
-      .actor_id,
-  ).toBe("existing-owner");
-  const claim = f.calls.find((c) => c.url.endsWith("/claim"))!;
-  expect(claim.init.method).toBe("POST");
-  expect(claim.init.body).toBeUndefined();
-  expect(claim.init.credentials).toBe("same-origin");
-  expect([...new Headers(claim.init.headers).keys()]).toEqual([]);
-});
-
-test("browser login uses cookies, without saving a bearer or sending it with domain requests", async () => {
-  const f = fixture(false);
+test("browser sign-in and claim use the cookie session, without saving or sending a bearer", async () => {
+  const f = fixture({ native: false });
+  f.state.accounts = true;
+  f.state.workspaces.push({ id: "ws-2", name: "Birch", owner: false });
   await f.client.restore();
   await f.client.signIn("owner@example.test", "test password only");
-  await request("https://company.example", "/workspace");
+  await f.client.claim(`${KERNEL}/w/ws-2`, "invite-1");
+  await request(`${KERNEL}/w/ws-2`, "/workspace");
   expect(f.saved.size).toBe(0);
+  const claim = f.sent("/w/ws-2/api/auth/claim")[0]!;
+  expect(claim.init.credentials).toBe("same-origin");
+  expect(f.bearer(claim)).toBeNull();
   expect(f.calls.at(-1)!.init.credentials).toBe("same-origin");
-  expect(new Headers(f.calls.at(-1)!.init.headers).has("authorization")).toBe(
-    false,
-  );
+  expect(f.bearer(f.calls.at(-1))).toBeNull();
 });
 
 test("logout revokes remotely before forgetting a native credential; an outage is not a successful logout", async () => {
@@ -374,10 +521,8 @@ test("logout revokes remotely before forgetting a native credential; an outage i
   f.state.unavailable = false;
   await f.client.signOut();
   expect(f.saved.size).toBe(0);
-  await request("https://company.example", "/workspace");
-  expect(new Headers(f.calls.at(-1)!.init.headers).has("authorization")).toBe(
-    false,
-  );
+  await request(`${KERNEL}/w/ws-1`, "/workspace");
+  expect(f.bearer(f.calls.at(-1))).toBeNull();
   expect(f.calls.at(-1)!.init.credentials).toBe("omit");
 });
 
@@ -385,9 +530,7 @@ test("a native client without a stored token does not try a stale cookie session
   const f = fixture();
   f.state.signed = true; // a hypothetical stale native cookie jar
   expect((await f.client.restore()).identity).toBeNull();
-  expect(f.calls.map((c) => c.url)).toEqual([
-    "https://company.example/api/health",
-  ]);
+  expect(f.calls.map((c) => c.url)).toEqual([`${KERNEL}/api/health`]);
 });
 
 test("a late unauthorized response cannot erase a newer login", async () => {
@@ -396,11 +539,11 @@ test("a late unauthorized response cannot erase a newer login", async () => {
     new Promise<Response>((resolve) => {
       complete = resolve;
     })) as unknown as typeof fetch;
-  bindCredential("https://company.example", "workspace-a", "old.session");
-  const pending = request("https://company.example", "/workspace").catch(
+  bindCredential(KERNEL, "old.session");
+  const pending = request(`${KERNEL}/w/ws-1`, "/workspace").catch(
     (error: unknown) => error,
   );
-  bindCredential("https://company.example", "workspace-a", "new.session");
+  bindCredential(KERNEL, "new.session");
   complete(Response.json({ error: "Expired" }, { status: 401 }));
   await pending;
   const sent: (string | null)[] = [];
@@ -408,30 +551,20 @@ test("a late unauthorized response cannot erase a newer login", async () => {
     sent.push(new Headers(init.headers).get("authorization"));
     return Response.json({});
   }) as unknown as typeof fetch;
-  await request("https://company.example", "/workspace");
+  await request(`${KERNEL}/w/ws-2`, "/workspace");
   expect(sent).toEqual(["Bearer new.session"]);
 });
 
 test("native authentication works on an explicitly selected LAN HTTP connection", async () => {
   const kernel = "http://192.168.1.10:4310";
-  const f = fixture(true, "workspace-a", kernel);
+  const f = fixture({ kernel });
   expect((await f.client.restore()).identity).toBeNull();
-  expect(
-    (
-      await f.client.signUp(
-        "Owner",
-        "owner@example.test",
-        "fixture-only-password",
-      )
-    ).actor_id,
-  ).toBe("existing-owner");
-  expect(f.saved.get(credentialStorageKey(kernel, "workspace-a"))).toBe(
-    "signed.session",
-  );
-  await request(kernel, "/workspace");
-  expect(new Headers(f.calls.at(-1)!.init.headers).get("authorization")).toBe(
-    "Bearer signed.session",
-  );
+  await f.client.signUp("Owner", "owner@example.test", "fixture-only-password");
+  const created = await f.client.createWorkspace("Aspen");
+  expect(created.base).toBe(`${kernel}/w/ws-1`);
+  expect(f.saved.get(credentialStorageKey(kernel))).toBe("signed.session");
+  await request(created.base, "/workspace");
+  expect(f.bearer(f.calls.at(-1))).toBe("Bearer signed.session");
   expect(
     f.calls.every(
       ({ init }) =>
@@ -441,6 +574,38 @@ test("native authentication works on an explicitly selected LAN HTTP connection"
     ),
   ).toBe(true);
   await f.client.signOut();
+  expect(f.saved.size).toBe(0);
+});
+
+test("an older kernel serves one workspace at its origin, set up by the claim of its owner", async () => {
+  const f = fixture({ kind: "older" });
+  const { health } = await f.client.restore();
+  expect(kernelId(health)).toBe("instance-a");
+  expect(health.auth.setup_required).toBe(true);
+  await f.client.signUp("Owner", "owner@example.test", "fixture password");
+  const owner = await f.client.claim(KERNEL);
+  expect(owner.actor_id).toBe("person-instance-a");
+  expect(owner.setup_required).toBe(false);
+  expect(health.auth.setup_required).toBe(false);
+  expect(await f.client.workspaces()).toEqual([
+    { id: "instance-a", name: "Company", base: KERNEL, owner: true },
+  ]);
+  await expect(f.client.createWorkspace("Birch")).rejects.toThrow();
+  const claim = f.sent("/api/auth/claim")[0]!;
+  expect(claim.init.method).toBe("POST");
+  expect(claim.init.body).toBeUndefined();
+  expect(f.saved.get(credentialStorageKey(KERNEL))).toBe("signed.session");
+});
+
+test("closed registration stays a failure and nothing is saved", async () => {
+  const f = fixture();
+  f.state.accounts = true;
+  const restored = await f.client.restore();
+  expect(restored.health.auth.setup_required).toBe(false);
+  await expect(
+    f.client.signUp("Other", "other@example.test", "fixture password"),
+  ).rejects.toMatchObject({ status: 403 });
+  expect(f.sent("/api/auth/identity")).toHaveLength(0);
   expect(f.saved.size).toBe(0);
 });
 
@@ -482,22 +647,18 @@ test("a workspace on a kernel is addressed by its base, and no other path is", (
     expect(() => secureKernelAddress(address)).toThrow();
 });
 
-test("a workspace keeps its secure-store key when its kernel serves it at /w/<id>", () => {
-  expect(
-    credentialStorageKey(
-      "http://192.168.1.10:4310/w/workspace-a",
-      "workspace-a",
-    ),
-  ).toBe(credentialStorageKey("http://192.168.1.10:4310", "workspace-a"));
-});
-
-test("secure-store keys cannot collide across address or workspace, and public auth requires HTTPS", () => {
+test("a kernel's secure-store key is the same from any of its workspaces, and the keys before it stay apart", () => {
+  expect(credentialStorageKey("http://192.168.1.10:4310/w/workspace-a")).toBe(
+    credentialStorageKey("http://192.168.1.10:4310"),
+  );
   const keys = [
+    credentialStorageKey("https://a.example"),
+    credentialStorageKey("https://b.example"),
     credentialStorageKey("https://a.example", "workspace-a"),
     credentialStorageKey("https://a.example", "workspace-b"),
     credentialStorageKey("https://b.example", "workspace-a"),
   ];
-  expect(new Set(keys).size).toBe(3);
+  expect(new Set(keys).size).toBe(5);
   expect(keys.every((key) => /^[a-zA-Z0-9._-]+$/.test(key))).toBe(true);
   expect(secureKernelAddress("http://127.0.0.1:4310")).toBe(
     "http://127.0.0.1:4310",
@@ -509,13 +670,15 @@ test("secure-store keys cannot collide across address or workspace, and public a
 });
 
 test("a kernel without sign-in is used as it is, whatever its version, without credentials", async () => {
-  const { client, state, calls, reads } = fixture(true);
-  state.legacy = true;
-  const result = await client.restore();
+  const f = fixture({ kind: "unsigned" });
+  const result = await f.client.restore();
   expect(result.identity).toBeNull();
   expect(result.health.capabilities).toEqual(["chat-v1"]);
   expect(result.health.auth.setup_required).toBe(false);
+  expect(await f.client.workspaces()).toEqual([
+    { id: "instance-a", name: "Company", base: KERNEL, owner: true },
+  ]);
   // Nothing was read from storage and no sign-in request was made.
-  expect(reads).toEqual([]);
-  expect(calls.map((c) => new URL(c.url).pathname)).toEqual(["/api/health"]);
+  expect(f.reads).toEqual([]);
+  expect(f.calls.map((c) => new URL(c.url).pathname)).toEqual(["/api/health"]);
 });

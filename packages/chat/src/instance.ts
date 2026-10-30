@@ -2,25 +2,17 @@ import { request } from "./client";
 import { isThread, unreadIn } from "./chat";
 import type { Approval, Conversation } from "./chat";
 
-/** A workspace a kernel serves, at its own base: `<kernel>/w/<id>`, or the kernel itself. */
+/**
+ * A workspace of a kernel the account is a member of, at its own base: `<kernel>/w/<id>`, or
+ * the kernel itself for an older kernel's one workspace.
+ */
 export interface ServedWorkspace {
   id: string;
   name: string;
-  /** Where its API is: `${base}/api…`, for every call, sign-in and file. */
+  /** Where its API is: `${base}/api…`, for every call and file. */
   base: string;
-}
-
-/**
- * What a kernel serves: its workspaces, the oldest first, each at its base. A kernel without
- * `workspaces-v1` serves one, at its own origin.
- */
-export interface KernelInstance {
-  /** The kernel's origin. */
-  kernel: string;
-  /** It serves workspaces at `/w/<id>`. */
-  multi: boolean;
-  version?: string;
-  workspaces: ServedWorkspace[];
+  /** The account is its owner. */
+  owner: boolean;
 }
 
 /** HTTP is supported for a kernel on the owner's own computer, over the LAN; public connections use HTTPS. */
@@ -86,11 +78,14 @@ export function workspaceAddress(address: string) {
   };
 }
 
-/** The workspace to open on an instance: the one chosen last if it is still served, else its only one. */
-export function pickWorkspace(instance: KernelInstance, remembered?: string) {
+/** The workspace to open on a kernel: the one chosen last if it is still there, else the only one. */
+export function pickWorkspace(
+  workspaces: ServedWorkspace[],
+  remembered?: string,
+) {
   return (
-    instance.workspaces.find((w) => w.id === remembered) ??
-    (instance.workspaces.length === 1 ? instance.workspaces[0] : undefined)
+    workspaces.find((w) => w.id === remembered) ??
+    (workspaces.length === 1 ? workspaces[0] : undefined)
   );
 }
 
