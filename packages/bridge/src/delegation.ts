@@ -16,6 +16,12 @@ interface Event {
   text?: string;
 }
 
+/** A delegated session works without asking for each tool: each harness's own auto mode. */
+const AUTO: Record<string, object> = {
+  "claude-code": { permission_mode: "auto" },
+  codex: { approval_policy: "never" },
+};
+
 /** A new session of a harness in a folder, with the work to do as its first input. */
 export async function startSession(
   call: Call,
@@ -30,6 +36,7 @@ export async function startSession(
   const { session } = await call<{ session: Session }>("/sessions", {
     harness: input.harness,
     workspace: input.workspace,
+    ...AUTO[input.harness],
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
   });

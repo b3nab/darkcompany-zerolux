@@ -52,7 +52,13 @@ test("a delegated session starts with its work, answers, takes more words and st
   expect(k.calls.slice(0, 2)).toEqual([
     {
       path: "/sessions",
-      body: { harness: "codex", workspace: "/work", model: "fixture-model" },
+      // Delegated work does not wait for approvals: the harness's own auto mode.
+      body: {
+        harness: "codex",
+        workspace: "/work",
+        approval_policy: "never",
+        model: "fixture-model",
+      },
     },
     { path: "/sessions/child/input", body: { text: "run the tests" } },
   ]);
