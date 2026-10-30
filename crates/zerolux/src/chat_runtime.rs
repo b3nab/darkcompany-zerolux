@@ -35,6 +35,25 @@ struct AgentTask {
 }
 
 impl AgentTask {
+    async fn finish_stop(&mut self) -> (bool, Result<()>, Result<()>) {
+        let gone = self.task.is_finished();
+        self.stop.send_replace(true);
+        let (driver, subscriber) = tokio::join!(finish(&mut self.task), async {
+            if let Some(subscriber) = &mut self.subscriber {
+                finish(subscriber).await
+            } else {
+                Ok(())
+            }
+        });
+        // Revocation can finish an adapter before this signal reaches it. Native adapters
+        // return cancellation failures before this HTTP error, so they remain failures.
+        let revoked = |result: Result<()>| match result {
+            Err(error) if error.is::<crate::chat_driver::Revoked>() => Ok(()),
+            other => other,
+        };
+        (gone, revoked(driver), revoked(subscriber))
+    }
+
     /// Drops the kernel side without cancelling native work. The subscriber is asked to stop,
     /// never aborted: an aborted subscriber leaves its LiveKit room open, and every open room
     /// keeps the sockets of a WebRTC peer until the kernel runs out of file descriptors.
@@ -161,9 +180,14 @@ async fn git(dir: &std::path::Path, args: &[&str]) -> Result<String> {
 }
 
 impl ChatRuntime {
-    /// The kernel's own address, on this computer.
+    /// This workspace's canonical address on its kernel, including its workspace path.
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// The local transport supplied to harnesses, including integrations without path support.
+    pub(crate) fn harness_url(&self) -> &str {
+        &self.harness_url
     }
 
     /// The folder a new session works in: `workspace`, or with `worktree` the same folder in
@@ -264,6 +288,7 @@ pub struct ChatRuntime {
     pub(crate) store: Store,
     livekit: Arc<LiveKit>,
     base_url: String,
+    harness_url: String,
     runners: crate::claude_runner::Registry,
     pi_runners: crate::pi_runner::Registry,
     changed: Arc<Notify>,
@@ -313,7 +338,7 @@ impl ChatRuntime {
         base_url: String,
         links: PathBuf,
     ) -> Result<Arc<Self>> {
-        Self::start_inner(store, livekit, base_url, links, None).await
+        Self::start_hosted(store, livekit, base_url.clone(), base_url, links, None).await
     }
 
     pub async fn start_with_runner(
@@ -323,13 +348,22 @@ impl ChatRuntime {
         links: PathBuf,
         program: crate::claude_runner::RunnerProgram,
     ) -> Result<Arc<Self>> {
-        Self::start_inner(store, livekit, base_url, links, Some(program)).await
+        Self::start_hosted(
+            store,
+            livekit,
+            base_url.clone(),
+            base_url,
+            links,
+            Some(program),
+        )
+        .await
     }
 
-    async fn start_inner(
+    pub(crate) async fn start_hosted(
         store: Store,
         livekit: Arc<LiveKit>,
         base_url: String,
+        harness_url: String,
         links: PathBuf,
         program: Option<crate::claude_runner::RunnerProgram>,
     ) -> Result<Arc<Self>> {
@@ -402,6 +436,7 @@ impl ChatRuntime {
             store,
             livekit,
             base_url,
+            harness_url,
             runners: crate::claude_runner::Registry::new(links.join("claude"), program.clone()),
             pi_runners: crate::pi_runner::Registry::new(links.join("pi"), program),
             changed,
@@ -1293,6 +1328,7 @@ impl ChatRuntime {
                     Ok(()) => self.retried(&session.id, true),
                     Err(error) => {
                         self.retried(&session.id, false);
+                        self.owned_attention(&owner, &session.id, &error).await;
                         tracing::warn!(
                             session_id = session.id,
                             error = format!("{error:#}"),
@@ -1487,9 +1523,9 @@ impl ChatRuntime {
         Ok(true)
     }
 
-    /// Whether the session's link is still up: its kernel-side adapter runs and, for pi, the
-    /// extension still holds this link. An older pi extension does not say: as before, its
-    /// session is relinked.
+    /// Whether the session's link is still up: its kernel-side adapter runs and a managed
+    /// Claude runner or pi extension still holds the binding. A live process alone is not
+    /// a working link; a notice on an actually bound link remains for the owner.
     async fn link_alive(&self, owner: &ChatIdentity, session: &ChatSession) -> bool {
         let running = self
             .agents
@@ -1497,7 +1533,21 @@ impl ChatRuntime {
             .await
             .get(&session.id)
             .is_some_and(|agent| !agent.task.is_finished());
-        if !running || session.harness != "pi" {
+        if !running {
+            return false;
+        }
+        match self.owned_mode(owner, &session.id).await {
+            Ok(Some(mode)) => {
+                return self
+                    .runners
+                    .find(&session.native_session_id, &session.workspace, mode)
+                    .await
+                    .is_ok_and(|link| link.is_some_and(|link| link.bound));
+            }
+            Err(_) => return false,
+            Ok(None) => {}
+        }
+        if session.harness != "pi" {
             return running;
         }
         let Ok(locator) = self.store.chat_session_locator(owner, &session.id).await else {
@@ -1617,7 +1667,7 @@ impl ChatRuntime {
             }
             Ok::<(), anyhow::Error>(())
         });
-        let base_url = self.base_url.clone();
+        let base_url = self.harness_url().to_owned();
         let session_id = session.id.clone();
         let store = self.store.clone();
         let changed = self.changed.clone();
@@ -1701,7 +1751,7 @@ impl ChatRuntime {
             );
         }
         if let Some(host) = &runner {
-            let pid = host.bind(&self.base_url, &token).await?;
+            let pid = host.bind(self.harness_url(), &token).await?;
             let description = host.describe().await?;
             let durable = crate::pi_runner::recovery_locator(&session.native_session_id, &session.workspace,
                 serde_json::json!({"session_file":description["session_file"],"profile":description["profile"]})).await?;
@@ -1740,7 +1790,8 @@ impl ChatRuntime {
                 &target.native_locator,
             )
             .await?;
-        let link = sessions::pair_pi(&target, &self.base_url, &workspace.id, token, resume).await?;
+        let link =
+            sessions::pair_pi(&target, self.harness_url(), &workspace.id, token, resume).await?;
         let (stopper, mut stop) = watch::channel(false);
         let owned = runner.is_some();
         let session_id = session.id.clone();
@@ -1810,15 +1861,13 @@ impl ChatRuntime {
         };
         // An adapter that had already ended (its link lost) before the owner's Stop is not a
         // stop that failed: there was nothing live to cancel, and the note says so.
-        let gone = agent.task.is_finished();
-        agent.stop.send_replace(true);
-        let (driver, subscriber) = tokio::join!(finish(&mut agent.task), async {
-            if let Some(subscriber) = &mut agent.subscriber {
-                finish(subscriber).await
-            } else {
-                Ok(())
-            }
-        });
+        let (gone, driver, subscriber) = agent.finish_stop().await;
+        // An owned runner can outlive its failed connection monitor, including a monitor
+        // that ends while Stop is waiting. Stop must still reach that authenticated process.
+        if driver.is_err() && self.stop_untracked_owned(id).await? {
+            subscriber?;
+            return Ok(None);
+        }
         if gone && let Err(error) = &driver {
             tracing::warn!(
                 session_id = id,
@@ -1830,14 +1879,8 @@ impl ChatRuntime {
                 "Stopped. Its harness did not confirm it stopped working.",
             ));
         }
-        // The stop revokes the token before it reaches the adapter: a request the adapter made
-        // in between is refused, and that is the stop, not a failure.
-        let revoked = |result: Result<()>| match result {
-            Err(error) if error.is::<crate::chat_driver::Revoked>() => Ok(()),
-            other => other,
-        };
-        revoked(driver)?;
-        revoked(subscriber)?;
+        driver?;
+        subscriber?;
         Ok(agent.stop_note)
     }
 
@@ -1894,6 +1937,8 @@ mod owned;
 mod plans;
 mod remote;
 mod settings;
+#[cfg(test)]
+mod stop_tests;
 mod subagents;
 pub use subagents::Subagent;
 pub(crate) use subagents::{events as subagent_events_of, list as subagents_of};
