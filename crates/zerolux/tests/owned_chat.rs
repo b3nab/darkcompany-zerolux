@@ -205,7 +205,33 @@ async fn managed_claude_bootstrap_lifecycle() {
     );
     assert!(kill(Pid::from_raw(pid), None).is_ok());
 
+    let failure = uuid::Uuid::new_v4().to_string();
+    // A long, multibyte control error must still produce a persisted, recoverable state.
+    std::fs::write(
+        workspace.join("bind-failure"),
+        format!("{failure}{}", "界".repeat(900)),
+    )
+    .unwrap();
     let kernel = Kernel::start(&fixture, port).await;
+    let failed = kernel.api("/sessions", None).await;
+    assert_eq!(failed["sessions"][0]["id"], session);
+    assert_eq!(failed["sessions"][0]["status"], "attention");
+    assert!(
+        failed["sessions"][0]["attention_reason"]
+            .as_str()
+            .unwrap()
+            .contains(&failure)
+    );
+    assert_eq!(count(&fixture.trace(), "start"), 1);
+    assert_eq!(count(&fixture.trace(), "input"), 1);
+    let unbound = fixture
+        .control(native.as_str().unwrap(), json!({"method":"describe"}))
+        .await;
+    assert_eq!(unbound["bound"], false);
+    let instance = unbound["instance_id"].clone();
+    std::fs::remove_file(workspace.join("bind-failure")).unwrap();
+    // Drive the same retry used by the scheduler; neither Resume nor new input is requested.
+    kernel.runtime.as_ref().unwrap().reconnect().await.unwrap();
     let sessions = kernel
         .wait("/sessions", |v| {
             v["sessions"]
@@ -218,6 +244,53 @@ async fn managed_claude_bootstrap_lifecycle() {
     assert_eq!(sessions["sessions"][0]["native_session_id"], native);
     assert_eq!(count(&fixture.trace(), "start"), 1);
     assert!(kill(Pid::from_raw(pid), None).is_ok());
+    // A genuine notice on a bound link must survive reconnect. A living but unbound
+    // runner must instead be rebound even while its previous monitor still runs.
+    let owner = kernel.store.chat_identity(None).await.unwrap();
+    let notice = uuid::Uuid::new_v4().to_string();
+    kernel
+        .store
+        .set_chat_session_status(
+            &owner,
+            &session,
+            ChatSessionStatus {
+                status: "attention".into(),
+                reason: Some(notice.clone()),
+            },
+        )
+        .await
+        .unwrap();
+    kernel.runtime.as_ref().unwrap().reconnect().await.unwrap();
+    assert_eq!(
+        kernel
+            .store
+            .chat_session(&owner, &session)
+            .await
+            .unwrap()
+            .attention_reason
+            .as_deref(),
+        Some(notice.as_str())
+    );
+    fixture
+        .control(
+            native.as_str().unwrap(),
+            json!({"method":"prepare", "link_id":session}),
+        )
+        .await;
+    let unbound = fixture
+        .control(native.as_str().unwrap(), json!({"method":"describe"}))
+        .await;
+    assert_eq!(unbound["bound"], false);
+    kernel.runtime.as_ref().unwrap().reconnect().await.unwrap();
+    let rebound = fixture
+        .control(native.as_str().unwrap(), json!({"method":"describe"}))
+        .await;
+    assert_eq!(rebound["bound"], true);
+    assert_eq!(rebound["instance_id"], unbound["instance_id"]);
+    assert_eq!(rebound["instance_id"], instance);
+    assert!(kill(Pid::from_raw(pid), None).is_ok());
+    assert_eq!(count(&fixture.trace(), "start"), 1);
+    assert_eq!(count(&fixture.trace(), "input"), 1);
     let approvals = kernel.api("/chat/approvals", None).await;
     assert_eq!(approvals["approvals"][0]["id"], approval);
     assert_eq!(approvals["approvals"][0]["status"], "pending");
@@ -415,6 +488,24 @@ async fn managed_claude_bootstrap_lifecycle() {
     assert_eq!(start["model"], "native-default");
     assert_eq!(start["effort"], "high");
     assert_eq!(count(&trace, "input"), 2);
+    // Losing the transport ends its monitor, not the native query. Explicit Stop must
+    // still reach this authenticated runner after that monitor has finished.
+    fixture
+        .control(
+            native.as_str().unwrap(),
+            json!({"method":"prepare", "link_id":restored}),
+        )
+        .await;
+    kernel
+        .wait("/sessions", |v| {
+            v["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["id"] == restored && s["status"] == "attention")
+        })
+        .await;
+    assert!(kill(Pid::from_raw(start["pid"].as_i64().unwrap() as i32), None).is_ok());
     let stopped = kernel
         .api(&format!("/sessions/{restored}/stop"), Some(json!({})))
         .await;

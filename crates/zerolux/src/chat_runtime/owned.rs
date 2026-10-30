@@ -5,6 +5,16 @@ use crate::{
 };
 use serde_json::json;
 
+fn connection_reason(error: &anyhow::Error) -> String {
+    let mut reason = format!("The Claude runner could not be connected: {error:#}");
+    let mut end = reason.len().min(2_000);
+    while !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    reason.truncate(end);
+    reason
+}
+
 // A surviving runner keeps its launch fingerprint; a cold replacement must instead
 // preserve its last confirmed effective permissions, including owner changes made live.
 fn restored_mode(
@@ -221,20 +231,22 @@ impl ChatRuntime {
         let link = match launched {
             Ok(link) => link,
             Err(error) => {
-                self.owned_attention(who, &issued.session.id).await;
+                self.owned_attention(who, &issued.session.id, &error).await;
                 return Err(error);
             }
         };
         let bound = link
             .bind(
-                &self.base_url,
+                &self.harness_url,
                 &issued.token,
                 &issued.session.id,
                 &executable,
                 resume_native,
             )
             .await;
-        self.monitor_owned(&mut agents, link, &issued.session);
+        if bound.is_ok() {
+            self.monitor_owned(&mut agents, link, &issued.session);
+        }
         drop(agents);
         self.finish_owned_bind(who, issued, bound).await
     }
@@ -251,7 +263,7 @@ impl ChatRuntime {
             return Err(Error::StoppedByOwner.into());
         }
         if let Err(error) = result {
-            self.owned_attention(who, &current.id).await;
+            self.owned_attention(who, &current.id, &error).await;
             return Err(error);
         }
         let _ = self.session_settings(who, &current.id).await;
@@ -259,7 +271,12 @@ impl ChatRuntime {
         Ok((issued.actor, current))
     }
 
-    async fn owned_attention(&self, who: &ChatIdentity, id: &str) {
+    pub(super) async fn owned_attention(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+        error: &anyhow::Error,
+    ) {
         let _ = self
             .store
             .set_chat_session_status(
@@ -267,9 +284,7 @@ impl ChatRuntime {
                 id,
                 ChatSessionStatus {
                     status: "attention".into(),
-                    reason: Some(
-                        "Needs attention. Unconfirmed messages were not sent again.".into(),
-                    ),
+                    reason: Some(connection_reason(error)),
                 },
             )
             .await;
@@ -320,6 +335,11 @@ impl ChatRuntime {
         };
         // Authenticate the surviving host before pausing work or rotating its token.
         link.check_bind().await?;
+        // Preparing this same runner intentionally pauses its transport. Its old monitor
+        // must finish before that transition, without sending Stop to the native query.
+        if let Some(previous) = agents.remove(&session.id) {
+            previous.release().await;
+        }
         if link.bound {
             link.prepare(&session.id).await?;
         }
@@ -329,17 +349,16 @@ impl ChatRuntime {
             .await?;
         let bound = link
             .bind(
-                &self.base_url,
+                &self.harness_url,
                 &issued.token,
                 &session.id,
                 &executable,
                 true,
             )
             .await;
-        if let Some(previous) = agents.remove(&session.id) {
-            previous.release().await;
+        if bound.is_ok() {
+            self.monitor_owned(&mut agents, link, session);
         }
-        self.monitor_owned(&mut agents, link, session);
         drop(agents);
         self.finish_owned_bind(who, issued, bound).await?;
         Ok(())
@@ -411,11 +430,7 @@ impl ChatRuntime {
                 return Ok(());
             }
             self.store
-                .fail_chat_link(
-                    who,
-                    &session.id,
-                    &format!("The session could not be restored: {error}"),
-                )
+                .fail_chat_link(who, &session.id, &connection_reason(error))
                 .await?;
             self.changed();
         }
@@ -443,23 +458,30 @@ impl ChatRuntime {
                         if *stop.borrow() { break link.stop(&id).await; }
                     }
                     _ = tick.tick() => {
-                        if let Err(error) = link.describe().await { break Err(error); }
+                        match link.describe().await {
+                            Ok(description) if description["bound"] == true => {}
+                            Ok(_) => break Err(anyhow::anyhow!("The Claude runner lost its connection")),
+                            Err(error) => break Err(error),
+                        }
                     }
                 }
             };
-            if result.is_err()
+            if let Err(error) = &result
                 && !*stop.borrow()
                 && let Ok(owner) = store.session_person(&id).await
             {
+                tracing::warn!(
+                    session_id = id,
+                    error = format!("{error:#}"),
+                    "Claude runner connection ended"
+                );
                 let _ = store
                     .set_chat_session_status(
                         &owner,
                         &id,
                         ChatSessionStatus {
                             status: "attention".into(),
-                            reason: Some(
-                                "The Claude runner stopped. Waiting to restore the session.".into(),
-                            ),
+                            reason: Some(connection_reason(error)),
                         },
                     )
                     .await;
