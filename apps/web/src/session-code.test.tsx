@@ -144,6 +144,25 @@ test("the agent's words carry what can be done with them, such as hearing them",
   expect(html.match(/Listen to/g)).toHaveLength(1);
 });
 
+test("every message of a session says when it was written, and words given or said can be copied", () => {
+  const time = "2026-10-30T09:05:00.000Z";
+  const html = renderToStaticMarkup(
+    <SessionBlocks
+      blocks={[
+        { key: "1.0", time, kind: "input", text: "Check", chat: null, at: 1 },
+        { key: "2.0", time, kind: "text", text: "Checked." },
+        { key: "3.0", time, kind: "notice", text: "Agent done" },
+        { key: "4.0", time: null, kind: "text", text: "Unrecorded." },
+      ]}
+    />,
+  );
+  expect(
+    html.match(new RegExp(`<time[^>]*dateTime="${time}"`, "g")),
+  ).toHaveLength(3);
+  // A copy for each input and each of the agent's words; none for a notice.
+  expect(html.match(/<button/g)).toHaveLength(3);
+});
+
 test("a session listens for its CI: failures only by default, then the owner's words", () => {
   const form = (failures_only: boolean) =>
     renderToStaticMarkup(

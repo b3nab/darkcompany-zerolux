@@ -38,8 +38,10 @@ import {
   densityLabels,
   draftOf,
   folderName,
+  forkAfter,
   harnessLabels,
   nativeMatches,
+  nestDelegates,
   hitKindLabels,
   inputImagesError,
   inputImageTypes,
@@ -144,7 +146,7 @@ import { useMe } from "./AuthGate";
 import { ChangesPanel, FilesPanel, Pane, TerminalPanel } from "./SessionCode";
 import { SubagentList, SubagentPanel } from "./SessionSubagents";
 
-import { AskOnTheSide, InputActions } from "./SessionFork";
+import { AskOnTheSide, ForkHere, InputActions } from "./SessionFork";
 import { SessionSchedules } from "./SessionSchedules";
 import { BackgroundPanel } from "./SessionBackground";
 import { useReadingPlace } from "./reading";
@@ -393,20 +395,24 @@ export function ConsoleList({
             : native,
         )
       : [];
-  const shown = attentionInbox(
-    sessions[view].map((session) => ({
-      ...session,
-      output_at: sessionOutputAt(chat, session) ?? null,
-    })),
-    chat.approvals,
-  );
-  // Grouped only while live: pinned first, then by state.
-  const group = (row: (typeof shown)[number]) =>
-    view !== "live"
-      ? undefined
-      : row.session.pinned_at
-        ? "pinned"
-        : row.attention;
+  // Grouped only while live: pinned first, then by state; a delegated session under the one
+  // that started it, in its group.
+  let heading: Attention | "pinned" | undefined;
+  const shown = nestDelegates(
+    attentionInbox(
+      sessions[view].map((session) => ({
+        ...session,
+        output_at: sessionOutputAt(chat, session) ?? null,
+      })),
+      chat.approvals,
+    ),
+  ).map((row) => ({
+    ...row,
+    heading:
+      view !== "live" || row.depth
+        ? heading
+        : (heading = row.session.pinned_at ? "pinned" : row.attention),
+  }));
   return (
     <section aria-label="Console" className="flex min-h-0 flex-1 flex-col">
       <header className="flex items-center justify-between gap-2 px-4 pt-4 pb-3">
@@ -486,7 +492,7 @@ export function ConsoleList({
           const { session, attention } = row;
           const agent = actors.find((a) => a.id === session.actor_id);
           const tone = sessionTone(session);
-          const heading = group(row);
+          const { heading, depth } = row;
           // A pending request says what it asks; otherwise the session's latest in a line.
           const asks = chat.approvals.find(
             (a) => a.session_id === session.id && a.status === "pending",
@@ -500,8 +506,13 @@ export function ConsoleList({
                   (agent ? session.title : folderName(session.workspace)) ||
                   "Untitled session";
           return (
-            <div key={session.id} className="flex flex-col">
-              {heading && (i === 0 || group(shown[i - 1]!) !== heading) && (
+            <div
+              key={session.id}
+              // Under the session that started it, one step in for each.
+              style={{ marginLeft: `${depth}rem` }}
+              className={cn("flex flex-col", depth && "border-l pl-1")}
+            >
+              {heading && shown[i - 1]?.heading !== heading && (
                 <h3
                   className={cn(
                     "flex items-center justify-between px-2 pt-3 pb-1 font-mono text-[11px] tracking-wide uppercase",
@@ -512,7 +523,7 @@ export function ConsoleList({
                 >
                   {heading === "pinned" ? "Pinned" : attentionLabels[heading]}
                   <span className="text-faint">
-                    {shown.filter((s) => group(s) === heading).length}
+                    {shown.filter((s) => s.heading === heading).length}
                   </span>
                 </h3>
               )}
@@ -1376,25 +1387,32 @@ export function SessionView({
                   );
                   return started && (() => openSubagent(started.id));
                 }}
-                textActions={
-                  speaker
-                    ? (text) => (
-                        <Listen
-                          reading={aloud.reading === text.key}
-                          error={
-                            aloud.failed?.id === text.key
-                              ? aloud.failed.error
-                              : undefined
-                          }
-                          toggle={() =>
-                            aloud.reading === text.key
-                              ? aloud.stop()
-                              : void aloud.read(text.key, speaker, text.text)
-                          }
-                        />
-                      )
-                    : undefined
-                }
+                textActions={(text) => (
+                  <>
+                    {/* A fork that keeps the work up to these words: its person's. */}
+                    {access.mine && (
+                      <ForkHere
+                        busy={busy}
+                        fork={() => void fork(forkAfter(blocks, text.key))}
+                      />
+                    )}
+                    {speaker && (
+                      <Listen
+                        reading={aloud.reading === text.key}
+                        error={
+                          aloud.failed?.id === text.key
+                            ? aloud.failed.error
+                            : undefined
+                        }
+                        toggle={() =>
+                          aloud.reading === text.key
+                            ? aloud.stop()
+                            : void aloud.read(text.key, speaker, text.text)
+                        }
+                      />
+                    )}
+                  </>
+                )}
                 inputActions={
                   access.write
                     ? (input) => (

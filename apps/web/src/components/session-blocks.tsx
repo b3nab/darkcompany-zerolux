@@ -1,10 +1,11 @@
 import { useId } from "react";
 import type { ReactNode } from "react";
 import { cn } from "cn";
-import { ChevronRightIcon, CircleAlertIcon, InfoIcon } from "lucide-react";
+import { BellIcon, ChevronRightIcon, CircleAlertIcon } from "lucide-react";
 import {
   blockRuns,
   isSubagent,
+  messageTime,
   thoughtLabel,
   toolItems,
   toolsPhrase,
@@ -19,7 +20,12 @@ import type {
   ToolsRun,
 } from "@zerolux/chat";
 import { MessageText } from "@/components/message-text";
-import { ExploredCalls, SubagentCard, ToolCall } from "@/components/tool-call";
+import {
+  Copy,
+  ExploredCalls,
+  SubagentCard,
+  ToolCall,
+} from "@/components/tool-call";
 import type { ChatTitle } from "@/components/tool-call";
 import { Reveal } from "@/components/reveal";
 import { Spinner } from "@/components/ui/spinner";
@@ -169,6 +175,55 @@ export type InputBlock = Extract<SessionBlock, { kind: "input" }>;
 /** The agent's own words in the session. */
 export type TextBlock = Extract<SessionBlock, { kind: "text" }>;
 
+/** What shows under a message when it is pointed at, or always where nothing points. */
+export const ON_POINT =
+  "opacity-0 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100";
+
+/** When the harness recorded it: the hour today, the day before that; the whole date on hover. */
+function Stamp({ time }: { time: string | null }) {
+  const at = time ? Date.parse(time) : NaN;
+  if (Number.isNaN(at)) return null;
+  return (
+    <time
+      dateTime={time!}
+      title={new Date(at).toLocaleString()}
+      className="shrink-0 font-mono text-[11px] text-faint"
+    >
+      {messageTime(at)}
+    </time>
+  );
+}
+
+/** Under a message: when it was written, its copy, and what else can be done with it. */
+function MessageBar({
+  time,
+  text,
+  end,
+  children,
+}: {
+  time: string | null;
+  text: string;
+  /** Under words given to the session, on their side. */
+  end?: boolean;
+  children?: ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-1 self-stretch",
+        end && "justify-end",
+      )}
+    >
+      <Stamp time={time} />
+      <Copy
+        text={text}
+        className="group-hover/message:opacity-100 pointer-coarse:opacity-100"
+      />
+      {children}
+    </div>
+  );
+}
+
 /** Words given to the session, with what goes under them. */
 export function InputBubble({
   text,
@@ -184,7 +239,7 @@ export function InputBubble({
   children?: ReactNode;
 }) {
   return (
-    <div className="group/input flex flex-col items-end gap-1">
+    <div className="group/message flex flex-col items-end gap-1">
       <div className="max-w-[min(40rem,85%)] rounded-md rounded-br-xs border border-human/25 bg-human/10 px-3.5 py-2">
         {from && (
           <p className="mb-1 font-mono text-[11px] text-faint">From {from}</p>
@@ -223,17 +278,25 @@ function Block({
           text={block.text}
           from={block.chat && chatTitle && (chatTitle(block.chat) ?? "a chat")}
         >
-          {inputActions?.(block)}
+          <MessageBar time={block.time} text={block.text} end>
+            {inputActions?.(block)}
+          </MessageBar>
         </InputBubble>
       );
     case "command":
-      return <InputBubble text={block.text} command />;
+      return (
+        <InputBubble text={block.text} command>
+          <MessageBar time={block.time} text={block.text} end />
+        </InputBubble>
+      );
     case "text":
       return (
-        <>
+        <div className="group/message flex flex-col gap-1">
           <MessageText text={block.text} />
-          {textActions?.(block)}
-        </>
+          <MessageBar time={block.time} text={block.text}>
+            {textActions?.(block)}
+          </MessageBar>
+        </div>
       );
     case "thinking":
       return (
@@ -281,9 +344,10 @@ function Block({
       );
     case "notice":
       return (
-        <p className="flex items-start gap-2 text-[12.5px] text-faint">
-          <InfoIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-          {block.text}
+        <p className="flex items-start gap-2 self-start rounded-md border bg-card px-3 py-2 text-[12.5px] text-muted-foreground">
+          <BellIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1">{block.text}</span>
+          <Stamp time={block.time} />
         </p>
       );
     case "compacted":

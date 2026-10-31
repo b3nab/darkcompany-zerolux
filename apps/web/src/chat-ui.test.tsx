@@ -1736,6 +1736,31 @@ test("the console lists the project's own sessions with the live ones, each to o
   expect(html).toContain('href="/console/native/n-cedar"');
 });
 
+test("a delegated session is listed right under the session that started it", () => {
+  const delegate = {
+    ...session("s-delegate", BIRCH),
+    parent_session_id: "s-coordinator",
+  };
+  const html = renderToStaticMarkup(
+    <ConsoleList
+      busy={false}
+      perform={perform}
+      chat={fakeChat({
+        sessions: [
+          delegate,
+          session("s-other", BIRCH),
+          session("s-coordinator", ASPEN),
+        ],
+      })}
+      actors={actors}
+    />,
+  );
+  const links = [...html.matchAll(/href="\/console\/([^"]+)"/g)].map(
+    (match) => match[1],
+  );
+  expect(links.indexOf("s-delegate")).toBe(links.indexOf("s-coordinator") + 1);
+});
+
 test("a session of the project's own continues from its box, running or saved", () => {
   const box = (availability: "attachable" | "attention") =>
     renderToStaticMarkup(

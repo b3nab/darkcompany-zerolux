@@ -1,6 +1,9 @@
 import { useState } from "react";
-import { HistoryIcon, PencilIcon } from "lucide-react";
+import type { ReactNode } from "react";
+import { cn } from "cn";
+import { GitForkIcon, HistoryIcon, PencilIcon } from "lucide-react";
 import type { FilesRewind, Perform } from "@zerolux/chat";
+import { ON_POINT } from "@/components/session-blocks";
 import type { InputBlock } from "@/components/session-blocks";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,119 +41,158 @@ export function InputActions({
   const [rewinding, setRewinding] = useState<FilesRewind>();
   if (editing !== undefined)
     return (
-      <form
-        aria-label="Edit and send again"
-        className="flex w-full max-w-[min(40rem,85%)] flex-col gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (editing.trim()) void fork?.(input.at, editing.trim());
-        }}
-      >
-        <Textarea
-          aria-label="Input"
-          value={editing}
-          rows={3}
-          autoFocus
-          onChange={(event) => setEditing(event.target.value)}
-          className="text-sm"
-        />
-        <div className="flex justify-end gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => setEditing(undefined)}
-          >
-            Cancel
-          </Button>
-          <Button type="submit" size="sm" disabled={busy || !editing.trim()}>
-            Send in a new session
-          </Button>
-        </div>
-      </form>
+      <Below>
+        <form
+          aria-label="Edit and send again"
+          className="flex w-full max-w-[min(40rem,85%)] flex-col gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (editing.trim()) void fork?.(input.at, editing.trim());
+          }}
+        >
+          <Textarea
+            aria-label="Input"
+            value={editing}
+            rows={3}
+            autoFocus
+            onChange={(event) => setEditing(event.target.value)}
+            className="text-sm"
+          />
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setEditing(undefined)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" disabled={busy || !editing.trim()}>
+              Send in a new session
+            </Button>
+          </div>
+        </form>
+      </Below>
     );
   if (rewinding)
     return (
-      <div
-        role="alert"
-        className="flex max-w-[min(40rem,85%)] flex-col gap-2 rounded-md bg-attention/10 p-3 text-sm"
-      >
-        {rewinding.canRewind ? (
-          <>
-            <p>
-              Rewind {rewinding.filesChanged?.length ?? 0}{" "}
-              {rewinding.filesChanged?.length === 1 ? "file" : "files"} to
-              before this input
-              {rewinding.insertions !== undefined &&
-                ` (+${rewinding.insertions} −${rewinding.deletions ?? 0})`}
-              ?
-            </p>
-            {!!rewinding.filesChanged?.length && (
-              <ul className="font-mono text-[11px] text-muted-foreground">
-                {rewinding.filesChanged.map((file) => (
-                  <li key={file} className="truncate">
-                    {file}
-                  </li>
-                ))}
-              </ul>
+      <Below>
+        <div
+          role="alert"
+          className="flex max-w-[min(40rem,85%)] flex-col gap-2 rounded-md bg-attention/10 p-3 text-sm"
+        >
+          {rewinding.canRewind ? (
+            <>
+              <p>
+                Rewind {rewinding.filesChanged?.length ?? 0}{" "}
+                {rewinding.filesChanged?.length === 1 ? "file" : "files"} to
+                before this input
+                {rewinding.insertions !== undefined &&
+                  ` (+${rewinding.insertions} −${rewinding.deletions ?? 0})`}
+                ?
+              </p>
+              {!!rewinding.filesChanged?.length && (
+                <ul className="font-mono text-[11px] text-muted-foreground">
+                  {rewinding.filesChanged.map((file) => (
+                    <li key={file} className="truncate">
+                      {file}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          ) : (
+            <p>Cannot rewind: {rewinding.error}</p>
+          )}
+          <div className="flex gap-2">
+            {rewinding.canRewind && (
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() =>
+                  void perform(
+                    async () => void (await rewind!(input.at, false)),
+                  ).then((done) => done && setRewinding(undefined))
+                }
+              >
+                Rewind
+              </Button>
             )}
-          </>
-        ) : (
-          <p>Cannot rewind: {rewinding.error}</p>
-        )}
-        <div className="flex gap-2">
-          {rewinding.canRewind && (
             <Button
               size="sm"
-              disabled={busy}
-              onClick={() =>
-                void perform(
-                  async () => void (await rewind!(input.at, false)),
-                ).then((done) => done && setRewinding(undefined))
-              }
+              variant="outline"
+              onClick={() => setRewinding(undefined)}
             >
-              Rewind
+              {rewinding.canRewind ? "Keep them" : "Close"}
             </Button>
-          )}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setRewinding(undefined)}
-          >
-            {rewinding.canRewind ? "Keep them" : "Close"}
-          </Button>
+          </div>
         </div>
-      </div>
+      </Below>
     );
   return (
-    <span className="flex gap-1 opacity-0 transition-opacity group-hover/input:opacity-100 focus-within:opacity-100">
+    <>
       {fork && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 px-2 text-xs text-faint"
-          disabled={busy}
+        <BarButton
+          label="Edit"
+          busy={busy}
           onClick={() => setEditing(input.text)}
         >
-          <PencilIcon data-icon="inline-start" />
-          Edit
-        </Button>
+          <PencilIcon />
+        </BarButton>
       )}
       {rewind && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 px-2 text-xs text-faint"
-          disabled={busy}
+        <BarButton
+          label="Rewind files"
+          busy={busy}
           onClick={() =>
             void perform(async () => setRewinding(await rewind(input.at, true)))
           }
         >
-          <HistoryIcon data-icon="inline-start" />
-          Rewind files
-        </Button>
+          <HistoryIcon />
+        </BarButton>
       )}
-    </span>
+    </>
+  );
+}
+
+/** One of what can be done with a message, by its icon, named on hover. */
+function BarButton({
+  label,
+  busy,
+  onClick,
+  children,
+}: {
+  label: string;
+  busy: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon-xs"
+      aria-label={label}
+      title={label}
+      disabled={busy}
+      onClick={onClick}
+      className={cn("text-faint hover:text-foreground", ON_POINT)}
+    >
+      {children}
+    </Button>
+  );
+}
+
+/** On a line of its own under the input's bar, on its side. */
+function Below({ children }: { children: ReactNode }) {
+  return <div className="flex basis-full justify-end">{children}</div>;
+}
+
+/** A new session with the work up to here, this one left as it is. */
+export function ForkHere({ fork, busy }: { fork: () => void; busy: boolean }) {
+  return (
+    <BarButton label="Fork from here" busy={busy} onClick={fork}>
+      <GitForkIcon />
+    </BarButton>
   );
 }
 
