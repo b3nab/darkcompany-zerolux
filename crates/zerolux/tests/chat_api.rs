@@ -254,6 +254,50 @@ async fn child_kernel_discovers_and_hires_an_isolated_native_session_over_http()
         0,
         "discovery must not attach"
     );
+    // The Console lists the harnesses' sessions of the workspace's folder, and reads them
+    // without opening them.
+    let in_folder = |client: reqwest::Client, url: String| async move {
+        client
+            .get(format!("{url}/sessions/native"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap()
+    };
+    let listed = in_folder(client.clone(), url.clone()).await;
+    let ids = |listed: &Value| {
+        let mut ids: Vec<String> = listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|session| session["id"].as_str().unwrap().to_owned())
+            .collect();
+        ids.sort();
+        ids
+    };
+    let mut both = vec![
+        codex["id"].as_str().unwrap().to_owned(),
+        pi["id"].as_str().unwrap().to_owned(),
+    ];
+    both.sort();
+    assert_eq!(ids(&listed), both);
+    for op in ["events", "output"] {
+        client
+            .get(format!(
+                "{url}/sessions/native/{}/{op}",
+                codex["id"].as_str().unwrap()
+            ))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+    }
+    assert_eq!(native.count("thread/resume"), 0, "reading must not open");
     let hired = client
         .post(format!("{url}/sessions/attach"))
         .json(&json!({
@@ -268,6 +312,11 @@ async fn child_kernel_discovers_and_hires_an_isolated_native_session_over_http()
         .await
         .unwrap();
     assert_eq!(hired["session"]["native_session_id"], codex_runtime::THREAD);
+    // In the workspace now, it is one of its sessions and no longer listed as native.
+    assert_eq!(
+        ids(&in_folder(client.clone(), url.clone()).await),
+        [pi["id"].as_str().unwrap().to_owned()]
+    );
     assert!(!hired.to_string().contains("token") && !hired.to_string().contains("native_locator"));
     assert_eq!(native.count("thread/resume"), 1);
     assert_eq!(native.count("thread/start"), 0);

@@ -498,6 +498,31 @@ impl Store {
             .ok_or(Error::NotFound)
     }
 
+    /// The project the workspace belongs to: the folder holding its `.zerolux`, or its own
+    /// folder elsewhere on this computer. None for one kept in the kernel's data.
+    pub async fn project_folder(&self) -> Result<Option<std::path::PathBuf>> {
+        let folder = std::path::PathBuf::from(self.workspace_info().await?.folder);
+        if !folder.is_absolute() {
+            return Ok(None);
+        }
+        Ok(Some(match folder.file_name() {
+            Some(name) if name == ".zerolux" => folder.parent().unwrap_or(&folder).to_path_buf(),
+            _ => folder,
+        }))
+    }
+
+    /// The native sessions already in the workspace, by harness and native ID.
+    pub async fn linked_native(&self) -> Result<std::collections::HashSet<(String, String)>> {
+        use crate::entity::sessions;
+        Ok(sessions::Entity::find()
+            .filter(sessions::Column::WorkspaceId.eq(&self.workspace))
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(|row| (row.harness, row.native_session_id))
+            .collect())
+    }
+
     pub async fn set_workspace_name(&self, input: SetWorkspaceName) -> Result<WorkspaceInfo> {
         let name = workspace_name(&input.name)?;
         let tx = self.write().await?;

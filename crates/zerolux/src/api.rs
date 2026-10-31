@@ -530,6 +530,9 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
     let domain = legacy
         .route("/sessions", get(list_sessions).post(create_session))
         .route("/sessions/discover", get(discover_sessions))
+        .route("/sessions/native", get(native_sessions))
+        .route("/sessions/native/{id}/events", get(native_events))
+        .route("/sessions/native/{id}/output", get(native_output))
         .route("/sessions/search", get(search_sessions))
         .route("/sessions/attach", post(attach_session))
         .route("/sessions/catalog", get(settings_catalog))
@@ -1088,6 +1091,52 @@ async fn discover_sessions(
     Ok(Json(json!(
         runtime(&state)?.discover().await.map_err(runtime_error)?
     )))
+}
+
+/// The harnesses' own sessions in the workspace's project folder, not in the workspace yet.
+async fn native_sessions(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+) -> Result<Json<Value>, ApiFailure> {
+    host_person(&state, &who).await?;
+    Ok(Json(json!(
+        runtime(&state)?
+            .native_sessions()
+            .await
+            .map_err(runtime_error)?
+    )))
+}
+
+/// Such a session's record in the Agent Console's common model, read without opening it.
+async fn native_events(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    query: Result<Query<crate::native_output::EventQuery>, QueryRejection>,
+) -> Result<Json<Value>, ApiFailure> {
+    host_person(&state, &who).await?;
+    let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
+    let events = runtime(&state)?
+        .native_record(&id, "events", &json!({ "query": query }))
+        .await
+        .map_err(said)?;
+    Ok(Json(events))
+}
+
+/// Such a session's native records, from `after`.
+async fn native_output(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    query: Result<Query<OutputQuery>, QueryRejection>,
+) -> Result<Json<Value>, ApiFailure> {
+    host_person(&state, &who).await?;
+    let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
+    let output = runtime(&state)?
+        .native_record(&id, "output", &json!({ "after": query.after }))
+        .await
+        .map_err(said)?;
+    Ok(Json(output))
 }
 
 #[derive(Deserialize)]

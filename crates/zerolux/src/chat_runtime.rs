@@ -80,6 +80,13 @@ pub(crate) fn workspace_dir(path: &str) -> Result<String> {
     Ok(workspace.to_string_lossy().into_owned())
 }
 
+/// Whether a session's folder is the project's or inside it, as the file system resolves both.
+fn within(folder: &str, project: &std::path::Path) -> bool {
+    let resolve =
+        |path: &std::path::Path| dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    resolve(std::path::Path::new(folder)).starts_with(resolve(project))
+}
+
 /// Tells the people in the workspace when a terminal's output grows or it ends, at most every
 /// 100 ms per terminal: clients then read the new output over HTTP.
 async fn terminal_notices(
@@ -742,6 +749,42 @@ impl ChatRuntime {
     pub async fn discover(&self) -> Result<Value> {
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
         Ok(serde_json::to_value(sessions::discover_sessions().await)?)
+    }
+
+    /// The harnesses' own sessions in the workspace's project folder that are not in the
+    /// workspace yet, running or saved, read where the harnesses keep them.
+    pub async fn native_sessions(&self) -> Result<sessions::Discovery> {
+        ensure!(!*self.stop.borrow(), "The kernel is stopping");
+        let Some(project) = self.store.project_folder().await? else {
+            return Ok(sessions::Discovery::default());
+        };
+        let linked = self.store.linked_native().await?;
+        let mut found = sessions::discover_sessions().await;
+        found.sessions.retain(|session| {
+            within(&session.workspace, &project)
+                && !linked.contains(&(
+                    session.harness.id().to_owned(),
+                    session.native_session_id.clone(),
+                ))
+        });
+        Ok(found)
+    }
+
+    /// What a native session of the workspace's project says, read without opening it.
+    pub async fn native_record(&self, id: &str, op: &str, params: &Value) -> Result<Value> {
+        let project = self.store.project_folder().await?.ok_or(Error::NotFound)?;
+        let (target, _) = sessions::resolve_any(id)
+            .await
+            .map_err(|_| Error::NotFound)?;
+        ensure!(within(&target.workspace, &project), Error::NotFound);
+        let record = crate::host_ops::RecordRef {
+            id: id.to_owned(),
+            harness: target.harness.id().to_owned(),
+            native_session_id: target.native_session_id,
+            native_locator_json: target.native_locator.to_string(),
+            workspace: target.workspace,
+        };
+        crate::host_ops::record(op, &record, params).await
     }
 
     /// A discovered session in ZeroLux: a running one is linked as it is; a saved one is
