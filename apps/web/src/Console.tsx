@@ -768,6 +768,7 @@ export function NativeSessionView({
           )}
           <SessionBlocks
             blocks={blocks}
+            record={{ sessionId: native.id, native: true }}
             chatTitle={(id) =>
               chat.conversations.find((c) => c.id === id)?.title
             }
@@ -1376,6 +1377,7 @@ export function SessionView({
               className="mx-auto flex max-w-3xl flex-col gap-3"
             >
               <SessionBlocks
+                record={{ sessionId: session.id }}
                 blocks={placeApprovals(
                   blocks,
                   chat.approvals.filter((a) => a.session_id === session.id),

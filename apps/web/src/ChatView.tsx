@@ -365,7 +365,10 @@ export function ChatView({
     const turn = work.find((w) => w.sessionId === sessionId)?.turns.at(-1);
     return turn && !turn.ended ? turn : undefined;
   };
-  const finished = new Map<string, { actorId: string; turn: ChatTurn }[]>();
+  const finished = new Map<
+    string,
+    { actorId: string; sessionId: string; turn: ChatTurn }[]
+  >();
   for (const { sessionId, turns } of work) {
     const actorId = chat.sessions.find((s) => s.id === sessionId)?.actor_id;
     const live = turnsHere.some((s) => s.id === sessionId)
@@ -375,7 +378,7 @@ export function ChatView({
       if (actorId && turn !== live)
         finished.set(turn.delivery, [
           ...(finished.get(turn.delivery) ?? []),
-          { actorId, turn },
+          { actorId, sessionId, turn },
         ]);
   }
   // Opened work stays open as a running turn finishes and moves under its message.
@@ -624,19 +627,22 @@ export function ChatView({
                       )}
                     </MessageRow>
                     {m.deliveries.flatMap((d) =>
-                      (finished.get(d.id) ?? []).map(({ actorId, turn }) => {
-                        const key = `${actorId}:${turn.delivery}`;
-                        return (
-                          <WorkLine
-                            key={key}
-                            name={name(actorId)}
-                            chatTitle={chatTitle}
-                            turn={turn}
-                            open={opened.has(key)}
-                            toggle={() => toggle(key)}
-                          />
-                        );
-                      }),
+                      (finished.get(d.id) ?? []).map(
+                        ({ actorId, sessionId, turn }) => {
+                          const key = `${actorId}:${turn.delivery}`;
+                          return (
+                            <WorkLine
+                              key={key}
+                              name={name(actorId)}
+                              chatTitle={chatTitle}
+                              turn={turn}
+                              record={{ sessionId }}
+                              open={opened.has(key)}
+                              toggle={() => toggle(key)}
+                            />
+                          );
+                        },
+                      ),
                     )}
                   </Fragment>
                 );
@@ -689,6 +695,7 @@ export function ChatView({
                         name={name(s.actor_id)}
                         chatTitle={chatTitle}
                         turn={turn}
+                        record={{ sessionId: s.id }}
                         open={opened.has(key)}
                         toggle={() => toggle(key)}
                         busy={busy}

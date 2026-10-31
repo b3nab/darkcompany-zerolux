@@ -1,4 +1,11 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
 import { cn } from "cn";
 import {
@@ -30,20 +37,120 @@ import {
   changeCount,
   diffLines,
   exploredPhrase,
+  fileSize,
   plainLine,
   spanLabel,
   toolOutcome,
   toolPhrase,
   toolState,
   toolView,
+  useWholeOutput,
 } from "@zerolux/chat";
-import type { PlanStep, ToolBlock, ToolOutcome, ToolView } from "@zerolux/chat";
+import type {
+  PlanStep,
+  RecordOf,
+  ToolBlock,
+  ToolOutcome,
+  ToolView,
+} from "@zerolux/chat";
 import { MessageText } from "@/components/message-text";
 import { Reveal } from "@/components/reveal";
 import { useOpen } from "@/components/density";
 
 /** How a chat is named where a tool names it by id. */
 export type ChatTitle = (id: string | null) => string | undefined;
+
+/** The record the tools shown come from: an output a page carried cut is read whole there. */
+export const ToolRecord = createContext<RecordOf | undefined>(undefined);
+
+/** A tool opened: its whole output, read from its record when a page carried only the start. */
+function useOpened(tool: ToolBlock) {
+  const whole = useWholeOutput(tool, useContext(ToolRecord));
+  const opened = useMemo(
+    () =>
+      tool.result
+        ? { ...tool, result: { ...tool.result, output: whole.output } }
+        : tool,
+    [tool, whole.output],
+  );
+  const outcome = useMemo(
+    () => opened.result && toolOutcome(opened.result.output),
+    [opened],
+  );
+  return { tool: opened, outcome, whole };
+}
+
+/** Where a cut output stands: being read whole, not read, or only its start here. */
+function WholeState({
+  whole,
+  size,
+}: {
+  whole: ReturnType<typeof useWholeOutput>;
+  size?: number;
+}) {
+  if (whole.reading)
+    return (
+      <p className="flex items-center gap-1.5 font-mono text-[11px] text-faint">
+        <LoaderIcon
+          aria-hidden
+          className="size-3 animate-spin motion-reduce:animate-none"
+        />
+        Loading the whole output
+      </p>
+    );
+  if (whole.error)
+    return (
+      <p role="alert" className="text-[12px] text-destructive">
+        {whole.error}
+      </p>
+    );
+  if (whole.cut && size !== undefined)
+    return (
+      <p className="font-mono text-[11px] text-faint">
+        Start of {fileSize(size)}
+      </p>
+    );
+  return null;
+}
+
+/** What a subagent brought back, whole once opened. */
+function SubagentReply({ tool }: { tool: ToolBlock }) {
+  const opened = useOpened(tool);
+  return (
+    <>
+      {opened.outcome?.text && (
+        <div className="border-t border-agent/15 pt-2">
+          <MessageText text={opened.outcome.text} />
+        </div>
+      )}
+      <WholeState whole={opened.whole} size={tool.result?.truncated} />
+    </>
+  );
+}
+
+/** What a tool was given and gave back, whole once opened. */
+function Opened({
+  view,
+  tool,
+  chatTitle,
+}: {
+  view: ToolView;
+  tool: ToolBlock;
+  chatTitle?: ChatTitle;
+}) {
+  const opened = useOpened(tool);
+  return (
+    <>
+      <Body
+        view={view}
+        tool={opened.tool}
+        outcome={opened.outcome}
+        chatTitle={chatTitle}
+      />
+      <WholeState whole={opened.whole} size={tool.result?.truncated} />
+    </>
+  );
+}
 
 /**
  * One tool call: a line saying what it does or did, open for what it was given and what came
@@ -131,12 +238,7 @@ export function ToolCall({
       </button>
       <Reveal open={open} id={panel}>
         <div className="flex flex-col gap-2 border-t px-3 py-2.5">
-          <Body
-            view={view}
-            tool={tool}
-            outcome={outcome}
-            chatTitle={chatTitle}
-          />
+          <Opened view={view} tool={tool} chatTitle={chatTitle} />
         </div>
       </Reveal>
     </div>
@@ -287,10 +389,8 @@ export function SubagentCard({
               {view.prompt}
             </p>
           )}
-          {outcome?.text ? (
-            <div className="border-t border-agent/15 pt-2">
-              <MessageText text={outcome.text} />
-            </div>
+          {tool.result ? (
+            <SubagentReply tool={tool} />
           ) : running ? (
             <p className="text-[12.5px] text-faint">Working…</p>
           ) : null}

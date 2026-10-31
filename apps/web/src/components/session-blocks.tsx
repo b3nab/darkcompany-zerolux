@@ -16,6 +16,7 @@ import type {
   Approval,
   ApprovalItem,
   LiveItem,
+  RecordOf,
   SessionBlock,
   ToolsRun,
 } from "@zerolux/chat";
@@ -25,6 +26,7 @@ import {
   ExploredCalls,
   SubagentCard,
   ToolCall,
+  ToolRecord,
 } from "@/components/tool-call";
 import type { ChatTitle } from "@/components/tool-call";
 import { Reveal } from "@/components/reveal";
@@ -42,6 +44,7 @@ export const ARRIVE =
  */
 export function SessionBlocks({
   blocks,
+  record,
   chatTitle,
   renderApproval,
   inputActions,
@@ -49,6 +52,8 @@ export function SessionBlocks({
   openSubagent,
 }: {
   blocks: (SessionBlock | ApprovalItem)[];
+  /** Where they are read from: a tool's output a page carried cut is read whole there. */
+  record?: RecordOf;
   /** How a chat is named: inputs say which chat they came from, ZeroLux tools where they wrote. */
   chatTitle?: ChatTitle;
   /** A request of the session, drawn where it was made: open while pending, a receipt after. */
@@ -62,7 +67,7 @@ export function SessionBlocks({
 }) {
   const fresh = useArrivals(blocks);
   const density = useDensity();
-  return blockRuns(blocks).map((run) => {
+  const runs = blockRuns(blocks).map((run) => {
     if (density === "compact" && run.kind === "thinking") return null;
     return (
       <div
@@ -87,6 +92,7 @@ export function SessionBlocks({
       </div>
     );
   });
+  return <ToolRecord.Provider value={record}>{runs}</ToolRecord.Provider>;
 }
 
 /** Tools run one after another: one card, or in compact density one line that opens on it. */

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { ChevronRightIcon } from "lucide-react";
 import { currentStep, sessionBlocks, turnLine } from "@zerolux/chat";
-import type { ChatTurn } from "@zerolux/chat";
+import type { ChatTurn, RecordOf } from "@zerolux/chat";
 import { SessionBlocks } from "@/components/session-blocks";
 import type { ChatTitle } from "@/components/tool-call";
 
@@ -13,12 +13,15 @@ const workBlocks = (turn: ChatTurn | undefined) =>
 export function WorkLine({
   name,
   turn,
+  record,
   open,
   toggle,
   chatTitle,
 }: {
   name: string;
   turn: ChatTurn;
+  /** The session it is read from. */
+  record?: RecordOf;
   open: boolean;
   toggle: () => void;
   chatTitle?: ChatTitle;
@@ -42,7 +45,9 @@ export function WorkLine({
           {turnLine(turn, all)}
         </span>
       </button>
-      {open && <WorkBlocks blocks={blocks} chatTitle={chatTitle} />}
+      {open && (
+        <WorkBlocks blocks={blocks} record={record} chatTitle={chatTitle} />
+      )}
     </li>
   );
 }
@@ -51,6 +56,7 @@ export function WorkLine({
 export function LiveWork({
   name,
   turn,
+  record,
   open,
   toggle,
   busy,
@@ -60,6 +66,8 @@ export function LiveWork({
   name: string;
   /** Absent until its turn is read. */
   turn?: ChatTurn;
+  /** The session it is read from. */
+  record?: RecordOf;
   open: boolean;
   toggle: () => void;
   busy: boolean;
@@ -115,7 +123,7 @@ export function LiveWork({
         )}
       </div>
       {open && blocks.length > 0 && (
-        <WorkBlocks blocks={blocks} chatTitle={chatTitle} />
+        <WorkBlocks blocks={blocks} record={record} chatTitle={chatTitle} />
       )}
     </div>
   );
@@ -123,14 +131,16 @@ export function LiveWork({
 
 function WorkBlocks({
   blocks,
+  record,
   chatTitle,
 }: {
   blocks: ReturnType<typeof workBlocks>;
+  record?: RecordOf;
   chatTitle?: ChatTitle;
 }) {
   return (
     <div className="mt-2 mb-1 ml-1.5 flex flex-col gap-2 border-l pl-4">
-      <SessionBlocks blocks={blocks} chatTitle={chatTitle} />
+      <SessionBlocks blocks={blocks} record={record} chatTitle={chatTitle} />
     </div>
   );
 }

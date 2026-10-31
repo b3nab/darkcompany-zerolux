@@ -11,6 +11,7 @@ import { SubagentList } from "./SessionSubagents";
 import { SubagentCard } from "@/components/tool-call";
 import { Marked } from "./Console";
 import { SessionBlocks } from "@/components/session-blocks";
+import { setDensity } from "@/components/density";
 import type { InputBlock } from "@/components/session-blocks";
 
 afterEach(() => setKernelFetch());
@@ -161,6 +162,36 @@ test("every message of a session says when it was written, and words given or sa
   ).toHaveLength(3);
   // A copy for each input and each of the agent's words; none for a notice.
   expect(html.match(/<button/g)).toHaveLength(3);
+});
+
+test("an opened tool whose output a page carried cut reads it whole from its session, or keeps the start", () => {
+  setDensity("detailed");
+  const cut = {
+    key: "5.0",
+    time: null,
+    kind: "tool" as const,
+    id: "t1",
+    name: "Read",
+    input: { file_path: "/src/app.ts" },
+    result: {
+      output: "first lines",
+      error: false,
+      time: null,
+      at: 7,
+      truncated: 900_000,
+    },
+  };
+  const shown = (record?: { sessionId: string }) =>
+    renderToStaticMarkup(<SessionBlocks blocks={[cut]} record={record} />);
+  const read = shown({ sessionId: "s-aspen" });
+  const kept = shown();
+  setDensity("normal");
+  // The start is shown either way; with its session, the whole is on its way.
+  expect(read).toContain("first lines");
+  expect(read).toMatch(/animate-spin/);
+  expect(kept).toContain("first lines");
+  expect(kept).not.toMatch(/animate-spin/);
+  expect(kept).not.toBe(read);
 });
 
 test("a session listens for its CI: failures only by default, then the owner's words", () => {
