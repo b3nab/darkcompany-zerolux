@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { memo, useId } from "react";
 import type { ReactNode } from "react";
 import { cn } from "cn";
 import { BellIcon, ChevronRightIcon, CircleAlertIcon } from "lucide-react";
@@ -179,8 +179,11 @@ export type TextBlock = Extract<SessionBlock, { kind: "text" }>;
 export const ON_POINT =
   "opacity-0 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100";
 
-/** When the harness recorded it: the hour today, the day before that; the whole date on hover. */
-function Stamp({ time }: { time: string | null }) {
+/**
+ * When the harness recorded it: the hour today, the day before that; the whole date on hover.
+ * Written once per message: a page of earlier work does not write every time shown again.
+ */
+const Stamp = memo(function Stamp({ time }: { time: string | null }) {
   const at = time ? Date.parse(time) : NaN;
   if (Number.isNaN(at)) return null;
   return (
@@ -192,7 +195,7 @@ function Stamp({ time }: { time: string | null }) {
       {messageTime(at)}
     </time>
   );
-}
+});
 
 /** Under a message: when it was written, its copy, and what else can be done with it. */
 function MessageBar({

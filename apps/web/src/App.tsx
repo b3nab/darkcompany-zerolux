@@ -316,10 +316,14 @@ export function App({
   );
   // A session that is not (or no longer) listed shows the whole console.
   const consoleSession = chat.sessions.find((s) => s.id === consoleId);
-  // The harnesses' own sessions in the project's folders, read again as the workspace's change.
+  // The harnesses' own sessions in the project's folders, read again when the workspace gains
+  // or loses a session (one taken in leaves them), not as each one works.
   const natives = useNativeSessions(
     !!workspace && !needsOnboarding && chatReady,
-    chat.sessions,
+    chat.sessions
+      .map((s) => s.id)
+      .sort()
+      .join(" "),
   );
   const nativeSession = natives.sessions.find((s) => s.id === nativeId);
   const consoleList = (
