@@ -247,6 +247,22 @@ test("the reader's first read starts at the end, scoped to the chat", async () =
   ]);
 });
 
+test("a native session of the project is read where its harness keeps it, from the end", async () => {
+  const urls = fakeRecord([at({ type: "text", text: "x" }, 0)], 10);
+  const reader = sessionReader(
+    "claude/1",
+    undefined,
+    () => {},
+    undefined,
+    true,
+  );
+  await reader.earlier();
+  expect(urls).toEqual([
+    `/api/sessions/native/claude%2F1/events?before=${Number.MAX_SAFE_INTEGER}`,
+  ]);
+  reader.close();
+});
+
 test("a kernel that reads only forward asks for an update instead of looping", async () => {
   let calls = 0;
   globalThis.fetch = (async (_url: string) => {

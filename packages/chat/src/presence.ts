@@ -1,5 +1,5 @@
 import { listedSessions, liveSessions, sessionState } from "./chat";
-import type { Approval, ChatSession } from "./chat";
+import type { Approval, ChatSession, DiscoveredSession } from "./chat";
 import { harnessLabels } from "./client";
 import type { Actor } from "./client";
 import type { Chat } from "./useChat";
@@ -59,6 +59,15 @@ export const delegatedTo = (sessionId: string, sessions: ChatSession[]) =>
     .filter((s) => s.parent_session_id === sessionId)
     .sort((a, b) => b.created_at - a.created_at);
 
+/** Each word typed is in what is known, whatever the case: nothing typed finds everything. */
+function typedIn(known: (string | null | undefined)[], query: string) {
+  const text = known.join("\n").toLowerCase();
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .every((word) => text.includes(word));
+}
+
 /**
  * Whether a session is one the owner is looking for: each word typed is in its title, agent,
  * folder, harness or latest summary, whatever the case. Nothing typed finds them all.
@@ -68,20 +77,24 @@ export function sessionMatches(
   actors: Actor[],
   query: string,
 ) {
-  const known = [
-    session.title,
-    actors.find((a) => a.id === session.actor_id)?.name,
-    session.workspace,
-    harnessLabels[session.harness],
-    session.summary,
-  ]
-    .join("\n")
-    .toLowerCase();
-  return query
-    .toLowerCase()
-    .split(/\s+/)
-    .every((word) => known.includes(word));
+  return typedIn(
+    [
+      session.title,
+      actors.find((a) => a.id === session.actor_id)?.name,
+      session.workspace,
+      harnessLabels[session.harness],
+      session.summary,
+    ],
+    query,
+  );
 }
+
+/** Whether a native session of the project is one the owner is looking for: by its title, folder or harness. */
+export const nativeMatches = (session: DiscoveredSession, query: string) =>
+  typedIn(
+    [session.title, session.workspace, harnessLabels[session.harness]],
+    query,
+  );
 
 /**
  * What an agent is doing, as the owner reads it everywhere: its best chat session.

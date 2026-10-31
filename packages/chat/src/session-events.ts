@@ -490,13 +490,15 @@ export function sessionReader(
   changed: (record: SessionRecord) => void,
   /** One of its subagents, whose events come in the same pages. */
   subagent?: string,
+  /** A native session of the project, not in the workspace: read where its harness keeps it. */
+  native = false,
 ) {
   const record: SessionRecord = { events: [], next: 0, error: "" };
   let closed = false;
   let queue = Promise.resolve();
   const page = (cursor: string) =>
     api<SessionEventPage>(
-      `/sessions/${encodeURIComponent(sessionId)}${subagent ? `/subagents/${encodeURIComponent(subagent)}` : ""}/events?${cursor}${chat ? `&chat=${encodeURIComponent(chat)}` : ""}`,
+      `/sessions/${native ? "native/" : ""}${encodeURIComponent(sessionId)}${subagent ? `/subagents/${encodeURIComponent(subagent)}` : ""}/events?${cursor}${chat ? `&chat=${encodeURIComponent(chat)}` : ""}`,
     );
   // Drawn once per read, when it is over and changed something: never page by page.
   let shown = "";
@@ -570,22 +572,35 @@ const unread: SessionRecord = { events: [], next: 0, error: "" };
 /**
  * A session's work, the latest first: earlier pages on request, later events whenever `grown`
  * changes (the `end` of its latest `session.output` notice). With `subagent`, that subagent's
- * work instead, read to its end whenever the session's record grows.
+ * work instead, read to its end whenever the session's record grows. A `native` session of the
+ * project, which sends no notices, is read to its end every few seconds.
  */
 export function useSessionEvents(
   sessionId: string,
   grown?: number,
   subagent?: string,
+  native = false,
 ) {
   const [record, setRecord] = useState(unread);
   const reader = useRef<SessionReader>(undefined);
   useEffect(() => {
-    const opened = sessionReader(sessionId, undefined, setRecord, subagent);
+    const opened = sessionReader(
+      sessionId,
+      undefined,
+      setRecord,
+      subagent,
+      native,
+    );
     reader.current = opened;
     setRecord(unread);
     void opened.earlier();
-    return opened.close;
-  }, [sessionId, subagent]);
+    if (!native) return opened.close;
+    const timer = setInterval(() => void opened.grow(LATEST), 3000);
+    return () => {
+      clearInterval(timer);
+      opened.close();
+    };
+  }, [sessionId, subagent, native]);
   useEffect(() => {
     if (grown === undefined) return;
     // No notice says where a subagent's record ends: it is read to its end.

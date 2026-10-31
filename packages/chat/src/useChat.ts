@@ -110,6 +110,18 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       readTo(id, last);
   }
 
+  async function attachSession(
+    discovered_session_id: string,
+    agent: { name?: string; actor_id?: string } = {},
+  ) {
+    const opened = await api<{ actor: Actor | null; session: ChatSession }>(
+      "/sessions/attach",
+      { discovered_session_id, ...agent },
+    );
+    await listSessions();
+    return opened;
+  }
+
   async function sendInput(input: SentInput) {
     // In place, in the order they were sent.
     const now = (status: SentInput["status"], error?: string) => {
@@ -492,16 +504,29 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
      * Opens a found session in ZeroLux: for an agent (`actor_id`, or a new one by `name`),
      * or as the owner's own with neither.
      */
-    async attach(
-      discovered_session_id: string,
-      agent: { name?: string; actor_id?: string } = {},
+    attach: attachSession,
+    /**
+     * Continues a native session of the project: it comes into the workspace as the owner's
+     * own, then takes the words as its first input, shown at its end like any other (`after`:
+     * where the record read ends). Answers the session.
+     */
+    async continueNative(
+      discoveredId: string,
+      text: string,
+      images: InputImage[] = [],
+      after = 0,
     ) {
-      const opened = await api<{ actor: Actor | null; session: ChatSession }>(
-        "/sessions/attach",
-        { discovered_session_id, ...agent },
-      );
-      await listSessions();
-      return opened;
+      const { session } = await attachSession(discoveredId);
+      void sendInput({
+        id: newId(),
+        session_id: session.id,
+        text,
+        images,
+        mode: "steer",
+        after,
+        status: "sending",
+      }).catch(() => undefined);
+      return session;
     },
     /** A new session ZeroLux runs in a folder, with or without an agent. */
     async createSession(input: NewSession) {
