@@ -147,6 +147,36 @@ pub struct Item {
     pub time: Option<String>,
     #[serde(flatten)]
     pub event: Event,
+    /// A tool's output given only in part: the whole one's size in bytes. The record at `at`
+    /// gives it whole.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<usize>,
+}
+
+/// How much of a tool's output a page carries: the rest is read when it is opened.
+const OUTPUT_SHOWN: usize = 4 * 1024;
+
+impl Item {
+    /// The same event, with a long tool output cut to its beginning, as text.
+    pub fn light(mut self) -> Self {
+        if let Event::ToolResult { output, .. } = &mut self.event {
+            let whole = output.to_string().len();
+            if whole > 2 * OUTPUT_SHOWN {
+                let text = match &*output {
+                    Value::String(text) => text.clone(),
+                    Value::Array(_) => text_of(output, &["text"]),
+                    other => other.to_string(),
+                };
+                let mut end = OUTPUT_SHOWN.min(text.len());
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                *output = Value::String(text[..end].to_owned());
+                self.truncated = Some(whole);
+            }
+        }
+        self
+    }
 }
 
 /// The chat and delivery an envelope names, in the current format or an earlier one.
@@ -624,6 +654,7 @@ pub fn project(harness: &str, records: &[Record]) -> Vec<Item> {
                 at: record.at,
                 time: time.clone(),
                 event,
+                truncated: None,
             })
         })
         .collect()
@@ -820,6 +851,7 @@ mod tests {
                     at: at as u64,
                     time: None,
                     event,
+                    truncated: None,
                 })
                 .collect()
         };

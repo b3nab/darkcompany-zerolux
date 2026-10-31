@@ -77,10 +77,30 @@ pub async fn record(op: &str, record: &RecordRef, params: &Value) -> Result<Valu
     })
     .await?;
     Ok(match op {
-        "events" => json!(
-            crate::native_output::events_of(&row.id, &row.harness, path, param(params, "query")?)
-                .await?
-        ),
+        // A page carries the beginning of each long tool output; `events_at` the whole.
+        "events" => {
+            let mut page = crate::native_output::events_of(
+                &row.id,
+                &row.harness,
+                path,
+                param(params, "query")?,
+            )
+            .await?;
+            page.events = page.events.into_iter().map(|item| item.light()).collect();
+            json!(page)
+        }
+        "events_at" => {
+            let at: u64 = param(params, "at")?;
+            let path = path.context("The session's native record is not there yet")?;
+            let (records, ..) = crate::native_output::read(&path, at).await?;
+            let record: Vec<_> = records
+                .into_iter()
+                .take(1)
+                .filter(|record| record.at == at)
+                .collect();
+            anyhow::ensure!(!record.is_empty(), crate::store::Error::NotFound);
+            json!({"events": crate::native_events::project(&row.harness, &record)})
+        }
         "output" => {
             let after: u64 = param(params, "after")?;
             let (records, next, end) = match path {
@@ -207,5 +227,49 @@ pub async fn answer(op: &str, params: Value) -> Result<Value> {
             .await
         }
         other => bail!("This computer's ZeroLux does not know `{other}`; update it"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_page_carries_a_long_tool_output_cut_and_its_record_gives_it_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("session.jsonl");
+        let long = "x".repeat(64 * 1024);
+        let lines = [
+            json!({"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"t1","name":"read","arguments":{}}]}}),
+            json!({"type":"message","message":{"role":"toolResult","toolCallId":"t1","content":[{"type":"text","text":long}]}}),
+            json!({"type":"message","message":{"role":"toolResult","toolCallId":"t2","content":[{"type":"text","text":"short"}]}}),
+        ];
+        let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+        std::fs::write(&file, text).unwrap();
+        let record = RecordRef {
+            id: "s".into(),
+            harness: "pi".into(),
+            native_session_id: "n".into(),
+            native_locator_json: json!({"session_file": file}).to_string(),
+            workspace: dir.path().to_string_lossy().into_owned(),
+        };
+        let page = record_op(&record, "events", json!({"query": {}})).await;
+        let results: Vec<&Value> = page["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["type"] == "tool_result")
+            .collect();
+        assert_eq!(results.len(), 2);
+        let (cut, short) = (results[0], results[1]);
+        assert!(cut["output"].as_str().unwrap().len() < long.len());
+        assert!(cut["truncated"].as_u64().unwrap() > long.len() as u64);
+        assert!(short.get("truncated").is_none());
+        let whole = record_op(&record, "events_at", json!({"at": cut["at"]})).await;
+        assert_eq!(whole["events"][0]["output"][0]["text"], long.as_str());
+    }
+
+    async fn record_op(record: &RecordRef, op: &str, params: Value) -> Value {
+        super::record(op, record, &params).await.unwrap()
     }
 }

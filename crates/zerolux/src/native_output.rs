@@ -30,6 +30,9 @@ use crate::{
 
 /// A page reads up to this many bytes, but never splits a record.
 pub const PAGE_BYTES: u64 = 512 * 1024;
+/// How much of a record a page of earlier events reads: its long tool outputs travel cut,
+/// so a wide page stays light and holds many events.
+const BACK_BYTES: u64 = 2 * 1024 * 1024;
 const WATCH_EVERY: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Serialize)]
@@ -292,7 +295,7 @@ pub(crate) async fn events_of(
             Ok(page(events, after, next, end))
         }
         Some(before) => {
-            let (events, first, stop, end) = back(&path, harness, before, chat, PAGE_BYTES)
+            let (events, first, stop, end) = back(&path, harness, before, chat, BACK_BYTES)
                 .await
                 .map_err(|e| unreadable(e, before))?;
             Ok(page(events, first, stop, end))

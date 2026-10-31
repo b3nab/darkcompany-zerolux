@@ -532,6 +532,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/sessions/discover", get(discover_sessions))
         .route("/sessions/native", get(native_sessions))
         .route("/sessions/native/{id}/events", get(native_events))
+        .route("/sessions/native/{id}/events/{at}", get(native_events_at))
         .route("/sessions/native/{id}/output", get(native_output))
         .route("/sessions/search", get(search_sessions))
         .route("/sessions/attach", post(attach_session))
@@ -573,6 +574,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/sessions/{id}/output", get(session_output))
         .route("/sessions/{id}/live", get(session_live))
         .route("/sessions/{id}/events", get(session_events))
+        .route("/sessions/{id}/events/{at}", get(session_events_at))
         .route("/sessions/{id}/subagents", get(session_subagents))
         .route(
             "/sessions/{id}/terminal-command",
@@ -1118,6 +1120,20 @@ async fn native_events(
     let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
     let events = runtime(&state)?
         .native_record(&id, "events", &json!({ "query": query }))
+        .await
+        .map_err(said)?;
+    Ok(Json(events))
+}
+
+/// The events of one record of such a session, whole.
+async fn native_events_at(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path((id, at)): Path<(String, u64)>,
+) -> Result<Json<Value>, ApiFailure> {
+    host_person(&state, &who).await?;
+    let events = runtime(&state)?
+        .native_record(&id, "events_at", &json!({ "at": at }))
         .await
         .map_err(said)?;
     Ok(Json(events))
@@ -1893,6 +1909,16 @@ async fn session_events(
     let who = state.store.acting_for(&who, &id, Access::Read).await?;
     let Query(query) = query.map_err(|error| Error::Invalid(error.body_text()))?;
     on_record(&state, &who, &id, "events", json!({ "query": query })).await
+}
+
+/// The events of the one record at `at`, whole: a tool output a page carried cut.
+async fn session_events_at(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path((id, at)): Path<(String, u64)>,
+) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
+    on_record(&state, &who, &id, "events_at", json!({ "at": at })).await
 }
 
 /// Stops the native turn in progress; the session stays linked.
