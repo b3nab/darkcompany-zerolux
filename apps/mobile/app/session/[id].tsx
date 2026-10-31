@@ -470,9 +470,10 @@ export default function SessionPage() {
             initialScrollAtEnd
             maintainScrollAtEnd
             maintainVisibleContentPosition={{ data: true, size: true }}
-            // The latest work comes first; earlier work loads while scrolling up to it.
+            // The latest work comes first; earlier work is read two screens before the top, so
+            // scrolling up rarely waits for it.
             onStartReached={more ? earlier : undefined}
-            onStartReachedThreshold={0.4}
+            onStartReachedThreshold={2}
             keyboardDismissMode="interactive"
             keyboardOffset={insets.bottom}
             onScroll={onScroll}

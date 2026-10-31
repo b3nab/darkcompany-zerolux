@@ -80,8 +80,12 @@ export default function Console() {
       all.filter((session) => sessionMatches(session, actors, query)),
     ]),
   ) as Record<Shown, typeof chat.sessions>;
-  // The harnesses' own sessions in the project's folder: read again as sessions come in.
-  const project = useNativeSessions(true, chat.sessions, url);
+  // The harnesses' own sessions in the project's folder: read again as sessions come in or go.
+  const project = useNativeSessions(
+    true,
+    chat.sessions.map((session) => session.id).join(),
+    url,
+  );
   const natives = project.sessions.filter((native) =>
     nativeMatches(native, query),
   );
