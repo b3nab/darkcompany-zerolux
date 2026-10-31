@@ -611,7 +611,11 @@ export function useSessionEvents(
     setRecord(unread);
     void opened.earlier();
     if (!native) return opened.close;
-    const timer = setInterval(() => void opened.grow(LATEST), 3000);
+    // One read at a time: a slow one is not joined by others waiting behind it.
+    let reading: Promise<void> | undefined;
+    const timer = setInterval(() => {
+      reading ??= opened.grow(LATEST).finally(() => (reading = undefined));
+    }, 3000);
     return () => {
       clearInterval(timer);
       opened.close();

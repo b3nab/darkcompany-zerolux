@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { DiscoveredSession, Discovery } from "./chat";
-import { ApiError, errorMessage, kernelUrl, request } from "./client";
+import { ApiError, kernelUrl, request } from "./client";
+import { sharedRead, useSharedRead } from "./shared-read";
 
 /** The latest active first. */
 export const byActivity = (sessions: DiscoveredSession[]) =>
@@ -8,51 +9,49 @@ export const byActivity = (sessions: DiscoveredSession[]) =>
     (a, b) => (b.last_activity_at ?? 0) - (a.last_activity_at ?? 0),
   );
 
+const readNative = (kernel: string) =>
+  request<Discovery>(kernel, "/sessions/native").then(
+    ({ sessions }) => byActivity(sessions),
+    (error: unknown) => {
+      // A kernel without them, or a person who may not use its computer's sessions, has none.
+      if (
+        error instanceof ApiError &&
+        (error.status === 403 || error.status === 404)
+      )
+        return [];
+      throw error;
+    },
+  );
+
 /**
  * The harnesses' own sessions in the workspace's project folder, running or saved, not in the
  * workspace yet, the latest active first: read while `enabled`, every 15 s, and again when
- * `changed` changes (attaching one takes it out). A kernel without them, or a person who
- * may not use its computer's sessions, has none.
+ * `changed` changes (attaching one takes it out). One read at a time for every screen, however
+ * slow: a change during it reads once more after it.
  */
 export function useNativeSessions(
   enabled: boolean,
   changed?: unknown,
   kernel = kernelUrl(),
 ) {
-  const [read, setRead] = useState<{
-    kernel: string;
-    sessions: DiscoveredSession[];
-    error: string;
-  }>();
-  const reload = useCallback(
-    () =>
-      request<Discovery>(kernel, "/sessions/native").then(
-        ({ sessions }) =>
-          setRead({ kernel, sessions: byActivity(sessions), error: "" }),
-        (error: unknown) => {
-          const none =
-            error instanceof ApiError &&
-            (error.status === 403 || error.status === 404);
-          // Out of reach a moment, the sessions last read stay.
-          setRead((was) => ({
-            kernel,
-            sessions: !none && was?.kernel === kernel ? was.sessions : [],
-            error: none ? "" : errorMessage(error),
-          }));
-        },
-      ),
-    [kernel],
-  );
+  const { read, reload } = useSharedRead(readNative, kernel, enabled);
   useEffect(() => {
     if (!enabled) return;
-    void reload();
-    const timer = setInterval(() => void reload(), 15_000);
+    const join = () => void sharedRead(readNative, kernel, true);
+    join();
+    const timer = setInterval(join, 15_000);
     return () => clearInterval(timer);
-  }, [enabled, reload, changed]);
-  const current = read?.kernel === kernel ? read : undefined;
+  }, [enabled, kernel]);
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) return void (first.current = false);
+    void reload();
+    // `changed` alone says when to read again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [changed]);
   return {
-    sessions: current?.sessions ?? [],
-    error: current?.error ?? "",
+    sessions: read?.items ?? [],
+    error: read?.error ?? "",
     reload,
   };
 }

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect } from "react";
+import { sharedRead, useSharedRead } from "./shared-read";
 import type { JsonSchema } from "./action-form";
 import type { ChatSession } from "./chat";
 import type { UiPiece } from "./extension-ui";
-import { errorMessage, fetchKernel, kernelUrl, request } from "./client";
+import { fetchKernel, kernelUrl, request } from "./client";
 import type { Actor } from "./client";
 
 /** A setting of an extension; a secret's value never comes back, only whether it has one. */
@@ -189,41 +190,27 @@ export function extensionsNotice() {
   readers.forEach((read) => read());
 }
 
-/** What `load` reads from the kernel, read again whenever extensions change. */
+/**
+ * What `load` reads from the kernel, read again whenever extensions change: one read at a time
+ * for every screen that shows it.
+ */
 export function useKernelList<T>(
   load: (kernel: string) => Promise<T>,
   kernel: string,
   enabled: boolean,
 ) {
-  const [read, setRead] = useState<{
-    kernel: string;
-    items?: T;
-    error?: string;
-  }>();
-  const reload = useCallback(
-    async () =>
-      enabled
-        ? load(kernel).then(
-            (items) => setRead({ kernel, items }),
-            (error: unknown) =>
-              setRead((was) => ({
-                ...(was?.kernel === kernel ? was : { kernel }),
-                error: errorMessage(error),
-              })),
-          )
-        : undefined,
-    [load, kernel, enabled],
-  );
+  const { read, reload } = useSharedRead(load, kernel, enabled);
   useEffect(() => {
-    void reload();
-    const read = () => void reload();
-    readers.add(read);
+    if (!enabled) return;
+    // A screen that opens joins a read under way.
+    void sharedRead(load, kernel, true);
+    const again = () => void reload();
+    readers.add(again);
     return () => {
-      readers.delete(read);
+      readers.delete(again);
     };
-  }, [reload]);
-  const current = enabled && read?.kernel === kernel ? read : undefined;
-  return { items: current?.items, error: current?.error ?? "", reload };
+  }, [load, kernel, enabled, reload]);
+  return { items: read?.items, error: read?.error ?? "", reload };
 }
 
 const readExtensions = (kernel: string) =>
