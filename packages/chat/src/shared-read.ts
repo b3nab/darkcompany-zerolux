@@ -71,7 +71,9 @@ export function useSharedRead<T>(
     },
     [at],
   );
-  const read = useSyncExternalStore(subscribe, () => at.read);
+  // The same on a server render, as the web's tests make.
+  const snapshot = () => at.read;
+  const read = useSyncExternalStore(subscribe, snapshot, snapshot);
   const reload = useCallback(
     () => (enabled ? sharedRead(load, kernel) : Promise.resolve()),
     [load, kernel, enabled],
