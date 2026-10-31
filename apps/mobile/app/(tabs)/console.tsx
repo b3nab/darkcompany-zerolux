@@ -11,16 +11,18 @@ import {
   ago,
   hitKindLabels,
   matchParts,
+  nativeMatches,
   sessionMatches,
   sessionOutputAt,
   startsAnywhere,
   useHistorySearch,
+  useNativeSessions,
 } from "@zerolux/chat";
-import type { Attention } from "@zerolux/chat";
+import type { Attention, DiscoveredSession } from "@zerolux/chat";
 import { Screen } from "@/components/screen";
 import { WorkspaceButton } from "@/components/workspace-mark";
 import { SearchField } from "@/components/search-field";
-import { SessionRow } from "@/components/session";
+import { NativeRow, SessionRow } from "@/components/session";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "../../src/kernel";
@@ -50,9 +52,16 @@ const empty: Record<Shown, string> = {
 
 /**
  * The Agent Console, as an inbox: the pinned sessions, then each live session in one state,
- * what needs you first, the latest within each; the stopped and archived ones on request.
- * The pen starts a new session, with or without an agent.
+ * what needs you first, the latest within each, then the project's native sessions not in the
+ * workspace yet, the latest active first; the stopped and archived ones on request. The pen
+ * starts a new session, with or without an agent.
  */
+/** How many sessions each list has. */
+const countsOf = (sessions: Record<Shown, unknown[]>) =>
+  Object.fromEntries(
+    Object.entries(sessions).map(([list, all]) => [list, all.length]),
+  ) as Record<Shown, number>;
+
 export default function Console() {
   const { workspace, chat, url, hosts } = useSession();
   // Sessions start on the kernel's computer: its person's, or open to you.
@@ -70,20 +79,36 @@ export default function Console() {
       all.filter((session) => sessionMatches(session, actors, query)),
     ]),
   ) as Record<Shown, typeof chat.sessions>;
-  const rows = attentionInbox(
+  // The harnesses' own sessions in the project's folder: read again as sessions come in.
+  const project = useNativeSessions(true, chat.sessions, url);
+  const natives = project.sessions.filter((native) =>
+    nativeMatches(native, query),
+  );
+  const inbox = attentionInbox(
     sessions[shown].map((session) => ({
       ...session,
       output_at: sessionOutputAt(chat, session) ?? null,
     })),
     chat.approvals,
   );
+  type Row = (typeof inbox)[number] | { native: DiscoveredSession };
+  const rows: Row[] =
+    shown === "live"
+      ? [...inbox, ...natives.map((native) => ({ native }))]
+      : inbox;
+  const counts = {
+    ...countsOf(sessions),
+    live: sessions.live.length + natives.length,
+  };
   // The live inbox in sections; the other lists are plain.
-  const section = (row: (typeof rows)[number]) =>
+  const section = (row: Row) =>
     shown !== "live"
       ? undefined
-      : row.session.pinned_at
-        ? "pinned"
-        : row.attention;
+      : "native" in row
+        ? "native"
+        : row.session.pinned_at
+          ? "pinned"
+          : row.attention;
   return (
     <Screen
       leading={<WorkspaceButton />}
@@ -129,7 +154,7 @@ export default function Console() {
               {shownLabels[value]}
             </Text>
             <Text className="font-mono text-[12px] text-faint">
-              {sessions[value].length}
+              {counts[value]}
             </Text>
           </Pressable>
         ))}
@@ -137,11 +162,22 @@ export default function Console() {
       <LegendList
         style={{ flex: 1 }}
         data={rows}
-        keyExtractor={({ session }) => session.id}
+        keyExtractor={(row) =>
+          "native" in row ? `native:${row.native.id}` : row.session.id
+        }
         estimatedItemSize={60}
         contentContainerStyle={{ paddingBottom: 16 }}
         keyboardDismissMode="on-drag"
-        ListFooterComponent={<HistoryResults query={query} kernel={url} />}
+        ListFooterComponent={
+          <>
+            {shown === "live" && project.error ? (
+              <Text className="px-5 pt-3 text-sm text-destructive">
+                {project.error}
+              </Text>
+            ) : null}
+            <HistoryResults query={query} kernel={url} />
+          </>
+        }
         ListEmptyComponent={
           <Text className="p-5 text-base leading-6 text-faint">
             {query.trim()
@@ -150,7 +186,6 @@ export default function Console() {
           </Text>
         }
         renderItem={({ item, index }) => {
-          const { session, attention } = item;
           const here = section(item);
           return (
             <View>
@@ -160,24 +195,36 @@ export default function Console() {
                     accessibilityRole="header"
                     className={cn(
                       "font-mono text-[11px] tracking-wider uppercase",
-                      here === "pinned" ? "text-faint" : attentionTones[here],
+                      here === "pinned" || here === "native"
+                        ? "text-faint"
+                        : attentionTones[here],
                     )}
                   >
-                    {here === "pinned" ? "Pinned" : attentionLabels[here]}
+                    {here === "pinned"
+                      ? "Pinned"
+                      : here === "native"
+                        ? "In this project"
+                        : attentionLabels[here]}
                   </Text>
                   <Text className="font-mono text-[11px] text-faint">
                     {rows.filter((row) => section(row) === here).length}
                   </Text>
                 </View>
               ) : null}
-              <SessionRow
-                session={session}
-                agent={actors.find((a) => a.id === session.actor_id)}
-                attention={attention}
-                asks={chat.approvals.find(
-                  (a) => a.session_id === session.id && a.status === "pending",
-                )}
-              />
+              {"native" in item ? (
+                <NativeRow native={item.native} />
+              ) : (
+                <SessionRow
+                  session={item.session}
+                  agent={actors.find((a) => a.id === item.session.actor_id)}
+                  attention={item.attention}
+                  asks={chat.approvals.find(
+                    (a) =>
+                      a.session_id === item.session.id &&
+                      a.status === "pending",
+                  )}
+                />
+              )}
             </View>
           );
         }}

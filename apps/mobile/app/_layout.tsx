@@ -85,6 +85,7 @@ function Navigator() {
         <Stack.Screen name="invites" />
         <Stack.Screen name="session/new" options={{ presentation: "modal" }} />
         <Stack.Screen name="session/[id]" />
+        <Stack.Screen name="native/[id]" />
         <Stack.Screen name="terminal/[id]" />
         <Stack.Screen name="background/[id]" />
         <Stack.Screen name="background-command/[id]" />

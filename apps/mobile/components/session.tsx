@@ -25,6 +25,7 @@ import type {
   Approval,
   Attention,
   ChatSession,
+  DiscoveredSession,
   ShareChoice,
 } from "@zerolux/chat";
 import type { MenuEntry } from "@zerolux/ui";
@@ -222,6 +223,58 @@ export function SessionRow({
         ) : null}
       </View>
     </MenuLink>
+  );
+}
+
+/**
+ * A native session of the project, not in the workspace yet: it opens to be read, and goes on
+ * in the workspace with a first input.
+ */
+export function NativeRow({ native }: { native: DiscoveredSession }) {
+  const title = native.title || "Untitled session";
+  return (
+    <Link
+      href={{
+        pathname: "/native/[id]",
+        params: {
+          id: native.id,
+          title,
+          harness: native.harness,
+          folder: native.workspace,
+        },
+      }}
+      asChild
+    >
+      <Pressable className="flex-row items-center gap-3 px-5 py-2.5 active:bg-accent">
+        <ActorMark kind="agent" name={title} tone="stopped" />
+        <View className="min-w-0 flex-1 gap-0.5">
+          <View className="flex-row items-baseline gap-2">
+            <Text numberOfLines={1} className="shrink text-sm font-medium">
+              {title}
+            </Text>
+            {native.last_activity_at ? (
+              <Text
+                accessibilityLabel={ago(native.last_activity_at)}
+                className="ml-auto font-mono text-[11px] text-faint"
+              >
+                {briefAgo(native.last_activity_at)}
+              </Text>
+            ) : null}
+          </View>
+          <Text numberOfLines={1} className="text-xs text-faint">
+            {`${harnessLabels[native.harness] ?? native.harness} · ${folderName(native.workspace)}`}
+          </Text>
+          {native.reason ? (
+            <Text
+              numberOfLines={1}
+              className="text-[13px] text-muted-foreground"
+            >
+              {native.reason}
+            </Text>
+          ) : null}
+        </View>
+      </Pressable>
+    </Link>
   );
 }
 
