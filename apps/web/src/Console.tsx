@@ -650,8 +650,8 @@ export function ConsoleList({
                   {folderName(one.workspace)}
                 </span>
               </span>
-              {one.availability === "attention" && one.reason && (
-                <span className="truncate text-[13px] text-attention">
+              {one.reason && (
+                <span className="truncate text-[11.5px] text-faint">
                   {one.reason}
                 </span>
               )}
@@ -697,7 +697,6 @@ export function NativeSessionView({
   const navigate = useNavigate();
   const [text, setText] = useState("");
   const title = native.title || "Untitled session";
-  const open = native.availability === "attachable";
   const continueWith = (said: string) =>
     perform(async () => {
       const session = await chat.continueNative(
@@ -767,16 +766,16 @@ export function NativeSessionView({
       <div className="mx-auto w-full max-w-3xl shrink-0 px-3 pb-3 md:px-6">
         <Composer
           label={`Continue ${title}`}
-          placeholder={open ? `Continue ${title}` : (native.reason ?? title)}
+          placeholder={`Continue ${title}`}
           text={text}
           setText={setText}
-          open={open}
+          open
           busy={busy}
           send={() => {
             if (text.trim()) void continueWith(text.trim());
           }}
           voice={{
-            transcription: open && voice.available,
+            transcription: voice.available,
             send: async (said) => {
               await continueWith(said);
             },

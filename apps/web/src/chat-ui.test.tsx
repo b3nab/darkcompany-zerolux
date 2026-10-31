@@ -1736,7 +1736,7 @@ test("the console lists the project's own sessions with the live ones, each to o
   expect(html).toContain('href="/console/native/n-cedar"');
 });
 
-test("a session of the project's own continues from its box only when it can be taken", () => {
+test("a session of the project's own continues from its box, running or saved", () => {
   const box = (availability: "attachable" | "attention") =>
     renderToStaticMarkup(
       <NativeSessionView
@@ -1747,5 +1747,5 @@ test("a session of the project's own continues from its box only when it can be 
       />,
     ).match(/<textarea[^>]*>/)![0];
   expect(box("attachable")).not.toContain('disabled=""');
-  expect(box("attention")).toContain('disabled=""');
+  expect(box("attention")).not.toContain('disabled=""');
 });
