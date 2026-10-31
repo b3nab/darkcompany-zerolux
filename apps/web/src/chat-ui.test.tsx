@@ -3,7 +3,13 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup as render } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { ApprovalCard, ApprovalReceipt, Approvals } from "./Approvals";
-import { ConsoleList, ContextMeter, QueueCards, SessionView } from "./Console";
+import {
+  ConsoleList,
+  ContextMeter,
+  NativeSessionView,
+  QueueCards,
+  SessionView,
+} from "./Console";
 import {
   AddAgent,
   ChatHome,
@@ -34,6 +40,7 @@ import {
 import type { Actor, Workspace } from "./api";
 import type {
   Approval,
+  DiscoveredSession,
   ChatSession,
   ChatTurn,
   SessionBlock,
@@ -233,6 +240,7 @@ function fakeChat(overrides: Partial<Chat> = {}): Chat {
     interrupt: async () => true,
     compact: nothing,
     input: nothing,
+    continueNative: async () => session("s-native", ASPEN),
     sentInputs: () => [],
     retryInput: nothing,
     dropInput: () => {},
@@ -1698,4 +1706,46 @@ test("a file a message shares downloads with a press where Storage is, and is on
   expect(card(true)).toMatch(/<button[^>]*>.*notes\.md.*\d KB/);
   expect(card(false)).not.toContain("<button");
   expect(card(false)).toContain("notes.md");
+});
+
+const nativeSession = (
+  availability: "attachable" | "attention",
+): DiscoveredSession => ({
+  id: "n-cedar",
+  harness: "claude-code",
+  title: "Refactor the parser",
+  workspace: "/tmp/cedar",
+  last_activity_at: 1_000,
+  native_session_id: "native-cedar",
+  availability,
+  can_create_context: true,
+  reason: availability === "attention" ? "Open in another terminal" : null,
+});
+
+test("the console lists the project's own sessions with the live ones, each to open and read", () => {
+  const html = renderToStaticMarkup(
+    <ConsoleList
+      busy={false}
+      perform={perform}
+      chat={fakeChat({ sessions: [session("s-aspen", ASPEN)] })}
+      actors={actors}
+      natives={[nativeSession("attachable")]}
+    />,
+  );
+  expect(html).toContain('href="/console/s-aspen"');
+  expect(html).toContain('href="/console/native/n-cedar"');
+});
+
+test("a session of the project's own continues from its box only when it can be taken", () => {
+  const box = (availability: "attachable" | "attention") =>
+    renderToStaticMarkup(
+      <NativeSessionView
+        native={nativeSession(availability)}
+        chat={fakeChat()}
+        busy={false}
+        perform={perform}
+      />,
+    ).match(/<textarea[^>]*>/)![0];
+  expect(box("attachable")).not.toContain('disabled=""');
+  expect(box("attention")).toContain('disabled=""');
 });

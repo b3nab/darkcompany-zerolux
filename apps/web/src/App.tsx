@@ -15,6 +15,7 @@ import {
   startsHere,
   useChat,
   useHosts,
+  useNativeSessions,
   useStorage,
 } from "@zerolux/chat";
 import type { Conversation } from "@zerolux/chat";
@@ -37,7 +38,12 @@ import { Approvals, openApprovals } from "./Approvals";
 import { useAuthentication, useMe } from "./AuthGate";
 import { ChatHome, ChatList, ChatView, NewConversation } from "./ChatView";
 import { CommandMenu } from "./CommandMenu";
-import { ConsoleHome, ConsoleList, SessionView } from "./Console";
+import {
+  ConsoleHome,
+  ConsoleList,
+  NativeSessionView,
+  SessionView,
+} from "./Console";
 import { MD, useMedia } from "./media";
 import { Meetings } from "./Meetings";
 import { UpdateButton } from "./Updates";
@@ -131,6 +137,7 @@ export function App({
   const chatId = useMatch("/chats/:id")?.params.id;
   const agentId = useMatch("/team/:id")?.params.id;
   const consoleId = useMatch("/console/:id")?.params.id;
+  const nativeId = useMatch("/console/native/:id")?.params.id;
   const requestId = useRef(0);
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const id = ++requestId.current;
@@ -309,10 +316,17 @@ export function App({
   );
   // A session that is not (or no longer) listed shows the whole console.
   const consoleSession = chat.sessions.find((s) => s.id === consoleId);
+  // The harnesses' own sessions in the project's folders, read again as the workspace's change.
+  const natives = useNativeSessions(
+    !!workspace && !needsOnboarding && chatReady,
+    chat.sessions,
+  );
+  const nativeSession = natives.sessions.find((s) => s.id === nativeId);
   const consoleList = (
     <ConsoleList
       chat={chat}
       actors={actors}
+      natives={natives.sessions}
       starts={starts}
       guestOn={guestOn}
       hosts={hosts}
@@ -635,6 +649,24 @@ export function App({
                     )}
                   />
                   <Route path="/console" element={consoleHome} />
+                  <Route
+                    path="/console/native/:id"
+                    element={
+                      nativeSession
+                        ? section(
+                            consoleList,
+                            true,
+                            <NativeSessionView
+                              key={nativeSession.id}
+                              native={nativeSession}
+                              chat={chat}
+                              busy={busy}
+                              perform={perform}
+                            />,
+                          )
+                        : consoleHome
+                    }
+                  />
                   <Route
                     path="/console/:id"
                     element={

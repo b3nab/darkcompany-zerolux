@@ -29,6 +29,7 @@ import {
   attentionInbox,
   attentionLabels,
   briefAgo,
+  byActivity,
   commandsFor,
   consoleSessions,
   contextShare,
@@ -38,6 +39,7 @@ import {
   draftOf,
   folderName,
   harnessLabels,
+  nativeMatches,
   hitKindLabels,
   inputImagesError,
   inputImageTypes,
@@ -84,6 +86,7 @@ import {
   withMention,
 } from "@zerolux/chat";
 import type {
+  DiscoveredSession,
   AgentSettings,
   Attention,
   Chat,
@@ -104,7 +107,7 @@ import type {
 import type { Actor } from "./api";
 import { sessionTone } from "./presence";
 import { Eyebrow, Presence } from "@/components/presence";
-import { SessionMark } from "@/components/profile";
+import { HarnessMark, SessionMark } from "@/components/profile";
 import {
   InputBubble,
   Compacting,
@@ -333,9 +336,12 @@ export function ConsoleList({
   hosts,
   busy,
   perform,
+  natives: native = [],
 }: {
   chat: Chat;
   actors: Actor[];
+  /** The harnesses' own sessions in the project's folders, not yet in the workspace. */
+  natives?: DiscoveredSession[];
   /** The workspace's computers: one's own joined ones run sessions too. */
   hosts?: Host[];
   /** Sessions start on this computer for its person, or for anyone it is open to. */
@@ -377,6 +383,16 @@ export function ConsoleList({
         )
       : chat.sessions,
   );
+  // The harnesses' own sessions in the project's folders, not yet in the workspace: read at
+  // once, continued with a first input.
+  const natives =
+    view === "live"
+      ? byActivity(
+          query.trim()
+            ? native.filter((one) => nativeMatches(one, query.trim()))
+            : native,
+        )
+      : [];
   const shown = attentionInbox(
     sessions[view].map((session) => ({
       ...session,
@@ -448,7 +464,7 @@ export function ConsoleList({
         choose={setView}
         options={(
           [
-            ["live", "Live", sessions.live.length],
+            ["live", "Live", sessions.live.length + natives.length],
             ["stopped", "Stopped", sessions.stopped.length],
             ["archived", "Archived", sessions.archived.length],
           ] as const
@@ -600,13 +616,173 @@ export function ConsoleList({
             </div>
           );
         })}
-        {shown.length === 0 && (
+        {natives.length > 0 && (
+          <h3 className="flex items-center justify-between px-2 pt-3 pb-1 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
+            In this project
+            <span className="text-faint">{natives.length}</span>
+          </h3>
+        )}
+        {natives.map((one) => (
+          <NavLink
+            key={one.id}
+            to={`/console/native/${encodeURIComponent(one.id)}`}
+            className="flex items-center gap-3 rounded-md px-2 py-2.5 transition-colors hover:bg-accent aria-[current=page]:bg-accent"
+          >
+            <HarnessMark harness={one.harness} className="size-8" />
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="flex items-baseline gap-2">
+                <span className="truncate text-sm font-medium">
+                  {one.title || "Untitled session"}
+                </span>
+                {one.last_activity_at && (
+                  <time
+                    dateTime={new Date(one.last_activity_at).toISOString()}
+                    title={ago(one.last_activity_at)}
+                    className="ml-auto shrink-0 font-mono text-[11px] text-faint"
+                  >
+                    {briefAgo(one.last_activity_at)}
+                  </time>
+                )}
+              </span>
+              <span className="truncate text-[11.5px] text-faint">
+                {harnessLabels[one.harness] ?? one.harness} ·{" "}
+                <span title={one.workspace} className="font-mono">
+                  {folderName(one.workspace)}
+                </span>
+              </span>
+              {one.availability === "attention" && one.reason && (
+                <span className="truncate text-[13px] text-attention">
+                  {one.reason}
+                </span>
+              )}
+            </span>
+          </NavLink>
+        ))}
+        {shown.length === 0 && natives.length === 0 && (
           <p className="px-2 py-6 text-sm text-faint">
             {query.trim() ? "No session matches." : emptyLists[view]}
           </p>
         )}
         <HistoryHits query={query} chat={chat} actors={actors} />
       </nav>
+    </section>
+  );
+}
+
+/**
+ * A session of the project's own harness, read where the harness keeps it, as it goes on. The
+ * first input makes it the workspace's, and its page then is the workspace's session's.
+ */
+export function NativeSessionView({
+  native,
+  chat,
+  busy,
+  perform,
+}: {
+  native: DiscoveredSession;
+  chat: Chat;
+  busy: boolean;
+  perform: Perform;
+}) {
+  const { events, error, more, earlier } = useSessionEvents(
+    native.id,
+    undefined,
+    undefined,
+    true,
+  );
+  const blocks = sessionBlocks(events);
+  const reading = useReadingPlace(true, { more, load: earlier });
+  useLayoutEffect(reading.settle, [reading.settle, events]);
+  const voice = useVoice();
+  const navigate = useNavigate();
+  const [text, setText] = useState("");
+  const title = native.title || "Untitled session";
+  const open = native.availability === "attachable";
+  const continueWith = (said: string) =>
+    perform(async () => {
+      const session = await chat.continueNative(
+        native.id,
+        said,
+        [],
+        events.length ? events[events.length - 1]!.at + 1 : undefined,
+      );
+      setText("");
+      navigate(`/console/${session.id}`);
+    });
+  return (
+    <section
+      aria-label={`${title}'s session`}
+      className="flex min-h-0 min-w-0 flex-1 flex-col"
+    >
+      <header className="flex min-h-14 shrink-0 items-center gap-3 border-b px-3 py-2 md:px-5">
+        <Link
+          to="/console"
+          aria-label="All sessions"
+          className={buttonVariants({
+            variant: "ghost",
+            size: "icon-sm",
+            className: "md:hidden",
+          })}
+        >
+          <ChevronLeftIcon />
+        </Link>
+        <HarnessMark harness={native.harness} className="size-8" />
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-[15px] font-medium">{title}</h2>
+          <p className="truncate text-xs text-muted-foreground">
+            {harnessLabels[native.harness] ?? native.harness} ·{" "}
+            <span title={native.workspace} className="font-mono">
+              {folderName(native.workspace)}
+            </span>
+          </p>
+        </div>
+      </header>
+      <div
+        ref={reading.scroller}
+        className="min-h-0 flex-1 overflow-y-auto px-3 py-4 [overflow-anchor:none] md:px-6"
+        onScroll={reading.onScroll}
+      >
+        <LoadingEarlier
+          loading={reading.loadingEarlier}
+          label="Loading earlier work"
+        />
+        <div ref={reading.top} />
+        <div
+          ref={reading.list}
+          className="mx-auto flex max-w-3xl flex-col gap-3"
+        >
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
+          <SessionBlocks
+            blocks={blocks}
+            chatTitle={(id) =>
+              chat.conversations.find((c) => c.id === id)?.title
+            }
+          />
+        </div>
+      </div>
+      <div className="mx-auto w-full max-w-3xl shrink-0 px-3 pb-3 md:px-6">
+        <Composer
+          label={`Continue ${title}`}
+          placeholder={open ? `Continue ${title}` : (native.reason ?? title)}
+          text={text}
+          setText={setText}
+          open={open}
+          busy={busy}
+          send={() => {
+            if (text.trim()) void continueWith(text.trim());
+          }}
+          voice={{
+            transcription: open && voice.available,
+            send: async (said) => {
+              await continueWith(said);
+            },
+          }}
+        />
+      </div>
     </section>
   );
 }
