@@ -394,8 +394,8 @@ fn claude_candidates(value: &Value) -> Result<Vec<Candidate>> {
     }).collect()
 }
 
-/// What is read of a saved transcript to list it: its folder near the start, its title near
-/// the end, where Claude Code writes the latest one again.
+/// What is read of a saved transcript to list it: its folder and first words near the start,
+/// its title and last message near the end, where Claude Code writes the latest title again.
 const TRANSCRIPT_HEAD: u64 = 256 * 1024;
 const TRANSCRIPT_TAIL: u64 = 64 * 1024;
 
@@ -433,14 +433,27 @@ async fn claude_history_in(projects: &Path) -> Result<Vec<Candidate>> {
                 continue;
             };
             let metadata = handle.metadata().await?;
-            let mut workspace = None;
+            let (mut workspace, mut first, mut command, mut agent) = (None, None, None, None);
             let mut lines = tokio::io::BufReader::new((&mut handle).take(TRANSCRIPT_HEAD)).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                if let Some(cwd) = serde_json::from_str::<Value>(&line)
-                    .ok()
-                    .and_then(|record| record["cwd"].as_str().map(str::to_owned))
-                {
-                    workspace = Some(cwd);
+                let Ok(record) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
+                if workspace.is_none() {
+                    workspace = record["cwd"].as_str().map(str::to_owned);
+                }
+                if agent.is_none() {
+                    agent = record["agentName"]
+                        .as_str()
+                        .filter(|name| !name.trim().is_empty())
+                        .map(str::to_owned);
+                }
+                match claude_words(&record) {
+                    Some(Words::Said(said)) if first.is_none() => first = Some(said),
+                    Some(Words::Command(typed)) if command.is_none() => command = Some(typed),
+                    _ => {}
+                }
+                if workspace.is_some() && (first.is_some() || agent.is_some()) {
                     break;
                 }
             }
@@ -467,14 +480,37 @@ async fn claude_history_in(projects: &Path) -> Result<Vec<Candidate>> {
                     .map(|record| title(record, key, ""))
                     .filter(|name| !name.is_empty())
             };
+            // As Claude Code names it: the name given, its own title, or the first words; a
+            // team's member by its name.
             let name = named("custom-title", "customTitle")
                 .or_else(|| named("ai-title", "aiTitle"))
+                .or_else(|| named("agent-name", "agentName"))
+                .or(agent)
+                .or(first)
+                .or(command)
+                .map(|name| title(&json!({ "name": name }), "name", ""))
+                .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| "Claude Code session".into());
-            let modified = metadata
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|time| time.as_millis() as i64);
+            // When its last message was written. Claude Code adds bookkeeping to a transcript
+            // long after, so the file's own time is only the last resort.
+            let at = |kinds: &[&str]| {
+                records
+                    .iter()
+                    .rev()
+                    .filter(|record| {
+                        kinds.is_empty() || kinds.iter().any(|kind| record["type"] == *kind)
+                    })
+                    .find_map(|record| record["timestamp"].as_str())
+                    .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+                    .map(|time| time.timestamp_millis())
+            };
+            let modified = at(&["user", "assistant"]).or_else(|| at(&[])).or_else(|| {
+                metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|time| time.as_millis() as i64)
+            });
             found.push(candidate(
                 NativeSessionTarget {
                     harness: Harness::ClaudeCode,
@@ -490,6 +526,79 @@ async fn claude_history_in(projects: &Path) -> Result<Vec<Candidate>> {
         }
     }
     Ok(found)
+}
+
+/// What a person wrote in a Claude Code session's record, never Claude Code's own notes.
+fn claude_words(record: &Value) -> Option<Words> {
+    if record["type"] != "user" || record["isMeta"] == true || record["isCompactSummary"] == true {
+        return None;
+    }
+    let content = &record["message"]["content"];
+    let text = match content {
+        Value::String(text) => text.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter(|block| block["type"] == "text")
+            .filter_map(|block| block["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => return None,
+    };
+    first_words(&text)
+}
+
+/// A person's message as one line.
+enum Words {
+    /// What they asked, a team lead's message without its envelope.
+    Said(String),
+    /// A command, as typed.
+    Command(String),
+}
+
+impl Words {
+    fn said(self) -> Option<String> {
+        match self {
+            Words::Said(text) => Some(text),
+            Words::Command(_) => None,
+        }
+    }
+    fn command(self) -> Option<String> {
+        match self {
+            Words::Command(text) => Some(text),
+            Words::Said(_) => None,
+        }
+    }
+}
+
+/// A message's words as one line; nothing for a harness's own notes.
+fn first_words(text: &str) -> Option<Words> {
+    let text = text.trim();
+    let inside = |tag: &str| {
+        let open = text.find(&format!("<{tag}"))?;
+        let start = open + text[open..].find('>')? + 1;
+        // A preview may be cut before the envelope closes.
+        let end = text[start..]
+            .find(&format!("</{tag}>"))
+            .map_or(text.len(), |end| start + end);
+        Some(text[start..end].trim().to_owned())
+    };
+    let line = |text: &str| {
+        text.lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(str::to_owned)
+    };
+    if text.starts_with("<command-name>") {
+        let command = inside("command-name")?;
+        let args = inside("command-args").unwrap_or_default();
+        line(&format!("{command} {args}")).map(Words::Command)
+    } else if text.starts_with("<teammate-message") {
+        line(&inside("teammate-message")?).map(Words::Said)
+    } else if text.starts_with('<') {
+        None
+    } else {
+        line(text).map(Words::Said)
+    }
 }
 
 /// What a connected Claude Code session can and cannot do, stated up front.
@@ -523,12 +632,72 @@ async fn discover_claude(saved: bool) -> Result<Vec<Candidate>> {
             Err(error) => entry.public.reason = Some(format!("{error}")),
         }
     }
-    candidates.extend(
-        saved
-            .into_iter()
-            .filter(|c| !running.contains(&c.target.native_session_id)),
-    );
+    // A running session is named and dated by its transcript, as a saved one.
+    let (same, others): (Vec<_>, Vec<_>) = saved
+        .into_iter()
+        .partition(|c| running.contains(&c.target.native_session_id));
+    for entry in &mut candidates {
+        if let Some(saved) = same
+            .iter()
+            .find(|c| c.target.native_session_id == entry.target.native_session_id)
+        {
+            entry.target.title = saved.target.title.clone();
+            entry.public.title = saved.public.title.clone();
+            entry.public.last_activity_at = saved.public.last_activity_at;
+        }
+    }
+    candidates.extend(others);
     Ok(candidates)
+}
+
+/// As Codex names a thread: the name given, or the first line of its first message. A
+/// preview that holds only an envelope is read on in the thread's own record.
+async fn codex_title(thread: &Value, record: Option<&str>) -> String {
+    let named = title(thread, "name", "");
+    if !named.is_empty() {
+        return named;
+    }
+    let preview = thread["preview"].as_str().unwrap_or_default();
+    let mut first = first_words(preview).and_then(Words::said);
+    if first.is_none()
+        && preview.trim_start().starts_with('<')
+        && let Some(path) = record
+    {
+        first = codex_first_words(Path::new(path)).await;
+    }
+    let first = first
+        .or_else(|| first_words(preview).and_then(Words::command))
+        .or_else(|| {
+            preview
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_default();
+    title(&json!({ "name": first }), "name", "Codex thread")
+}
+
+/// The first thing a person asked a Codex thread, from the start of its rollout.
+async fn codex_first_words(path: &Path) -> Option<String> {
+    let file = tokio::fs::File::open(path).await.ok()?;
+    let mut lines = tokio::io::BufReader::new(file.take(TRANSCRIPT_HEAD)).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        let Ok(record) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let payload = &record["payload"];
+        if record["type"] == "event_msg"
+            && payload["type"] == "user_message"
+            && let Some(said) = payload["message"]
+                .as_str()
+                .and_then(first_words)
+                .and_then(Words::said)
+        {
+            return Some(said);
+        }
+    }
+    None
 }
 
 async fn codex_candidates(endpoint: &str) -> Result<Vec<Candidate>> {
@@ -586,12 +755,13 @@ async fn codex_candidates(endpoint: &str) -> Result<Vec<Candidate>> {
                 NativeSessionTarget {
                     harness: Harness::Codex,
                     native_session_id: id,
-                    title: title(actual, "name", "Codex thread"),
+                    title: codex_title(info, actual["path"].as_str()).await,
                     workspace: text(actual, "cwd")?,
                     native_locator: json!({"endpoint":endpoint}),
                 },
-                actual["updatedAt"]
+                info["recencyAt"]
                     .as_i64()
+                    .or_else(|| info["updatedAt"].as_i64())
                     .and_then(|time| time.checked_mul(1000)),
                 ready,
                 if ready {
@@ -1159,6 +1329,94 @@ mod tests {
                 .await
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn saved_claude_sessions_without_a_title_are_named_by_their_first_words_and_dated_by_their_last_message()
+     {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("-work");
+        std::fs::create_dir(&project).unwrap();
+        let work = if cfg!(windows) { r"C:\work" } else { "/work" };
+        let write = |id: &str, lines: &[Value]| {
+            let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+            std::fs::write(project.join(format!("{id}.jsonl")), text).unwrap();
+        };
+        let command = json!({"type":"user","cwd":work,"message":{"role":"user","content":"<command-name>/model</command-name>\n<command-args>opus</command-args>"}});
+        let asked = "11111111-1111-4111-8111-111111111111";
+        write(
+            asked,
+            &[
+                json!({"type":"user","cwd":work,"isMeta":true,"message":{"role":"user","content":"<local-command-caveat>notes</local-command-caveat>"}}),
+                command.clone(),
+                json!({"type":"user","cwd":work,"timestamp":"2026-10-01T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"\n  Fix the login  \nthen deploy"}]}}),
+                json!({"type":"assistant","cwd":work,"timestamp":"2026-10-02T12:30:00Z","message":{"role":"assistant","content":[]}}),
+                json!({"type":"mode","mode":"normal"}),
+                json!({"type":"permission-mode","permissionMode":"auto"}),
+            ],
+        );
+        let typed = "22222222-2222-4222-8222-222222222222";
+        write(typed, &[command]);
+        let member = "33333333-3333-4333-8333-333333333333";
+        write(
+            member,
+            &[
+                json!({"type":"user","cwd":work,"agentName":"reviewer","message":{"role":"user","content":"<teammate-message teammate_id=\"lead\">\nReview it</teammate-message>"}}),
+            ],
+        );
+        let found = claude_history_in(root.path()).await.unwrap();
+        let of = |id: &str| {
+            found
+                .iter()
+                .find(|c| c.target.native_session_id == id)
+                .unwrap()
+                .public
+                .clone()
+        };
+        assert_eq!(of(asked).title, "Fix the login");
+        assert_eq!(
+            of(asked).last_activity_at,
+            Some(
+                chrono::DateTime::parse_from_rfc3339("2026-10-02T12:30:00Z")
+                    .unwrap()
+                    .timestamp_millis()
+            )
+        );
+        assert_eq!(of(typed).title, "/model opus");
+        assert_eq!(of(member).title, "reviewer");
+    }
+
+    #[tokio::test]
+    async fn codex_threads_without_a_name_are_named_by_their_first_words() {
+        assert_eq!(
+            codex_title(&json!({"name":"Release","preview":"ship"}), None).await,
+            "Release"
+        );
+        assert_eq!(
+            codex_title(&json!({"name":null,"preview":"\nShip it\nnow"}), None).await,
+            "Ship it"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let rollout = dir.path().join("rollout.jsonl");
+        let lines = [
+            json!({"type":"session_meta","payload":{"id":"t"}}),
+            json!({"type":"event_msg","payload":{"type":"user_message","message":"<teammate-message teammate_id=\"lead\">\nAudit the cache\nfully"}}),
+        ];
+        let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+        std::fs::write(&rollout, text).unwrap();
+        let envelope = json!({"preview":"<teammate-message teammate_id=\"lead\">"});
+        assert_eq!(
+            codex_title(&envelope, rollout.to_str()).await,
+            "Audit the cache"
+        );
+        assert_eq!(
+            codex_title(
+                &json!({"preview":"<command-name>/model</command-name>"}),
+                None
+            )
+            .await,
+            "/model"
         );
     }
 }
