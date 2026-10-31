@@ -25,6 +25,7 @@ import { useSession } from "../src/kernel";
 import { useAccess } from "../src/me";
 
 export type InputBlock = Extract<SessionBlock, { kind: "input" }>;
+export type TextBlock = Extract<SessionBlock, { kind: "text" }>;
 
 /** What a rewind changes, as one line: how many files, lines added and removed. */
 const changes = (rewind: FilesRewind) => {
@@ -42,10 +43,11 @@ const fileList = (rewind: FilesRewind) => {
 };
 
 /**
- * What the owner does with one of their inputs, on a long press: resend it, edited, in a new
- * session that goes on from before it, this one staying as it is; put the folder's files back
- * as they were before it, where the harness keeps checkpoints; or copy it. `open` shows the
- * choices; `sheet` is the editor, to render once.
+ * What the owner does with a message of the session, on a long press. With one of their inputs:
+ * resend it, edited, in a new session that goes on from before it, this one staying as it is;
+ * put the folder's files back as they were before it, where the harness keeps checkpoints. With
+ * one of the agent's: a new session that goes on from after it (`keep`, from `forkAfter`).
+ * Either is copied. `open` shows the choices; `sheet` is the editor, to render once.
  */
 export function useInputActions(session: ChatSession | undefined) {
   const { chat } = useSession();
@@ -91,35 +93,59 @@ export function useInputActions(session: ChatSession | undefined) {
       ],
     );
   };
-  const open = (block: InputBlock) => {
+  const open = (block: InputBlock | TextBlock, keep?: number) => {
     if (!session) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const actions = [
-      ...(mine
+    const copy = {
+      label: "Copy",
+      run: () => void Clipboard.setStringAsync(block.text),
+    };
+    const actions =
+      block.kind === "text"
         ? [
-            {
-              label: "Edit and resend",
-              run: () => setEditing({ block, text: block.text }),
-            },
+            ...(mine
+              ? [
+                  {
+                    label: "Fork from here",
+                    run: () =>
+                      void chat
+                        .forkSession(
+                          session.id,
+                          keep === undefined ? {} : { at: keep },
+                        )
+                        .then(
+                          ({ session: forked }) =>
+                            router.push(`/session/${forked.id}`),
+                          failed("Not forked"),
+                        ),
+                  },
+                ]
+              : []),
+            copy,
           ]
-        : []),
-      // Only Claude Code keeps checkpoints; the others' files come back through their changes.
-      ...(write && session.harness === "claude-code"
-        ? [
-            {
-              label: "Put files back to before this",
-              run: () =>
-                void rewind(session, block).catch(
-                  failed("The files can't be put back"),
-                ),
-            },
-          ]
-        : []),
-      {
-        label: "Copy",
-        run: () => void Clipboard.setStringAsync(block.text),
-      },
-    ];
+        : [
+            ...(mine
+              ? [
+                  {
+                    label: "Edit and resend",
+                    run: () => setEditing({ block, text: block.text }),
+                  },
+                ]
+              : []),
+            // Only Claude Code keeps checkpoints; the others' files come back through their changes.
+            ...(write && session.harness === "claude-code"
+              ? [
+                  {
+                    label: "Put files back to before this",
+                    run: () =>
+                      void rewind(session, block).catch(
+                        failed("The files can't be put back"),
+                      ),
+                  },
+                ]
+              : []),
+            copy,
+          ];
     if (Platform.OS === "ios")
       ActionSheetIOS.showActionSheetWithOptions(
         {
@@ -131,7 +157,7 @@ export function useInputActions(session: ChatSession | undefined) {
     // Android's alert has three buttons at most: outside it is Cancel.
     else
       Alert.alert(
-        "Your message",
+        block.kind === "input" ? "Your message" : "Message",
         undefined,
         actions.map((a) => ({ text: a.label, onPress: a.run })),
         { cancelable: true },

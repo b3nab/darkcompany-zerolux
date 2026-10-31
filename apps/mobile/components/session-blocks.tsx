@@ -10,6 +10,7 @@ import { useCSSVariable } from "uniwind";
 import {
   blockRuns,
   isSubagent,
+  messageTime,
   thoughtLabel,
   toolItems,
   toolsPhrase,
@@ -27,7 +28,7 @@ import type {
 import { Fold } from "@/components/fold";
 import { Listen } from "@/components/listen";
 import { MessageBody } from "@/components/message-body";
-import type { InputBlock } from "@/components/session-fork";
+import type { InputBlock, TextBlock } from "@/components/session-fork";
 import {
   ExploredCalls,
   SubagentCard,
@@ -43,7 +44,20 @@ type Item = SessionBlock | ApprovalItem;
 /** A request of the session, drawn where it was made: open while pending, a receipt after. */
 type RenderApproval = (approval: Approval) => ReactNode;
 /** The owner's choices on one of their inputs, on a long press. */
-type InputMenu = (block: InputBlock) => void;
+/** A long press on a message: the owner's input or the agent's words. */
+type InputMenu = (block: InputBlock | TextBlock) => void;
+
+/** When a message was written, under it. */
+function Stamp({ time, end }: { time: string | null; end?: boolean }) {
+  if (!time) return null;
+  return (
+    <Text
+      className={cn("font-mono text-[10.5px] text-faint", end && "self-end")}
+    >
+      {messageTime(Date.parse(time))}
+    </Text>
+  );
+}
 /** The agent with a voice, and the session it writes in. */
 type Voice = { actorId: string; sessionId: string };
 
@@ -205,6 +219,7 @@ function Block({
           <Text selectable={!inputMenu} className="text-[15px] leading-[21px]">
             {block.text.trim()}
           </Text>
+          <Stamp time={block.time} end />
         </Pressable>
       );
     case "command":
@@ -217,17 +232,26 @@ function Block({
         </View>
       );
     case "text":
-      return voice ? (
-        <View className="gap-1.5">
-          <MessageBody text={block.text} />
-          <Listen
-            id={`${voice.sessionId}:${block.key}`}
-            actorId={voice.actorId}
-            text={block.text}
-          />
-        </View>
-      ) : (
-        <MessageBody text={block.text} />
+      // With a menu, a long press opens it, Copy and Fork from here; else the words are selectable.
+      return (
+        <Pressable
+          disabled={!inputMenu}
+          onLongPress={inputMenu && (() => inputMenu(block))}
+          accessibilityHint={
+            inputMenu ? "Long press to copy or fork from here" : undefined
+          }
+          className="gap-1.5 active:opacity-70"
+        >
+          <MessageBody text={block.text} selectable={!inputMenu} />
+          {voice ? (
+            <Listen
+              id={`${voice.sessionId}:${block.key}`}
+              actorId={voice.actorId}
+              text={block.text}
+            />
+          ) : null}
+          <Stamp time={block.time} />
+        </Pressable>
       );
     case "thinking":
       return (

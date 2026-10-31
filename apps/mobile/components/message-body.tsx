@@ -33,9 +33,12 @@ const lightCode = {
 export function MessageBody({
   text,
   picture,
+  selectable = true,
 }: {
   text: string;
   picture?: (src: string) => string | undefined;
+  /** Its words can be selected; not when a long press opens a menu with Copy. */
+  selectable?: boolean;
 }) {
   const { resolved } = useTheme();
   const [foreground, muted, link, card, border, accent, background] =
@@ -170,7 +173,7 @@ export function MessageBody({
             markdown={segment.text}
             flavor="github"
             markdownStyle={style}
-            selectable
+            selectable={selectable}
             onLinkPress={({ url }) => {
               if (SAFE.test(url)) void Linking.openURL(url);
             }}

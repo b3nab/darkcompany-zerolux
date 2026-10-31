@@ -37,6 +37,7 @@ import {
   draftOf,
   errorMessage,
   folderName,
+  forkAfter,
   harnessLabels,
   inputImagesError,
   isLooking,
@@ -122,6 +123,7 @@ import {
   useSubagentLinks,
 } from "@/components/subagents";
 import { ForkSession, useInputActions } from "@/components/session-fork";
+import type { InputBlock, TextBlock } from "@/components/session-fork";
 import { ContinueInTerminal } from "@/components/continue-terminal";
 import { SettingSelect } from "@/components/setting-select";
 import { Button } from "@/components/ui/button";
@@ -208,6 +210,11 @@ export default function SessionPage() {
     earlier,
   } = useSessionEvents(id, chat.outputs[id]?.end);
   const blocks = useMemo(() => sessionBlocks(events), [events]);
+  // A long press forks from the record as it is then, not as it was when the row was drawn.
+  const shown = useRef(blocks);
+  shown.current = blocks;
+  const messageMenu = (block: InputBlock | TextBlock) =>
+    inputs.open(block, forkAfter(shown.current, block.key));
   // Its subagents' work, from the tool calls that started them and in About: read again when
   // a tool call comes, which is when one starts.
   const { subagents } = useSessionSubagents(
@@ -429,7 +436,7 @@ export default function SessionPage() {
                     run={item as BlockRun<Item>}
                     fresh={fresh}
                     chatTitle={chatTitle}
-                    inputMenu={access.read ? inputs.open : undefined}
+                    inputMenu={access.read ? messageMenu : undefined}
                     voice={voice}
                     renderApproval={(approval: Approval) =>
                       // Its requests are its person's to decide; others see them wait.

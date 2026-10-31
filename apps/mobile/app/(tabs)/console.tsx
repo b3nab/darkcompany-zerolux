@@ -12,6 +12,7 @@ import {
   hitKindLabels,
   matchParts,
   nativeMatches,
+  nestDelegates,
   sessionMatches,
   sessionOutputAt,
   startsAnywhere,
@@ -84,12 +85,15 @@ export default function Console() {
   const natives = project.sessions.filter((native) =>
     nativeMatches(native, query),
   );
-  const inbox = attentionInbox(
-    sessions[shown].map((session) => ({
-      ...session,
-      output_at: sessionOutputAt(chat, session) ?? null,
-    })),
-    chat.approvals,
+  // A session another one started comes right under it.
+  const inbox = nestDelegates(
+    attentionInbox(
+      sessions[shown].map((session) => ({
+        ...session,
+        output_at: sessionOutputAt(chat, session) ?? null,
+      })),
+      chat.approvals,
+    ),
   );
   type Row = (typeof inbox)[number] | { native: DiscoveredSession };
   const rows: Row[] =
@@ -100,15 +104,15 @@ export default function Console() {
     ...countsOf(sessions),
     live: sessions.live.length + natives.length,
   };
-  // The live inbox in sections; the other lists are plain.
-  const section = (row: Row) =>
-    shown !== "live"
-      ? undefined
-      : "native" in row
-        ? "native"
-        : row.session.pinned_at
-          ? "pinned"
-          : row.attention;
+  // The live inbox in sections, a delegated session in its coordinator's; the other lists are plain.
+  let coordinator: Attention | "pinned" | undefined;
+  const sections = rows.map((row) => {
+    if (shown !== "live") return undefined;
+    if ("native" in row) return "native" as const;
+    if (row.depth === 0)
+      coordinator = row.session.pinned_at ? "pinned" : row.attention;
+    return coordinator;
+  });
   return (
     <Screen
       leading={<WorkspaceButton />}
@@ -186,10 +190,10 @@ export default function Console() {
           </Text>
         }
         renderItem={({ item, index }) => {
-          const here = section(item);
+          const here = sections[index];
           return (
             <View>
-              {here && (index === 0 || section(rows[index - 1]!) !== here) ? (
+              {here && (index === 0 || sections[index - 1] !== here) ? (
                 <View className="flex-row items-center justify-between px-5 pt-4 pb-1">
                   <Text
                     accessibilityRole="header"
@@ -207,7 +211,7 @@ export default function Console() {
                         : attentionLabels[here]}
                   </Text>
                   <Text className="font-mono text-[11px] text-faint">
-                    {rows.filter((row) => section(row) === here).length}
+                    {sections.filter((section) => section === here).length}
                   </Text>
                 </View>
               ) : null}
@@ -218,6 +222,7 @@ export default function Console() {
                   session={item.session}
                   agent={actors.find((a) => a.id === item.session.actor_id)}
                   attention={item.attention}
+                  depth={item.depth}
                   asks={chat.approvals.find(
                     (a) =>
                       a.session_id === item.session.id &&

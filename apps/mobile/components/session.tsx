@@ -68,12 +68,15 @@ export function SessionRow({
   agent,
   attention,
   asks,
+  depth = 0,
 }: {
   session: ChatSession;
   agent?: Actor;
   attention: Attention;
   /** The request it waits on you for. */
   asks?: Approval;
+  /** How far under the session that started it, in the Console. */
+  depth?: number;
 }) {
   const organize = useOrganize(session);
   const { workspace, chat, hosts, url } = useSession();
@@ -138,7 +141,11 @@ export function SessionRow({
     <MenuLink
       href={`/session/${session.id}`}
       menu={menu}
-      className="flex-row items-center gap-3 px-5 py-2.5 active:bg-accent"
+      className={cn(
+        "flex-row items-center gap-3 px-5 py-2.5 active:bg-accent",
+        depth === 1 && "pl-11",
+        depth > 1 && "pl-16",
+      )}
     >
       <ActorMark
         kind="agent"
