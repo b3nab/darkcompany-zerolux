@@ -29,7 +29,7 @@ pub struct DiscoveredSession {
     pub can_create_context: bool,
     pub reason: Option<String>,
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct DiscoveryError {
     pub harness: Harness,
     pub message: String,
@@ -49,6 +49,7 @@ pub struct NativeSessionTarget {
     pub workspace: String,
     pub native_locator: Value,
 }
+#[derive(Clone)]
 struct Candidate {
     public: DiscoveredSession,
     target: NativeSessionTarget,
@@ -720,8 +721,59 @@ async fn scan(saved: bool) -> (Vec<Candidate>, Vec<DiscoveryError>) {
     (candidates, errors)
 }
 
-pub async fn discover_sessions() -> Discovery {
+/// The last look at this computer's sessions. Looking takes seconds, since the harnesses
+/// list their own, so one look runs at a time and every caller shares it: a recent one is
+/// reused, an older one is given at once while a new look runs.
+struct Look {
+    at: std::time::Instant,
+    candidates: Vec<Candidate>,
+    errors: Vec<DiscoveryError>,
+}
+
+static LAST: std::sync::LazyLock<std::sync::Mutex<Option<Look>>> =
+    std::sync::LazyLock::new(Default::default);
+static LOOKING: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(Default::default);
+/// How long a look stands for the computer as it is.
+const FRESH: Duration = Duration::from_secs(10);
+
+fn last(within: Option<Duration>) -> Option<(Vec<Candidate>, Vec<DiscoveryError>)> {
+    let last = LAST.lock().expect("last look");
+    last.as_ref()
+        .filter(|look| within.is_none_or(|age| look.at.elapsed() < age))
+        .map(|look| (look.candidates.clone(), look.errors.clone()))
+}
+
+async fn look_now() -> (Vec<Candidate>, Vec<DiscoveryError>) {
+    let _looking = LOOKING.lock().await;
+    // Another caller may have just looked.
+    if let Some(look) = last(Some(FRESH)) {
+        return look;
+    }
     let (candidates, errors) = scan(true).await;
+    *LAST.lock().expect("last look") = Some(Look {
+        at: std::time::Instant::now(),
+        candidates: candidates.clone(),
+        errors: errors.clone(),
+    });
+    (candidates, errors)
+}
+
+/// The computer's sessions: the last look when recent; an older one at once, looking again
+/// meanwhile; a new look only when there was none.
+async fn looked() -> (Vec<Candidate>, Vec<DiscoveryError>) {
+    if let Some(look) = last(Some(FRESH)) {
+        return look;
+    }
+    if let Some(look) = last(None) {
+        tokio::spawn(look_now());
+        return look;
+    }
+    look_now().await
+}
+
+pub async fn discover_sessions() -> Discovery {
+    let (candidates, errors) = looked().await;
     Discovery {
         sessions: candidates.into_iter().map(|c| c.public).collect(),
         errors,
@@ -734,11 +786,13 @@ pub async fn resolve_any(id: &str) -> Result<(NativeSessionTarget, bool)> {
         id.len() == 64 && id.bytes().all(|c| c.is_ascii_hexdigit()),
         "Invalid discovery selection"
     );
-    let (candidates, _) = scan(true).await;
-    let candidate = candidates
-        .into_iter()
-        .find(|c| c.public.id == id)
-        .context("The selected session is no longer available; refresh the list")?;
+    let find = |candidates: Vec<Candidate>| candidates.into_iter().find(|c| c.public.id == id);
+    // A session listed a moment ago is found in that look; one not in it, in a new one.
+    let candidate = match find(looked().await.0) {
+        Some(candidate) => candidate,
+        None => find(look_now().await.0)
+            .context("The selected session is no longer available; refresh the list")?,
+    };
     let running = candidate.public.availability == "attachable";
     Ok((candidate.target, running))
 }

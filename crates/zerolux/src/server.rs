@@ -197,6 +197,9 @@ impl Server {
             shared.public.clone(),
         )
         .into_make_service_with_connect_info::<SocketAddr>();
+        // The first look at this computer's sessions takes seconds: it starts now, not when
+        // someone first opens the Console.
+        tokio::spawn(crate::sessions::discover_sessions());
         tracing::info!(%address, "ZeroLux kernel ready");
         let instance = shared.clone();
         let task = tokio::spawn(async move {
