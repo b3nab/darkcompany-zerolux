@@ -7,12 +7,13 @@ import {
   currentStep,
   forkAfter,
   sessionBlocks,
+  wholeToolOutput,
   recordsResync,
   sessionReader,
   toolText,
   turnSummary,
 } from "./session-events";
-import type { SessionRecord } from "./session-events";
+import type { SessionRecord, ToolBlock } from "./session-events";
 import { toolLine } from "./tool-view";
 import type { SessionEvent } from "./session-events";
 
@@ -72,7 +73,7 @@ test("a session's events become blocks: a tool joins its result, a turn's start 
       id: "t1",
       name: "Bash",
       input: { command: "bun test" },
-      result: { output: "12 pass", error: false, time: null },
+      result: { output: "12 pass", error: false, time: null, at: 40 },
     },
     { key: "30.1", time: null, kind: "text", text: "Running them now." },
     // The turn ended before Read gave anything back.
@@ -440,4 +441,68 @@ test("a fork that keeps a block goes on from before the next input, or keeps the
   expect(forkAfter(blocks, key("first"))).toBe(20);
   expect(forkAfter(blocks, key("answer two"))).toBeUndefined();
   expect(forkAfter(blocks, "missing")).toBeUndefined();
+});
+
+test("a long tool output comes cut with its whole size, and is read whole from its own record", async () => {
+  const blocks = sessionBlocks([
+    at(
+      { type: "tool_call", id: "t1", name: "Read", input: { path: "a.ts" } },
+      10,
+    ),
+    at(
+      {
+        type: "tool_result",
+        id: "t1",
+        output: "first lines",
+        error: false,
+        truncated: 90000,
+      },
+      20,
+    ),
+  ]);
+  const tool = blocks[0] as ToolBlock;
+  expect(tool.result).toMatchObject({
+    output: "first lines",
+    at: 20,
+    truncated: 90000,
+  });
+  const urls: string[] = [];
+  globalThis.fetch = (async (url: string) => {
+    urls.push(url);
+    return Response.json({
+      events: [
+        {
+          type: "tool_result",
+          id: "other",
+          output: "no",
+          error: false,
+          at: 20,
+          time: null,
+        },
+        {
+          type: "tool_result",
+          id: "t1",
+          output: "the whole file",
+          error: false,
+          at: 20,
+          time: null,
+        },
+      ],
+    });
+  }) as typeof fetch;
+  expect(await wholeToolOutput({ sessionId: "s/1" }, tool, "")).toBe(
+    "the whole file",
+  );
+  expect(
+    await wholeToolOutput({ sessionId: "n1", native: true }, tool, ""),
+  ).toBe("the whole file");
+  expect(urls).toEqual([
+    "/api/sessions/s%2F1/events/20",
+    "/api/sessions/native/n1/events/20",
+  ]);
+  globalThis.fetch = (async () =>
+    Response.json({ events: [] })) as unknown as typeof fetch;
+  await expect(
+    wholeToolOutput({ sessionId: "s1" }, tool, ""),
+  ).rejects.toThrow();
 });

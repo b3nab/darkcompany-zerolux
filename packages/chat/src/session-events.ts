@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, api, errorMessage } from "./client";
+import { ApiError, api, errorMessage, kernelUrl, request } from "./client";
 import type { Approval } from "./chat";
 import {
   changeCount,
@@ -26,7 +26,14 @@ export type SessionEvent = {
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
   | { type: "tool_call"; id: string; name: string; input: unknown }
-  | { type: "tool_result"; id: string; output: unknown; error: boolean }
+  | {
+      type: "tool_result";
+      id: string;
+      output: unknown;
+      error: boolean;
+      /** A long output travels cut, its beginning as `output`: the whole one's size in bytes. */
+      truncated?: number;
+    }
   | { type: "turn_started" }
   | { type: "turn_ended"; status: string }
   | { type: "error"; message: string }
@@ -79,7 +86,15 @@ export type SessionBlock = {
       name: string;
       input: unknown;
       /** Absent while the tool still runs. */
-      result?: { output: unknown; error: boolean; time: string | null };
+      result?: {
+        output: unknown;
+        error: boolean;
+        time: string | null;
+        /** The record it is in: where its whole output is read. Every result read has it. */
+        at?: number;
+        /** It came cut: the whole output's size in bytes. */
+        truncated?: number;
+      };
       /** The turn ended before the tool gave anything back. */
       stopped?: boolean;
     }
@@ -95,6 +110,69 @@ export type SessionBlock = {
   | { kind: "notice"; text: string }
 );
 export type ToolBlock = Extract<SessionBlock, { kind: "tool" }>;
+
+/** Whose record a block is read from: a session of the workspace, or a native one of the project. */
+export interface RecordOf {
+  sessionId: string;
+  native?: boolean;
+}
+
+/** A tool's whole output, read from the one record it is in. */
+export async function wholeToolOutput(
+  record: RecordOf,
+  tool: ToolBlock,
+  kernel = kernelUrl(),
+) {
+  if (tool.result?.at === undefined) return tool.result?.output;
+  const { events } = await request<{ events: SessionEvent[] }>(
+    kernel,
+    `/sessions/${record.native ? "native/" : ""}${encodeURIComponent(record.sessionId)}/events/${tool.result.at}`,
+  );
+  const whole = events.find(
+    (event) => event.type === "tool_result" && event.id === tool.id,
+  );
+  if (whole?.type !== "tool_result")
+    throw new Error("The output is no longer in the session's record");
+  return whole.output;
+}
+
+/**
+ * What a tool gave back, whole: read from its record when a page carried it cut, while shown
+ * (`record` is where; without it, the beginning stays). `cut`: only the beginning is here.
+ */
+export function useWholeOutput(
+  tool: ToolBlock,
+  record: RecordOf | undefined,
+  kernel = kernelUrl(),
+) {
+  const cut =
+    tool.result?.truncated !== undefined && tool.result.at !== undefined;
+  const [whole, setWhole] = useState<{ output?: unknown; error?: string }>();
+  const at = tool.result?.at;
+  const sessionId = record?.sessionId;
+  const native = record?.native;
+  useEffect(() => {
+    if (!cut || !sessionId) return;
+    let live = true;
+    setWhole(undefined);
+    wholeToolOutput({ sessionId, native }, tool, kernel).then(
+      (output) => live && setWhole({ output }),
+      (error: unknown) => live && setWhole({ error: errorMessage(error) }),
+    );
+    return () => {
+      live = false;
+    };
+    // The record and the tool's place in it say what to read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cut, sessionId, native, at, tool.id, kernel]);
+  const read = whole && "output" in whole;
+  return {
+    output: read ? whole.output : tool.result?.output,
+    reading: cut && !!sessionId && !whole,
+    cut: cut && !read,
+    error: whole?.error ?? "",
+  };
+}
 
 /**
  * Where a fork that keeps a block goes on from (`SessionFork.at`): before the input after it;
@@ -177,7 +255,15 @@ export function sessionBlocks(events: SessionEvent[]): SessionBlock[] {
         break;
       }
       case "tool_result": {
-        const result = { output: event.output, error: event.error, time };
+        const result = {
+          output: event.output,
+          error: event.error,
+          time,
+          at: event.at,
+          ...(event.truncated === undefined
+            ? {}
+            : { truncated: event.truncated }),
+        };
         const call = calls.get(event.id);
         if (call) call.result = result;
         else
