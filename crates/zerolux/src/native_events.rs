@@ -493,12 +493,36 @@ fn codex_user(content: &Value) -> Vec<Event> {
         return fragments
             .iter()
             .filter(|text| context(text) == Some("<subagent_notification>"))
-            .map(|text| Event::Notice {
-                text: text.trim().to_owned(),
-            })
+            .filter_map(|text| subagent_notice(text))
             .collect();
     }
     vec![input(text_of(content, &["input_text"]))]
+}
+
+/// `<subagent_notification>{"agent_path":"/root/a","status":{"completed":"…"}}</…>`: how a
+/// subagent ended, in one line. Statuses that end nothing tell nothing.
+fn subagent_notice(text: &str) -> Option<Event> {
+    let body = text
+        .trim()
+        .strip_prefix("<subagent_notification>")?
+        .strip_suffix("</subagent_notification>")?;
+    let notice: Value = serde_json::from_str(body.trim()).ok()?;
+    let agent = notice["agent_path"].as_str()?;
+    let status = &notice["status"];
+    let ended = if status.get("completed").is_some() {
+        "completed".to_owned()
+    } else if let Some(error) = status["errored"].as_str() {
+        format!("failed: {}", error.lines().next().unwrap_or_default())
+    } else {
+        match status.as_str()? {
+            "shutdown" => "shut down".to_owned(),
+            "not_found" => "was not found".to_owned(),
+            _ => return None,
+        }
+    };
+    Some(Event::Notice {
+        text: format!("Agent {agent} {ended}"),
+    })
 }
 
 fn codex(record: &Value) -> Vec<Event> {
@@ -858,19 +882,26 @@ mod tests {
 
     #[test]
     fn a_codex_subagents_notice_is_a_notice_and_codex_context_is_nobodys_input() {
-        let notice = "<subagent_notification>\n{\"agent\":\"a1\",\"status\":\"completed\"}\n</subagent_notification>";
+        let notice = |status: &str| json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":format!("<subagent_notification>\n{{\"agent_path\":\"/root/a\",\"status\":{status}}}\n</subagent_notification>")}]}});
         assert_eq!(
             events(
                 "codex",
                 vec![
-                    json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":notice}]}}),
+                    notice(r#"{"completed":"done"}"#),
+                    notice(r#"{"errored":"boom\nmore"}"#),
+                    notice(r#""shutdown""#),
+                    notice(r#""running""#),
                     json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<turn_aborted>\nstopped\n</turn_aborted>"}]}}),
                     json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<skill>\nname\n</skill>"},{"type":"input_text","text":"run it"}]}}),
                 ]
             ),
-            vec![Event::Notice {
-                text: notice.into()
-            }]
+            [
+                "Agent /root/a completed",
+                "Agent /root/a failed: boom",
+                "Agent /root/a shut down"
+            ]
+            .map(|text| Event::Notice { text: text.into() })
+            .to_vec()
         );
     }
 
