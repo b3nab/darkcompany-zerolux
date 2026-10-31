@@ -96,6 +96,22 @@ export type SessionBlock = {
 );
 export type ToolBlock = Extract<SessionBlock, { kind: "tool" }>;
 
+/**
+ * Where a fork that keeps a block goes on from (`SessionFork.at`): before the input after it;
+ * after the last input, nowhere, and the fork keeps the whole session.
+ */
+export function forkAfter(blocks: SessionBlock[], key: string) {
+  const index = blocks.findIndex((block) => block.key === key);
+  if (index < 0) return undefined;
+  const next = blocks
+    .slice(index + 1)
+    .find(
+      (block): block is Extract<SessionBlock, { kind: "input" }> =>
+        block.kind === "input",
+    );
+  return next?.at;
+}
+
 /** Events that can come between turns: the owner's commands, compactions, errors, notices. */
 const between = new Set<SessionEvent["type"]>([
   "command",

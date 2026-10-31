@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import {
+  clockTime,
+  messageTime,
   agentsForChat,
   chatPreview,
   directChat,
@@ -696,4 +698,23 @@ test("images go with an input when the kernel would take them", () => {
       { type: "image/jpeg", size: 8 * 1024 * 1024 },
     ]),
   ).toBeDefined();
+});
+
+test("a record's time is its hour today, and its day with the hour before", () => {
+  const now = new Date(2026, 9, 31, 15, 0).getTime();
+  const today = new Date(2026, 9, 31, 9, 5).getTime();
+  const yesterday = new Date(2026, 9, 30, 9, 5).getTime();
+  const earlier = new Date(2026, 9, 2, 9, 5).getTime();
+  const lastYear = new Date(2025, 9, 2, 9, 5).getTime();
+  expect(messageTime(today, now)).toBe(clockTime(today));
+  for (const time of [yesterday, earlier, lastYear]) {
+    expect(messageTime(time, now).endsWith(clockTime(time))).toBe(true);
+    expect(messageTime(time, now).length).toBeGreaterThan(
+      clockTime(time).length,
+    );
+  }
+  expect(
+    new Set([yesterday, earlier, lastYear].map((t) => messageTime(t, now)))
+      .size,
+  ).toBe(3);
 });

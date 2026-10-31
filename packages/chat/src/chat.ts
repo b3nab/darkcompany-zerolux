@@ -521,6 +521,22 @@ export function dayLabel(time: number, now = Date.now()) {
 /** A message's time: the hour and minutes. */
 export const clockTime = (time: number) =>
   new Date(time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+/** When something in a session's record was written: the hour today, with the day before that. */
+export function messageTime(time: number, now = Date.now()) {
+  const day = dayLabel(time, now);
+  if (day === "Today") return clockTime(time);
+  const date =
+    day === "Yesterday"
+      ? day
+      : new Date(time).toLocaleDateString([], {
+          day: "numeric",
+          month: "short",
+          ...(new Date(time).getFullYear() === new Date(now).getFullYear()
+            ? {}
+            : { year: "numeric" }),
+        });
+  return `${date} ${clockTime(time)}`;
+}
 /** A time in a list of chats: the hour today, the day before that. */
 export const listTime = (time: number, now = Date.now()) =>
   dayLabel(time, now) === "Today"

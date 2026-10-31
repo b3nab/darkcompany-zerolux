@@ -6,6 +6,7 @@ import {
   consoleSessions,
   delegatedBy,
   delegatedTo,
+  nestDelegates,
   noticeText,
   sessionAttention,
   sessionAttentions,
@@ -188,4 +189,29 @@ test("a session knows the session that delegated work to it, and the ones it del
     "first",
   ]);
   expect(delegatedTo("apart", all)).toEqual([]);
+});
+
+test("a delegated session comes right after its coordinator, deeper, however deep; the others keep their order", () => {
+  const row = (id: string, parent: string | null = null) => ({
+    session: { ...session(id, "connected"), parent_session_id: parent },
+  });
+  const nested = nestDelegates([
+    row("child-of-b", "b"),
+    row("a"),
+    row("grandchild", "child-of-b"),
+    row("b"),
+    row("orphan", "elsewhere"),
+    row("second-of-b", "b"),
+  ]);
+  expect(nested.map((r) => [r.session.id, r.depth])).toEqual([
+    ["a", 0],
+    ["b", 0],
+    ["child-of-b", 1],
+    ["grandchild", 2],
+    ["second-of-b", 1],
+    ["orphan", 0],
+  ]);
+  // Sessions that started each other in a ring are still listed, once.
+  const ring = nestDelegates([row("x", "y"), row("y", "x")]);
+  expect(ring.map((r) => r.session.id).sort()).toEqual(["x", "y"]);
 });

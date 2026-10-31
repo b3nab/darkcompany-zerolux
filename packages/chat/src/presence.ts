@@ -312,3 +312,35 @@ export function noticeText(
     body: body || session.title || "",
   };
 }
+
+/**
+ * Sessions as the Console lists them, each one another session started right after it, one
+ * level deeper and in its own order, however deep; the others keep their order. One whose
+ * coordinator is not in the same list stays where it is, at the top.
+ */
+export function nestDelegates<T extends { session: ChatSession }>(
+  rows: T[],
+): (T & { depth: number })[] {
+  const listed = new Set(rows.map((row) => row.session.id));
+  const under = new Map<string, T[]>();
+  const top: T[] = [];
+  for (const row of rows) {
+    const parent = row.session.parent_session_id;
+    if (parent && parent !== row.session.id && listed.has(parent))
+      under.set(parent, [...(under.get(parent) ?? []), row]);
+    else top.push(row);
+  }
+  const nested: (T & { depth: number })[] = [];
+  const placed = new Set<string>();
+  const place = (row: T, depth: number) => {
+    if (placed.has(row.session.id)) return;
+    placed.add(row.session.id);
+    nested.push({ ...row, depth });
+    for (const child of under.get(row.session.id) ?? [])
+      place(child, depth + 1);
+  };
+  top.forEach((row) => place(row, 0));
+  // Sessions that started each other in a ring have no top: they stay, at the top.
+  rows.forEach((row) => place(row, 0));
+  return nested;
+}

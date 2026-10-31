@@ -5,6 +5,7 @@ import {
   placeApprovals,
   chatTurns,
   currentStep,
+  forkAfter,
   sessionBlocks,
   recordsResync,
   sessionReader,
@@ -424,4 +425,19 @@ test("subagents and requests stand on their own; requests sit where they were ma
       r.kind === "tools" ? r.tools.map((x) => x.name).join("+") : r.kind,
     ),
   ).toEqual(["Read", "tool", "Bash", "approval", "text", "approval"]);
+});
+
+test("a fork that keeps a block goes on from before the next input, or keeps the whole session after the last", () => {
+  const blocks = sessionBlocks([
+    at({ type: "input", text: "first", chat: null }, 0),
+    at({ type: "text", text: "answer one" }, 10),
+    at({ type: "input", text: "second", chat: null }, 20),
+    at({ type: "text", text: "answer two" }, 30),
+  ]);
+  const key = (text: string) =>
+    blocks.find((b) => "text" in b && b.text === text)!.key;
+  expect(forkAfter(blocks, key("answer one"))).toBe(20);
+  expect(forkAfter(blocks, key("first"))).toBe(20);
+  expect(forkAfter(blocks, key("answer two"))).toBeUndefined();
+  expect(forkAfter(blocks, "missing")).toBeUndefined();
 });
