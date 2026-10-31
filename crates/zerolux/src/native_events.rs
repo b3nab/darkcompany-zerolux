@@ -457,11 +457,55 @@ fn claude(record: &Value) -> Vec<Event> {
     }
 }
 
+/// What Codex writes as user input for the model and never shows as anyone's: its
+/// environment, instructions, skills, shell commands, aborted turns and subagents' notices,
+/// each a whole fragment between its markers, as Codex itself recognizes them.
+const CODEX_CONTEXT: &[(&str, &str)] = &[
+    ("<environment_context>", "</environment_context>"),
+    ("<user_instructions>", "</user_instructions>"),
+    ("# agents.md instructions for ", "</instructions>"),
+    ("<skill>", "</skill>"),
+    ("<user_shell_command>", "</user_shell_command>"),
+    ("<turn_aborted>", "</turn_aborted>"),
+    ("<subagent_notification>", "</subagent_notification>"),
+];
+
+/// A Codex user message: the person's or another agent's input, or Codex's own context.
+/// A message holding any context fragment is Codex's; a subagent's notice is told as such.
+fn codex_user(content: &Value) -> Vec<Event> {
+    let fragments: Vec<&str> = match content {
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter(|block| block["type"] == "input_text")
+            .filter_map(|block| block["text"].as_str())
+            .collect(),
+        Value::String(text) => vec![text.as_str()],
+        _ => Vec::new(),
+    };
+    let context = |text: &str| {
+        let text = text.trim().to_ascii_lowercase();
+        CODEX_CONTEXT
+            .iter()
+            .find(|(open, close)| text.starts_with(open) && text.ends_with(close))
+            .map(|(open, _)| *open)
+    };
+    if fragments.iter().any(|text| context(text).is_some()) {
+        return fragments
+            .iter()
+            .filter(|text| context(text) == Some("<subagent_notification>"))
+            .map(|text| Event::Notice {
+                text: text.trim().to_owned(),
+            })
+            .collect();
+    }
+    vec![input(text_of(content, &["input_text"]))]
+}
+
 fn codex(record: &Value) -> Vec<Event> {
     let payload = &record["payload"];
     match (record["type"].as_str(), payload["type"].as_str()) {
         (Some("response_item"), Some("message")) => match payload["role"].as_str() {
-            Some("user") => vec![input(text_of(&payload["content"], &["input_text"]))],
+            Some("user") => codex_user(&payload["content"]),
             Some("assistant") => {
                 some_text(&text_of(&payload["content"], &["output_text"]), |text| {
                     Event::Text { text }
@@ -813,6 +857,24 @@ mod tests {
     }
 
     #[test]
+    fn a_codex_subagents_notice_is_a_notice_and_codex_context_is_nobodys_input() {
+        let notice = "<subagent_notification>\n{\"agent\":\"a1\",\"status\":\"completed\"}\n</subagent_notification>";
+        assert_eq!(
+            events(
+                "codex",
+                vec![
+                    json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":notice}]}}),
+                    json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<turn_aborted>\nstopped\n</turn_aborted>"}]}}),
+                    json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<skill>\nname\n</skill>"},{"type":"input_text","text":"run it"}]}}),
+                ]
+            ),
+            vec![Event::Notice {
+                text: notice.into()
+            }]
+        );
+    }
+
+    #[test]
     fn codex_records_project_to_the_common_model() {
         assert_eq!(
             events(
@@ -821,6 +883,8 @@ mod tests {
                     json!({"type":"event_msg","payload":{"type":"task_started"}}),
                     json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":ENVELOPE}]}}),
                     json!({"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"rules"}]}}),
+                    json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/w</cwd>\n</environment_context>"}]}}),
+                    json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /w\n\n<INSTRUCTIONS>\nrules\n</INSTRUCTIONS>"}]}}),
                     json!({"type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"think"}]}}),
                     json!({"type":"response_item","payload":{"type":"function_call","call_id":"f1","name":"shell","arguments":"{\"cmd\":\"ls\"}"}}),
                     json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"f1","output":"ok"}}),
