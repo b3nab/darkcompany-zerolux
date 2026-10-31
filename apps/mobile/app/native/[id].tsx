@@ -19,6 +19,7 @@ import { Composer } from "@/components/composer";
 import { ActorMark } from "@/components/member";
 import { Screen } from "@/components/screen";
 import { SessionRunView } from "@/components/session-blocks";
+import { ToolRecord } from "@/components/tool-call";
 import { ToLatest, useAway } from "@/components/to-latest";
 import { ChatList } from "@/components/ui/native";
 import { Text } from "@/components/ui/text";
@@ -61,6 +62,8 @@ export default function NativeSession() {
     [events],
   );
   const runs = useMemo(() => blockRuns(items), [items]);
+  // A tool's output a page carried cut is read whole from where the harness keeps it.
+  const record = useMemo(() => ({ sessionId: id, native: true }), [id]);
   const fresh = useArrivals(items);
   const list = useRef<LegendListRef>(null);
   const { away, onScroll } = useAway();
@@ -100,41 +103,45 @@ export default function NativeSession() {
         .join(" · ")}
       leading={<ActorMark kind="agent" name={name} tone="stopped" size="sm" />}
     >
-      <View className="flex-1">
-        <ChatList
-          ref={list}
-          data={runs}
-          keyExtractor={(run) => (run as BlockRun<(typeof items)[number]>).key}
-          renderItem={({ item }) => (
-            <SessionRunView
-              run={item as BlockRun<(typeof items)[number]>}
-              fresh={fresh}
-            />
-          )}
-          contentContainerClassName="gap-3 px-3 pt-3 pb-3"
-          alignItemsAtEnd
-          initialScrollAtEnd
-          maintainScrollAtEnd
-          maintainVisibleContentPosition={{ data: true, size: true }}
-          // The latest work comes first; earlier work is read two screens before the top, so
-          // scrolling up rarely waits for it.
-          onStartReached={more ? earlier : undefined}
-          onStartReachedThreshold={2}
-          keyboardDismissMode="interactive"
-          keyboardOffset={insets.bottom}
-          onScroll={onScroll}
-          ListEmptyComponent={
-            <Text
-              className={
-                readError ? "text-sm text-destructive" : "text-sm text-faint"
-              }
-            >
-              {readError || "Nothing recorded yet."}
-            </Text>
-          }
-        />
-        <ToLatest list={list} shown={away} label="Back to the latest work" />
-      </View>
+      <ToolRecord value={record}>
+        <View className="flex-1">
+          <ChatList
+            ref={list}
+            data={runs}
+            keyExtractor={(run) =>
+              (run as BlockRun<(typeof items)[number]>).key
+            }
+            renderItem={({ item }) => (
+              <SessionRunView
+                run={item as BlockRun<(typeof items)[number]>}
+                fresh={fresh}
+              />
+            )}
+            contentContainerClassName="gap-3 px-3 pt-3 pb-3"
+            alignItemsAtEnd
+            initialScrollAtEnd
+            maintainScrollAtEnd
+            maintainVisibleContentPosition={{ data: true, size: true }}
+            // The latest work comes first; earlier work is read two screens before the top, so
+            // scrolling up rarely waits for it.
+            onStartReached={more ? earlier : undefined}
+            onStartReachedThreshold={2}
+            keyboardDismissMode="interactive"
+            keyboardOffset={insets.bottom}
+            onScroll={onScroll}
+            ListEmptyComponent={
+              <Text
+                className={
+                  readError ? "text-sm text-destructive" : "text-sm text-faint"
+                }
+              >
+                {readError || "Nothing recorded yet."}
+              </Text>
+            }
+          />
+          <ToLatest list={list} shown={away} label="Back to the latest work" />
+        </View>
+      </ToolRecord>
       <Composer
         error={error}
         input={{

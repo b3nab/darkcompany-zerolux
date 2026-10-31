@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { createContext, use, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { ActivityIndicator, Image, Pressable, View } from "react-native";
 import { useRouter } from "expo-router";
@@ -32,6 +32,8 @@ import { useCSSVariable } from "uniwind";
 import {
   changeCount,
   diffLines,
+  fileSize,
+  useWholeOutput,
   exploredPhrase,
   plainLine,
   spanLabel,
@@ -40,7 +42,13 @@ import {
   toolState,
   toolView,
 } from "@zerolux/chat";
-import type { PlanStep, ToolBlock, ToolOutcome, ToolView } from "@zerolux/chat";
+import type {
+  PlanStep,
+  RecordOf,
+  ToolBlock,
+  ToolOutcome,
+  ToolView,
+} from "@zerolux/chat";
 import { Fold } from "@/components/fold";
 import { MessageBody } from "@/components/message-body";
 import { useSubagentLink } from "@/components/subagents";
@@ -49,6 +57,9 @@ import { cn } from "@/lib/utils";
 
 type ChatTitle = (id: string) => string | undefined;
 type State = ReturnType<typeof toolState>;
+
+/** Whose record the tools shown come from: a tool's output a page carried cut is read whole there. */
+export const ToolRecord = createContext<RecordOf | undefined>(undefined);
 
 /** Past this many lines a long output shows its end, and all of it on request. */
 const PREVIEW = 12;
@@ -98,9 +109,40 @@ export function ToolCall({
       )}
     >
       <View className="gap-2 border-t border-border px-3 py-2.5">
-        <Body view={view} tool={tool} outcome={outcome} chatTitle={chatTitle} />
+        <Opened view={view} tool={tool} chatTitle={chatTitle} />
       </View>
     </Fold>
+  );
+}
+
+/** What a tool was given and gave back, its output read whole once opened when it came cut. */
+function Opened({
+  view,
+  tool,
+  chatTitle,
+}: {
+  view: ToolView;
+  tool: ToolBlock;
+  chatTitle?: ChatTitle;
+}) {
+  const whole = useWholeOutput(tool, use(ToolRecord));
+  const outcome = useMemo(
+    () => tool.result && toolOutcome(whole.output),
+    [tool.result, whole.output],
+  );
+  return (
+    <>
+      <Body view={view} tool={tool} outcome={outcome} chatTitle={chatTitle} />
+      {whole.reading ? (
+        <ActivityIndicator className="self-start" />
+      ) : whole.error ? (
+        <Text className="text-xs text-destructive">{whole.error}</Text>
+      ) : whole.cut && tool.result?.truncated ? (
+        <Text className="text-xs text-faint">
+          {`The beginning of ${fileSize(tool.result.truncated)}`}
+        </Text>
+      ) : null}
+    </>
   );
 }
 
