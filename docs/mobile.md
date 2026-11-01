@@ -22,7 +22,9 @@ with what waits in the others: requests to decide and chats with unread messages
 shows those under Elsewhere. **New workspace** creates one on a kernel; **Connect a kernel**
 adds another. A kernel's menu signs out of it or removes it from the phone; holding a workspace
 renames it on this phone. Notifications name their workspace when the app keeps more than one,
-and a tap opens it.
+and a tap opens it. My settings › Marketplaces lists where every workspace of the kernel
+installs extensions from; the account that created the kernel's first workspace adds and
+removes them.
 
 ## Android
 

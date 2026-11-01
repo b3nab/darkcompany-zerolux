@@ -96,6 +96,7 @@ function Navigator() {
         <Stack.Screen name="subagent/[id]" />
         <Stack.Screen name="accounts/[id]" />
         <Stack.Screen name="extensions" />
+        <Stack.Screen name="marketplaces" />
         <Stack.Screen
           name="consent"
           options={{

@@ -1,8 +1,10 @@
 import {
   CheckIcon,
+  ChevronRightIcon,
   MonitorIcon,
   MoonIcon,
   PaletteIcon,
+  StoreIcon,
   SunIcon,
 } from "lucide-react-native";
 import type { LucideIcon } from "lucide-react-native";
@@ -131,6 +133,18 @@ export default function MySettings() {
               {version ? ` · v${version}` : ""}
             </Text>
           </View>
+          {multi ? (
+            <View className="border-t border-border">
+              <Row
+                icon={StoreIcon}
+                label="Marketplaces"
+                onPress={() => router.push("/marketplaces")}
+                trailing={
+                  <ChevronRightIcon color={muted} size={16} strokeWidth={1.5} />
+                }
+              />
+            </View>
+          ) : null}
           <View className="gap-2 border-t border-border px-4 py-3">
             {multi ? (
               <Button
