@@ -176,8 +176,9 @@ when due (one-day update age). Private authorization checks never extend them.
   created_at, expires_at}, token}`; the token is in this answer only), lists
   unused ones with `GET /api/invites` and withdraws one with
   `DELETE /api/invites/{id}`.
-- Desktop CORS must allow `authorization`, `content-type` and `x-zerolux-invite`, and expose
-  `set-auth-token` for the known app origins.
+- Desktop CORS must allow every method the API answers (`GET`, `POST`, `PUT`, `PATCH`,
+  `DELETE`) and the headers `authorization`, `content-type` and `x-zerolux-invite`, and expose
+  `set-auth-token` and `content-disposition` for the known app origins.
 
 ### Private service protocol (version 1)
 

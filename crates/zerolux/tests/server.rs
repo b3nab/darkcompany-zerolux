@@ -798,17 +798,42 @@ async fn the_desktop_app_origin_is_accepted_as_the_request_it_makes_with_explici
         assert_eq!(preflight.status(), 204);
         assert_eq!(preflight.headers()["access-control-allow-origin"], origin);
         assert_eq!(
-            preflight.headers()["access-control-allow-methods"],
-            "GET, POST"
-        );
-        assert_eq!(
             preflight.headers()["access-control-allow-headers"],
             "content-type, authorization, x-zerolux-invite"
         );
-        assert_eq!(
-            preflight.headers()["access-control-expose-headers"],
-            "set-auth-token"
-        );
+        // Changing and removing pass too: every method the API answers is allowed.
+        for method in ["GET", "POST", "PUT", "PATCH", "DELETE"] {
+            let asked = client
+                .request(
+                    reqwest::Method::OPTIONS,
+                    format!("{workspace}/api/triggers/any"),
+                )
+                .header("origin", origin)
+                .header("access-control-request-method", method)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(asked.status(), 204, "{origin} {method}");
+            let allowed = asked.headers()["access-control-allow-methods"]
+                .to_str()
+                .unwrap()
+                .to_owned();
+            assert!(
+                allowed.split(',').any(|one| one.trim() == method),
+                "{origin} {method}"
+            );
+        }
+        // The app reads a sign-in's token and a file's name from the kernel's answers.
+        let exposed = preflight.headers()["access-control-expose-headers"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        for header in ["set-auth-token", "content-disposition"] {
+            assert!(
+                exposed.split(',').any(|one| one.trim() == header),
+                "{origin} {header}"
+            );
+        }
         // A remote kernel: the desktop is a public visitor there, nothing more.
         let public = client
             .get(format!("{base}/api/health"))

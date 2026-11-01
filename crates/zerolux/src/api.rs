@@ -3025,20 +3025,22 @@ fn with_desktop_cors(mut response: Response, origin: &str) -> Response {
         header::HeaderValue::from_str(origin).expect("known origin"),
     );
     headers.insert(header::VARY, header::HeaderValue::from_static("Origin"));
-    // The signed session token of a sign-in, for the app to keep.
+    // The signed session token of a sign-in, for the app to keep, and the name of a file the
+    // kernel gives.
     headers.insert(
         header::ACCESS_CONTROL_EXPOSE_HEADERS,
-        header::HeaderValue::from_static("set-auth-token"),
+        header::HeaderValue::from_static("set-auth-token, content-disposition"),
     );
     response
 }
 
+/// Every method the API answers: the desktop app changes and removes things as the web does.
 fn desktop_preflight(origin: &str) -> Response {
     let mut response = StatusCode::NO_CONTENT.into_response();
     let headers = response.headers_mut();
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_METHODS,
-        header::HeaderValue::from_static("GET, POST"),
+        header::HeaderValue::from_static("GET, POST, PUT, PATCH, DELETE"),
     );
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
