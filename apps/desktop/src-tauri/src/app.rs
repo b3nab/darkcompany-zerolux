@@ -67,8 +67,11 @@ pub(crate) struct ProfileView {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Action {
     List,
+    /// A ZeroLux's window, on `page` when one is named.
     Open {
         id: String,
+        #[serde(default)]
+        page: Option<String>,
     },
     /// Another computer's ZeroLux, at its kernel's address.
     Add {
@@ -1543,7 +1546,11 @@ impl Host {
     async fn perform(&mut self, action: Action) -> Result<()> {
         match action {
             Action::List => {}
-            Action::Open { id } => self.open(&id).await?,
+            Action::Open { id, page: None } => self.open(&id).await?,
+            Action::Open {
+                id,
+                page: Some(page),
+            } => self.open_at(&id, &page).await?,
             Action::Add { url } => {
                 let verified = connection::verify(&url, None).await?;
                 if let Some(saved) = self
@@ -2485,6 +2492,19 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_zerolux_opens_on_the_page_the_manager_names_or_where_it_was() {
+        let open = |json| serde_json::from_str::<Action>(json).unwrap();
+        assert!(matches!(
+            open(r#"{"action":"open","id":"aspen","page":"/marketplaces"}"#),
+            Action::Open { id, page: Some(page) } if id == "aspen" && page == "/marketplaces"
+        ));
+        assert!(matches!(
+            open(r#"{"action":"open","id":"aspen"}"#),
+            Action::Open { page: None, .. }
+        ));
+    }
 
     #[test]
     fn failed_window_replacement_keeps_every_survivor_tracked_for_unfreeze() {

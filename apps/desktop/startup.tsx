@@ -62,7 +62,8 @@ export type DesktopState = {
 };
 type Action =
   | { action: "list" }
-  | { action: "open" | "forget"; id: string }
+  | { action: "open"; id: string; page?: string }
+  | { action: "forget"; id: string }
   | { action: "add"; url: string }
   | { action: "new_workspace" }
   | { action: "edit"; id: string; url: string }
@@ -517,6 +518,8 @@ export function WorkspaceManager({
   }, [state.profiles, panel]);
 
   const cancel = () => setPanel(null);
+  // This computer's own ZeroLux, once it has one: its marketplaces open in its window.
+  const own = state.profiles.find((profile) => profile.source.kind === "local");
   return (
     <main className="grid min-h-dvh grid-cols-[19rem_minmax(0,1fr)] max-sm:grid-cols-1">
       <aside className="flex flex-col gap-6 border-r bg-sidebar p-6 max-sm:border-r-0 max-sm:border-b">
@@ -569,6 +572,22 @@ export function WorkspaceManager({
             >
               Join a workspace…
             </button>
+            {own && (
+              <button
+                type="button"
+                disabled={disabled}
+                className="underline-offset-2 hover:underline"
+                onClick={() =>
+                  void done({
+                    action: "open",
+                    id: own.id,
+                    page: "/marketplaces",
+                  })
+                }
+              >
+                Marketplaces…
+              </button>
+            )}
           </span>
         </div>
       </aside>

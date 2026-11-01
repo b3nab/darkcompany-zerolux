@@ -31,6 +31,7 @@ import { WindowControls } from "@/components/window-controls";
 import { cn } from "cn";
 import type { Actor, Workspace } from "./api";
 import { AdministrationPage, MySettingsPage, ProfilePage } from "./Account";
+import { MarketplacesPage } from "./Marketplaces";
 import { KeyboardShortcuts, MenuButton, useAppMenu } from "./app-menu";
 import { pageOf, useHere, WORKSPACES_PAGE } from "./instance";
 import { ExtensionsPage } from "./Extensions";
@@ -709,6 +710,14 @@ export function App({
                           busy={busy}
                           perform={perform}
                         />
+                      </Page>
+                    }
+                  />
+                  <Route
+                    path="/marketplaces"
+                    element={
+                      <Page>
+                        <MarketplacesPage />
                       </Page>
                     }
                   />

@@ -30,6 +30,7 @@ import {
   PlusIcon,
   SettingsIcon,
   SlidersHorizontalIcon,
+  StoreIcon,
   SquareTerminalIcon,
   StampIcon,
   SunIcon,
@@ -521,10 +522,16 @@ export function WorkspaceMenu({ workspace }: { workspace: Workspace }) {
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
               {here && multiWorkspace(here.health) && (
-                <DropdownMenuItem onClick={() => here.create()}>
-                  <PlusIcon />
-                  New Workspace…
-                </DropdownMenuItem>
+                <>
+                  <DropdownMenuItem onClick={() => here.create()}>
+                    <PlusIcon />
+                    New Workspace…
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => navigate("/marketplaces")}>
+                    <StoreIcon />
+                    Marketplaces
+                  </DropdownMenuItem>
+                </>
               )}
               {desktop && (
                 <DropdownMenuItem

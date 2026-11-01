@@ -428,6 +428,7 @@ fn on_menu(app: &AppHandle, id: &str) {
             if let Some(profile) = id.strip_prefix("tray-workspace:") {
                 ask(Action::Open {
                     id: profile.to_owned(),
+                    page: None,
                 });
             } else if let Some(chosen) = id.strip_prefix("tray-choose:") {
                 let mut parts = chosen.splitn(3, '|');
@@ -660,6 +661,7 @@ pub async fn tray_open(
         app,
         Action::Open {
             id: profile.clone(),
+            page: None,
         },
     )
     .await?;
