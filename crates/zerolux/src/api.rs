@@ -210,6 +210,12 @@ pub(crate) fn instance_router(
             "/workspaces",
             get(account_workspaces).post(create_workspace),
         )
+        .route(
+            "/marketplaces",
+            get(instance_marketplaces)
+                .post(add_marketplace)
+                .delete(remove_marketplace),
+        )
         // A service comes back here from a sign-in, whichever workspace started it.
         .route("/extensions/oauth/callback", get(instance_signed_in))
         .fallback(|| async {
@@ -381,6 +387,114 @@ async fn create_workspace(
     })))
 }
 
+/// The marketplaces every workspace of the instance installs from: this computer's own, which
+/// stay, and those the instance added. `administers` says whether the account changes them.
+async fn instance_marketplaces(
+    State(state): State<InstanceState>,
+    request: Request,
+) -> Result<Json<Value>, ApiFailure> {
+    let instance = state.kernel.instance();
+    let administers = match state.kernel.auth() {
+        Some(_) => {
+            let session = account(&state, request.headers(), peer(&request)).await?;
+            instance.administers(&session.subject).await?
+        }
+        None => false,
+    };
+    let mut marketplaces: Vec<Value> =
+        crate::extensions::marketplace::indexes(state.kernel.data_dir())
+            .into_iter()
+            .map(|url| json!({ "url": url, "name": null, "added_at": null, "computer": true }))
+            .collect();
+    for added in instance.marketplaces().await? {
+        if marketplaces
+            .iter()
+            .all(|known| known["url"] != added.url.as_str())
+        {
+            marketplaces.push(json!({
+                "url": added.url,
+                "name": added.name,
+                "added_at": added.added_at,
+                "computer": false,
+            }));
+        }
+    }
+    Ok(Json(
+        json!({ "marketplaces": marketplaces, "administers": administers }),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MarketplaceAddress {
+    url: String,
+}
+
+/// The account that administers the instance, or a refusal.
+async fn administrator(
+    state: &InstanceState,
+    headers: &HeaderMap,
+    peer: Option<IpAddr>,
+) -> Result<(), ApiFailure> {
+    let session = account(state, headers, peer).await?;
+    if !state
+        .kernel
+        .instance()
+        .administers(&session.subject)
+        .await?
+    {
+        return Err(Error::Forbidden.into());
+    }
+    Ok(())
+}
+
+/// Adds a marketplace for every workspace of the instance, once its index is read: an HTTPS
+/// address, or a file on the kernel's computer.
+async fn add_marketplace(
+    State(state): State<InstanceState>,
+    request: Request,
+) -> Result<Json<Value>, ApiFailure> {
+    administrator(&state, request.headers(), peer(&request)).await?;
+    let ChatJson(input) = ChatJson::<MarketplaceAddress>::from_request(request, &state)
+        .await
+        .map_err(|response| ApiFailure(Box::new(response)))?;
+    let url = reqwest::Url::parse(input.url.trim())
+        .ok()
+        .filter(|url| matches!(url.scheme(), "https" | "file"))
+        .ok_or_else(|| Error::Invalid("A marketplace's address is https:// or file://".into()))?;
+    let index = crate::extensions::marketplace::read(url.as_str())
+        .await
+        .map_err(|error| Error::Invalid(format!("{error:#}")))?;
+    let added = state
+        .kernel
+        .instance()
+        .add_marketplace(url.as_str(), &index.name)
+        .await?;
+    Ok(Json(json!({ "marketplace": {
+        "url": added.url,
+        "name": added.name,
+        "added_at": added.added_at,
+        "computer": false,
+    }})))
+}
+
+/// Removes a marketplace the instance added; what was installed from it stays.
+async fn remove_marketplace(
+    State(state): State<InstanceState>,
+    request: Request,
+) -> Result<Json<Value>, ApiFailure> {
+    administrator(&state, request.headers(), peer(&request)).await?;
+    let ChatJson(input) = ChatJson::<MarketplaceAddress>::from_request(request, &state)
+        .await
+        .map_err(|response| ApiFailure(Box::new(response)))?;
+    state
+        .kernel
+        .instance()
+        .remove_marketplace(&input.url)
+        .await?;
+    Ok(Json(json!({ "removed": true })))
+}
+
 /// `/w/{id}/…` goes to that workspace, as it receives it: without `/w/{id}`; its sign-in
 /// endpoints are the instance's, but for who the account is there and joining it. Any other
 /// address is the web app's.
@@ -457,7 +571,7 @@ impl IntoResponse for Error {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
-            Self::Conflict | Self::OnboardingRequired | Self::StoppedByOwner => {
+            Self::Conflict | Self::Exists(_) | Self::OnboardingRequired | Self::StoppedByOwner => {
                 StatusCode::CONFLICT
             }
             Self::Database(_) | Self::Schema(_) => StatusCode::INTERNAL_SERVER_ERROR,

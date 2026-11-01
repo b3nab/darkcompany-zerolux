@@ -1,5 +1,7 @@
 -- Create "instance" table
-CREATE TABLE `instance` (`id` text NOT NULL, `auth_secret` text NOT NULL, `created_at` integer NOT NULL, PRIMARY KEY (`id`));
+CREATE TABLE `instance` (`id` text NOT NULL, `auth_secret` text NOT NULL, `owner` text NULL, `created_at` integer NOT NULL, PRIMARY KEY (`id`));
+-- Create "marketplaces" table
+CREATE TABLE `marketplaces` (`url` text NOT NULL, `name` text NOT NULL, `added_at` integer NOT NULL, PRIMARY KEY (`url`));
 -- Create "workspace" table
 CREATE TABLE `workspace` (`id` text NOT NULL, `name` text NOT NULL, `created_at` integer NOT NULL, `folder` text NOT NULL, PRIMARY KEY (`id`));
 -- Create index "workspace_folder" to table: "workspace"

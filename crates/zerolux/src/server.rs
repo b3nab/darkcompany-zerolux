@@ -360,6 +360,11 @@ impl ServerHandle {
         &self.shared.instance
     }
 
+    /// The kernel's data folder on this computer.
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.shared.data_dir
+    }
+
     /// The workspaces this kernel serves, oldest first.
     pub async fn workspaces(&self) -> Result<Vec<WorkspaceInfo>> {
         let mut infos = Vec::new();
@@ -554,6 +559,7 @@ impl Shared {
             harness_url,
             folder.join("links"),
             self.runner.clone(),
+            Some(self.data_dir.clone()),
         )
         .await?;
         let router = api::router_public(

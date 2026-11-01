@@ -136,6 +136,8 @@ pub struct Extensions {
     store: Store,
     /// Where extensions keep their logs.
     root: PathBuf,
+    /// The kernel's data folder, where this computer's own marketplace is.
+    computer: PathBuf,
     loaded: RwLock<HashMap<String, Loaded>>,
     /// Tells every person's clients something: that extensions changed, an extension's event,
     /// or a view it keeps.
@@ -193,9 +195,15 @@ fn row_manifest(row: &extensions::Model) -> Result<Manifest> {
 }
 
 impl Extensions {
-    pub fn new(store: Store, root: PathBuf, tell: Box<dyn Fn(Value) + Send + Sync>) -> Arc<Self> {
+    pub fn new(
+        store: Store,
+        root: PathBuf,
+        computer: PathBuf,
+        tell: Box<dyn Fn(Value) + Send + Sync>,
+    ) -> Arc<Self> {
         Arc::new_cyclic(|me| Self {
             store,
+            computer,
             loaded: RwLock::default(),
             tell,
             next_runs: std::sync::Mutex::default(),
@@ -209,6 +217,18 @@ impl Extensions {
             root,
             me: me.clone(),
         })
+    }
+
+    /// The marketplaces this workspace reads: this computer's own, then those its instance
+    /// added.
+    async fn indexes(&self) -> Result<Vec<String>> {
+        let mut indexes = marketplace::indexes(&self.computer);
+        for added in self.store.marketplaces().await? {
+            if !indexes.contains(&added.url) {
+                indexes.push(added.url);
+            }
+        }
+        Ok(indexes)
     }
 
     /// Where a person's client opens one of an extension's pages, `ui/…` in its folder: an
@@ -612,7 +632,7 @@ impl Extensions {
             })
             .collect();
         let (mut offers, mut errors, mut marketplaces) = (Vec::new(), Vec::new(), Vec::new());
-        for url in marketplace::indexes(self.root.parent().unwrap_or(&self.root)) {
+        for url in self.indexes().await? {
             match marketplace::read(&url).await {
                 Ok(index) => {
                     marketplaces.push(json!({"index": url, "name": index.name}));
@@ -703,9 +723,7 @@ impl Extensions {
     ) -> Result<Installed> {
         self.owner_only(who).await?;
         ensure!(
-            marketplace::indexes(self.root.parent().unwrap_or(&self.root))
-                .iter()
-                .any(|known| known == index_url),
+            self.indexes().await?.iter().any(|known| known == index_url),
             Error::Invalid("This kernel does not read that index".into())
         );
         let index = marketplace::read(index_url).await?;

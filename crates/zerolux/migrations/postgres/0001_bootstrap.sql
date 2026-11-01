@@ -35,9 +35,11 @@ CREATE TABLE "extensions" ("workspace_id" text NOT NULL, "id" text NOT NULL, "ve
 -- Create "hosts" table
 CREATE TABLE "hosts" ("workspace_id" text NOT NULL, "id" text NOT NULL, "name" text NOT NULL, "person_id" text NOT NULL, "open" boolean NOT NULL, "created_at" bigint NOT NULL, "seen_at" bigint NOT NULL, "secret_hash" text NULL, "link_hash" text NULL, "link_expires_at" bigint NULL, PRIMARY KEY ("workspace_id", "id"), CONSTRAINT "hosts_link_hash_key" UNIQUE ("workspace_id", "link_hash"), CONSTRAINT "hosts_secret_hash_key" UNIQUE ("workspace_id", "secret_hash"));
 -- Create "instance" table
-CREATE TABLE "instance" ("id" text NOT NULL, "auth_secret" text NOT NULL, "created_at" bigint NOT NULL, PRIMARY KEY ("id"));
+CREATE TABLE "instance" ("id" text NOT NULL, "auth_secret" text NOT NULL, "owner" text NULL, "created_at" bigint NOT NULL, PRIMARY KEY ("id"));
 -- Create "invites" table
 CREATE TABLE "invites" ("workspace_id" text NOT NULL, "id" text NOT NULL, "token_hash" text NOT NULL, "created_by" text NOT NULL, "created_at" bigint NOT NULL, "expires_at" bigint NOT NULL, "accepted_by" text NULL, "accepted_at" bigint NULL, PRIMARY KEY ("workspace_id", "id"), CONSTRAINT "invites_token_hash_key" UNIQUE ("workspace_id", "token_hash"));
+-- Create "marketplaces" table
+CREATE TABLE "marketplaces" ("url" text NOT NULL, "name" text NOT NULL, "added_at" bigint NOT NULL, PRIMARY KEY ("url"));
 -- Create "messages" table
 CREATE TABLE "messages" ("workspace_id" text NOT NULL, "id" text NOT NULL, "conversation_id" text NOT NULL, "seq" bigint NOT NULL, "author_id" text NOT NULL, "text" text NOT NULL, "reply_to_delivery_id" text NULL, "created_at" bigint NOT NULL, PRIMARY KEY ("workspace_id", "id"), CONSTRAINT "messages_conversation_id_seq_key" UNIQUE ("workspace_id", "conversation_id", "seq"), CONSTRAINT "messages_reply_to_delivery_id_key" UNIQUE ("workspace_id", "reply_to_delivery_id"));
 -- Create "read_positions" table

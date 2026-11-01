@@ -9,6 +9,10 @@ pub struct Model {
     /// Better Auth's signing secret, shared by the kernels serving this instance.
     #[sea_orm(column_type = "Text")]
     pub auth_secret: String,
+    /// The account that made its first workspace, which administers the instance: its
+    /// marketplaces. None until a workspace is made, and on an instance without sign-in.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub owner: Option<String>,
     pub created_at: i64,
 }
 

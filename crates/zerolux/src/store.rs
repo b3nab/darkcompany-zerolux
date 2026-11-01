@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     db::Location,
-    entity::{actors, instance, invites, workspace},
+    entity::{actors, instance, invites, marketplaces, workspace},
     model::*,
 };
 
@@ -38,6 +38,9 @@ pub enum Error {
     NotFound,
     #[error("This changed meanwhile; refresh and try again")]
     Conflict,
+    /// What is being added is there already.
+    #[error("{0}")]
+    Exists(String),
     #[error("The owner stopped this session while it was being relinked")]
     StoppedByOwner,
     #[error(transparent)]
@@ -255,6 +258,7 @@ impl Instance {
                 instance::ActiveModel {
                     id: Set(Uuid::new_v4().to_string()),
                     auth_secret: Set(random_token()),
+                    owner: Set(None),
                     created_at: Set(now_ms()),
                 }
                 .insert(&tx)
@@ -358,8 +362,59 @@ impl Instance {
         }
         .insert(&tx)
         .await?;
+        // The account that makes the first workspace administers the instance.
+        instance::Entity::update_many()
+            .col_expr(instance::Column::Owner, Expr::value(subject))
+            .filter(instance::Column::Owner.is_null())
+            .exec(&tx)
+            .await?;
         tx.commit().await?;
         Ok(workspace)
+    }
+
+    /// Whether the account `subject` administers the instance.
+    pub async fn administers(&self, subject: &str) -> Result<bool> {
+        Ok(instance::Entity::find()
+            .one(&self.db)
+            .await?
+            .and_then(|row| row.owner)
+            .is_some_and(|owner| owner == subject))
+    }
+
+    /// The marketplaces the instance added, oldest first.
+    pub async fn marketplaces(&self) -> Result<Vec<marketplaces::Model>> {
+        marketplaces_of(&self.db).await
+    }
+
+    /// Adds the marketplace whose index is at `url`, under the name the index gives itself.
+    pub async fn add_marketplace(&self, url: &str, name: &str) -> Result<marketplaces::Model> {
+        let tx = self.write().await?;
+        if marketplaces::Entity::find_by_id(url)
+            .one(&tx)
+            .await?
+            .is_some()
+        {
+            return Err(Error::Exists("This marketplace is already added".into()));
+        }
+        let added = marketplaces::ActiveModel {
+            url: Set(url.to_owned()),
+            name: Set(text(name, "The marketplace's name", 200, true)?),
+            added_at: Set(now_ms()),
+        }
+        .insert(&tx)
+        .await?;
+        tx.commit().await?;
+        Ok(added)
+    }
+
+    pub async fn remove_marketplace(&self, url: &str) -> Result<()> {
+        let tx = self.write().await?;
+        let removed = marketplaces::Entity::delete_by_id(url).exec(&tx).await?;
+        if removed.rows_affected == 0 {
+            return Err(Error::NotFound);
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Every workspace of the instance, oldest first.
@@ -500,6 +555,11 @@ impl Store {
 
     /// The project the workspace belongs to: the folder holding its `.zerolux`, or its own
     /// folder elsewhere on this computer. None for one kept in the kernel's data.
+    /// The marketplaces its instance added, for all its workspaces.
+    pub async fn marketplaces(&self) -> Result<Vec<marketplaces::Model>> {
+        marketplaces_of(&self.db).await
+    }
+
     pub async fn project_folder(&self) -> Result<Option<std::path::PathBuf>> {
         let folder = std::path::PathBuf::from(self.workspace_info().await?.folder);
         if !folder.is_absolute() {
@@ -568,4 +628,12 @@ impl Store {
             onboarding_required,
         })
     }
+}
+
+async fn marketplaces_of(db: &DatabaseConnection) -> Result<Vec<marketplaces::Model>> {
+    Ok(marketplaces::Entity::find()
+        .order_by_asc(marketplaces::Column::AddedAt)
+        .order_by_asc(marketplaces::Column::Url)
+        .all(db)
+        .await?)
 }

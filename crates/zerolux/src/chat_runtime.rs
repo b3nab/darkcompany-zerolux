@@ -346,7 +346,16 @@ impl ChatRuntime {
         base_url: String,
         links: PathBuf,
     ) -> Result<Arc<Self>> {
-        Self::start_hosted(store, livekit, base_url.clone(), base_url, links, None).await
+        Self::start_hosted(
+            store,
+            livekit,
+            base_url.clone(),
+            base_url,
+            links,
+            None,
+            None,
+        )
+        .await
     }
 
     pub async fn start_with_runner(
@@ -363,10 +372,13 @@ impl ChatRuntime {
             base_url,
             links,
             Some(program),
+            None,
         )
         .await
     }
 
+    /// `computer` is the kernel's data folder, where this computer's own marketplace is: by
+    /// default the workspace's.
     pub(crate) async fn start_hosted(
         store: Store,
         livekit: Arc<LiveKit>,
@@ -374,6 +386,7 @@ impl ChatRuntime {
         harness_url: String,
         links: PathBuf,
         program: Option<crate::claude_runner::RunnerProgram>,
+        computer: Option<PathBuf>,
     ) -> Result<Arc<Self>> {
         store.recover_sessions().await?;
         let worktrees = links.with_file_name("worktrees");
@@ -389,6 +402,12 @@ impl ChatRuntime {
         let extensions = crate::extensions::Extensions::new(
             store.clone(),
             links.with_file_name("extensions"),
+            computer.unwrap_or_else(|| {
+                links
+                    .parent()
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or_default()
+            }),
             Box::new({
                 let (store, livekit) = (store.clone(), livekit.clone());
                 move |notice: serde_json::Value| {

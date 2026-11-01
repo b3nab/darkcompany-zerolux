@@ -717,6 +717,177 @@ async fn an_existing_account_joins_another_workspace_with_an_invitation() {
 /// A signed-in account that is not a person of a workspace neither reads nor writes anything
 /// of it, whatever the route.
 #[tokio::test(flavor = "multi_thread")]
+async fn the_instance_has_the_marketplaces_and_every_workspace_installs_from_them() {
+    if !ready() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let database = db::TestDatabase::new(dir.path().join("data/zerolux.db")).await;
+    let kernel = Kernel::start(dir.path(), database.location().clone()).await;
+    let root = kernel.root();
+    let owner = token_of(
+        &kernel
+            .sign_up("Owner fixture", "owner@example.test", None)
+            .await,
+    );
+    let first = kernel.create(&owner, json!({ "name": "First" })).await;
+    let second = kernel.create(&owner, json!({ "name": "Second" })).await;
+    let index = dir.path().join("market/index.json");
+    std::fs::create_dir_all(index.parent().unwrap()).unwrap();
+    std::fs::write(
+        &index,
+        json!({
+            "name": "Market fixture",
+            "publishers": {},
+            "extensions": [{
+                "id": "fixture.tally",
+                "name": "Tally",
+                "publisher": "fixture",
+                "versions": [{
+                    "version": "0.0.1",
+                    "packages": { "any": { "url": "tally.zip", "sha256": "00" } }
+                }]
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let url = reqwest::Url::from_file_path(&index).unwrap().to_string();
+    let listed = |token: String| {
+        let (kernel, root) = (&kernel, root.clone());
+        async move {
+            let listed: Value = kernel
+                .get(&root, "/api/marketplaces", Some(&token))
+                .await
+                .json()
+                .await
+                .unwrap();
+            listed
+        }
+    };
+    let delete = |token: &str, url: &str| {
+        let mut request = kernel
+            .client
+            .delete(format!("{root}/api/marketplaces"))
+            .json(&json!({ "url": url }));
+        request = request.bearer_auth(token);
+        request.send()
+    };
+    // The account that made the first workspace administers the instance.
+    assert_eq!(listed(owner.clone()).await["administers"], true);
+    assert_eq!(
+        kernel
+            .post(
+                &root,
+                "/api/marketplaces",
+                Some(&owner),
+                json!({ "url": "http://example.test/index.json" })
+            )
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let added: Value = kernel
+        .post(
+            &root,
+            "/api/marketplaces",
+            Some(&owner),
+            json!({ "url": url }),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(added["marketplace"]["url"], url.as_str());
+    assert_eq!(added["marketplace"]["name"], "Market fixture");
+    assert_eq!(
+        kernel
+            .post(
+                &root,
+                "/api/marketplaces",
+                Some(&owner),
+                json!({ "url": url })
+            )
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    let shown = listed(owner.clone()).await;
+    assert!(
+        shown["marketplaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|market| market["url"] == url.as_str() && market["computer"] == false)
+    );
+    // Every workspace of the instance reads it, also one made after the first.
+    for workspace in [&first, &second] {
+        let offers: Value = kernel
+            .get(
+                &kernel.base(workspace),
+                "/api/extensions/marketplace",
+                Some(&owner),
+            )
+            .await
+            .json()
+            .await
+            .unwrap();
+        assert!(
+            offers["offers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|offer| offer["id"] == "fixture.tally" && offer["index"] == url.as_str()),
+            "{workspace}"
+        );
+    }
+    // Another account of the instance sees them, and changes nothing.
+    let base = kernel.base(&first);
+    let invite: Value = kernel
+        .post(&base, "/api/invites", Some(&owner), json!({}))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let ada = token_of(
+        &kernel
+            .sign_up("Ada", "ada@example.test", invite["token"].as_str())
+            .await,
+    );
+    let seen = listed(ada.clone()).await;
+    assert_eq!(seen["administers"], false);
+    assert_eq!(seen["marketplaces"], shown["marketplaces"]);
+    assert_eq!(
+        kernel
+            .post(
+                &root,
+                "/api/marketplaces",
+                Some(&ada),
+                json!({ "url": url })
+            )
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        delete(&ada, &url).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(delete(&owner, &url).await.unwrap().status(), StatusCode::OK);
+    assert_eq!(
+        delete(&owner, &url).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+    assert!(
+        listed(owner.clone()).await["marketplaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|market| market["url"] != url.as_str())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_non_member_reaches_nothing_of_a_workspace() {
     if !ready() {
         return;
