@@ -7,6 +7,7 @@ meanwhile. One file, with no dependencies: `zerolux ext new` puts it beside the 
 
 import json
 import os
+import signal
 import sys
 import threading
 import traceback
@@ -290,3 +291,17 @@ class Extension:
                 continue
             self._pool.submit(self._answer, message)
         self._pool.shutdown(wait=False, cancel_futures=True)
+        end_started()
+
+
+def end_started() -> None:
+    """On Unix the kernel runs the extension as the leader of a process group of its own
+    (`ZEROLUX_PROCESS_GROUP`): what it started ends with it, also when the kernel ended without
+    stopping it, as its input closes."""
+    if os.name != "posix" or not os.environ.get("ZEROLUX_PROCESS_GROUP"):
+        return
+    try:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        os.killpg(os.getpgrp(), signal.SIGTERM)
+    except (OSError, ValueError):
+        pass

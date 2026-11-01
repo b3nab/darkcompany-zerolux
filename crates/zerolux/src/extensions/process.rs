@@ -17,7 +17,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::{Child, Command},
+    process::Command,
     sync::{Mutex, mpsc, oneshot, watch},
 };
 
@@ -51,7 +51,7 @@ pub struct Process {
 }
 
 enum Part {
-    Child(Box<Child>),
+    Child(Box<crate::owned::Owned>),
     Module(Arc<super::library::Module>),
 }
 
@@ -79,7 +79,8 @@ impl Process {
         } else {
             folder.join(program)
         };
-        let mut child = Command::new(&program)
+        let mut command = Command::new(&program);
+        command
             .args(args)
             .current_dir(folder)
             .env_clear()
@@ -87,15 +88,14 @@ impl Process {
             .env("ZEROLUX_EXTENSION", extension)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::from(log))
-            .kill_on_drop(true)
-            .spawn()
+            .stderr(Stdio::from(log));
+        // What it starts runs in its process group, and ends with it.
+        #[cfg(unix)]
+        command.env("ZEROLUX_PROCESS_GROUP", "1");
+        let mut child = crate::owned::Owned::spawn(command)
             .with_context(|| format!("Cannot run `{}` for {extension}", program.display()))?;
-        let mut stdin = child.stdin.take().context("No input to the extension")?;
-        let stdout = child
-            .stdout
-            .take()
-            .context("No output from the extension")?;
+        let mut stdin = child.stdin().context("No input to the extension")?;
+        let stdout = child.stdout().context("No output from the extension")?;
         let (send, mut outgoing) = mpsc::unbounded_channel::<String>();
         let pending: Pending = Arc::default();
         let (ended_tx, ended) = watch::channel(false);
@@ -177,10 +177,10 @@ impl Process {
     pub async fn stop(&self) {
         self.notify("shutdown", json!({}));
         match self.part.lock().await.take() {
+            // Asked to stop, it ends; then whatever it started and left running ends too.
             Some(Part::Child(mut child)) => {
-                if tokio::time::timeout(GRACE, child.wait()).await.is_err() {
-                    let _ = child.kill().await;
-                }
+                let _ = tokio::time::timeout(GRACE, child.wait()).await;
+                child.stop(GRACE).await;
             }
             // The notice reaches it before it stops, in order.
             Some(Part::Module(module)) => {

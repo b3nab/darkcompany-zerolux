@@ -21,11 +21,11 @@ use axum::{
 use serde::Deserialize;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::{Child, ChildStdin, Command},
+    process::{ChildStdin, Command},
     sync::Mutex,
 };
 
-use crate::db::Location;
+use crate::{db::Location, owned::Owned};
 
 const CONTROL_HEADER: &str = "x-zerolux-auth-service";
 const ENROLL_HEADER: &str = "x-zerolux-auth-enroll";
@@ -85,7 +85,7 @@ enum Startup {
 }
 
 pub struct AuthService {
-    child: Mutex<Option<(Child, ChildStdin)>>,
+    child: Mutex<Option<(Owned, ChildStdin)>>,
     address: String,
     control_token: String,
     client: reqwest::Client,
@@ -120,7 +120,8 @@ impl AuthService {
             "secret": secret,
             "control_token": control_token,
         });
-        let mut child = Command::new(&entry.bun)
+        let mut command = Command::new(&entry.bun);
+        command
             .arg("--no-env-file")
             .arg(&entry.entry)
             .env_clear()
@@ -128,18 +129,16 @@ impl AuthService {
             .env("NODE_ENV", "production")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .kill_on_drop(true)
-            .spawn()
-            .with_context(|| {
-                format!(
-                    "Start the authentication service {} with {}",
-                    entry.entry.display(),
-                    entry.bun.display()
-                )
-            })?;
-        let mut stdin = child.stdin.take().expect("piped stdin");
-        let stdout = child.stdout.take().expect("piped stdout");
+            .stderr(Stdio::inherit());
+        let mut child = Owned::spawn(command).with_context(|| {
+            format!(
+                "Start the authentication service {} with {}",
+                entry.entry.display(),
+                entry.bun.display()
+            )
+        })?;
+        let mut stdin = child.stdin().expect("piped stdin");
+        let stdout = child.stdout().expect("piped stdout");
         stdin
             .write_all(format!("{config}\n").as_bytes())
             .await
@@ -154,7 +153,7 @@ impl AuthService {
                     address,
                 }) => address,
                 Ok(Startup::Ready { version, .. }) => {
-                    let _ = child.kill().await;
+                    child.stop(Duration::ZERO).await;
                     bail!(
                         "The authentication service speaks protocol {version}; this kernel speaks 1"
                     )
@@ -164,7 +163,7 @@ impl AuthService {
                     bail!("The authentication service could not start ({reason})")
                 }
                 Err(_) => {
-                    let _ = child.kill().await;
+                    child.stop(Duration::ZERO).await;
                     bail!("The authentication service did not announce itself")
                 }
             },
@@ -173,7 +172,7 @@ impl AuthService {
                 bail!("The authentication service ended before it was ready")
             }
             Err(_) => {
-                let _ = child.kill().await;
+                child.stop(Duration::ZERO).await;
                 bail!("The authentication service did not start in time")
             }
         };
@@ -324,13 +323,11 @@ impl AuthService {
 
     /// Ends the service: its stdin closes, it stops; a service that does not is killed.
     pub async fn shutdown(&self) {
-        let Some((mut child, stdin)) = self.child.lock().await.take() else {
+        let Some((child, stdin)) = self.child.lock().await.take() else {
             return;
         };
         drop(stdin);
-        if tokio::time::timeout(SHUTDOWN, child.wait()).await.is_err() {
-            let _ = child.kill().await;
-        }
+        ended(child).await;
     }
 }
 
@@ -338,11 +335,11 @@ fn random_token() -> String {
     crate::store::random_token()
 }
 
-/// Ends a child that already reported failure, within a deadline.
-async fn ended(mut child: Child) {
-    if tokio::time::timeout(SHUTDOWN, child.wait()).await.is_err() {
-        let _ = child.kill().await;
-    }
+/// Ends a service that was told to stop or reported failure, within a deadline, with what
+/// it started.
+async fn ended(mut child: Owned) {
+    let _ = tokio::time::timeout(SHUTDOWN, child.wait()).await;
+    child.stop(Duration::ZERO).await;
 }
 
 /// A file only this user reads, written whole or not at all.

@@ -61,12 +61,18 @@ tokio-util = { version = "0.7", features = ["io"] }
 chacha20poly1305 = "0.11.0"
 mime = "0.3.17"
 tower = { version = "0.5", default-features = false, features = ["util"] }
+process-wrap = { version = "10.0.1", default-features = false, features = [
+  "tokio1",
+  "process-group",
+  "job-object",
+  "kill-on-drop",
+] }
 
 [dev-dependencies]
 tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.30", features = ["signal", "process"] }
+nix = { version = "0.30", features = ["signal", "process", "user"] }
 
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61", features = [

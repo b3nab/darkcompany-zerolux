@@ -144,6 +144,8 @@ impl Server {
         let instance = Instance::open(&options.database)
             .await
             .context("Open the database")?;
+        // What a kernel on this computer left running when it ended without stopping it.
+        tokio::spawn(crate::owned::end_left_behind());
         let livekit_config = options
             .livekit
             .clone()

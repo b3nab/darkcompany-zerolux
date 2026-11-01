@@ -374,7 +374,7 @@ export async function serve(
       continue;
     }
     if (message.id === undefined) {
-      if (message.method === "shutdown") return;
+      if (message.method === "shutdown") break;
       if (message.method === "settings") {
         context.settings = message.params?.settings ?? {};
         void extension.settingsChanged?.(context);
@@ -401,5 +401,22 @@ export async function serve(
           },
         } as Message),
     );
+  }
+  endStarted();
+}
+
+/**
+ * On Unix the kernel runs the extension as the leader of a process group of its own
+ * (`ZEROLUX_PROCESS_GROUP`): what it started ends with it, also when the kernel ended without
+ * stopping it, as its input closes.
+ */
+function endStarted() {
+  if (process.platform === "win32" || !process.env.ZEROLUX_PROCESS_GROUP)
+    return;
+  process.on("SIGTERM", () => {});
+  try {
+    process.kill(-process.pid, "SIGTERM");
+  } catch {
+    // Not the group's leader: there is no group of its own to end.
   }
 }

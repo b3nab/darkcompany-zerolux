@@ -35,6 +35,7 @@ pub mod local_control;
 pub mod model;
 pub mod native_events;
 pub mod native_output;
+pub mod owned;
 pub mod people;
 mod pi_runner;
 pub mod platform;

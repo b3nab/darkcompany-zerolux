@@ -128,6 +128,40 @@ class SDK(unittest.TestCase):
         self.assertEqual(ext.heard, [5])  # type: ignore[attr-defined]
         kernel.close()
 
+    @unittest.skipUnless(os.name == "posix", "process groups are Unix's")
+    def test_what_an_extension_started_ends_when_its_input_closes(self):
+        import signal
+        import subprocess
+        import sys
+        program = (
+            "import subprocess, sys, zerolux\n"
+            "child = subprocess.Popen(['sleep', '600'])\n"
+            "print(child.pid, flush=True)\n"
+            "zerolux.Extension().serve(sys.stdin, open(__import__('os').devnull, 'w'))\n"
+        )
+        extension = subprocess.Popen(
+            [sys.executable, "-c", program], cwd=HERE, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, text=True, start_new_session=True,
+            env={**os.environ, "ZEROLUX_EXTENSION": "", "ZEROLUX_PROCESS_GROUP": "1"})
+        started = int(extension.stdout.readline())
+        try:
+            # The kernel ended: the extension's input closes.
+            extension.stdin.close()
+            extension.wait(10)
+            for _ in range(100):
+                try:
+                    os.kill(started, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.02)
+            else:
+                self.fail("what the extension started still runs")
+        finally:
+            try:
+                os.kill(started, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
     def test_the_voice_extension_carries_this_sdk(self):
         carried = HERE.parent.parent.parent / "marketplace" / "voice" / "zerolux.py"
         self.assertEqual(carried.read_text(), (HERE / "zerolux.py").read_text())

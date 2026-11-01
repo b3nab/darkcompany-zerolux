@@ -20,7 +20,7 @@ use livekit_api::{
     },
 };
 use tokio::{
-    process::{Child, Command},
+    process::Command,
     sync::{Mutex, Notify, watch},
 };
 use uuid::Uuid;
@@ -104,7 +104,7 @@ pub struct LiveKit {
     /// Started by this kernel (as opposed to an external server), whatever its URL says.
     owns_server: bool,
     /// Shared by every workspace's view of the same server.
-    managed: Arc<Mutex<Option<Child>>>,
+    managed: Arc<Mutex<Option<crate::owned::Owned>>>,
 }
 
 impl LiveKit {
@@ -320,19 +320,7 @@ impl LiveKit {
         let Some(mut child) = self.managed.lock().await.take() else {
             return Ok(());
         };
-        #[cfg(unix)]
-        if let Some(pid) = child.id() {
-            let _ = nix::sys::signal::kill(
-                nix::unistd::Pid::from_raw(pid as i32),
-                nix::sys::signal::Signal::SIGTERM,
-            );
-        }
-        if tokio::time::timeout(STOP_TIMEOUT, child.wait())
-            .await
-            .is_err()
-        {
-            child.kill().await.context("Stop managed LiveKit server")?;
-        }
+        child.stop(STOP_TIMEOUT).await;
         Ok(())
     }
 }
@@ -480,7 +468,7 @@ fn this_computer() -> Option<IpAddr> {
 async fn start_managed(
     data_dir: &PathBuf,
     expose: Option<IpAddr>,
-) -> anyhow::Result<(String, String, Child)> {
+) -> anyhow::Result<(String, String, crate::owned::Owned)> {
     // Generated on every start and handed over in the environment: never on disk or in argv.
     let secret = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     tokio::fs::create_dir_all(data_dir).await?;
@@ -513,11 +501,10 @@ async fn start_managed(
                 )
                 .stdin(Stdio::null())
                 .stdout(log.try_clone()?)
-                .stderr(log.try_clone()?)
-                .kill_on_drop(true);
+                .stderr(log.try_clone()?);
             // Keep the ports reserved until the child can take them over.
             drop((tcp, udp));
-            let mut child = command.spawn().context("Cannot start the LiveKit server. Install `livekit-server`, or set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET to use an external one")?;
+            let mut child = crate::owned::Owned::spawn(command).context("Cannot start the LiveKit server. Install `livekit-server`, or set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET to use an external one")?;
             let url = format!("ws://127.0.0.1:{port}");
             let rooms = RoomClient::with_api_key(&url, MANAGED_KEY, &secret);
             let status = loop {
