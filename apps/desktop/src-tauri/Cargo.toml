@@ -81,6 +81,7 @@ objc2-user-notifications = { version = "0.3.2", default-features = false, featur
   "UNNotificationTrigger",
 ] }
 plist = "1"
+tauri-nspanel = "2.1.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 notify-rust = "4.17.0"

@@ -2210,6 +2210,11 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             }
         }));
     }
+    // The tray's panel is a panel of macOS's own: over full-screen apps, without activating.
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.plugin(tauri_nspanel::init());
+    }
     let app = builder
         .plugin(crate::autostart::plugin())
         .plugin(

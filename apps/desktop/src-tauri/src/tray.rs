@@ -395,9 +395,7 @@ fn toggle(app: &AppHandle, anchor: Rect) {
         let _ = panel.hide();
         return;
     }
-    let shown = place(&panel, anchor)
-        .and_then(|()| panel.show())
-        .and_then(|()| panel.set_focus());
+    let shown = place(&panel, anchor).and_then(|()| reveal(&panel));
     if let Err(error) = shown {
         eprintln!("The tray panel could not open: {error}");
     }
@@ -449,19 +447,51 @@ fn on_menu(app: &AppHandle, id: &str) {
     }
 }
 
-/// On every space, a full-screen app's included, as the system's own menus are.
+/// The panel in front, with the keyboard. On macOS without activating the app, as the system's
+/// own menus open: activating it would leave a full-screen app's space.
+fn reveal(panel: &WebviewWindow) -> tauri::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_nspanel::ManagerExt;
+        if let Ok(panel) = panel.app_handle().get_webview_panel(PANEL) {
+            panel.show_and_make_key();
+            return Ok(());
+        }
+    }
+    panel.show()?;
+    panel.set_focus()
+}
+
+#[cfg(target_os = "macos")]
+tauri_nspanel::tauri_panel! {
+    panel!(TrayPanel {
+        config: {
+            can_become_key_window: true,
+            is_floating_panel: true,
+            hides_on_deactivate: false
+        }
+    })
+}
+
+/// A panel that never activates the app, on every space, a full-screen app's included, at the
+/// level of the system's own menus.
 #[cfg(target_os = "macos")]
 fn over_full_screen(panel: &WebviewWindow) -> tauri::Result<()> {
-    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
-    let window = panel.ns_window()?.cast::<NSWindow>();
-    // SAFETY: the panel's own NSWindow, alive as long as the panel; this runs in the app's
-    // setup, on the main thread.
-    let window = unsafe { &*window };
-    window.setCollectionBehavior(
-        NSWindowCollectionBehavior::CanJoinAllSpaces
-            | NSWindowCollectionBehavior::FullScreenAuxiliary
-            | NSWindowCollectionBehavior::IgnoresCycle,
+    use objc2_app_kit::NSWindowStyleMask;
+    use tauri_nspanel::{CollectionBehavior, PanelLevel, WebviewWindowExt};
+    let panel = panel.to_panel::<TrayPanel>()?;
+    panel
+        .add_style_mask(NSWindowStyleMask::NonactivatingPanel)
+        .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?;
+    panel.set_collection_behavior(
+        CollectionBehavior::new()
+            .can_join_all_spaces()
+            .full_screen_auxiliary()
+            .stationary()
+            .ignores_cycle()
+            .into(),
     );
+    panel.set_level(PanelLevel::PopUpMenu.value());
     Ok(())
 }
 
