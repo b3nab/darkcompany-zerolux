@@ -18,11 +18,9 @@ pub struct WindowState {
 
 /// The saved connection whose packaged workspace view this is, if it is one.
 pub fn workspace_profile<'a>(label: &'a str, url: &tauri::Url) -> Option<&'a str> {
-    let (id, generation) = label
-        .strip_prefix("workspace-")
-        .and_then(|label| label.rsplit_once('-'))?;
+    let id = crate::app::profile_of(label)?;
     (uuid::Uuid::parse_str(id).is_ok_and(|parsed| parsed.to_string() == id)
-        && generation.parse::<u64>().is_ok_and(|n| n > 0)
+        && crate::app::generation_of(label) > 0
         && local::app_page(url))
     .then_some(id)
 }
@@ -65,7 +63,7 @@ mod tests {
     use super::*;
     #[test]
     fn only_packaged_workspace_callers_can_use_window_controls() {
-        let label = format!("workspace-{}-1", uuid::Uuid::new_v4());
+        let label = format!("workspace-{}-1-1", uuid::Uuid::new_v4());
         let page = tauri::Url::parse("tauri://localhost/index.html").unwrap();
         assert!(workspace_profile(&label, &page).is_some());
         for label in ["manager", "workspace-not-a-profile-1", "workspace-other"] {

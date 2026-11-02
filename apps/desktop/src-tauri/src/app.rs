@@ -346,6 +346,11 @@ impl WorkspaceView {
     fn close(&self) -> Result<()> {
         self.window.close().context("Close the workspace view")
     }
+
+    /// Its place among its workspace's windows.
+    fn place(&self) -> usize {
+        view_of(self.window.label()).map_or(1, |(_, place)| place)
+    }
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -360,15 +365,11 @@ struct SavedView {
 #[derive(Clone, Deserialize, Serialize)]
 struct UpdateViews {
     version: String,
-    views: HashMap<String, Vec<SavedView>>,
+    views: HashMap<String, Places>,
 }
 
 impl UpdateViews {
-    fn merge(
-        previous: Option<&Self>,
-        version: String,
-        live: HashMap<String, Vec<SavedView>>,
-    ) -> Self {
+    fn merge(previous: Option<&Self>, version: String, live: HashMap<String, Places>) -> Self {
         let mut views = previous
             .map(|saved| saved.views.clone())
             .unwrap_or_default();
@@ -533,11 +534,50 @@ fn manager_request(url: &tauri::Url) -> bool {
 }
 
 /// The workspace a window shows, from its label `workspace-<profile>-<generation>`.
-fn profile_of(label: &str) -> Option<&str> {
-    label
-        .strip_prefix("workspace-")?
-        .rsplit_once('-')
-        .map(|(id, _)| id)
+/// A workspace window's label: its workspace, its place among that workspace's windows, and
+/// which window it is.
+fn view_label(profile: &str, place: usize, generation: u64) -> String {
+    format!("workspace-{profile}-{place}-{generation}")
+}
+
+/// The workspace a window's label names, and its place among the workspace's windows.
+fn view_of(label: &str) -> Option<(&str, usize)> {
+    let (rest, _) = label.strip_prefix("workspace-")?.rsplit_once('-')?;
+    let (id, place) = rest.rsplit_once('-')?;
+    Some((id, place.parse().ok()?))
+}
+
+pub(crate) fn profile_of(label: &str) -> Option<&str> {
+    view_of(label).map(|(id, _)| id)
+}
+
+/// What the window-state plugin keeps a workspace window's frame under: its workspace and place,
+/// so the next window in that place, after a quit or an update, opens where it was.
+fn state_key(label: &str) -> &str {
+    match view_of(label) {
+        Some(_) => label.rsplit_once('-').map_or(label, |(key, _)| key),
+        None => label,
+    }
+}
+
+/// What the plugin keeps of a window: where it is and how large, maximized or full screen.
+fn window_state() -> tauri_plugin_window_state::StateFlags {
+    use tauri_plugin_window_state::StateFlags;
+    StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED | StateFlags::FULLSCREEN
+}
+
+/// A workspace's windows by their place, the first place first; a place left empty has none.
+type Places = Vec<Option<SavedView>>;
+
+fn by_place(views: impl IntoIterator<Item = (usize, SavedView)>) -> Places {
+    let mut places = Places::new();
+    for (place, view) in views {
+        if places.len() < place {
+            places.resize(place, None);
+        }
+        places[place - 1] = Some(view);
+    }
+    places
 }
 
 /// The workspace in front.
@@ -843,7 +883,7 @@ impl Host {
                 })
             };
             let window = self
-                .build_view(&profile, &verified.url, saved.as_ref())
+                .build_view(&profile, &verified.url, saved.as_ref(), 1)
                 .await?;
             self.windows.insert(id.to_owned(), vec![window]);
         }
@@ -898,8 +938,10 @@ impl Host {
             path: Some(path),
             ..Default::default()
         });
+        let taken: Vec<_> = self.windows[&id].iter().map(WorkspaceView::place).collect();
+        let place = (1..).find(|place| !taken.contains(place)).unwrap_or(1);
         let view = self
-            .build_view(&profile, &verified.url, saved.as_ref())
+            .build_view(&profile, &verified.url, saved.as_ref(), place)
             .await?;
         if let Some(position) = self
             .windows
@@ -1023,9 +1065,10 @@ impl Host {
         profile: &Profile,
         url: &tauri::Url,
         saved: Option<&SavedView>,
+        place: usize,
     ) -> Result<WorkspaceView> {
         self.generation += 1;
-        let label = format!("workspace-{}-{}", profile.id, self.generation);
+        let label = view_label(&profile.id, place, self.generation);
         self.app
             .state::<crate::extension_ui::Kernels>()
             .set(&profile.id, url);
@@ -1150,12 +1193,12 @@ impl Host {
 
     /// Each of a workspace's windows, with its drafts and place, once nothing waits to be sent in
     /// any; their input stays frozen meanwhile.
-    async fn prepare_views(&self, id: &str) -> Result<Vec<SavedView>> {
+    async fn prepare_views(&self, id: &str) -> Result<Places> {
         let mut saved = Vec::new();
         for view in self.windows.get(id).into_iter().flatten() {
-            saved.push(Self::prepare_view(view).await?);
+            saved.push((view.place(), Self::prepare_view(view).await?));
         }
-        Ok(saved)
+        Ok(by_place(saved))
     }
 
     async fn prepare_view(view: &WorkspaceView) -> Result<SavedView> {
@@ -1227,8 +1270,12 @@ impl Host {
             profile.observe(&verified)?;
             // Each window again at the new address, where it was, with its drafts.
             let mut replacements = Vec::new();
-            for one in &saved {
-                match self.build_view(&profile, &verified.url, Some(one)).await {
+            for (at, one) in saved.iter().enumerate() {
+                let Some(one) = one else { continue };
+                match self
+                    .build_view(&profile, &verified.url, Some(one), at + 1)
+                    .await
+                {
                     Ok(view) => replacements.push(view),
                     Err(error) => {
                         for view in &replacements {
@@ -1273,11 +1320,12 @@ impl Host {
         &mut self,
         profile: &Profile,
         url: &tauri::Url,
-        saved: &[SavedView],
+        saved: &[Option<SavedView>],
     ) -> Result<Vec<WorkspaceView>> {
         let mut views = Vec::new();
-        for state in saved {
-            match self.build_view(profile, url, Some(state)).await {
+        for (at, state) in saved.iter().enumerate() {
+            let Some(state) = state else { continue };
+            match self.build_view(profile, url, Some(state), at + 1).await {
                 Ok(view) => views.push(view),
                 Err(error) => {
                     for view in views {
@@ -1872,8 +1920,10 @@ impl Host {
         }
         let mut views = Vec::new();
         let prepared: Result<()> = async {
-            for state in states {
-                views.push(self.build_view(profile, url, Some(&state)).await?);
+            for (at, state) in states.iter().enumerate() {
+                if let Some(state) = state {
+                    views.push(self.build_view(profile, url, Some(state), at + 1).await?);
+                }
             }
             UpdateViews::persist(&self.root.root, Some(&saved))?;
             Ok(())
@@ -1934,6 +1984,8 @@ impl Host {
             for id in self.windows.keys() {
                 saved.insert(id.clone(), self.prepare_views(id).await?);
             }
+            // Where each window is, kept by the plugin before the app restarts.
+            tauri_plugin_window_state::AppHandleExt::save_window_state(&self.app, window_state())?;
             let checkpoint = UpdateViews::merge(
                 previous_views.as_ref(),
                 pending.update.version.clone(),
@@ -2065,17 +2117,24 @@ impl Host {
         serde_json::from_str(&json).ok()
     }
 
-    /// The windows open at quit, each on its page, to open again at the next launch.
+    /// The windows open at quit, each on its page and in its place, to open again at the next
+    /// launch where the window-state plugin kept them.
     async fn remember_windows(&mut self) {
         self.prune();
-        let mut open: HashMap<String, Vec<SavedView>> = HashMap::new();
+        let mut open: HashMap<String, Places> = HashMap::new();
         for (id, views) in &self.windows {
+            let mut pages = Vec::new();
             for view in views {
-                open.entry(id.clone()).or_default().push(SavedView {
-                    path: Self::page_of(&view.window).await,
-                    ..Default::default()
-                });
+                let path = Self::page_of(&view.window).await;
+                pages.push((
+                    view.place(),
+                    SavedView {
+                        path,
+                        ..Default::default()
+                    },
+                ));
             }
+            open.insert(id.clone(), by_place(pages));
         }
         let file = self.root.root.join(WINDOWS);
         let kept = if open.is_empty() {
@@ -2094,7 +2153,7 @@ impl Host {
     /// The windows open at the last quit, again on their pages; whether any opened.
     async fn reopen_windows(&mut self) -> Result<bool> {
         let file = self.root.root.join(WINDOWS);
-        let saved: HashMap<String, Vec<SavedView>> = match std::fs::read(&file) {
+        let saved: HashMap<String, Places> = match std::fs::read(&file) {
             Ok(bytes) => {
                 serde_json::from_slice(&bytes).context("Read the windows open at the last quit")?
             }
@@ -2210,6 +2269,21 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             }
         }));
     }
+    // Each workspace window opens again where the one in its place was, as large, maximized or
+    // full screen, by the window-state plugin. A test's own data root keeps its own.
+    let mut window_state = tauri_plugin_window_state::Builder::new()
+        .with_state_flags(window_state())
+        .map_label(state_key)
+        // It sees the key: workspace windows only, never the manager, the tray or a draft import.
+        .with_filter(|key| key.starts_with("workspace-"));
+    if let Some(root) = std::env::var_os("ZEROLUX_DESKTOP_DATA_DIR") {
+        window_state = window_state.with_filename(
+            PathBuf::from(root)
+                .join("window-state.json")
+                .to_string_lossy(),
+        );
+    }
+    builder = builder.plugin(window_state.build());
     // The tray's panel is a panel of macOS's own: over full-screen apps, without activating.
     #[cfg(target_os = "macos")]
     {
@@ -2545,13 +2619,13 @@ mod tests {
         assert_eq!(current, vec![4]);
     }
 
-    fn draft(text: &str) -> Vec<SavedView> {
-        vec![SavedView {
+    fn draft(text: &str) -> Places {
+        vec![Some(SavedView {
             can_leave: Some(true),
             reason: None,
             drafts: Some(HashMap::from([("chat".into(), text.into())])),
             path: Some("/chats".into()),
-        }]
+        })]
     }
 
     #[test]
@@ -2579,11 +2653,21 @@ mod tests {
         };
         let saved = read();
         assert_eq!(
-            saved.views["offline"][0].drafts.as_ref().unwrap()["chat"],
+            saved.views["offline"][0]
+                .as_ref()
+                .unwrap()
+                .drafts
+                .as_ref()
+                .unwrap()["chat"],
             "deferred"
         );
         assert_eq!(
-            saved.views["open"][0].drafts.as_ref().unwrap()["chat"],
+            saved.views["open"][0]
+                .as_ref()
+                .unwrap()
+                .drafts
+                .as_ref()
+                .unwrap()["chat"],
             "new"
         );
         // Installation fails: restore only the pre-existing deferred checkpoint.
@@ -2600,13 +2684,47 @@ mod tests {
     }
 
     #[test]
-    fn a_window_names_its_workspace() {
+    fn a_window_names_its_workspace_and_its_place() {
+        let label = view_label("6f0c1d2e-aaaa-bbbb-cccc-0123456789ab", 2, 7);
         assert_eq!(
-            profile_of("workspace-6f0c1d2e-aaaa-bbbb-cccc-0123456789ab-7"),
-            Some("6f0c1d2e-aaaa-bbbb-cccc-0123456789ab")
+            view_of(&label),
+            Some(("6f0c1d2e-aaaa-bbbb-cccc-0123456789ab", 2))
         );
         assert_eq!(profile_of("manager"), None);
         assert_eq!(profile_of("draft-import-x-1"), None);
+    }
+
+    #[test]
+    fn a_window_keeps_the_frame_of_its_place_whichever_window_is_there() {
+        let profile = "6f0c1d2e-aaaa-bbbb-cccc-0123456789ab";
+        assert_eq!(
+            state_key(&view_label(profile, 2, 7)),
+            state_key(&view_label(profile, 2, 31))
+        );
+        assert_ne!(
+            state_key(&view_label(profile, 1, 7)),
+            state_key(&view_label(profile, 2, 7))
+        );
+        assert_eq!(state_key("manager"), "manager");
+    }
+
+    #[test]
+    fn windows_come_back_in_their_places_a_closed_one_leaving_its_place_empty() {
+        let page = |path: &str| SavedView {
+            path: Some(path.into()),
+            ..Default::default()
+        };
+        let places = by_place([(3, page("/console")), (1, page("/chats"))]);
+        let paths: Vec<_> = places
+            .iter()
+            .map(|place| place.as_ref().and_then(|view| view.path.as_deref()))
+            .collect();
+        assert_eq!(paths, [Some("/chats"), None, Some("/console")]);
+        // A list from before places reads as places one after another.
+        let earlier: Places =
+            serde_json::from_str(r#"[{"path":"/chats"},{"path":"/console"}]"#).unwrap();
+        assert_eq!(earlier.len(), 2);
+        assert!(earlier.iter().all(Option::is_some));
     }
 
     #[test]
