@@ -119,7 +119,8 @@ if (import.meta.main) {
           "--slurp",
           `repos/${process.env.GITHUB_REPOSITORY}/releases`,
         ],
-        { encoding: "utf8" },
+        // Every release so far, with its notes and assets: well past the default 1 MiB.
+        { encoding: "utf8", maxBuffer: 1024 * 1024 * 1024 },
       ),
     ).flat() as {
       tag_name: string;
