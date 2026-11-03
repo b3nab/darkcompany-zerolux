@@ -5,15 +5,12 @@ import type { TextInputInstance } from "react-native";
 import {
   ActivityIcon,
   ChevronDownIcon,
-  ClockIcon,
-  PencilIcon,
   ChevronRightIcon,
   FileDiffIcon,
   ListChecksIcon,
   PanelRightIcon,
   PuzzleIcon,
   SquareTerminalIcon,
-  XIcon,
 } from "lucide-react-native";
 import {
   ActionSheetIOS,
@@ -24,7 +21,6 @@ import {
   Pressable,
   ScrollView,
   Switch,
-  TextInput,
   View,
 } from "react-native";
 import * as Haptics from "expo-haptics";
@@ -65,6 +61,7 @@ import {
   useSessionSubagents,
   useSessionCompacting,
   useSessionQueue,
+  useQueue,
   useSessionUsage,
   whenLooking,
   withMention,
@@ -93,7 +90,6 @@ import type {
   Density,
   InputMode,
   LiveItem,
-  QueuedInput,
   SentInput,
   SessionUsage,
   PlanStep,
@@ -123,6 +119,7 @@ import {
   useSubagentLinks,
 } from "@/components/subagents";
 import { ForkSession, useInputActions } from "@/components/session-fork";
+import { QueueCard, QueueStack } from "@/components/session-queue";
 import type { InputBlock, TextBlock } from "@/components/session-fork";
 import { ContinueInTerminal } from "@/components/continue-terminal";
 import { SettingSelect } from "@/components/setting-select";
@@ -550,7 +547,9 @@ function Composer({
   const { write } = useAccess(session);
   const stop = useInterrupt(session);
   const harnessCommands = useSessionCommands(session.id, url);
+  // Steers its harness has yet to take, then what ZeroLux holds for the turns after.
   const queue = useSessionQueue(session.id, chat.live);
+  const waiting = useQueue(session.id, url);
   const usage = useSessionUsage(session.id, chat.live);
   // Shown for every compaction, whoever started it, until its summary or failure.
   const compacting = useSessionCompacting(session.id, chat.live);
@@ -685,8 +684,9 @@ function Composer({
         { text: "Cancel", style: "cancel" },
       ]);
   };
+  // Send queues while it works; held, it goes into the turn now, or in place of it.
   const modes: [string, InputMode][] = [
-    ["When the turn ends", "queue"],
+    ["Into this turn", "steer"],
     ["Stop and send", "interrupt"],
   ];
   const chooseMode = () => {
@@ -736,12 +736,15 @@ function Composer({
           </Text>
         </View>
       ) : null}
+      {waiting.length ? (
+        <QueueStack session={session} items={waiting} write={write} />
+      ) : null}
       {queue.map((item) => (
         <QueueCard
           key={item.id}
           session={session}
           item={item}
-          changeable={write && item.changeable}
+          changeable={false}
         />
       ))}
       {mention && files.length ? (
@@ -840,7 +843,7 @@ function Composer({
             setCursor(event.nativeEvent.selection.start),
           placeholder: open
             ? stop.allowed
-              ? `Add to ${name}'s turn`
+              ? `Queue for ${name}`
               : `Write to ${name}, or / for commands`
             : sessionState(session),
         }}
@@ -1321,111 +1324,6 @@ function SentInputView({ input }: { input: SentInput }) {
           {input.status === "sending" ? "Sending…" : "Sent"}
         </Text>
       )}
-    </View>
-  );
-}
-
-/**
- * An input of the owner's waiting for the turn to end, above the box: rewritten or taken
- * back where its harness allows it.
- */
-function QueueCard({
-  session,
-  item,
-  changeable,
-}: {
-  session: ChatSession;
-  item: QueuedInput;
-  changeable: boolean;
-}) {
-  const { chat } = useSession();
-  const [editing, setEditing] = useState<string>();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [faint, muted] = useCSSVariable([
-    "--color-faint",
-    "--color-muted-foreground",
-  ]).map(String);
-  const act = async (work: () => Promise<unknown>) => {
-    setBusy(true);
-    setError("");
-    try {
-      await work();
-      setEditing(undefined);
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <View className="gap-2 rounded-md border border-border bg-background px-3 py-2">
-      <View className="flex-row items-start gap-2">
-        <View className="mt-1">
-          <ClockIcon color={faint} size={13} strokeWidth={1.75} />
-        </View>
-        {editing === undefined ? (
-          <Text numberOfLines={3} className="flex-1 text-sm">
-            {item.text}
-          </Text>
-        ) : (
-          <TextInput
-            value={editing}
-            onChangeText={setEditing}
-            multiline
-            autoFocus
-            accessibilityLabel="Waiting input"
-            className="max-h-28 flex-1 font-sans text-sm text-foreground"
-          />
-        )}
-        {changeable && editing === undefined ? (
-          <View className="flex-row gap-3">
-            <Pressable
-              onPress={() => setEditing(item.text)}
-              accessibilityRole="button"
-              accessibilityLabel="Edit the waiting input"
-              hitSlop={8}
-            >
-              <PencilIcon color={muted} size={15} strokeWidth={1.75} />
-            </Pressable>
-            <Pressable
-              onPress={() =>
-                void act(() => chat.removeQueued(session.id, item.id))
-              }
-              disabled={busy}
-              accessibilityRole="button"
-              accessibilityLabel="Take back the waiting input"
-              hitSlop={8}
-            >
-              <XIcon color={muted} size={15} strokeWidth={2} />
-            </Pressable>
-          </View>
-        ) : null}
-      </View>
-      {editing !== undefined ? (
-        <View className="flex-row justify-end gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busy}
-            onPress={() => setEditing(undefined)}
-          >
-            <Text>Cancel</Text>
-          </Button>
-          <Button
-            size="sm"
-            disabled={busy || !editing.trim()}
-            onPress={() =>
-              void act(() =>
-                chat.editQueued(session.id, item.id, editing.trim()),
-              )
-            }
-          >
-            <Text>Save</Text>
-          </Button>
-        </View>
-      ) : null}
-      {error ? <Text className="text-xs text-destructive">{error}</Text> : null}
     </View>
   );
 }
