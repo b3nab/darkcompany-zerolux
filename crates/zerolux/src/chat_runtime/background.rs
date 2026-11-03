@@ -319,7 +319,7 @@ impl ChatRuntime {
             .input(&owner, &row.session_id, &text, InputMode::Queue, &[])
             .await;
         let (told, error) = match sent {
-            Ok(()) => (Some(now_ms()), None),
+            Ok(_) => (Some(now_ms()), None),
             Err(error) => (None, Some(format!("{error:#}"))),
         };
         commands::ActiveModel {

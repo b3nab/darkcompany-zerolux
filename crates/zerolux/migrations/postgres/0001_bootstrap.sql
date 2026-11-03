@@ -42,6 +42,10 @@ CREATE TABLE "invites" ("workspace_id" text NOT NULL, "id" text NOT NULL, "token
 CREATE TABLE "marketplaces" ("url" text NOT NULL, "name" text NOT NULL, "added_at" bigint NOT NULL, PRIMARY KEY ("url"));
 -- Create "messages" table
 CREATE TABLE "messages" ("workspace_id" text NOT NULL, "id" text NOT NULL, "conversation_id" text NOT NULL, "seq" bigint NOT NULL, "author_id" text NOT NULL, "text" text NOT NULL, "reply_to_delivery_id" text NULL, "created_at" bigint NOT NULL, PRIMARY KEY ("workspace_id", "id"), CONSTRAINT "messages_conversation_id_seq_key" UNIQUE ("workspace_id", "conversation_id", "seq"), CONSTRAINT "messages_reply_to_delivery_id_key" UNIQUE ("workspace_id", "reply_to_delivery_id"));
+-- Create "queued_inputs" table
+CREATE TABLE "queued_inputs" ("workspace_id" text NOT NULL, "id" text NOT NULL, "session_id" text NOT NULL, "position" bigint NOT NULL, "text" text NOT NULL, "images_json" text NOT NULL, "author_id" text NOT NULL, "created_at" bigint NOT NULL, PRIMARY KEY ("workspace_id", "id"));
+-- Create index "queued_inputs_session_position" to table: "queued_inputs"
+CREATE INDEX "queued_inputs_session_position" ON "queued_inputs" ("workspace_id", "session_id", "position");
 -- Create "read_positions" table
 CREATE TABLE "read_positions" ("workspace_id" text NOT NULL, "actor_id" text NOT NULL, "kind" text NOT NULL, "subject_id" text NOT NULL, "position" bigint NOT NULL, "updated_at" bigint NOT NULL, PRIMARY KEY ("workspace_id", "actor_id", "kind", "subject_id"), CONSTRAINT "read_positions_kind_check" CHECK (kind = ANY (ARRAY['conversation'::text, 'session'::text])), CONSTRAINT "read_positions_position_check" CHECK ("position" >= 0));
 -- Create "schedules" table
@@ -84,6 +88,8 @@ ALTER TABLE "hosts" ADD CONSTRAINT "hosts_person_id_fkey" FOREIGN KEY ("workspac
 ALTER TABLE "invites" ADD CONSTRAINT "invites_accepted_by_fkey" FOREIGN KEY ("workspace_id", "accepted_by") REFERENCES "actors" ("workspace_id", "id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "invites_created_by_fkey" FOREIGN KEY ("workspace_id", "created_by") REFERENCES "actors" ("workspace_id", "id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "invites_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "workspace" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
 -- Modify "messages" table
 ALTER TABLE "messages" ADD CONSTRAINT "messages_author_id_fkey" FOREIGN KEY ("workspace_id", "author_id") REFERENCES "actors" ("workspace_id", "id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "messages_conversation_id_fkey" FOREIGN KEY ("workspace_id", "conversation_id") REFERENCES "conversations" ("workspace_id", "id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "messages_reply_to_delivery_id_fkey" FOREIGN KEY ("workspace_id", "reply_to_delivery_id") REFERENCES "deliveries" ("workspace_id", "id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "messages_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "workspace" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
+-- Modify "queued_inputs" table
+ALTER TABLE "queued_inputs" ADD CONSTRAINT "queued_inputs_session_id_fkey" FOREIGN KEY ("workspace_id", "session_id") REFERENCES "sessions" ("workspace_id", "id") ON UPDATE NO ACTION ON DELETE CASCADE, ADD CONSTRAINT "queued_inputs_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "workspace" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
 -- Modify "read_positions" table
 ALTER TABLE "read_positions" ADD CONSTRAINT "read_positions_actor_id_fkey" FOREIGN KEY ("workspace_id", "actor_id") REFERENCES "actors" ("workspace_id", "id") ON UPDATE NO ACTION ON DELETE NO ACTION, ADD CONSTRAINT "read_positions_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "workspace" ("id") ON UPDATE NO ACTION ON DELETE NO ACTION;
 -- Modify "schedules" table

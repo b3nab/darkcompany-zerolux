@@ -706,9 +706,18 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         )
         .route("/sessions/{id}/commands", get(session_commands))
         .route(
+            "/sessions/{id}/queue",
+            get(session_queue).delete(clear_queue),
+        )
+        .route(
+            "/sessions/{id}/queue/order",
+            axum::routing::put(reorder_queue),
+        )
+        .route(
             "/sessions/{id}/queue/{item}",
             axum::routing::patch(requeue).delete(unqueue),
         )
+        .route("/sessions/{id}/queue/{item}/send", post(send_queued))
         .route(
             "/sessions/{id}/goal",
             get(session_goal)
@@ -2090,11 +2099,71 @@ async fn session_input(
     ChatJson(input): ChatJson<InputRequest>,
 ) -> Result<Json<Value>, ApiFailure> {
     let who = state.store.acting_for(&who, &id, Access::Write).await?;
-    runtime(&state)?
+    let queued = runtime(&state)?
         .input(&who, &id, &input.text, input.mode, &input.images)
         .await
         .map_err(runtime_error)?;
-    Ok(Json(json!({ "sent": true })))
+    Ok(Json(match queued {
+        Some(queued) => json!({ "queued": queued }),
+        None => json!({}),
+    }))
+}
+
+/// The inputs waiting in the session's queue, first first.
+async fn session_queue(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
+    Ok(Json(
+        json!({ "queue": state.store.queue(&who, &id).await? }),
+    ))
+}
+
+/// Sends one waiting input at once: into the running turn, or as a new one.
+async fn send_queued(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path((id, item)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
+    runtime(&state)?
+        .send_queued(&who, &id, &item)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QueueOrder {
+    ids: Vec<String>,
+}
+
+/// The queue in another order: every waiting input, each once.
+async fn reorder_queue(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<QueueOrder>,
+) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
+    state.store.reorder_queue(&who, &id, &input.ids).await?;
+    Ok(Json(
+        json!({ "queue": state.store.queue(&who, &id).await? }),
+    ))
+}
+
+/// Takes everything out of the session's queue.
+async fn clear_queue(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
+    state.store.clear_queue(&who, &id).await?;
+    Ok(Json(json!({ "queue": [] })))
 }
 
 #[derive(Deserialize)]

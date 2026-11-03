@@ -23,14 +23,40 @@ const COMPACT: &str = "compact-v1";
 impl ChatRuntime {
     /// Stops the native turn in progress, whoever started it. The session stays linked and
     /// its context is kept; an unconfirmed interruption is reported, never retried.
+    /// With a queue, the whole queue then goes at once, as the next turn.
     pub async fn interrupt(&self, who: &ChatIdentity, id: &str) -> Result<bool> {
         // What the harness or its integration cannot do is said as it is.
-        self.interrupt_native(who, id)
-            .await
-            .map_err(|error| match error.downcast::<Error>() {
-                Ok(error) => error.into(),
-                Err(error) => Error::Invalid(format!("{error:#}")).into(),
-            })
+        async {
+            if !self.store.has_queue(id).await? {
+                return self.interrupt_native(who, id).await;
+            }
+            let queued = self.store.take_queue(id, true).await?;
+            let Some(next) = crate::queue::Due::joined(queued.clone()) else {
+                return self.interrupt_native(who, id).await;
+            };
+            self.mark_queue_sent(id);
+            match self
+                .input_native(
+                    &next.author,
+                    id,
+                    &next.text,
+                    InputMode::Interrupt,
+                    &next.images,
+                )
+                .await
+            {
+                Ok(()) => Ok(true),
+                Err(error) => {
+                    self.store.put_back(id, &queued).await?;
+                    Err(error)
+                }
+            }
+        }
+        .await
+        .map_err(|error: anyhow::Error| match error.downcast::<Error>() {
+            Ok(error) => error.into(),
+            Err(error) => Error::Invalid(format!("{error:#}")).into(),
+        })
     }
 
     /// The owner's own input, typed into the session from ZeroLux: native user input, not a
@@ -45,13 +71,142 @@ impl ChatRuntime {
         text: &str,
         mode: InputMode,
         images: &[InputImage],
-    ) -> Result<()> {
-        self.input_native(who, id, text, mode, images)
-            .await
-            .map_err(|error| match error.downcast::<Error>() {
-                Ok(error) => error.into(),
-                Err(error) => Error::Invalid(format!("{error:#}")).into(),
-            })
+    ) -> Result<Option<crate::queue::Queued>> {
+        async {
+            if mode != InputMode::Queue {
+                return self
+                    .input_native(who, id, text, mode, images)
+                    .await
+                    .map(|()| None);
+            }
+            // Queued, it waits in ZeroLux, never in the harness: unless nothing runs and nothing
+            // waits, when it starts the next turn at once.
+            if (text.trim().is_empty() && images.is_empty()) || text.len() > 64 * 1024 {
+                return Err(Error::Invalid("Write up to 64 KiB, or send an image".into()).into());
+            }
+            decode_images(images)?;
+            let session = self.store.chat_session(who, id).await?;
+            let busy = session.activity.as_deref() == Some("working")
+                || self.queue_awaits(id)
+                || self.store.has_queue(id).await?;
+            if !busy {
+                self.mark_queue_sent(id);
+                self.input_native(who, id, text, InputMode::Steer, images)
+                    .await?;
+                return Ok(None);
+            }
+            Ok(Some(self.store.enqueue(who, id, text, images).await?))
+        }
+        .await
+        .map_err(|error: anyhow::Error| match error.downcast::<Error>() {
+            Ok(error) => error.into(),
+            Err(error) => Error::Invalid(format!("{error:#}")).into(),
+        })
+    }
+
+    /// Sends one waiting input at once: into the running turn, or as a new one.
+    pub async fn send_queued(&self, who: &ChatIdentity, id: &str, item: &str) -> Result<()> {
+        async {
+            let input = self.store.take_queued(who, id, item).await?;
+            self.mark_queue_sent(id);
+            if let Err(error) = self
+                .input_native(
+                    &input.author,
+                    id,
+                    &input.text,
+                    InputMode::Steer,
+                    &input.images,
+                )
+                .await
+            {
+                self.store
+                    .put_back(id, std::slice::from_ref(&input))
+                    .await?;
+                return Err(error);
+            }
+            Ok(())
+        }
+        .await
+        .map_err(|error: anyhow::Error| match error.downcast::<Error>() {
+            Ok(error) => error.into(),
+            Err(error) => Error::Invalid(format!("{error:#}")).into(),
+        })
+    }
+
+    /// Each session whose turn has ended gets the first input of its queue as its next turn,
+    /// one at a time: an input is sent only once its session shows it is idle again.
+    pub async fn run_queues(&self) -> Result<()> {
+        const STARTING: std::time::Duration = std::time::Duration::from_secs(20);
+        const RETRY: std::time::Duration = std::time::Duration::from_secs(30);
+        for id in self.store.sessions_with_queue().await? {
+            let owner = self.store.session_person(&id).await?;
+            let Ok(session) = self.store.chat_session(&owner, &id).await else {
+                continue;
+            };
+            if session.stopped_at.is_some() || session.status != "connected" {
+                continue;
+            }
+            if session.activity.as_deref() == Some("working") {
+                // Its turn started: the input it was sent is being worked on.
+                self.queue_sent.lock().expect("queue").remove(&id);
+                continue;
+            }
+            let waiting = |map: &std::sync::Mutex<HashMap<String, std::time::Instant>>,
+                           within: std::time::Duration| {
+                map.lock()
+                    .expect("queue")
+                    .get(&id)
+                    .is_some_and(|at| at.elapsed() < within)
+            };
+            if waiting(&self.queue_sent, STARTING) || waiting(&self.queue_failed, RETRY) {
+                continue;
+            }
+            let Some(next) = self.store.take_queue(&id, false).await?.pop() else {
+                continue;
+            };
+            self.mark_queue_sent(&id);
+            if let Err(error) = self
+                .input_native(
+                    &next.author,
+                    &id,
+                    &next.text,
+                    InputMode::Steer,
+                    &next.images,
+                )
+                .await
+            {
+                tracing::warn!(
+                    session = id,
+                    error = format!("{error:#}"),
+                    "A queued input was not sent"
+                );
+                self.store
+                    .put_back(&id, std::slice::from_ref(&next))
+                    .await?;
+                self.queue_failed
+                    .lock()
+                    .expect("queue")
+                    .insert(id.clone(), std::time::Instant::now());
+            }
+        }
+        Ok(())
+    }
+
+    fn mark_queue_sent(&self, id: &str) {
+        self.queue_sent
+            .lock()
+            .expect("queue")
+            .insert(id.to_owned(), std::time::Instant::now());
+        self.queue_failed.lock().expect("queue").remove(id);
+    }
+
+    /// An input of its queue was just sent to the session, and its turn has not shown yet.
+    fn queue_awaits(&self, id: &str) -> bool {
+        self.queue_sent
+            .lock()
+            .expect("queue")
+            .get(id)
+            .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(20))
     }
 
     /// Summarizes the session's older history so its context has room again, with the
@@ -130,8 +285,8 @@ impl ChatRuntime {
         }
     }
 
-    /// Takes a waiting input out of the harness's queue, or rewrites it with `text`. Codex
-    /// keeps its queue open to this; Claude Code and pi do not.
+    /// Takes a waiting input out of the queue, or rewrites it with `text`: ZeroLux's queue, or
+    /// the harness's own, which Codex keeps open to this.
     pub async fn change_queued(
         &self,
         who: &ChatIdentity,
@@ -145,6 +300,13 @@ impl ChatRuntime {
             }
             if text.is_some_and(|text| text.trim().is_empty() || text.len() > 64 * 1024) {
                 return Err(Error::Invalid("Write from 1 byte to 64 KiB".into()).into());
+            }
+            if self.store.is_queued(id, item).await? {
+                match text {
+                    Some(text) => self.store.edit_queued(who, id, item, text).await?,
+                    None => drop(self.store.take_queued(who, id, item).await?),
+                }
+                return Ok(());
             }
             let session = self.store.chat_session(who, id).await?;
             match self.native_control(who, &session, INPUT).await? {

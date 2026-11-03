@@ -17,6 +17,7 @@ pub mod instance;
 pub mod invites;
 pub mod marketplaces;
 pub mod messages;
+pub mod queued_inputs;
 pub mod read_positions;
 pub mod schedules;
 pub mod sessions;

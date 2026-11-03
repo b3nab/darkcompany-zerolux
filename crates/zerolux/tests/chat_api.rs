@@ -2681,3 +2681,153 @@ async fn a_codex_session_runs_on_a_joined_computer() {
     runtime.shutdown().await.unwrap();
     livekit.shutdown().await.unwrap();
 }
+
+/// While a session works, what its person writes waits in ZeroLux's queue: in order, changed,
+/// taken back, put in another place or cleared; an input that cannot reach its harness when its
+/// turn comes goes back to the head of the queue, never lost.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sessions_queue_is_kept_by_zerolux_changed_and_never_lost() {
+    if std::process::Command::new("livekit-server")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("livekit-server not installed: skipped");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let database = db::TestDatabase::new(dir.path().join("kernel.db")).await;
+    let store = database.open().await;
+    store
+        .set_owner_name(SetOwnerName {
+            name: "Owner".into(),
+        })
+        .await
+        .unwrap();
+    let livekit = Arc::new(
+        LiveKit::start(LiveKitConfig {
+            url: None,
+            api_key: None,
+            api_secret: None,
+            data_dir: dir.path().join("livekit"),
+        })
+        .await
+        .unwrap(),
+    );
+    let (kernel, runtime) = Kernel::serve(dir, database, store, Some(livekit.clone())).await;
+    let runtime = runtime.unwrap();
+    let agent = kernel.agent("Queue fixture", None).await;
+    let id = agent.session.id.clone();
+    let activity = |state: &'static str| {
+        let (kernel, id, token) = (&kernel, id.clone(), agent.token.clone());
+        async move {
+            let reported = kernel
+                .post(
+                    &format!("/chat/sessions/{id}/activity"),
+                    Some(&token),
+                    json!({ "activity": state }),
+                )
+                .await;
+            assert_eq!(reported.status(), StatusCode::OK);
+        }
+    };
+    let queue = || {
+        let (kernel, id) = (&kernel, id.clone());
+        async move {
+            let listed: Value = kernel
+                .get(&format!("/sessions/{id}/queue"), None)
+                .await
+                .json()
+                .await
+                .unwrap();
+            listed["queue"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| {
+                    (
+                        item["id"].as_str().unwrap().to_owned(),
+                        item["text"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        }
+    };
+    activity("working").await;
+    for text in ["one", "two", "three"] {
+        let sent: Value = kernel
+            .post(
+                &format!("/sessions/{id}/input"),
+                None,
+                json!({ "text": text, "mode": "queue" }),
+            )
+            .await
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(sent["queued"]["text"], text);
+    }
+    let waiting = queue().await;
+    let texts =
+        |items: &[(String, String)]| items.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>();
+    assert_eq!(texts(&waiting), ["one", "two", "three"]);
+    let (one, two, three) = (
+        waiting[0].0.clone(),
+        waiting[1].0.clone(),
+        waiting[2].0.clone(),
+    );
+    // Changed, put in another place, taken back.
+    let changed = kernel
+        .request(Method::PATCH, &format!("/sessions/{id}/queue/{two}"), None)
+        .json(&json!({ "text": "deux" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(changed.status(), StatusCode::OK);
+    let ordered = kernel
+        .request(Method::PUT, &format!("/sessions/{id}/queue/order"), None)
+        .json(&json!({ "ids": [three, one, two] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ordered.status(), StatusCode::OK);
+    assert_eq!(texts(&queue().await), ["three", "one", "deux"]);
+    // An order that leaves one out, or names another, is refused.
+    let partial = kernel
+        .request(Method::PUT, &format!("/sessions/{id}/queue/order"), None)
+        .json(&json!({ "ids": [one] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(partial.status(), StatusCode::CONFLICT);
+    let removed = kernel
+        .request(
+            Method::DELETE,
+            &format!("/sessions/{id}/queue/{three}"),
+            None,
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(removed.status(), StatusCode::OK);
+    assert_eq!(texts(&queue().await), ["one", "deux"]);
+    // Its turn ends: the first goes, and since this fixture has no harness to take it, it
+    // comes back to the head of the queue, as it was.
+    activity("idle").await;
+    runtime.run_queues().await.unwrap();
+    assert_eq!(texts(&queue().await), ["one", "deux"]);
+    // Stopped, the whole queue goes at once; what does not reach the harness stays queued.
+    let stopped = kernel
+        .post(&format!("/sessions/{id}/interrupt"), None, json!({}))
+        .await;
+    assert_ne!(stopped.status(), StatusCode::OK);
+    assert_eq!(texts(&queue().await), ["one", "deux"]);
+    let cleared = kernel
+        .request(Method::DELETE, &format!("/sessions/{id}/queue"), None)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cleared.status(), StatusCode::OK);
+    assert!(queue().await.is_empty());
+    livekit.shutdown().await.unwrap();
+}

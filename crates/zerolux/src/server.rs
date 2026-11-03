@@ -714,6 +714,18 @@ async fn run_workspace(
             }
         })
     };
+    // Queues: a session whose turn ended gets the next input of its queue.
+    let queues = runtime.clone();
+    let queuer = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            if let Err(error) = queues.run_queues().await {
+                tracing::warn!(error = format!("{error:#}"), "Queues did not run");
+            }
+        }
+    });
     // Triggers: a session hears when the CI runs of its commit end.
     let watch = runtime.clone();
     let watcher = tokio::spawn(async move {
@@ -742,6 +754,7 @@ async fn run_workspace(
         _ = stopped.wait_for(|stop| *stop) => None,
     };
     for task in [
+        queuer,
         relinker,
         sweeper,
         scheduler,

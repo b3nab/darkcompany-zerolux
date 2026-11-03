@@ -80,6 +80,7 @@ pub fn sql(backend: DatabaseBackend) -> String {
         schedules,
         invites,
         triggers,
+        queued_inputs,
         hosts,
         extensions,
         extension_values,

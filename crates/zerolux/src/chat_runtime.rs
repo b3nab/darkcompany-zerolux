@@ -321,6 +321,10 @@ pub struct ChatRuntime {
     live: crate::live::Live,
     /// The budget, in cents, each session last reached: its work was stopped for it once.
     budgets_reached: std::sync::Mutex<HashMap<String, i64>>,
+    /// Sessions sent an input of their queue whose turn has not shown it started yet, and
+    /// those whose last send failed: when, so the queue waits a while before going on.
+    queue_sent: std::sync::Mutex<HashMap<String, std::time::Instant>>,
+    queue_failed: std::sync::Mutex<HashMap<String, std::time::Instant>>,
     /// Terminals the owner opened in sessions' folders.
     pub terminals: Arc<crate::terminals::Terminals>,
     terminal_notices: Mutex<Option<JoinHandle<()>>>,
@@ -479,6 +483,8 @@ impl ChatRuntime {
             attachments,
             live: crate::live::Live::default(),
             budgets_reached: std::sync::Mutex::new(HashMap::new()),
+            queue_sent: Default::default(),
+            queue_failed: Default::default(),
             terminals,
             terminal_notices: Mutex::new(Some(terminal_notices)),
             hosts: Arc::default(),

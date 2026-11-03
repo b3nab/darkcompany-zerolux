@@ -39,6 +39,7 @@ pub mod owned;
 pub mod people;
 mod pi_runner;
 pub mod platform;
+pub mod queue;
 pub mod requests;
 pub mod schedules;
 pub mod server;

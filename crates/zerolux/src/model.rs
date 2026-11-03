@@ -328,7 +328,7 @@ pub enum InputMode {
 }
 
 /// An image the owner sends with their input, base64-encoded.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InputImage {
     /// `image/png`, `image/jpeg`, `image/gif` or `image/webp`.

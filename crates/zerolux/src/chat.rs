@@ -272,7 +272,7 @@ impl Store {
         })
     }
 
-    async fn session_access_in<C: ConnectionTrait>(
+    pub(crate) async fn session_access_in<C: ConnectionTrait>(
         &self,
         db: &C,
         who: &ChatIdentity,
@@ -449,7 +449,7 @@ impl Store {
         self.event_in(db, kind, payload, actors).await
     }
 
-    async fn personal_event<C: ConnectionTrait>(
+    pub(crate) async fn personal_event<C: ConnectionTrait>(
         &self,
         db: &C,
         kind: &str,
