@@ -314,7 +314,8 @@ impl ChatRuntime {
                     Some(text) => control.requeue(item, text).await,
                     None => control.unqueue(item).await,
                 },
-                _ => bail!("This harness's queue cannot be changed from ZeroLux"),
+                // Not in any queue: it was sent already.
+                _ => Err(Error::NotFound.into()),
             }
         }
         .await

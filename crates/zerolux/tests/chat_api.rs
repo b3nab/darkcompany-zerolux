@@ -2811,6 +2811,18 @@ async fn a_sessions_queue_is_kept_by_zerolux_changed_and_never_lost() {
         .unwrap();
     assert_eq!(removed.status(), StatusCode::OK);
     assert_eq!(texts(&queue().await), ["one", "deux"]);
+    // One that left the queue is no longer there to change.
+    let gone = kernel
+        .request(
+            Method::PATCH,
+            &format!("/sessions/{id}/queue/{three}"),
+            None,
+        )
+        .json(&json!({ "text": "again" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(gone.status().is_client_error());
     // Its turn ends: the first goes, and since this fixture has no harness to take it, it
     // comes back to the head of the queue, as it was.
     activity("idle").await;
