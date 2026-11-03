@@ -62,9 +62,9 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
   const [openId, setOpenId] = useState<string>();
   const [messages, setMessages] = useState<Message[]>([]);
   const [realtime, setRealtime] = useState<RealtimeStatus>("connecting");
-  // When each session's native output last grew, as the kernel noticed it.
+  // Where each session's native record ends, and when its last step was written, as the kernel says.
   const [outputs, setOutputs] = useState<
-    Record<string, { end: number; at: number }>
+    Record<string, { end: number; at?: number }>
   >({});
   const [error, setError] = useState("");
   const open = useRef<string>(undefined);
@@ -316,7 +316,8 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
         const { session_id, end, type: _, event_id: __, ...tail } = event;
         setOutputs((all) => ({
           ...all,
-          [session_id]: { end, at: Date.now() },
+          // The time the kernel read in the record, never when the notice came.
+          [session_id]: { end, at: tail.output_at ?? all[session_id]?.at },
         }));
         // How the record now ends rides on the notice: the session updates in place.
         if (Object.keys(tail).length)

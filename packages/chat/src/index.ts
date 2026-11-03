@@ -2,6 +2,7 @@ export * from "./client";
 export * from "./auth";
 export * from "./instance";
 export * from "./native";
+export * from "./console-rows";
 export * from "./marketplaces";
 export * from "./chat";
 export * from "./realtime";
