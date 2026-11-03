@@ -110,28 +110,34 @@ if (import.meta.main) {
         ? process.env.GITHUB_REF_NAME
         : undefined;
     const base = buildInfo(root, {}, now);
-    const releases = JSON.parse(
-      execFileSync(
-        "gh",
-        [
-          "api",
-          "--paginate",
-          "--slurp",
-          `repos/${process.env.GITHUB_REPOSITORY}/releases`,
-        ],
-        // Every release so far, with its notes and assets: well past the default 1 MiB.
-        { encoding: "utf8", maxBuffer: 1024 * 1024 * 1024 },
-      ),
-    ).flat() as {
-      tag_name: string;
-      draft: boolean;
-      body: string | null;
-      assets: { name: string }[];
-    }[];
     const marker = `<!-- zerolux-run:${process.env.GITHUB_RUN_ID} -->`;
+    // Of every release only what this needs, a line each: with their notes and assets, the
+    // releases go well past the 1 MiB a process's output may hold.
+    const releases = execFileSync(
+      "gh",
+      [
+        "api",
+        "--paginate",
+        `repos/${process.env.GITHUB_REPOSITORY}/releases`,
+        "--jq",
+        `.[] | {tag_name, draft, marked: ((.body // "") | contains(${JSON.stringify(marker)})), built: any(.assets[]; .name == "build.json")}`,
+      ],
+      { encoding: "utf8" },
+    )
+      .split("\n")
+      .filter(Boolean)
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            tag_name: string;
+            draft: boolean;
+            marked: boolean;
+            built: boolean;
+          },
+      );
     const existing = tag
       ? releases.find((release) => release.tag_name === tag)
-      : releases.find((release) => release.body?.includes(marker));
+      : releases.find((release) => release.marked);
     if (existing && !existing.draft)
       throw new Error(
         `${existing.tag_name} is already published; its artifacts are immutable`,
@@ -151,7 +157,7 @@ if (import.meta.main) {
       dirty: false,
     };
     if (base.dirty) throw new Error("Build releases from a clean checkout");
-    if (existing?.assets.some((asset) => asset.name === "build.json")) {
+    if (existing?.built) {
       const saved = JSON.parse(
         execFileSync(
           "gh",
