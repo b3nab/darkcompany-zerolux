@@ -60,6 +60,33 @@ export function desktopSignIn() {
   };
 }
 
+/**
+ * Tells the desktop each page this window goes to, whoever moves it: the window opens there
+ * again after a restart, a crash or a forced exit.
+ */
+export function reportPages() {
+  if (!desktopConnection()) return () => {};
+  const report = () =>
+    void import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke("desktop_page"))
+      .catch(() => {});
+  const changes = (["pushState", "replaceState"] as const).map((name) => {
+    const change = history[name];
+    history[name] = (...args: Parameters<History["pushState"]>) => {
+      change.apply(history, args);
+      report();
+    };
+    return () => void (history[name] = change);
+  });
+  addEventListener("popstate", report);
+  addEventListener("hashchange", report);
+  return () => {
+    changes.forEach((undo) => undo());
+    removeEventListener("popstate", report);
+    removeEventListener("hashchange", report);
+  };
+}
+
 /** A web address opened outside the app: by the system browser in the desktop, else a new tab. */
 export async function openLink(url: string) {
   if (!desktopConnection()) {

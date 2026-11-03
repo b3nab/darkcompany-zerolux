@@ -4,6 +4,7 @@ import { App } from "./App";
 import { preloadRenderer } from "./components/message-text";
 import { keepDraftsIn, lookWith } from "@zerolux/chat";
 import { WorkspaceRoot } from "./instance";
+import { reportPages } from "./desktop";
 import { startTheme } from "./theme";
 import { trayPanel } from "./tray";
 import { TrayPanel } from "./TrayPanel";
@@ -27,6 +28,7 @@ try {
 } catch {
   // Unreadable or no storage: drafts start empty.
 }
+reportPages();
 // A right click opens the app's own menus; the browser's only where text is written or chosen,
 // for its Cut, Copy and Paste.
 document.addEventListener("contextmenu", (event) => {

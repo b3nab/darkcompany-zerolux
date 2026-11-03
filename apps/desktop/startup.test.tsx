@@ -137,6 +137,8 @@ test("registry commands are restricted to the packaged manager, not workspace pa
     // Its switcher: the workspaces the app knows, and opening one.
     "allow-desktop-workspaces",
     "allow-desktop-switch",
+    // That it went to another page: the desktop reads which from its own web view.
+    "allow-desktop-page",
     // The app's menu: its commands, the bar's sections, and the window's own menu button.
     "allow-menu-commands",
     "allow-menu-sections",

@@ -85,9 +85,19 @@ fn caller(window: &WebviewWindow) -> Result<String, String> {
         .ok_or_else(|| "A sign-in belongs to its packaged workspace view only".to_owned())
 }
 
+/// The store may wait for its person's answer, as the Keychain does when it asks: never on the
+/// main thread, which draws every window, nor on a worker the app's kernel needs.
+async fn off_thread<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// A saved connection's sign-in, for the tray's panel, which hears every open workspace.
-pub fn read_saved(profile: &str, workspace_id: &str) -> Option<String> {
-    read(&System, profile, workspace_id)
+pub async fn read_saved(profile: String, workspace_id: String) -> Result<Option<String>, String> {
+    off_thread(move || read(&System, &profile, &workspace_id)).await
 }
 
 #[tauri::command]
@@ -95,8 +105,7 @@ pub async fn read_workspace_credential(
     window: WebviewWindow,
     workspace_id: String,
 ) -> Result<Option<String>, String> {
-    let profile = caller(&window)?;
-    Ok(read(&System, &profile, &workspace_id))
+    read_saved(caller(&window)?, workspace_id).await
 }
 
 #[tauri::command]
@@ -106,8 +115,7 @@ pub async fn write_workspace_credential(
     token: Option<String>,
 ) -> Result<(), String> {
     let profile = caller(&window)?;
-    write(&System, &profile, &workspace_id, token.as_deref());
-    Ok(())
+    off_thread(move || write(&System, &profile, &workspace_id, token.as_deref())).await
 }
 
 #[cfg(test)]

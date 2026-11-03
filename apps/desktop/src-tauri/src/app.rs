@@ -18,7 +18,7 @@ use std::{
 };
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{Notify, mpsc, oneshot, watch};
 use zerolux::{
     claude_runner::{RunnerProgram, executable},
     server::{Server, ServerOptions},
@@ -27,7 +27,7 @@ use zerolux::{
 const MANAGER: &str = "manager";
 /// The page of a ZeroLux's window where a new workspace is made.
 const NEW_WORKSPACE: &str = "/workspaces?new";
-/// The windows open at the last quit.
+/// The session: the windows open, each in its place on its page.
 const WINDOWS: &str = "windows.json";
 
 #[derive(Clone, Default, Serialize)]
@@ -133,6 +133,21 @@ type Reply = oneshot::Sender<Result<View, String>>;
 pub(crate) struct Commands {
     pub(crate) send: mpsc::Sender<(Action, Reply)>,
     pub(crate) view: Arc<Mutex<View>>,
+    /// A window closed or went to another page.
+    session: Arc<Notify>,
+}
+
+/// The session is kept again: a window closed or went to another page.
+pub(crate) fn session_changed(app: &tauri::AppHandle) {
+    if let Some(commands) = app.try_state::<Commands>() {
+        commands.session.notify_one();
+    }
+}
+
+/// A workspace's window went to another page.
+#[tauri::command]
+fn desktop_page(app: tauri::AppHandle) {
+    session_changed(&app);
 }
 
 // Only the trusted, packaged manager can read or change the connection registry.
@@ -353,7 +368,7 @@ impl WorkspaceView {
     }
 }
 
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, PartialEq, Serialize)]
 struct SavedView {
     #[serde(rename = "canLeave")]
     can_leave: Option<bool>,
@@ -412,6 +427,10 @@ struct Host {
     kernel: Option<Kernel>,
     /// Each workspace's open windows, the one last opened at the end.
     windows: HashMap<String, Vec<WorkspaceView>>,
+    /// The last session's windows not open again yet: each opens with its workspace.
+    unopened: HashMap<String, Places>,
+    /// The session as its file has it.
+    remembered: HashMap<String, Places>,
     active: Option<String>,
     generation: u64,
     view: Arc<Mutex<View>>,
@@ -578,6 +597,42 @@ fn by_place(views: impl IntoIterator<Item = (usize, SavedView)>) -> Places {
         places[place - 1] = Some(view);
     }
     places
+}
+
+/// The session its file keeps: none before the first window.
+fn read_session(root: &Path) -> Result<HashMap<String, Places>> {
+    match std::fs::read(root.join(WINDOWS)) {
+        Ok(bytes) => serde_json::from_slice(&bytes).context("Read the windows of the last session"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// The session: each workspace's windows by place, those open, on their pages, over those of the
+/// last session not open again yet.
+fn session_of(
+    unopened: &HashMap<String, Places>,
+    open: impl IntoIterator<Item = (String, usize, Option<String>)>,
+) -> HashMap<String, Places> {
+    let mut views: HashMap<String, Vec<(usize, SavedView)>> = HashMap::new();
+    for (id, places) in unopened {
+        let saved = places.iter().enumerate();
+        views
+            .entry(id.clone())
+            .or_default()
+            .extend(saved.filter_map(|(at, view)| Some((at + 1, view.clone()?))));
+    }
+    for (id, place, path) in open {
+        let view = SavedView {
+            path,
+            ..Default::default()
+        };
+        views.entry(id).or_default().push((place, view));
+    }
+    views
+        .into_iter()
+        .map(|(id, views)| (id, by_place(views)))
+        .collect()
 }
 
 /// The workspace in front.
@@ -865,10 +920,24 @@ impl Host {
         for view in self.windows.get(id).into_iter().flatten() {
             view.window.set_title(&profile.name)?;
         }
+        // Its windows as they were: after an update with their drafts, else as the last session
+        // left them. One that does not open is told, and the others open.
+        let mut failed = None;
         if !self.windows.contains_key(id) {
-            self.restore_profile_views(&profile, &verified.url).await?;
+            failed = self
+                .restore_profile_views(&profile, &verified.url)
+                .await
+                .err();
+            if self.windows.contains_key(id) {
+                self.unopened.remove(id);
+            } else if failed.is_none() {
+                failed = self.reopen_views(&profile, &verified.url, page).await.err();
+            }
         }
         if !self.windows.contains_key(id) {
+            if let Some(error) = failed {
+                return Err(error);
+            }
             let saved = if profile.app_ui {
                 page.map(|path| SavedView {
                     path: Some(path.to_owned()),
@@ -892,7 +961,8 @@ impl Host {
         *catalog.profile_mut(id)? = profile;
         catalog.selected = Some(id.to_owned());
         self.save(catalog)?;
-        self.activate(id)
+        self.activate(id)?;
+        failed.map_or(Ok(()), Err)
     }
 
     /// A workspace's latest window comes forward; other workspaces' windows stay as they are,
@@ -959,10 +1029,18 @@ impl Host {
         self.activate(&id)
     }
 
-    /// Back from the Dock with no window: the workspace last in front, else the one last
-    /// opened, else the choice of workspaces.
+    /// Back from the Dock with no window: the last session's windows when the app started without
+    /// them, else the workspace last in front, else the one last opened, else the choice of
+    /// workspaces.
     async fn reopen(&mut self) -> Result<()> {
         self.prune();
+        if self.windows.is_empty() && !self.unopened.is_empty() {
+            let reopened = self.reopen_windows().await;
+            if self.windows.is_empty() {
+                show_manager(&self.app, None);
+            }
+            return reopened;
+        }
         if let Some(id) = self
             .active
             .clone()
@@ -1316,6 +1394,68 @@ impl Host {
         result
     }
 
+    /// A workspace's saved windows, each in its place: those that open, still hidden, and the
+    /// places of those that do not, with why.
+    async fn restore_places(
+        &mut self,
+        profile: &Profile,
+        url: &tauri::Url,
+        places: &Places,
+    ) -> (Vec<WorkspaceView>, Places, Result<()>) {
+        let mut views = Vec::new();
+        let mut failed = Vec::new();
+        let mut error = None;
+        for (at, state) in places.iter().enumerate() {
+            let Some(state) = state else { continue };
+            match self.build_view(profile, url, Some(state), at + 1).await {
+                Ok(view) => views.push(view),
+                Err(failure) => {
+                    failed.push((at + 1, state.clone()));
+                    error.get_or_insert(failure);
+                }
+            }
+        }
+        (views, by_place(failed), error.map_or(Ok(()), Err))
+    }
+
+    /// Windows that opened join their workspace's, shown.
+    fn show_views(&mut self, id: &str, views: Vec<WorkspaceView>) -> Result<()> {
+        if views.is_empty() {
+            return Ok(());
+        }
+        let open = self.windows.entry(id.to_owned()).or_default();
+        let from = open.len();
+        open.extend(views);
+        for view in &open[from..] {
+            view.window.show()?;
+        }
+        Ok(())
+    }
+
+    /// A workspace's windows of the last session, the one in front on `page` when one is named.
+    /// One that does not open stays in the session for the next time.
+    async fn reopen_views(
+        &mut self,
+        profile: &Profile,
+        url: &tauri::Url,
+        page: Option<&str>,
+    ) -> Result<()> {
+        let Some(mut places) = self.unopened.remove(&profile.id) else {
+            return Ok(());
+        };
+        if let Some(page) = page
+            && let Some(front) = places.iter_mut().rev().find_map(Option::as_mut)
+        {
+            front.path = Some(page.to_owned());
+        }
+        let (views, failed, opened) = self.restore_places(profile, url, &places).await;
+        if !failed.is_empty() {
+            self.unopened.insert(profile.id.clone(), failed);
+        }
+        self.show_views(&profile.id, views)?;
+        opened
+    }
+
     async fn replacement_views(
         &mut self,
         profile: &Profile,
@@ -1666,6 +1806,7 @@ impl Host {
                     return Err(error);
                 }
                 crate::credentials::forget(&id);
+                self.unopened.remove(&id);
                 for view in self.windows.remove(&id).into_iter().flatten() {
                     view.close()?;
                 }
@@ -1751,6 +1892,14 @@ impl Host {
         }
         let resumed = self.catalog.recover_adoptions(&self.root.root).await?;
         let mut startup_errors: Vec<_> = resumed.into_iter().map(|name| format!("{name}: the previous CLI kept ownership after an interrupted transfer; retry Run with this app")).collect();
+        // The last session's windows, until each opens again with its workspace.
+        match read_session(&self.root.root) {
+            Ok(session) => {
+                self.remembered = session.clone();
+                self.unopened = session;
+            }
+            Err(error) => startup_errors.push(format!("{error:#}")),
+        }
         let profiles: Vec<_> = self
             .catalog
             .profiles
@@ -1834,38 +1983,40 @@ impl Host {
         if launch.choose_workspace {
             return Ok(());
         }
+        // The last session's windows come back, whichever workspace the launch names besides.
+        let session = !self.unopened.is_empty();
+        let reopened = self.reopen_windows().await;
         if let Some(url) = launch.connect {
             let canonical = connection::kernel_url(&url)?;
-            if let Some(profile) = self
+            match self
                 .catalog
                 .profiles
                 .iter()
                 .find(|profile| profile.existing_url() == Some(canonical.as_str()))
             {
-                let id = profile.id.clone();
-                return self.open(&id).await;
+                Some(profile) => {
+                    let id = profile.id.clone();
+                    self.open(&id).await?;
+                }
+                None => self.perform(Action::Add { url }).await?,
             }
-            return self.perform(Action::Add { url }).await;
-        }
-        if launch.local {
-            if let Some(profile) = self
+        } else if launch.local {
+            match self
                 .catalog
                 .profiles
                 .iter()
                 .find(|profile| profile.source == Source::Local)
             {
-                let id = profile.id.clone();
-                return self.open(&id).await;
+                Some(profile) => {
+                    let id = profile.id.clone();
+                    self.open(&id).await?;
+                }
+                None => self.perform(Action::NewWorkspace).await?,
             }
-            return self.perform(Action::NewWorkspace).await;
-        }
-        if self.reopen_windows().await? {
-            return Ok(());
-        }
-        if let Some(id) = self.catalog.selected.clone() {
+        } else if !session && let Some(id) = self.catalog.selected.clone() {
             self.open(&id).await?;
         }
-        Ok(())
+        reopened
     }
 
     /// Restore every window's drafts and route after an update, including background workspaces.
@@ -1918,28 +2069,19 @@ impl Host {
         if states.is_empty() {
             return UpdateViews::persist(&self.root.root, Some(&saved));
         }
-        let mut views = Vec::new();
-        let prepared: Result<()> = async {
-            for (at, state) in states.iter().enumerate() {
-                if let Some(state) = state {
-                    views.push(self.build_view(profile, url, Some(state), at + 1).await?);
-                }
-            }
-            UpdateViews::persist(&self.root.root, Some(&saved))?;
-            Ok(())
+        let (views, failed, opened) = self.restore_places(profile, url, &states).await;
+        // A window that did not open keeps its drafts for the next time.
+        if !failed.is_empty() {
+            saved.views.insert(profile.id.clone(), failed);
         }
-        .await;
-        if let Err(error) = prepared {
+        if let Err(error) = UpdateViews::persist(&self.root.root, Some(&saved)) {
             for view in views {
                 let _ = view.close();
             }
             return Err(error);
         }
-        for view in &views {
-            view.window.show()?;
-        }
-        self.windows.insert(profile.id.clone(), views);
-        Ok(())
+        self.show_views(&profile.id, views)?;
+        opened
     }
 
     async fn install_update(&mut self, pending: crate::updates::Pending) -> Result<()> {
@@ -2096,104 +2238,76 @@ impl Host {
         }
     }
 
-    /// The page a window is on.
-    async fn page_of(window: &WebviewWindow) -> Option<String> {
-        let (send, receive) = oneshot::channel();
-        let send = Mutex::new(Some(send));
-        window
-            .eval_with_callback(
-                "location.pathname + location.search + location.hash",
-                move |value| {
-                    if let Some(send) = send.lock().expect("page lock").take() {
-                        let _ = send.send(value);
-                    }
-                },
-            )
-            .ok()?;
-        let json = tokio::time::timeout(Duration::from_secs(1), receive)
-            .await
-            .ok()?
-            .ok()?;
-        serde_json::from_str(&json).ok()
-    }
-
-    /// The windows open at quit, each on its page and in its place, to open again at the next
-    /// launch where the window-state plugin kept them.
-    async fn remember_windows(&mut self) {
+    /// The session, kept as it changes, as a browser keeps its own: after a quit, a crash or a
+    /// forced exit, every window opens again where it was.
+    fn remember_windows(&mut self) {
         self.prune();
-        let mut open: HashMap<String, Places> = HashMap::new();
-        for (id, views) in &self.windows {
-            let mut pages = Vec::new();
-            for view in views {
-                let path = Self::page_of(&view.window).await;
-                pages.push((
-                    view.place(),
-                    SavedView {
-                        path,
-                        ..Default::default()
-                    },
-                ));
-            }
-            open.insert(id.clone(), by_place(pages));
+        let open = self.windows.iter().flat_map(|(id, views)| {
+            views.iter().map(|view| {
+                let path = view
+                    .window
+                    .url()
+                    .ok()
+                    .filter(local::app_page)
+                    .map(|url| local::route(&url));
+                (id.clone(), view.place(), path)
+            })
+        });
+        let session = session_of(&self.unopened, open);
+        if session == self.remembered {
+            return;
         }
-        let file = self.root.root.join(WINDOWS);
-        let kept = if open.is_empty() {
-            match std::fs::remove_file(file) {
+        let kept = if session.is_empty() {
+            match std::fs::remove_file(self.root.root.join(WINDOWS)) {
                 Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
                 _ => Ok(()),
             }
         } else {
-            crate::preferences::write_json(&self.root.root, WINDOWS, &open)
+            crate::preferences::write_json(&self.root.root, WINDOWS, &session)
         };
-        if let Err(error) = kept {
-            eprintln!("The open windows could not be kept for the next launch: {error:#}");
+        match kept {
+            Ok(()) => self.remembered = session,
+            Err(error) => eprintln!("The open windows could not be kept: {error:#}"),
         }
     }
 
-    /// The windows open at the last quit, again on their pages; whether any opened.
-    async fn reopen_windows(&mut self) -> Result<bool> {
-        let file = self.root.root.join(WINDOWS);
-        let saved: HashMap<String, Places> = match std::fs::read(&file) {
-            Ok(bytes) => {
-                serde_json::from_slice(&bytes).context("Read the windows open at the last quit")?
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err(error.into()),
-        };
-        std::fs::remove_file(file)?;
+    /// The session kept again, unless the app is closing or updating, as its windows go with it.
+    fn keep_session(&mut self) {
+        if self
+            .app
+            .try_state::<Lifecycle>()
+            .is_none_or(|state| state.phase.load(Ordering::Acquire) == 0)
+        {
+            self.remember_windows();
+        }
+    }
+
+    /// The last session's windows, again in their places on their pages; the workspace that was
+    /// in front comes in front.
+    async fn reopen_windows(&mut self) -> Result<()> {
+        if self.unopened.is_empty() {
+            return Ok(());
+        }
+        let selected = self.catalog.selected.clone();
         let mut errors = Vec::new();
-        for (id, states) in saved {
-            let Ok(mut profile) = self.catalog.profile(&id).cloned() else {
+        for id in self.unopened.keys().cloned().collect::<Vec<_>>() {
+            let Ok(name) = self
+                .catalog
+                .profile(&id)
+                .map(|profile| profile.name.clone())
+            else {
+                // Its workspace is no longer saved.
+                self.unopened.remove(&id);
                 continue;
             };
-            if self.windows.contains_key(&id) {
-                continue;
-            }
-            let reopened: Result<()> = async {
-                let verified = self.verified(&profile).await?;
-                profile.observe(&verified)?;
-                let views = self
-                    .replacement_views(&profile, &verified.url, &states)
-                    .await?;
-                for view in &views {
-                    view.window.show()?;
-                }
-                self.windows.insert(id.clone(), views);
-                let mut catalog = self.catalog.clone();
-                *catalog.profile_mut(&id)? = profile.clone();
-                self.save(catalog)
-            }
-            .await;
-            if let Err(error) = reopened {
-                errors.push(format!("{}: {error:#}", profile.name));
+            if let Err(error) = self.open(&id).await {
+                errors.push(format!("{name}: {error:#}"));
             }
         }
-        if let Some(id) = self
-            .catalog
-            .selected
-            .clone()
-            .filter(|id| self.windows.contains_key(id))
-        {
+        let mut catalog = self.catalog.clone();
+        catalog.selected = selected.clone();
+        self.save(catalog)?;
+        if let Some(id) = selected.filter(|id| self.windows.contains_key(id)) {
             self.activate(&id)?;
         }
         ensure!(
@@ -2201,11 +2315,11 @@ impl Host {
             "Some windows could not reopen: {}",
             errors.join("; ")
         );
-        Ok(!self.windows.is_empty())
+        Ok(())
     }
 
     async fn shutdown(mut self) {
-        self.remember_windows().await;
+        self.remember_windows();
         std::mem::replace(&mut self.computers, Links::new(PathBuf::new()))
             .shutdown()
             .await;
@@ -2331,6 +2445,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             crate::autostart::autostart_set,
             desktop_workspaces,
             desktop_switch,
+            desktop_page,
             crate::menu::menu_commands,
             crate::menu::menu_sections,
             crate::menu::menu_run,
@@ -2339,7 +2454,10 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
         .on_menu_event(|app, event| crate::menu::run(app, event.id().as_ref()))
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::Focused(true) => crate::menu::focused(window),
-            tauri::WindowEvent::Destroyed => crate::menu::closed(window),
+            tauri::WindowEvent::Destroyed => {
+                crate::menu::closed(window);
+                session_changed(window.app_handle());
+            }
             _ => {}
         })
         .setup(move |app| {
@@ -2347,9 +2465,11 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             let view = Arc::new(Mutex::new(View::default()));
             let page_view = view.clone();
             let (send, mut commands) = mpsc::channel(4);
+            let session = Arc::new(Notify::new());
             app.manage(Commands {
                 send,
                 view: view.clone(),
+                session: session.clone(),
             });
             let navigation = app.handle().clone();
             let popup = app.handle().clone();
@@ -2457,6 +2577,8 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                     catalog,
                     kernel: None,
                     windows: HashMap::new(),
+                    unopened: HashMap::new(),
+                    remembered: HashMap::new(),
                     active: None,
                     generation: 0,
                     view,
@@ -2472,6 +2594,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                     .err()
                     .map(|error| format!("{error:#}"));
                 host.publish(false, error.clone());
+                host.keep_session();
                 if error.is_some() && !background {
                     show_manager(&host.app, None);
                 }
@@ -2490,6 +2613,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                             host.publish(false, error);
                             continue;
                         }
+                        _=session.notified()=>{ host.keep_session(); continue; },
                         command=commands.recv()=>command,
                     };
                     let Some((action, reply)) = command else {
@@ -2502,6 +2626,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
                         host.publish(true, None);
                     }
                     let result = host.perform(action).await;
+                    host.keep_session();
                     let error = result.as_ref().err().map(|error| format!("{error:#}"));
                     let snapshot = host.publish(false, error.clone());
                     let _ = reply.send(match error {
@@ -2732,6 +2857,53 @@ mod tests {
             serde_json::from_str(r#"[{"path":"/chats"},{"path":"/console"}]"#).unwrap();
         assert_eq!(earlier.len(), 2);
         assert!(earlier.iter().all(Option::is_some));
+    }
+
+    #[test]
+    fn the_session_keeps_every_window_those_open_over_those_still_to_open() {
+        let page = |path: &str| {
+            Some(SavedView {
+                path: Some(path.into()),
+                ..Default::default()
+            })
+        };
+        let unopened = HashMap::from([
+            ("aspen".to_owned(), vec![page("/chats"), page("/console")]),
+            ("birch".to_owned(), vec![None, page("/files")]),
+        ]);
+        let session = session_of(
+            &unopened,
+            [
+                ("aspen".to_owned(), 1, Some("/chats/new".to_owned())),
+                ("cedar".to_owned(), 2, Some("/settings".to_owned())),
+            ],
+        );
+        // An open window takes its place, on its page; one still to open keeps its own.
+        assert!(session["aspen"] == [page("/chats/new"), page("/console")]);
+        assert!(session["birch"] == [None, page("/files")]);
+        assert!(session["cedar"] == [None, page("/settings")]);
+        assert_eq!(session.len(), 3);
+        assert!(session_of(&HashMap::new(), []).is_empty());
+    }
+
+    #[test]
+    fn a_session_reads_back_as_kept_and_is_empty_before_any_window() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(read_session(root.path()).unwrap().is_empty());
+        let session = HashMap::from([(
+            "aspen".to_owned(),
+            vec![
+                None,
+                Some(SavedView {
+                    path: Some("/console".into()),
+                    ..Default::default()
+                }),
+            ],
+        )]);
+        crate::preferences::write_json(root.path(), WINDOWS, &session).unwrap();
+        assert!(read_session(root.path()).unwrap() == session);
+        std::fs::write(root.path().join(WINDOWS), "{").unwrap();
+        assert!(read_session(root.path()).is_err());
     }
 
     #[test]

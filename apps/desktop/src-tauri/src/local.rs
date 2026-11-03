@@ -140,12 +140,17 @@ pub fn app_route(path: &str) -> Option<String> {
     if !same_origin(&base, &url) || !app_page(&url) {
         return None;
     }
-    Some(format!(
+    Some(route(&url))
+}
+
+/// Where a page of the app is: its path, query and fragment.
+pub fn route(url: &tauri::Url) -> String {
+    format!(
         "{}{}{}",
         url.path(),
         url.query().map(|q| format!("?{q}")).unwrap_or_default(),
         url.fragment().map(|f| format!("#{f}")).unwrap_or_default()
-    ))
+    )
 }
 
 pub fn external_link(url: &tauri::Url) -> bool {

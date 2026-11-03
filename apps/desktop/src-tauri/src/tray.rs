@@ -597,13 +597,13 @@ pub fn tray_workspaces(
 
 /// A workspace's sign-in, for the panel to read its kernel.
 #[tauri::command]
-pub fn tray_credential(
+pub async fn tray_credential(
     window: WebviewWindow,
     profile: String,
     workspace: String,
 ) -> Result<Option<String>, String> {
     panel_only(&window)?;
-    Ok(credentials::read_saved(&profile, &workspace))
+    credentials::read_saved(profile, workspace).await
 }
 
 /// What waits for you, for the mark and the menu; the notifications of the rest go.

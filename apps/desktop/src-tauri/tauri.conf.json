@@ -82,6 +82,7 @@
             "allow-update-install",
             "allow-desktop-workspaces",
             "allow-desktop-switch",
+            "allow-desktop-page",
             "allow-menu-commands",
             "allow-menu-sections",
             "allow-menu-run",

@@ -27,6 +27,7 @@ fn main() {
             "autostart_set",
             "desktop_workspaces",
             "desktop_switch",
+            "desktop_page",
             "menu_commands",
             "menu_sections",
             "menu_run",
