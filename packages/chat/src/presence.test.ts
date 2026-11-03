@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import type { Approval, ChatSession } from "./chat";
 import type { Actor } from "./client";
 import {
-  attentionInbox,
   consoleSessions,
   delegatedBy,
   delegatedTo,
@@ -105,34 +104,7 @@ test("a session's state for you: what it asks first, then work, failure, news, q
   ).toBe("failed");
   expect(sessionAttention({ ...idle, seen_at: 50 }, [])).toBe("unseen");
   expect(sessionAttention({ ...idle, seen_at: 150 }, [])).toBe("idle");
-  const inbox = attentionInbox(
-    [
-      {
-        ...session("quiet", "connected", "idle"),
-        output_at: 10,
-        seen_at: 20,
-      },
-      { ...session("new", "connected", "idle"), output_at: 300, seen_at: 100 },
-      session("busy", "connected", "working"),
-      { ...session("asks", "connected", "idle"), output_at: 5 },
-    ],
-    [request("asks", "permission")],
-  );
-  expect(inbox.map((row) => [row.session.id, row.attention])).toEqual([
-    ["asks", "approval"],
-    ["busy", "working"],
-    ["new", "unseen"],
-    ["quiet", "idle"],
-  ]);
-  // Pinned first, whatever their state; archived ones leave the Console's lists.
-  const pinned = attentionInbox(
-    [
-      session("busy", "connected", "working"),
-      { ...session("kept", "connected", "idle"), pinned_at: 5 },
-    ],
-    [],
-  );
-  expect(pinned.map((row) => row.session.id)).toEqual(["kept", "busy"]);
+  // Archived ones leave the Console's lists.
   const lists = consoleSessions([
     session("on", "connected"),
     { ...session("away", "connected"), archived_at: 9 },

@@ -77,6 +77,8 @@ const symbols: Record<string, Symbol> = {
   play: "play",
   "user-plus": "person.badge.plus",
   user: "person",
+  users: "person.2",
+  square: "stop",
   "rotate-cw": "arrow.clockwise",
   "rotate-ccw": "arrow.counterclockwise",
   "refresh-cw": "arrow.clockwise",

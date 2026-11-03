@@ -187,24 +187,6 @@ export type Attention =
   | "unseen"
   | "idle";
 
-export const attentionLabels: Record<Attention, string> = {
-  approval: "Needs approval",
-  input: "Needs input",
-  working: "Working",
-  failed: "Failed",
-  unseen: "New",
-  idle: "Idle",
-};
-
-export const attentionOrder: Attention[] = [
-  "approval",
-  "input",
-  "working",
-  "failed",
-  "unseen",
-  "idle",
-];
-
 /** A session's state for you: what it asks, its work, and whether you have seen its latest. */
 export function sessionAttention(
   session: ChatSession,
@@ -222,22 +204,6 @@ export function sessionAttention(
   if (session.output_at && session.output_at > (session.seen_at ?? 0))
     return "unseen";
   return "idle";
-}
-
-/** Sessions as an inbox: pinned ones first, then what needs you, the most recent within each. */
-export function attentionInbox(sessions: ChatSession[], approvals: Approval[]) {
-  return sessions
-    .map((session) => ({
-      session,
-      attention: sessionAttention(session, approvals),
-    }))
-    .sort(
-      (a, b) =>
-        Number(!!b.session.pinned_at) - Number(!!a.session.pinned_at) ||
-        attentionOrder.indexOf(a.attention) -
-          attentionOrder.indexOf(b.attention) ||
-        (b.session.output_at ?? 0) - (a.session.output_at ?? 0),
-    );
 }
 
 /** When a session's native output last grew: as the kernel lists it, or as it noticed it live. */

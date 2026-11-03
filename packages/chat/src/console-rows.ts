@@ -1,7 +1,15 @@
 import type { Approval, ChatSession, DiscoveredSession } from "./chat";
 import { nestDelegates, sessionAttention, sessionOutputAt } from "./presence";
 import type { Attention } from "./presence";
+import type { Harness } from "./client";
 import type { Chat } from "./useChat";
+
+/** The short mark of each harness, beside a row's title in every client. */
+export const harnessMarks: Record<Harness, string> = {
+  "claude-code": "CC",
+  codex: "CX",
+  pi: "pi",
+};
 
 /** What a Console row shows first: it works, it needs you, it failed, it has news, or it rests. */
 export type RowState = "running" | "needs" | "failed" | "unseen" | "idle";

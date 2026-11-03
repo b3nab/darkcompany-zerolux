@@ -5,21 +5,19 @@ import { SquarePenIcon } from "lucide-react-native";
 import { useCSSVariable } from "uniwind";
 import { LegendList } from "@legendapp/list/react-native";
 import {
-  attentionInbox,
-  attentionLabels,
-  consoleSessions,
   ago,
+  consoleGroupLabels,
+  consoleRows,
+  consoleSessions,
   hitKindLabels,
   matchParts,
   nativeMatches,
-  nestDelegates,
   sessionMatches,
-  sessionOutputAt,
   startsAnywhere,
   useHistorySearch,
   useNativeSessions,
 } from "@zerolux/chat";
-import type { Attention, DiscoveredSession } from "@zerolux/chat";
+import type { ConsoleGroup } from "@zerolux/chat";
 import { Screen } from "@/components/screen";
 import { WorkspaceButton } from "@/components/workspace-mark";
 import { SearchField } from "@/components/search-field";
@@ -29,14 +27,10 @@ import { cn } from "@/lib/utils";
 import { useSession } from "../../src/kernel";
 import { useMe } from "../../src/me";
 
-/** How each state reads in the inbox: what needs you stands out, the rest stays quiet. */
-const attentionTones: Record<Attention, string> = {
-  approval: "text-attention",
-  input: "text-attention",
-  working: "text-agent-foreground",
-  failed: "text-destructive",
-  unseen: "text-foreground",
-  idle: "text-faint",
+/** How each group's heading reads: what needs you stands out, what runs is the agents', the days stay quiet. */
+const groupTones: Partial<Record<ConsoleGroup, string>> = {
+  needs: "text-attention",
+  running: "text-agent-foreground",
 };
 
 type Shown = "live" | "stopped" | "archived";
@@ -51,18 +45,18 @@ const empty: Record<Shown, string> = {
   archived: "Nothing archived.",
 };
 
-/**
- * The Agent Console, as an inbox: the pinned sessions, then each live session in one state,
- * what needs you first, the latest within each, then the project's native sessions not in the
- * workspace yet, the latest active first; the stopped and archived ones on request. The pen
- * starts a new session, with or without an agent.
- */
 /** How many sessions each list has. */
 const countsOf = (sessions: Record<Shown, unknown[]>) =>
   Object.fromEntries(
     Object.entries(sessions).map(([list, all]) => [list, all.length]),
   ) as Record<Shown, number>;
 
+/**
+ * The Agent Console, a list of work: in Live, the pinned sessions, what needs you, what runs,
+ * then the rest by the day of their last activity, the project's own sessions among them; the
+ * stopped and archived ones on request, the latest active first. A delegated session stays
+ * under the one that started it. The pen starts a new session, with or without an agent.
+ */
 export default function Console() {
   const { workspace, chat, url, hosts } = useSession();
   // Sessions start on the kernel's computer: its person's, or open to you.
@@ -89,34 +83,17 @@ export default function Console() {
   const natives = project.sessions.filter((native) =>
     nativeMatches(native, query),
   );
-  // A session another one started comes right under it.
-  const inbox = nestDelegates(
-    attentionInbox(
-      sessions[shown].map((session) => ({
-        ...session,
-        output_at: sessionOutputAt(chat, session) ?? null,
-      })),
-      chat.approvals,
-    ),
-  );
-  type Row = (typeof inbox)[number] | { native: DiscoveredSession };
-  const rows: Row[] =
-    shown === "live"
-      ? [...inbox, ...natives.map((native) => ({ native }))]
-      : inbox;
+  const rows = consoleRows({
+    sessions: sessions[shown],
+    approvals: chat.approvals,
+    chat,
+    natives: shown === "live" ? natives : [],
+    live: shown === "live",
+  });
   const counts = {
     ...countsOf(sessions),
     live: sessions.live.length + natives.length,
   };
-  // The live inbox in sections, a delegated session in its coordinator's; the other lists are plain.
-  let coordinator: Attention | "pinned" | undefined;
-  const sections = rows.map((row) => {
-    if (shown !== "live") return undefined;
-    if ("native" in row) return "native" as const;
-    if (row.depth === 0)
-      coordinator = row.session.pinned_at ? "pinned" : row.attention;
-    return coordinator;
-  });
   return (
     <Screen
       leading={<WorkspaceButton />}
@@ -170,11 +147,11 @@ export default function Console() {
       <LegendList
         style={{ flex: 1 }}
         data={rows}
-        keyExtractor={(row) =>
-          "native" in row ? `native:${row.native.id}` : row.session.id
-        }
+        keyExtractor={(row) => row.key}
         estimatedItemSize={60}
         contentContainerStyle={{ paddingBottom: 16 }}
+        // Under the screen's header, so the tabs leave its inset to it: the bar clears the last row.
+        contentInsetAdjustmentBehavior="automatic"
         keyboardDismissMode="on-drag"
         ListFooterComponent={
           <>
@@ -194,38 +171,33 @@ export default function Console() {
           </Text>
         }
         renderItem={({ item, index }) => {
-          const here = sections[index];
+          const here = item.group;
           return (
             <View>
-              {here && (index === 0 || sections[index - 1] !== here) ? (
+              {here && (index === 0 || rows[index - 1]!.group !== here) ? (
                 <View className="flex-row items-center justify-between px-5 pt-4 pb-1">
                   <Text
                     accessibilityRole="header"
                     className={cn(
                       "font-mono text-[11px] tracking-wider uppercase",
-                      here === "pinned" || here === "native"
-                        ? "text-faint"
-                        : attentionTones[here],
+                      groupTones[here] ?? "text-faint",
                     )}
                   >
-                    {here === "pinned"
-                      ? "Pinned"
-                      : here === "native"
-                        ? "In this project"
-                        : attentionLabels[here]}
+                    {consoleGroupLabels[here]}
                   </Text>
                   <Text className="font-mono text-[11px] text-faint">
-                    {sections.filter((section) => section === here).length}
+                    {rows.filter((row) => row.group === here).length}
                   </Text>
                 </View>
               ) : null}
-              {"native" in item ? (
+              {item.kind === "native" ? (
                 <NativeRow native={item.native} />
               ) : (
                 <SessionRow
                   session={item.session}
                   agent={actors.find((a) => a.id === item.session.actor_id)}
                   attention={item.attention}
+                  at={item.at}
                   depth={item.depth}
                   asks={chat.approvals.find(
                     (a) =>

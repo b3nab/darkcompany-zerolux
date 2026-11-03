@@ -1,16 +1,27 @@
 import { Link, useRouter } from "expo-router";
 import { useState } from "react";
-import { Alert, Platform, Pressable, View } from "react-native";
-import { ChevronRightIcon, PinIcon, UsersIcon } from "lucide-react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Platform,
+  Pressable,
+  View,
+} from "react-native";
+import {
+  ChevronRightIcon,
+  CircleDashedIcon,
+  PinIcon,
+} from "lucide-react-native";
 import { useCSSVariable } from "uniwind";
 import {
-  ago,
-  briefAgo,
   delegatedBy,
   delegatedTo,
   errorMessage,
   folderName,
+  harnessMarks,
   harnessLabels,
+  rowState,
+  rowTime,
   sessionComputer,
   sessionName,
   sessionState,
@@ -18,7 +29,6 @@ import {
   shareChoice,
   sharedAs,
   shareLabels,
-  useModelLabels,
 } from "@zerolux/chat";
 import type {
   Actor,
@@ -26,11 +36,12 @@ import type {
   Attention,
   ChatSession,
   DiscoveredSession,
+  RowState,
   ShareChoice,
 } from "@zerolux/chat";
 import type { MenuEntry } from "@zerolux/ui";
 import { MenuLink } from "@/components/action-menu";
-import { ActorMark, Fact, Lamp } from "@/components/member";
+import { Fact, Lamp } from "@/components/member";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
@@ -38,7 +49,7 @@ import { useSession } from "@/src/kernel";
 import { Segmented } from "@/components/segmented";
 import { useAccess, useMe } from "@/src/me";
 
-/** Pin, archive, rename and budget a session, keeping the kernel's reason when it refuses. */
+/** Pin, archive, rename, share and budget a session, keeping the kernel's reason when it refuses. */
 export function useOrganize(session: ChatSession) {
   const { chat } = useSession();
   const change = (update: Parameters<typeof chat.updateSession>[1]) =>
@@ -51,54 +62,158 @@ export function useOrganize(session: ChatSession) {
     pin: () => change({ pinned: !session.pinned_at }),
     archive: () => change({ archived: !session.archived_at }),
     rename: (title: string) => change({ title: title.trim() }),
+    share: (choice: ShareChoice) => change({ shared: sharedAs(choice) }),
     /** Stops the session's turns at this cost in dollars; 0 lifts it. */
     budget: (usd: number) => change({ budget_usd: usd }),
   };
 }
 
+/** A session's harness, as its short mark. */
+function Harness({ harness }: { harness: ChatSession["harness"] }) {
+  return (
+    <Text
+      accessibilityLabel={harnessLabels[harness] ?? harness}
+      className="w-3 font-mono text-[10px] text-faint"
+    >
+      {harnessMarks[harness] ?? harness}
+    </Text>
+  );
+}
+
 /**
- * One session as the Console's inbox lists it, like a chat in the list of chats: its agent
- * (or its title, without one) whole and when it last wrote; what it runs on; then what it asks
- * of you, what it does while it works, why it stopped, else its latest; a dot while it has
- * written what you have not seen. Held, one's own is renamed, pinned, archived or forked: the
- * system's menu over its preview on iOS, the app's sheet on Android.
+ * What a Console row says first, at its left: a spinner while it works, amber when it needs
+ * you, red when it failed, a full dot for news, grey at rest; dashed for a project's own
+ * session, not in the workspace yet.
+ */
+function StateMark({ state, native }: { state: RowState; native?: boolean }) {
+  const [agent, faint] = useCSSVariable(["--color-agent", "--color-faint"]).map(
+    String,
+  );
+  if (native)
+    return (
+      <View accessibilityLabel="Not in this workspace">
+        <CircleDashedIcon color={faint} size={12} strokeWidth={2} />
+      </View>
+    );
+  if (state === "running")
+    return (
+      <ActivityIndicator
+        accessibilityLabel="Working"
+        size="small"
+        color={agent}
+        style={{ transform: [{ scale: 0.6 }] }}
+      />
+    );
+  return (
+    <View
+      accessibilityLabel={stateLabels[state]}
+      className={cn(
+        "size-2 rounded-full",
+        state === "needs" && "bg-attention",
+        state === "failed" && "bg-destructive",
+        state === "unseen" && "bg-foreground",
+        state === "idle" && "bg-faint/50",
+      )}
+    />
+  );
+}
+const stateLabels: Record<RowState, string> = {
+  running: "Working",
+  needs: "Needs you",
+  failed: "Failed",
+  unseen: "New",
+  idle: "Idle",
+};
+
+/** A Console row's two lines: the title with the time at its right, and one line under it. */
+function RowBody({
+  title,
+  time,
+  bold,
+  pinned,
+  line,
+  tone,
+  harness,
+}: {
+  title: string;
+  time?: number;
+  bold: boolean;
+  pinned?: boolean;
+  line: string;
+  tone?: "attention" | "destructive";
+  harness: ChatSession["harness"];
+}) {
+  const faint = String(useCSSVariable("--color-faint"));
+  return (
+    <View className="min-w-0 flex-1 gap-0.5">
+      <View className="flex-row items-center gap-2">
+        <Harness harness={harness} />
+        <Text
+          numberOfLines={1}
+          className={cn(
+            "min-w-0 flex-1 text-[15px]",
+            bold ? "font-semibold" : "text-foreground",
+          )}
+        >
+          {title}
+        </Text>
+        {pinned ? <PinIcon color={faint} size={11} strokeWidth={2} /> : null}
+        {time ? (
+          <Text
+            accessibilityLabel={new Date(time).toLocaleString()}
+            className="font-mono text-[11px] text-faint"
+          >
+            {rowTime(time)}
+          </Text>
+        ) : null}
+      </View>
+      <Text
+        numberOfLines={1}
+        className={cn(
+          "pl-5 text-[13px] text-muted-foreground",
+          tone === "attention" && "text-attention",
+          tone === "destructive" && "text-destructive",
+        )}
+      >
+        {line}
+      </Text>
+    </View>
+  );
+}
+
+/**
+ * A session in the Console, as work: its state at the left, its title and when it was last
+ * active, and one line, what it needs from you when it does, else its latest summary. Its
+ * model, computer and who shares it are in its About. A long press renames, pins, archives
+ * and forks it.
  */
 export function SessionRow({
   session,
   agent,
   attention,
+  at,
   asks,
   depth = 0,
 }: {
   session: ChatSession;
   agent?: Actor;
   attention: Attention;
+  /** When it was last active. */
+  at: number;
   /** The request it waits on you for. */
   asks?: Approval;
   /** How far under the session that started it, in the Console. */
   depth?: number;
 }) {
   const organize = useOrganize(session);
-  const { workspace, chat, hosts, url } = useSession();
-  const modelLabel = useModelLabels(url);
-  // On a joined computer, the row says which.
-  const computer = sessionComputer(session, hosts.hosts);
-  const faint = String(useCSSVariable("--color-faint"));
-  const unseen = attention === "unseen";
-  // A session another started works for it: the row says which.
-  const parent = delegatedBy(session, chat.sessions);
-  // Another person's session, shared with you: the row says whose.
+  const { workspace, chat } = useSession();
   const { me } = useMe();
   const person =
     session.owner_id !== me?.id
       ? (workspace?.actors.find((a) => a.id === session.owner_id)?.name ??
         "another person")
       : undefined;
-  // Why it stopped and waits for you, as the kernel says: a budget reached, a lost link.
-  const stopped =
-    session.status === "attention" && session.attention_reason
-      ? session.attention_reason
-      : undefined;
+  const state = rowState(attention);
   const title = session.title || "Untitled session";
   const router = useRouter();
   // Android has no prompt: its About, where the title is, opens instead.
@@ -120,6 +235,18 @@ export function SessionRow({
       ({ session: forked }) => router.push(`/session/${forked.id}`),
       (e: unknown) => Alert.alert("Not forked", errorMessage(e)),
     );
+  const stop = () =>
+    Alert.alert(`Stop ${title}?`, undefined, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Stop",
+        style: "destructive",
+        onPress: () =>
+          void chat
+            .stop(session.id)
+            .catch((e) => Alert.alert("Not stopped", errorMessage(e))),
+      },
+    ]);
   const menu: MenuEntry[] = person
     ? []
     : [
@@ -134,108 +261,69 @@ export function SessionRow({
           icon: organize.archived ? "archive-restore" : "archive",
           onPress: organize.archive,
         },
+        {
+          title: "Share",
+          icon: "users",
+          items: (Object.entries(shareLabels) as [ShareChoice, string][]).map(
+            ([choice, label]) => ({
+              title: label,
+              checked: shareChoice(session.shared) === choice,
+              onPress: () => organize.share(choice),
+            }),
+          ),
+        },
         { divider: true },
         { title: "Fork", icon: "git-fork", onPress: fork },
+        ...(session.status === "stopped"
+          ? []
+          : ([
+              { divider: true },
+              { title: "Stop", icon: "square", tone: "danger", onPress: stop },
+            ] as const)),
       ];
+  // What it needs from you takes the line, else what it did last.
+  const stopped =
+    session.status === "attention" ? session.attention_reason : undefined;
+  const line = asks
+    ? `Asks: ${asks.summary}`
+    : (state === "failed" && stopped) ||
+      session.summary ||
+      sessionState(session);
   return (
     <MenuLink
       href={`/session/${session.id}`}
       menu={menu}
       className={cn(
-        "flex-row items-center gap-3 px-5 py-2.5 active:bg-accent",
-        depth === 1 && "pl-11",
-        depth > 1 && "pl-16",
+        "flex-row items-center gap-2.5 px-5 py-2.5 active:bg-accent",
+        depth === 1 && "pl-10",
+        depth > 1 && "pl-14",
       )}
     >
-      <ActorMark
-        kind="agent"
-        name={agent?.name ?? title}
-        tone={sessionTone(session)}
-      />
-      <View className="min-w-0 flex-1 gap-0.5">
-        <View className="flex-row items-baseline gap-2">
-          <Text
-            numberOfLines={1}
-            className={cn(
-              "shrink text-sm",
-              agent ? "font-mono text-agent-foreground" : "font-medium",
-            )}
-          >
-            {agent?.name ?? title}
-          </Text>
-          <View className="ml-auto flex-row items-center gap-1">
-            {organize.pinned ? (
-              <PinIcon color={faint} size={11} strokeWidth={2} />
-            ) : null}
-            {session.output_at ? (
-              <Text
-                accessibilityLabel={ago(session.output_at)}
-                className="font-mono text-[11px] text-faint"
-              >
-                {briefAgo(session.output_at)}
-              </Text>
-            ) : null}
-          </View>
-        </View>
-        {/* What it runs on: its model, the harness, the computer, and whose it is. */}
-        <View className="flex-row items-center gap-1.5">
-          <Text numberOfLines={1} className="shrink text-xs text-faint">
-            {[
-              agent?.model && modelLabel(session.harness, agent.model),
-              harnessLabels[session.harness] ?? session.harness,
-              computer && `on ${computer.name}`,
-              person && `by ${person}`,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          </Text>
-          {session.shared ? (
-            <UsersIcon
-              accessibilityLabel={`Shared to ${session.shared}`}
-              color={faint}
-              size={11}
-              strokeWidth={2}
-            />
-          ) : null}
-        </View>
-        <View className="flex-row items-center gap-1.5">
-          {unseen ? (
-            <View
-              accessibilityLabel="New"
-              className="size-1.5 rounded-full bg-agent"
-            />
-          ) : null}
-          <Text
-            numberOfLines={1}
-            className={cn(
-              "flex-1 text-[13px] text-muted-foreground",
-              attention === "working" && "text-agent-foreground",
-              (asks || stopped) && "text-attention",
-              unseen && "font-medium text-foreground",
-            )}
-          >
-            {attention === "working"
-              ? sessionState(session)
-              : asks
-                ? `Asks: ${asks.summary}`
-                : stopped
-                  ? session.attention_reason
-                  : session.summary || (agent ? title : sessionState(session))}
-          </Text>
-        </View>
-        {parent ? (
-          <Text numberOfLines={1} className="text-xs text-faint">
-            Started by {sessionName(parent, workspace?.actors ?? [])}
-          </Text>
-        ) : null}
+      <View className="w-4 items-center">
+        <StateMark state={state} />
       </View>
+      <RowBody
+        title={agent ? `${agent.name} · ${title}` : title}
+        time={at}
+        bold={state === "unseen"}
+        pinned={organize.pinned}
+        line={line}
+        tone={
+          state === "needs"
+            ? "attention"
+            : state === "failed"
+              ? "destructive"
+              : undefined
+        }
+        harness={session.harness}
+      />
     </MenuLink>
   );
 }
 
 /**
- * A native session of the project, not in the workspace yet: it opens to be read, and goes on
- * in the workspace with a first input.
+ * A native session of the project, not in the workspace yet, in the same row, marked as such:
+ * it opens to be read, and goes on in the workspace with a first input.
  */
 export function NativeRow({ native }: { native: DiscoveredSession }) {
   const title = native.title || "Untitled session";
@@ -252,34 +340,17 @@ export function NativeRow({ native }: { native: DiscoveredSession }) {
       }}
       asChild
     >
-      <Pressable className="flex-row items-center gap-3 px-5 py-2.5 active:bg-accent">
-        <ActorMark kind="agent" name={title} tone="stopped" />
-        <View className="min-w-0 flex-1 gap-0.5">
-          <View className="flex-row items-baseline gap-2">
-            <Text numberOfLines={1} className="shrink text-sm font-medium">
-              {title}
-            </Text>
-            {native.last_activity_at ? (
-              <Text
-                accessibilityLabel={ago(native.last_activity_at)}
-                className="ml-auto font-mono text-[11px] text-faint"
-              >
-                {briefAgo(native.last_activity_at)}
-              </Text>
-            ) : null}
-          </View>
-          <Text numberOfLines={1} className="text-xs text-faint">
-            {`${harnessLabels[native.harness] ?? native.harness} · ${folderName(native.workspace)}`}
-          </Text>
-          {native.reason ? (
-            <Text
-              numberOfLines={1}
-              className="text-[13px] text-muted-foreground"
-            >
-              {native.reason}
-            </Text>
-          ) : null}
+      <Pressable className="flex-row items-center gap-2.5 px-5 py-2.5 active:bg-accent">
+        <View className="w-4 items-center">
+          <StateMark state="idle" native />
         </View>
+        <RowBody
+          title={title}
+          time={native.last_activity_at ?? undefined}
+          bold={false}
+          line={folderName(native.workspace)}
+          harness={native.harness}
+        />
       </Pressable>
     </Link>
   );
