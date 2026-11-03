@@ -1,12 +1,21 @@
 import { useTypeInto } from "./type-into";
 import { MenuEntries, WithMenu } from "./native-menus";
 import type { MenuEntry } from "@zerolux/ui";
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
 import { Link, NavLink, useNavigate, useSearchParams } from "react-router";
 import { cn } from "cn";
 import {
   ActivityIcon,
+  ArchiveIcon,
+  ArchiveRestoreIcon,
   ChevronLeftIcon,
   ChevronDownIcon,
   EllipsisIcon,
@@ -15,22 +24,23 @@ import {
   ImagePlusIcon,
   InfoIcon,
   ListChecksIcon,
+  LoaderIcon,
+  PinIcon,
+  PinOffIcon,
   SearchIcon,
   PencilIcon,
   PlusIcon,
   SquareTerminalIcon,
-  UsersIcon,
   XIcon,
 } from "lucide-react";
 import {
   accountReady,
   agentSettingFields,
   ago,
-  attentionInbox,
-  attentionLabels,
   briefAgo,
-  byActivity,
   commandsFor,
+  consoleGroupLabels,
+  consoleRows,
   consoleSessions,
   contextShare,
   delegatedBy,
@@ -41,7 +51,6 @@ import {
   forkAfter,
   harnessLabels,
   nativeMatches,
-  nestDelegates,
   hitKindLabels,
   inputImagesError,
   inputImageTypes,
@@ -55,6 +64,7 @@ import {
   plainLine,
   planMode,
   recentFolders,
+  rowTime,
   saveDraft,
   sessionAccess,
   sessionBlocks,
@@ -88,17 +98,19 @@ import {
   withMention,
 } from "@zerolux/chat";
 import type {
+  ConsoleRow,
   DiscoveredSession,
   AgentSettings,
-  Attention,
   Chat,
   ChatSession,
   Density,
+  Harness,
   InputImage,
   InputMode,
   Perform,
   PlanStep,
   QueuedInput,
+  RowState,
   UiPiece,
   Host,
   SentInput,
@@ -186,16 +198,6 @@ const imageOf = (file: File) =>
 const outputLine = (chat: Chat, session: ChatSession) => {
   const at = sessionOutputAt(chat, session);
   return at ? `Output ${ago(at)}` : undefined;
-};
-
-/** How each state reads in the inbox: what needs you stands out, the rest stays quiet. */
-const attentionTones: Record<Attention, string> = {
-  approval: "text-attention",
-  input: "text-attention",
-  working: "text-agent-foreground",
-  failed: "text-destructive",
-  unseen: "text-foreground",
-  idle: "text-faint",
 };
 
 /** A choice among a few, side by side; the chosen one pressed. */
@@ -299,6 +301,20 @@ function sessionMenu(
       icon: session.archived_at ? "archive-restore" : "archive",
       onPress: change({ archived: !session.archived_at }),
     },
+    {
+      title: "Share",
+      icon: "users",
+      items: (Object.entries(shareLabels) as [ShareChoiceValue, string][]).map(
+        ([choice, label]) => ({
+          title: label,
+          checked: shareChoice(session.shared) === choice,
+          onPress: () =>
+            void perform(() =>
+              chat.updateSession(session.id, { shared: sharedAs(choice) }),
+            ),
+        }),
+      ),
+    },
     { divider: true },
     {
       title: "Fork",
@@ -327,7 +343,249 @@ function sessionMenu(
           },
         ]
       : []),
+    ...(session.status !== "stopped"
+      ? ([
+          { divider: true },
+          {
+            title: "Stop",
+            icon: "square",
+            tone: "danger",
+            onPress: () => void perform(() => chat.stop(session.id)),
+          },
+        ] as const)
+      : []),
   ];
+}
+
+const rowStateLabels: Record<RowState, string> = {
+  running: "Running",
+  needs: "Needs you",
+  failed: "Failed",
+  unseen: "New",
+  idle: "Idle",
+};
+
+/** A row's state at a glance: it works, it needs you, it failed, it has news, it rests. */
+function RowMark({ state }: { state: RowState }) {
+  if (state === "running")
+    return (
+      <LoaderIcon
+        role="img"
+        aria-label={rowStateLabels.running}
+        className="size-3 animate-spin text-agent motion-reduce:animate-none"
+      />
+    );
+  return (
+    <span
+      role="img"
+      aria-label={rowStateLabels[state]}
+      className={cn(
+        "size-2 rounded-full",
+        state === "needs" && "bg-attention",
+        state === "failed" && "bg-destructive",
+        state === "unseen" && "bg-agent",
+        state === "idle" && "bg-faint/50",
+      )}
+    />
+  );
+}
+
+/**
+ * A Console row, as a piece of work: its state and harness, its title and when it was last
+ * active, then what it needs of you, else where it stands. Who runs it, where and for whom is
+ * on hover. One's own has Pin, Archive and its menu on hover or focus, and on a right click.
+ */
+function ConsoleRowItem({
+  row,
+  chat,
+  actors,
+  hosts,
+  me,
+  modelLabel,
+  perform,
+  navigate,
+}: {
+  row: ConsoleRow;
+  chat: Chat;
+  actors: Actor[];
+  hosts?: Host[];
+  me?: string;
+  modelLabel: (harness: Harness, model: string) => string;
+  perform: Perform;
+  navigate: (to: string) => void;
+}) {
+  const { session } = row;
+  const native = row.kind === "native" ? row.native : undefined;
+  const harness = session?.harness ?? native!.harness;
+  const agent = session && actors.find((a) => a.id === session.actor_id);
+  const title = session
+    ? session.title || sessionName(session, actors)
+    : native!.title || "Untitled session";
+  // What it needs of you takes the place of where it stands.
+  const asks =
+    session &&
+    chat.approvals.find(
+      (a) => a.session_id === session.id && a.status === "pending",
+    );
+  const line = native
+    ? (native.reason ?? folderName(native.workspace))
+    : asks
+      ? asks.summary
+      : row.state === "failed" && session!.attention_reason
+        ? session!.attention_reason
+        : session!.summary
+          ? plainLine(session!.summary)
+          : row.state === "running"
+            ? sessionState(session!)
+            : folderName(session!.workspace);
+  const about = session
+    ? [
+        agent?.name,
+        agent?.model && modelLabel(harness, agent.model),
+        harnessLabels[harness] ?? harness,
+        sessionComputer(session, hosts) &&
+          `on ${sessionComputer(session, hosts)!.name}`,
+        session.owner_id !== me &&
+          `by ${actors.find((a) => a.id === session.owner_id)?.name ?? "someone"}`,
+        session.shared && `Shared to ${session.shared}`,
+        delegatedBy(session, chat.sessions) &&
+          `Started by ${sessionName(delegatedBy(session, chat.sessions)!, actors)}`,
+        folderName(session.workspace),
+      ]
+    : [harnessLabels[harness] ?? harness, native!.workspace];
+  const mine = !!session && session.owner_id === me;
+  return (
+    <div
+      // Under the session that started it, one step in for each.
+      style={{ marginLeft: `${row.depth}rem` }}
+      className={cn("group/row relative", row.depth && "border-l pl-1")}
+    >
+      <WithMenu
+        entries={
+          mine
+            ? sessionMenu(session, { chat, perform, navigate, open: true })
+            : undefined
+        }
+        render={
+          <NavLink
+            to={
+              session
+                ? `/console/${session.id}`
+                : `/console/native/${encodeURIComponent(native!.id)}`
+            }
+            title={about.filter(Boolean).join("\n")}
+            className="flex items-start gap-2.5 rounded-md px-2 py-2 transition-colors hover:bg-accent aria-[current=page]:bg-accent"
+          />
+        }
+      >
+        <span className="flex h-5 shrink-0 items-center gap-1.5">
+          <span className="flex size-3 items-center justify-center">
+            <RowMark state={row.state} />
+          </span>
+          <HarnessMark
+            harness={harness}
+            // Not in the workspace yet: its mark only outlined.
+            className={cn(
+              "size-4 rounded-[4px] text-[7px]",
+              native && "border-dashed bg-transparent",
+            )}
+          />
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span
+            className={cn(
+              "flex items-baseline gap-2",
+              // Room for its actions while they show.
+              mine && "group-focus-within/row:pr-19 group-hover/row:pr-19",
+            )}
+          >
+            <span
+              className={cn(
+                "truncate text-[13.5px]",
+                row.state === "unseen" && "font-semibold",
+              )}
+            >
+              {title}
+            </span>
+            {row.at !== undefined && (
+              <time
+                dateTime={new Date(row.at).toISOString()}
+                title={new Date(row.at).toLocaleString()}
+                className={cn(
+                  "ml-auto shrink-0 font-mono text-[11px] text-faint",
+                  mine &&
+                    "group-focus-within/row:invisible group-hover/row:invisible",
+                )}
+              >
+                {rowTime(row.at)}
+              </time>
+            )}
+          </span>
+          {line && (
+            <span
+              className={cn(
+                "truncate text-[12.5px] text-muted-foreground",
+                row.state === "needs" && "text-attention",
+                row.state === "failed" && "text-destructive",
+              )}
+            >
+              {line}
+            </span>
+          )}
+        </span>
+      </WithMenu>
+      {mine && (
+        <span className="absolute top-1.5 right-1.5 flex gap-0.5 opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100">
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={session.pinned_at ? "Unpin" : "Pin"}
+            title={session.pinned_at ? "Unpin" : "Pin"}
+            onClick={() =>
+              void perform(() =>
+                chat.updateSession(session.id, { pinned: !session.pinned_at }),
+              )
+            }
+          >
+            {session.pinned_at ? <PinOffIcon /> : <PinIcon />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={session.archived_at ? "Unarchive" : "Archive"}
+            title={session.archived_at ? "Unarchive" : "Archive"}
+            onClick={() =>
+              void perform(() =>
+                chat.updateSession(session.id, {
+                  archived: !session.archived_at,
+                }),
+              )
+            }
+          >
+            {session.archived_at ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Session actions"
+                />
+              }
+            >
+              <EllipsisIcon />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-52">
+              <MenuEntries
+                entries={sessionMenu(session, { chat, perform, navigate })}
+              />
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </span>
+      )}
+    </div>
+  );
 }
 
 export function ConsoleList({
@@ -378,10 +636,11 @@ export function ConsoleList({
   const [query, setQuery] = useState("");
   const modelLabel = useModelLabels();
   const navigate = useNavigate();
+  const typed = query.trim();
   const sessions = consoleSessions(
-    query.trim()
+    typed
       ? chat.sessions.filter((session) =>
-          sessionMatches(session, actors, query.trim()),
+          sessionMatches(session, actors, typed),
         )
       : chat.sessions,
   );
@@ -389,30 +648,19 @@ export function ConsoleList({
   // once, continued with a first input.
   const natives =
     view === "live"
-      ? byActivity(
-          query.trim()
-            ? native.filter((one) => nativeMatches(one, query.trim()))
-            : native,
-        )
+      ? typed
+        ? native.filter((one) => nativeMatches(one, typed))
+        : native
       : [];
-  // Grouped only while live: pinned first, then by state; a delegated session under the one
-  // that started it, in its group.
-  let heading: Attention | "pinned" | undefined;
-  const shown = nestDelegates(
-    attentionInbox(
-      sessions[view].map((session) => ({
-        ...session,
-        output_at: sessionOutputAt(chat, session) ?? null,
-      })),
-      chat.approvals,
-    ),
-  ).map((row) => ({
-    ...row,
-    heading:
-      view !== "live" || row.depth
-        ? heading
-        : (heading = row.session.pinned_at ? "pinned" : row.attention),
-  }));
+  // A list of work: the latest active first; while live, pinned, needing you and running
+  // first, then by day, each delegated session under the one that started it.
+  const rows = consoleRows({
+    sessions: sessions[view],
+    approvals: chat.approvals,
+    chat,
+    natives,
+    live: view === "live",
+  });
   return (
     <section aria-label="Console" className="flex min-h-0 flex-1 flex-col">
       <header className="flex items-center justify-between gap-2 px-4 pt-4 pb-3">
@@ -488,188 +736,29 @@ export function ConsoleList({
         aria-label="Agent sessions"
         className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3"
       >
-        {shown.map((row, i) => {
-          const { session, attention } = row;
-          const agent = actors.find((a) => a.id === session.actor_id);
-          const tone = sessionTone(session);
-          const { heading, depth } = row;
-          // A pending request says what it asks; otherwise the session's latest in a line.
-          const asks = chat.approvals.find(
-            (a) => a.session_id === session.id && a.status === "pending",
-          );
-          const line =
-            attention === "working"
-              ? sessionState(session)
-              : asks
-                ? `Asks: ${asks.summary}`
-                : (session.summary && plainLine(session.summary)) ||
-                  (agent ? session.title : folderName(session.workspace)) ||
-                  "Untitled session";
-          return (
-            <div
-              key={session.id}
-              // Under the session that started it, one step in for each.
-              style={{ marginLeft: `${depth}rem` }}
-              className={cn("flex flex-col", depth && "border-l pl-1")}
-            >
-              {heading && shown[i - 1]?.heading !== heading && (
-                <h3
-                  className={cn(
-                    "flex items-center justify-between px-2 pt-3 pb-1 font-mono text-[11px] tracking-wide uppercase",
-                    heading === "pinned"
-                      ? "text-muted-foreground"
-                      : attentionTones[heading],
-                  )}
-                >
-                  {heading === "pinned" ? "Pinned" : attentionLabels[heading]}
-                  <span className="text-faint">
-                    {shown.filter((s) => s.heading === heading).length}
-                  </span>
-                </h3>
-              )}
-              <WithMenu
-                entries={
-                  session.owner_id === me?.id
-                    ? sessionMenu(session, {
-                        chat,
-                        perform,
-                        navigate,
-                        open: true,
-                      })
-                    : undefined
-                }
-                render={
-                  <NavLink
-                    to={`/console/${session.id}`}
-                    className="flex items-center gap-3 rounded-md px-2 py-2.5 transition-colors hover:bg-accent aria-[current=page]:bg-accent"
-                  />
-                }
-              >
-                <SessionMark
-                  session={session}
-                  actors={actors}
-                  state={tone}
-                  className="size-8"
-                />
-                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span className="flex items-baseline gap-2">
-                    <span
-                      className={cn(
-                        "truncate text-sm",
-                        agent
-                          ? "font-mono text-agent-foreground"
-                          : "font-medium",
-                      )}
-                    >
-                      {sessionName(session, actors)}
-                    </span>
-                    {session.output_at && (
-                      <time
-                        dateTime={new Date(session.output_at).toISOString()}
-                        title={ago(session.output_at)}
-                        className="ml-auto shrink-0 font-mono text-[11px] text-faint"
-                      >
-                        {briefAgo(session.output_at)}
-                      </time>
-                    )}
-                  </span>
-                  {/* What it runs on: its model, the harness, the computer, and whose it is. */}
-                  <span className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-faint">
-                    <span className="truncate">
-                      {[
-                        agent?.model &&
-                          modelLabel(session.harness, agent.model),
-                        harnessLabels[session.harness] ?? session.harness,
-                        sessionComputer(session, hosts) &&
-                          `on ${sessionComputer(session, hosts)!.name}`,
-                        session.owner_id !== me?.id &&
-                          `by ${actors.find((a) => a.id === session.owner_id)?.name ?? "someone"}`,
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </span>
-                    {/* Shared: with everyone, to read or to work in. */}
-                    {session.shared && (
-                      <UsersIcon
-                        aria-label={`Shared to ${session.shared}`}
-                        className="size-3 shrink-0"
-                      />
-                    )}
-                  </span>
-                  <span
-                    className={cn(
-                      "flex items-center gap-1.5 truncate text-[13px] text-muted-foreground",
-                      attention === "working" && "text-agent-foreground",
-                      asks && "text-attention",
-                      attention === "unseen" && "font-medium text-foreground",
-                    )}
-                  >
-                    {attention === "unseen" && (
-                      <span
-                        aria-hidden
-                        className="size-1.5 shrink-0 rounded-full bg-agent"
-                      />
-                    )}
-                    {row.session.parent_session_id && (
-                      <span className="shrink-0 font-mono text-[11px] text-faint">
-                        ↳{" "}
-                        {sessionName(
-                          delegatedBy(row.session, chat.sessions) ??
-                            row.session,
-                          actors,
-                        )}
-                      </span>
-                    )}
-                    <span className="truncate">{line}</span>
-                  </span>
+        {rows.map((row, i) => (
+          <Fragment key={row.key}>
+            {row.group && rows[i - 1]?.group !== row.group && (
+              <h3 className="flex items-center justify-between px-2 pt-3 pb-1 font-mono text-[11px] tracking-wide text-faint uppercase">
+                {consoleGroupLabels[row.group]}
+                <span>
+                  {rows.filter((other) => other.group === row.group).length}
                 </span>
-              </WithMenu>
-            </div>
-          );
-        })}
-        {natives.length > 0 && (
-          <h3 className="flex items-center justify-between px-2 pt-3 pb-1 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
-            In this project
-            <span className="text-faint">{natives.length}</span>
-          </h3>
-        )}
-        {natives.map((one) => (
-          <NavLink
-            key={one.id}
-            to={`/console/native/${encodeURIComponent(one.id)}`}
-            className="flex items-center gap-3 rounded-md px-2 py-2.5 transition-colors hover:bg-accent aria-[current=page]:bg-accent"
-          >
-            <HarnessMark harness={one.harness} className="size-8" />
-            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="flex items-baseline gap-2">
-                <span className="truncate text-sm font-medium">
-                  {one.title || "Untitled session"}
-                </span>
-                {one.last_activity_at && (
-                  <time
-                    dateTime={new Date(one.last_activity_at).toISOString()}
-                    title={ago(one.last_activity_at)}
-                    className="ml-auto shrink-0 font-mono text-[11px] text-faint"
-                  >
-                    {briefAgo(one.last_activity_at)}
-                  </time>
-                )}
-              </span>
-              <span className="truncate text-[11.5px] text-faint">
-                {harnessLabels[one.harness] ?? one.harness} ·{" "}
-                <span title={one.workspace} className="font-mono">
-                  {folderName(one.workspace)}
-                </span>
-              </span>
-              {one.reason && (
-                <span className="truncate text-[11.5px] text-faint">
-                  {one.reason}
-                </span>
-              )}
-            </span>
-          </NavLink>
+              </h3>
+            )}
+            <ConsoleRowItem
+              row={row}
+              chat={chat}
+              actors={actors}
+              hosts={hosts}
+              me={me?.id}
+              modelLabel={modelLabel}
+              perform={perform}
+              navigate={navigate}
+            />
+          </Fragment>
         ))}
-        {shown.length === 0 && natives.length === 0 && (
+        {rows.length === 0 && (
           <p className="px-2 py-6 text-sm text-faint">
             {query.trim() ? "No session matches." : emptyLists[view]}
           </p>

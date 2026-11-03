@@ -1736,6 +1736,32 @@ test("the console lists the project's own sessions with the live ones, each to o
   expect(html).toContain('href="/console/native/n-cedar"');
 });
 
+test("the Console lists work: what needs you first, then the latest active, each with its time", () => {
+  const now = Date.now();
+  const html = renderToStaticMarkup(
+    <ConsoleList
+      busy={false}
+      perform={perform}
+      chat={fakeChat({
+        sessions: [
+          { ...session("s-earlier", BIRCH), output_at: now - 3_600_000 },
+          // No step recorded yet: dated by when it began.
+          { ...session("s-begun", BIRCH), created_at: now - 120_000 },
+          { ...session("s-aspen", ASPEN), output_at: now - 7_200_000 },
+          { ...session("s-recent", BIRCH), output_at: now - 60_000 },
+        ],
+        approvals: [approval("a1", "pending")],
+      })}
+      actors={actors}
+    />,
+  );
+  const links = [...html.matchAll(/href="\/console\/([^"]+)"/g)].map(
+    (match) => match[1],
+  );
+  expect(links).toEqual(["s-aspen", "s-recent", "s-begun", "s-earlier"]);
+  expect(html.match(/<time /g)).toHaveLength(4);
+});
+
 test("a delegated session is listed right under the session that started it", () => {
   const delegate = {
     ...session("s-delegate", BIRCH),
