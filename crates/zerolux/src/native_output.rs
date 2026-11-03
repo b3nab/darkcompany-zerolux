@@ -412,7 +412,14 @@ async fn read_tail(path: &Path, harness: &str) -> Tail {
         .await
         .map(|(records, ..)| records)
         .unwrap_or_default();
-    tail(&project(harness, &records), output_at)
+    let items = project(harness, &records);
+    // When its last step was written: a harness adds bookkeeping to its record long after,
+    // so the file's own time is only the last resort.
+    let last_step = items.iter().rev().find_map(|item| {
+        let time = chrono::DateTime::parse_from_rfc3339(item.time.as_deref()?).ok()?;
+        Some(time.timestamp_millis())
+    });
+    tail(&items, last_step.or(output_at))
 }
 
 /// Queued inputs a Claude Code record says the running turn took: `queue-operation` removes
@@ -511,16 +518,77 @@ async fn watch_once(
         tails.insert(session.id.clone(), ending);
         seen.insert(session.id, end);
     }
-    *sizes = seen;
     if let Ok(mut all) = TAILS.lock() {
-        *all = tails;
+        keep_tails(&mut all, sizes.keys(), tails);
     }
+    *sizes = seen;
     Ok(())
+}
+
+/// Every workspace's watcher keeps its own sessions' tails in the one map: it replaces those it
+/// saw before with those it sees now, and never touches another workspace's.
+fn keep_tails<'a>(
+    all: &mut HashMap<String, Tail>,
+    before: impl Iterator<Item = &'a String>,
+    now: HashMap<String, Tail>,
+) {
+    for id in before {
+        all.remove(id);
+    }
+    all.extend(now);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_session_is_dated_by_its_last_step_not_by_its_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let lines = [
+            json!({"type":"message","timestamp":"2026-10-01T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}),
+            json!({"type":"message","timestamp":"2026-10-01T10:05:00Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"stop"}}),
+            // Bookkeeping written later, which is no step.
+            json!({"type":"session_info","name":"later"}),
+        ];
+        let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+        std::fs::write(&path, text).unwrap();
+        let ending = read_tail(&path, "pi").await;
+        assert_eq!(
+            ending.output_at,
+            Some(
+                chrono::DateTime::parse_from_rfc3339("2026-10-01T10:05:00Z")
+                    .unwrap()
+                    .timestamp_millis()
+            )
+        );
+        assert_eq!(ending.summary.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn each_workspace_keeps_its_own_sessions_tails() {
+        let tail = |summary: &str| Tail {
+            output_at: Some(1),
+            last_turn: None,
+            summary: Some(summary.into()),
+        };
+        let mut all = HashMap::new();
+        let first = HashMap::from([("a".to_owned(), tail("a")), ("b".to_owned(), tail("b"))]);
+        keep_tails(&mut all, [].iter(), first.clone());
+        let other = HashMap::from([("x".to_owned(), tail("x"))]);
+        keep_tails(&mut all, [].iter(), other.clone());
+        // The first workspace looks again: `b` has stopped, `a` goes on.
+        keep_tails(
+            &mut all,
+            first.keys(),
+            HashMap::from([("a".to_owned(), tail("a2"))]),
+        );
+        let mut ids: Vec<_> = all.keys().cloned().collect();
+        ids.sort();
+        assert_eq!(ids, ["a", "x"]);
+        assert_eq!(all["a"].summary.as_deref(), Some("a2"));
+    }
 
     #[test]
     fn a_claude_record_says_which_queued_inputs_its_turn_took() {
