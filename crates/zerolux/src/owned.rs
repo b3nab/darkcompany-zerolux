@@ -18,6 +18,8 @@ use tokio::process::{ChildStdin, ChildStdout, Command};
 #[derive(Debug)]
 pub struct Owned {
     child: Box<dyn ChildWrapper>,
+    /// Its first process, which leads its tree: kept, since a process waited for has no ID.
+    pid: Option<u32>,
     /// Its tree has been ended: nothing of it is signalled again.
     ended: bool,
 }
@@ -33,18 +35,20 @@ impl Owned {
             .wrap(process_wrap::tokio::JobObject)
             .wrap(process_wrap::tokio::KillOnDrop);
         let child = command.spawn()?;
+        let pid = child.id();
         #[cfg(unix)]
-        if let Some(pid) = child.id() {
+        if let Some(pid) = pid {
             note::add(pid);
         }
         Ok(Self {
             child,
+            pid,
             ended: false,
         })
     }
 
     pub fn id(&self) -> Option<u32> {
-        self.child.id()
+        self.pid
     }
 
     pub fn stdin(&mut self) -> Option<ChildStdin> {
@@ -84,7 +88,7 @@ impl Owned {
         let _ = self.child.start_kill();
         self.ended = true;
         #[cfg(unix)]
-        if let Some(pid) = self.child.id() {
+        if let Some(pid) = self.pid {
             note::remove(pid);
         }
     }
@@ -93,7 +97,7 @@ impl Owned {
     async fn whole_tree_ended(&mut self) {
         let _ = self.child.wait().await;
         #[cfg(unix)]
-        if let Some(pid) = self.child.id() {
+        if let Some(pid) = self.pid {
             while group_alive(pid) {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
@@ -144,7 +148,7 @@ mod note {
     }
 
     /// This kernel's file, and its trees.
-    static NOTE: LazyLock<Mutex<(Option<PathBuf>, Vec<Tree>)>> = LazyLock::new(|| {
+    pub(super) static NOTE: LazyLock<Mutex<(Option<PathBuf>, Vec<Tree>)>> = LazyLock::new(|| {
         let file = folder()
             .zip(started(std::process::id()))
             .map(|(folder, started)| folder.join(format!("{}-{started}.json", std::process::id())));
@@ -368,6 +372,11 @@ mod tests {
         (owned, out.trim().parse().unwrap())
     }
 
+    fn noted(pid: u32) -> bool {
+        let note = note::NOTE.lock().unwrap();
+        note.1.iter().any(|tree| tree.pid == pid)
+    }
+
     async fn ends(pid: u32) -> bool {
         for _ in 0..100 {
             if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_err() {
@@ -381,10 +390,14 @@ mod tests {
     #[tokio::test]
     async fn stopping_a_process_ends_what_it_started_after_it_ended() {
         let (mut owned, started) = tree().await;
+        let leader = owned.id().unwrap();
+        assert!(noted(leader));
         owned.wait().await.unwrap();
         assert!(nix::sys::signal::kill(nix::unistd::Pid::from_raw(started as i32), None).is_ok());
         owned.stop(Duration::from_secs(1)).await;
         assert!(ends(started).await);
+        // Ended, it leaves the note: a kernel that starts later has nothing of it to end.
+        assert!(!noted(leader));
     }
 
     #[tokio::test]
