@@ -58,6 +58,13 @@ export function SessionQueue({
   const [editing, setEditing] = useState<{ id: string; text: string }>();
   const [dragged, setDragged] = useState<number>();
   const ids = queue.map((item) => item.id);
+  const save = (item: QueueItem) => {
+    const text = editing?.text.trim();
+    if (text && act)
+      void act.edit(item, text).then((done) => {
+        if (done) setEditing(undefined);
+      });
+  };
   const move = (from: number, to: number) => {
     if (act && to >= 0 && to < queue.length && to !== from)
       void act.order(moved(ids, from, to));
@@ -122,16 +129,11 @@ export function SessionQueue({
               </button>
             )}
             {editing?.id === item.id ? (
-              <form
+              // Not a form: the stack sits inside the box's own.
+              <div
+                role="group"
+                aria-label="Edit queued input"
                 className="flex min-w-0 flex-1 flex-col gap-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  const text = editing.text.trim();
-                  if (text && act)
-                    void act.edit(item, text).then((done) => {
-                      if (done) setEditing(undefined);
-                    });
-                }}
               >
                 <textarea
                   aria-label="Queued input"
@@ -149,16 +151,17 @@ export function SessionQueue({
                       !event.nativeEvent.isComposing
                     ) {
                       event.preventDefault();
-                      event.currentTarget.form?.requestSubmit();
+                      save(item);
                     }
                   }}
                   className="min-h-14 resize-none rounded-sm border border-input bg-background px-2 py-1.5 text-sm outline-none focus:border-ring"
                 />
                 <div className="flex gap-2">
                   <Button
-                    type="submit"
+                    type="button"
                     size="sm"
                     disabled={busy || !editing.text.trim()}
+                    onClick={() => save(item)}
                   >
                     Save
                   </Button>
@@ -171,7 +174,7 @@ export function SessionQueue({
                     Cancel
                   </Button>
                 </div>
-              </form>
+              </div>
             ) : (
               <p className="mt-0.5 line-clamp-2 min-w-0 flex-1 whitespace-pre-wrap">
                 {item.text}

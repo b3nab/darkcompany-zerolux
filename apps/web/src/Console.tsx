@@ -1938,16 +1938,17 @@ function SessionInput({
     const sent = text;
     const run = sessionCommand(sent);
     const going = run ? [] : picked;
+    // The box empties at once: what is typed next is the next input.
+    write("");
     const done = await perform(async () => {
       if (run?.name === "compact") return compact(run.args);
       const images = await Promise.all(going.map(({ file }) => imageOf(file)));
       // It shows below at once, and a failure there, to send again.
       void send(sent.trim(), mode, images).catch(() => {});
     });
-    if (!done) return;
-    going.forEach(({ url }) => remove(url));
-    // What was typed meanwhile stays.
-    if (draftOf(session.id) === sent) write("");
+    if (done) going.forEach(({ url }) => remove(url));
+    // What could not go comes back, unless something new was typed meanwhile.
+    else if (!draftOf(session.id)) write(sent);
   }
   return (
     <Composer
