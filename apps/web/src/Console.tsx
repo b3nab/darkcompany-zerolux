@@ -28,10 +28,8 @@ import {
   PinIcon,
   PinOffIcon,
   SearchIcon,
-  PencilIcon,
   PlusIcon,
   SquareTerminalIcon,
-  XIcon,
 } from "lucide-react";
 import {
   accountReady,
@@ -88,6 +86,7 @@ import {
   useSessionFiles,
   useSessionGit,
   useSessionLive,
+  useQueue,
   useSessionQueue,
   useSessionSettings,
   useSessionSubagents,
@@ -109,7 +108,6 @@ import type {
   InputMode,
   Perform,
   PlanStep,
-  QueuedInput,
   RowState,
   UiPiece,
   Host,
@@ -159,6 +157,7 @@ import { ChangesPanel, FilesPanel, Pane, TerminalPanel } from "./SessionCode";
 import { SubagentList, SubagentPanel } from "./SessionSubagents";
 
 import { AskOnTheSide, ForkHere, InputActions } from "./SessionFork";
+import { SessionQueue, sendModeOf } from "./SessionQueue";
 import { SessionSchedules } from "./SessionSchedules";
 import { BackgroundPanel } from "./SessionBackground";
 import { useReadingPlace } from "./reading";
@@ -955,7 +954,9 @@ export function SessionView({
   const live = useSessionLive(session.id, chat.live, events.length);
   // Its context being summarized, asked for or the harness's own.
   const compacting = useSessionCompacting(session.id, chat.live);
-  // The owner's inputs waiting for the turn to end, as the harness queues them.
+  // The inputs ZeroLux keeps for the next turns, one a turn, in order.
+  const waiting = useQueue(session.id);
+  // Words given to the turn in progress that its harness has not taken yet.
   const queue = useSessionQueue(session.id, chat.live);
   // The owner's inputs on their way, until the record or the queue has them; one sent before
   // the work shown is in the record above it.
@@ -1592,25 +1593,28 @@ export function SessionView({
             {plan?.some((step) => step.status !== "done") && (
               <PlanBar steps={plan} />
             )}
-            {queue.length > 0 && (
-              <QueueCards
-                queue={queue}
-                busy={busy}
-                // Each waiting input says whether its harness lets it change.
-                change={
-                  access.write
-                    ? {
-                        remove: (item) =>
-                          perform(() => chat.removeQueued(session.id, item.id)),
-                        edit: (item, text) =>
-                          perform(() =>
-                            chat.editQueued(session.id, item.id, text),
-                          ),
-                      }
-                    : undefined
-                }
-              />
-            )}
+            <SessionQueue
+              queue={waiting}
+              steering={queue}
+              busy={busy}
+              act={
+                access.write
+                  ? {
+                      edit: (item, text) =>
+                        perform(() =>
+                          chat.editQueued(session.id, item.id, text),
+                        ),
+                      remove: (item) =>
+                        perform(() => chat.removeQueued(session.id, item.id)),
+                      send: (item) =>
+                        perform(() => chat.sendQueued(session.id, item.id)),
+                      order: (ids) =>
+                        perform(() => chat.reorderQueue(session.id, ids)),
+                      clear: () => perform(() => chat.clearQueue(session.id)),
+                    }
+                  : undefined
+              }
+            />
           </SessionInput>
         </section>
       </SidePanel>
@@ -1927,7 +1931,9 @@ function SessionInput({
   const modes = !(
     session.harness === "claude-code" && session.origin !== "owned"
   );
-  async function submit(mode: InputMode = "steer") {
+  // Sent while it works, an input waits in ZeroLux's queue for a turn of its own; at rest with
+  // nothing queued it starts one. ⌘/Ctrl Enter puts it into the turn in progress instead.
+  async function submit(mode: InputMode = "queue") {
     if (!open || empty || tooLong || imagesError) return;
     const sent = text;
     const run = sessionCommand(sent);
@@ -1936,7 +1942,7 @@ function SessionInput({
       if (run?.name === "compact") return compact(run.args);
       const images = await Promise.all(going.map(({ file }) => imageOf(file)));
       // It shows below at once, and a failure there, to send again.
-      void send(sent.trim(), working ? mode : "steer", images).catch(() => {});
+      void send(sent.trim(), mode, images).catch(() => {});
     });
     if (!done) return;
     going.forEach(({ url }) => remove(url));
@@ -1951,7 +1957,7 @@ function SessionInput({
           ? "Read only"
           : open
             ? working
-              ? `Add to ${name}'s turn`
+              ? `Queue for ${name}`
               : `Write to ${name}, or / for commands`
             : sessionState(session)
       }
@@ -2007,8 +2013,7 @@ function SessionInput({
           }
           if (!sendsOnEnter(event.nativeEvent)) return;
           event.preventDefault();
-          // Option Enter waits for the turn to end.
-          void submit(event.altKey && working && modes ? "queue" : "steer");
+          void submit(sendModeOf(event, working));
         },
       }}
       form={{
@@ -2109,11 +2114,11 @@ function SessionInput({
         />
       }
       error={tooLong ? "Too long: up to 64 KB." : imagesError}
-      send={() => void submit("steer")}
+      send={() => void submit("queue")}
       later={
         modes
           ? {
-              queue: () => void submit("queue"),
+              steer: () => void submit("steer"),
               stop: () => void submit("interrupt"),
             }
           : undefined
@@ -2122,7 +2127,7 @@ function SessionInput({
       voice={{
         transcription: owner && transcription,
         // What was said goes into the session as it is, without its recording.
-        send: (said) => send(said, "steer", []),
+        send: (said) => send(said, "queue", []),
       }}
     />
   );
@@ -2378,110 +2383,5 @@ function SentInputBubble({
         </span>
       )}
     </InputBubble>
-  );
-}
-
-/**
- * The owner's inputs waiting for the turn to end, above the box, in the order they will go.
- * Where the harness allows it, each can be rewritten or taken out before it runs.
- */
-export function QueueCards({
-  queue,
-  busy,
-  change,
-}: {
-  queue: QueuedInput[];
-  busy: boolean;
-  change?: {
-    remove: (item: QueuedInput) => Promise<boolean>;
-    edit: (item: QueuedInput, text: string) => Promise<boolean>;
-  };
-}) {
-  const [editing, setEditing] = useState<{ id: string; text: string }>();
-  return (
-    <ul
-      aria-label="Queue"
-      className="mx-auto flex w-full max-w-3xl flex-col gap-1.5"
-    >
-      {queue.map((item) => (
-        <li
-          key={item.id}
-          className="flex items-start gap-2 rounded-md border border-dashed bg-card px-3 py-2 text-sm"
-        >
-          <span className="mt-0.5 shrink-0 font-mono text-[11px] text-faint">
-            Queued
-          </span>
-          {editing?.id === item.id ? (
-            <form
-              className="flex min-w-0 flex-1 flex-col gap-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const text = editing.text.trim();
-                if (text && change)
-                  void change.edit(item, text).then((done) => {
-                    if (done) setEditing(undefined);
-                  });
-              }}
-            >
-              <textarea
-                aria-label="Queued input"
-                value={editing.text}
-                autoFocus
-                rows={2}
-                onChange={(event) =>
-                  setEditing({ id: item.id, text: event.target.value })
-                }
-                className="min-h-14 resize-none rounded-sm border border-input bg-background px-2 py-1.5 text-sm outline-none focus:border-ring"
-              />
-              <div className="flex gap-2">
-                <Button
-                  type="submit"
-                  size="sm"
-                  disabled={busy || !editing.text.trim()}
-                >
-                  Save
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setEditing(undefined)}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </form>
-          ) : (
-            <p className="line-clamp-2 min-w-0 flex-1 whitespace-pre-wrap">
-              {item.text}
-            </p>
-          )}
-          {change && item.changeable && editing?.id !== item.id && (
-            <span className="flex shrink-0 gap-0.5">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Rewrite"
-                disabled={busy}
-                onClick={() => setEditing({ id: item.id, text: item.text })}
-              >
-                <PencilIcon />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Take out of the queue"
-                disabled={busy}
-                onClick={() => void change.remove(item)}
-              >
-                <XIcon />
-              </Button>
-            </span>
-          )}
-        </li>
-      ))}
-    </ul>
   );
 }

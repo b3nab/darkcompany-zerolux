@@ -105,8 +105,9 @@ export function Composer({
   meter?: ReactNode;
   error?: string;
   send: () => void;
-  /** Other ways to send while the agent works, on holding the primary button. */
-  later?: { queue: () => void; stop: () => void };
+  /** Other ways to send while the agent works, on holding the primary button: into the turn in
+   * progress, or in place of it. */
+  later?: { steer: () => void; stop: () => void };
   interrupt?: () => void;
   /** Where speech goes; without transcription only a kept recording remains. */
   voice: Omit<VoiceTargets, "write">;
@@ -475,8 +476,8 @@ export function Composer({
                   />
                 </span>
                 <DropdownMenuContent align="end" className="w-52">
-                  <DropdownMenuItem onClick={later.queue}>
-                    When the turn ends
+                  <DropdownMenuItem onClick={later.steer}>
+                    Into this turn
                   </DropdownMenuItem>
                   <DropdownMenuItem variant="destructive" onClick={later.stop}>
                     Stop and send
