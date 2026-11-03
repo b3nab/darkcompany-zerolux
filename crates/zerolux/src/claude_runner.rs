@@ -384,7 +384,7 @@ impl Registry {
     }
 
     async fn check_not_running(&self, native_id: &str) -> Result<()> {
-        let mut child = tokio::process::Command::new(&self.program.claude_cli)
+        let mut child = crate::platform::command(&self.program.claude_cli)
             .args(["agents", "--json"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -577,6 +577,7 @@ pub(crate) async fn forked(
     mut command: tokio::process::Command,
     workspace: &str,
 ) -> Result<serde_json::Value> {
+    platform::isolate_descriptors(command.as_std_mut());
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(60),
         command

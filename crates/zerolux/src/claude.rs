@@ -22,7 +22,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
-    process::Command,
     sync::{mpsc, watch},
 };
 
@@ -54,7 +53,7 @@ struct Listed {
 
 /// Read-only: asks Claude Code for its running sessions.
 async fn list() -> Result<Vec<Listed>> {
-    let listing = Command::new(crate::platform::executable("claude"))
+    let listing = crate::platform::command(crate::platform::executable("claude"))
         .args(["agents", "--json"])
         .stdin(Stdio::null())
         .kill_on_drop(true)
@@ -953,7 +952,7 @@ mod tests {
         let (sockets, _) = workspace();
         let (_dir, cwd) = workspace();
         let projects = projects(&["birch"]);
-        let mut child = tokio::process::Command::new("sleep")
+        let mut child = crate::platform::command("sleep")
             .arg("30")
             .kill_on_drop(true)
             .spawn()
@@ -1868,7 +1867,7 @@ mod tests {
     /// A live process of the test's own: never a system process, whose existence would
     /// make the test depend on the machine it runs on.
     fn held() -> std::process::Child {
-        std::process::Command::new("sleep")
+        crate::platform::std_command("sleep")
             .arg("60")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())

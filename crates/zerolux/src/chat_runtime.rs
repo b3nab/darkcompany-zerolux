@@ -164,7 +164,7 @@ async fn host_notices_task(
 async fn git(dir: &std::path::Path, args: &[&str]) -> Result<String> {
     let output = tokio::time::timeout(
         Duration::from_secs(60),
-        tokio::process::Command::new("git")
+        crate::platform::command("git")
             .arg("-C")
             .arg(dir)
             .args(args)

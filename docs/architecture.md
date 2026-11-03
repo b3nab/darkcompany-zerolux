@@ -13,6 +13,8 @@
 
 The kernel owns workspace rules and persistent state, independently of its CLI or desktop host. Clients consume the same HTTP API; the desktop does not introduce a second domain API through Tauri commands. Authentication, update mechanisms, storage adapters and future client modules must respect these boundaries. Modularity includes clients and themes, not only server components. [Extensions](extensions.md) add actions, extension points, events and triggers to a workspace through the same API.
 
+Kernel child processes use `platform::command` / `platform::std_command`, or the guarded `Owned`, `detach` and native fork launchers. On macOS these paths prevent concurrent socket creation from leaking listeners and pipes into children, while preserving their configured standard streams and spawn errors.
+
 ## Native agent observability and control
 
 ZeroLux provides full observability and control over agents and all their output, uniformly for pi, Claude Code and Codex. Agent Console integrates native history, output, tool activity, errors and intervention requests into the kernel. Native input, approvals and interruption are kernel capabilities.

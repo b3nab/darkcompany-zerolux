@@ -35,7 +35,7 @@ pub struct Change {
 async fn git(folder: &Path, args: &[&str]) -> Result<Vec<u8>> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(60),
-        tokio::process::Command::new("git")
+        crate::platform::command("git")
             .arg("-C")
             .arg(folder)
             .args(args)
@@ -304,7 +304,7 @@ pub async fn push(folder: &Path) -> Result<()> {
 pub(crate) async fn gh(folder: &Path, args: &[&str]) -> Result<std::process::Output> {
     tokio::time::timeout(
         std::time::Duration::from_secs(60),
-        tokio::process::Command::new("gh")
+        crate::platform::command("gh")
             .args(args)
             .current_dir(folder)
             .env("GH_PROMPT_DISABLED", "1")

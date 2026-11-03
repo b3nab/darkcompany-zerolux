@@ -1,10 +1,28 @@
 /** Deterministic native-host fixture. Never constructs AgentSession or contacts a model. */
 import chatExtension from "../chat-extension.ts";
 import { appendFileSync } from "node:fs";
+import { Transport } from "@zerolux/bridge";
 import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+
+// Force a published reply's HTTP result to reach the tool only after native off.
+// The message is already visible to the GUI while its native call is still in flight.
+let releaseReply: (() => void) | undefined;
+if (process.env.ZEROLUX_FIXTURE_REPLY_AFTER_OFF) {
+  const reply = new Promise<void>((resolve) => {
+    releaseReply = resolve;
+  });
+  const bind = Transport.prototype.bind;
+  Transport.prototype.bind = function (request) {
+    bind.call(this, async <T>(path: string, body?: unknown): Promise<T> => {
+      const result = await request<T>(path, body);
+      if (body && /^\/conversations\/[^/]+\/messages$/.test(path)) await reply;
+      return result;
+    });
+  };
+}
 
 type Handler = (event: any, ctx: ExtensionContext) => unknown;
 const handlers = new Map<string, Handler>();
@@ -97,14 +115,37 @@ chatExtension({
         const [, chat, replyTo] = /^Chat: (\S+); delivery: (\S+)$/m.exec(
           content,
         )!;
-        await send.execute("fixture-call", {
-          chat: chat!,
-          reply_to: replyTo!,
-          text: "Deterministic pi response; no model was called.",
+        let toolError = false;
+        let toolResult: unknown;
+        try {
+          toolResult = await send.execute("fixture-call", {
+            chat: chat!,
+            reply_to: replyTo!,
+            text: "Deterministic pi response; no model was called.",
+          });
+        } catch (error) {
+          // pi turns a rejected execute() into a failed tool result, not a host crash.
+          toolError = true;
+          toolResult = {
+            content: [{ type: "text", text: String(error) }],
+            details: undefined,
+          };
+        }
+        await emit("tool_execution_end", {
+          type: "tool_execution_end",
+          toolCallId: "fixture-call",
+          toolName: "zerolux_send",
+          result: toolResult,
+          isError: toolError,
         });
         await emit("agent_before_settle", { outcome: "completed" });
         idle = true;
         await emit("agent_settled", { type: "agent_settled" });
+        if (releaseReply)
+          process.stdout.write(
+            JSON.stringify({ type: "turn_settled", tool_error: toolError }) +
+              "\n",
+          );
       })();
     }, 20);
   },
@@ -121,7 +162,7 @@ process.on("SIGUSR1", () => {
   const stopped = command.handler("off", context);
   if (process.env.ZEROLUX_FIXTURE_UI_LOG)
     appendFileSync(process.env.ZEROLUX_FIXTURE_UI_LOG, "OFF_REQUESTED\n");
-  void stopped;
+  void stopped.then(() => releaseReply?.());
 });
 process.on("SIGTERM", () => {
   void close();

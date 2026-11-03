@@ -128,7 +128,7 @@ pub(crate) fn agent_dir() -> Result<PathBuf> {
 }
 
 async fn command_json(program: &str, args: &[&str]) -> Result<Value> {
-    let mut child = tokio::process::Command::new(crate::platform::executable(program))
+    let mut child = crate::platform::command(crate::platform::executable(program))
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -823,7 +823,7 @@ pub async fn ensure_codex_daemon_with(
     if CodexRpc::connect(endpoint).await.is_ok() {
         return Ok(());
     }
-    let mut launcher = tokio::process::Command::new(program);
+    let mut launcher = crate::platform::command(program);
     homes
         .apply(&mut launcher)
         .args(["app-server", "daemon", "start"])

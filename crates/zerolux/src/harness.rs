@@ -2,7 +2,6 @@ use std::{path::PathBuf, process::Stdio, time::Duration};
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -64,7 +63,7 @@ pub async fn doctor() -> Vec<HarnessProbe> {
         if let Some(path) = &probe.path {
             let output = tokio::time::timeout(
                 Duration::from_secs(5),
-                Command::new(path)
+                crate::platform::command(path)
                     .arg("--version")
                     .stdin(Stdio::null())
                     .kill_on_drop(true)

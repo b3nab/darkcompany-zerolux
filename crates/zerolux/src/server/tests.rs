@@ -164,7 +164,7 @@ async fn harness_origins_isolate_tokens_and_close_before_the_database_lease_is_r
     assert_eq!(refused.status(), 403);
 
     handle.remove_workspace(&a_id).await.unwrap();
-    let occupied = TcpListener::bind(a_address).await.unwrap();
+    let occupied = crate::platform::rebind_after_close(a_address).await;
     assert_eq!(
         inbox(handle.workspace_url(&a_id), a_session.token.clone())
             .await
@@ -174,7 +174,7 @@ async fn harness_origins_isolate_tokens_and_close_before_the_database_lease_is_r
     assert_eq!(inbox(b_origin, b_session.token.clone()).await.status(), 200);
     assert_eq!(handle.workspaces().await.unwrap().len(), 1);
     server.shutdown().await.unwrap();
-    let _b_released = TcpListener::bind(b_address).await.unwrap();
+    let _b_released = crate::platform::rebind_after_close(b_address).await;
 
     // Started again on the same database, the kernel serves every workspace, each from a new
     // harness origin, with the same data.
@@ -190,6 +190,6 @@ async fn harness_origins_isolate_tokens_and_close_before_the_database_lease_is_r
         a_session.session.id
     );
     server.shutdown().await.unwrap();
-    let _a_released = TcpListener::bind(new_address).await.unwrap();
+    let _a_released = crate::platform::rebind_after_close(new_address).await;
     drop(occupied);
 }

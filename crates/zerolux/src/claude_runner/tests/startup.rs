@@ -144,7 +144,7 @@ async fn warm_bind_reuses_authenticated_legacy_and_managed_hosts() {
         ),
     ] {
         let f = Fixture::new(description.clone());
-        let mut child = tokio::process::Command::new(&f.registry.program.bun)
+        let mut child = crate::platform::command(&f.registry.program.bun)
             .arg(&f.registry.program.entry)
             .env("ZEROLUX_RUNNER_REGISTRY", &f.registry.path)
             .env("ZEROLUX_NATIVE_SESSION", &f.native)

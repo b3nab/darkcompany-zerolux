@@ -47,7 +47,7 @@ pub enum HostUse {
 
 /// This computer's name, as the system gives it.
 fn computer_name() -> String {
-    std::process::Command::new("hostname")
+    crate::platform::std_command("hostname")
         .arg("-s")
         .output()
         .ok()

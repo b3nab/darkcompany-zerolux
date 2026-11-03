@@ -99,6 +99,7 @@ async fn gui_hire_livekit_wake_and_reply_with_a_fake_pi_host() {
     let mut command = Command::new("bun");
     command.arg(fixture);
     isolated(&mut command, &home, &workspace, &path);
+    command.env("ZEROLUX_FIXTURE_REPLY_AFTER_OFF", "1");
     command.stdout(Stdio::piped());
     let mut native = Process(command.spawn().unwrap());
     // Convert the owned pipe to Tokio without ever reading a personal/native transcript.
@@ -209,13 +210,25 @@ async fn gui_hire_livekit_wake_and_reply_with_a_fake_pi_host() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    api(
+    // The reply was persisted before native off, but its tool receives the HTTP result
+    // afterwards. Like pi, the fixture must settle the failed tool without exiting.
+    let settled = tokio::time::timeout(Duration::from_secs(15), lines.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("native tool settled after off");
+    let settled: Value = serde_json::from_str(&settled).unwrap();
+    assert_eq!(settled["type"], "turn_settled");
+    assert_eq!(settled["tool_error"], true);
+    let stopped = api(
         &client,
         &base,
         &format!("/sessions/{session}/stop"),
         Some(json!({})),
     )
     .await;
+    assert_eq!(stopped["session"]["status"], "stopped");
+    assert!(stopped["session"]["stopped_at"].is_number());
     assert!(
         native.0.try_wait().unwrap().is_none(),
         "Stop must not kill the native pi host"

@@ -33,7 +33,8 @@ pub struct Owned {
 
 impl Owned {
     /// Starts `command` in a tree of its own.
-    pub fn spawn(command: Command) -> io::Result<Self> {
+    pub fn spawn(mut command: Command) -> io::Result<Self> {
+        crate::platform::isolate_descriptors(command.as_std_mut());
         let mut command = CommandWrap::from(command);
         #[cfg(unix)]
         command.wrap(process_wrap::tokio::ProcessGroup::leader());
@@ -146,7 +147,7 @@ const WATCHER: &str = "exec 3<&0; (trap '' TERM INT HUP; IFS= read -r said <&3; 
 fn tether(pid: u32) -> io::Result<std::io::PipeWriter> {
     let (read, write) = std::io::pipe()?;
     let pgid = i32::try_from(pid).map_err(io::Error::other)?;
-    let mut shell = std::process::Command::new("/bin/sh");
+    let mut shell = crate::platform::std_command("/bin/sh");
     std::os::unix::process::CommandExt::process_group(&mut shell, pgid);
     let status = shell
         .args(["-c", WATCHER])
@@ -335,7 +336,7 @@ mod note {
 
         fn leader(command: &str) -> std::process::Child {
             use std::os::unix::process::CommandExt;
-            std::process::Command::new("/bin/sh")
+            crate::platform::std_command("/bin/sh")
                 .args(["-c", command])
                 .process_group(0)
                 .spawn()
@@ -350,7 +351,7 @@ mod note {
         async fn trees_a_kernel_left_running_end_when_their_first_process_is_the_same() {
             let folder = tempfile::tempdir().unwrap();
             // A kernel that ended: a process that has already ended.
-            let mut ended = std::process::Command::new("/bin/sh")
+            let mut ended = crate::platform::std_command("/bin/sh")
                 .args(["-c", "exit 0"])
                 .spawn()
                 .unwrap();
@@ -406,6 +407,30 @@ mod note {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn neither_the_process_nor_its_watcher_keeps_a_listener_open() {
+        use std::{net::TcpListener, os::fd::AsRawFd, process::Stdio};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        // A concurrent spawn can see a socket before macOS sets FD_CLOEXEC on it.
+        // SAFETY: the descriptor belongs to this listener and is still open.
+        assert_eq!(
+            unsafe { nix::libc::fcntl(listener.as_raw_fd(), nix::libc::F_SETFD, 0) },
+            0
+        );
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "read -r signal"]).stdin(Stdio::piped());
+        let mut child = Owned::spawn(command).unwrap();
+        assert!(child.tether.is_some());
+        drop(listener);
+
+        let _released = crate::platform::rebind_after_close(address).await;
+        assert!(child.try_wait().unwrap().is_none());
+        child.stop(Duration::from_secs(1)).await;
+    }
 
     /// A tree whose first process starts another and ends: the other's process ID.
     async fn tree() -> (Owned, u32) {

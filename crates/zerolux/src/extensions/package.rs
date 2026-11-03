@@ -303,7 +303,7 @@ pub fn build(folder: &Path) -> Result<Vec<PathBuf>> {
 
 fn build_module(folder: &Path, library: &str) -> Result<PathBuf> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = std::process::Command::new(cargo)
+    let output = crate::platform::std_command(cargo)
         .args([
             "build",
             "--release",
@@ -354,7 +354,7 @@ pub fn build_interface(folder: &Path) -> Result<Vec<PathBuf>> {
         if !stale(folder, &out) {
             continue;
         }
-        let status = std::process::Command::new(crate::platform::executable("bun"))
+        let status = crate::platform::std_command(crate::platform::executable("bun"))
             .args(["build", "--production", "--format=cjs", "--target=browser"])
             .args([
                 "--external",

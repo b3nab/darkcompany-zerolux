@@ -12,6 +12,36 @@ use std::{
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+/// Starts children without leaking kernel descriptors during macOS socket creation.
+pub(crate) fn std_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    isolate_descriptors(&mut command);
+    command
+}
+
+pub(crate) fn command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    std_command(program).into()
+}
+
+pub(crate) fn isolate_descriptors(command: &mut std::process::Command) {
+    // macOS has no atomic socket(SOCK_CLOEXEC): another thread may spawn between socket()
+    // and fcntl(FD_CLOEXEC). Rust's posix_spawn also omits CLOEXEC_DEFAULT. Mark the child's
+    // own descriptors after fork, keeping stdio and Rust's exec-error pipe until exec.
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: close_fds uses async-signal-safe operations; nothing is allocated here.
+        unsafe {
+            command.pre_exec(|| {
+                close_fds::set_fds_cloexec(3, &[]);
+                Ok(())
+            });
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = command;
+}
+
 /// A path's real form, without links or `..`. On Windows it is the form people write
 /// (`C:\work`), not the extended one (`\\?\C:\work`) that processes and people do not expect.
 pub trait Canonical {
@@ -91,6 +121,7 @@ pub fn essential_env() -> Vec<(&'static str, std::ffi::OsString)> {
 
 /// Starts `command` on its own: it outlives the kernel and has no terminal.
 pub fn detach(command: &mut tokio::process::Command) {
+    isolate_descriptors(command.as_std_mut());
     #[cfg(unix)]
     // SAFETY: setsid is async-signal-safe; nothing else runs between fork and exec.
     unsafe {
@@ -347,8 +378,76 @@ impl AsyncWrite for Local {
 }
 
 #[cfg(test)]
+pub(crate) async fn rebind_after_close(address: std::net::SocketAddr) -> tokio::net::TcpListener {
+    use std::time::Duration;
+
+    // Even after its owner closes a CLOEXEC descriptor, a concurrent fork may retain it
+    // until exec or exit. Allow this OS handoff. In the inheritance regressions the child
+    // stays alive throughout, so a leak past exec still fails.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match tokio::net::TcpListener::bind(address).await {
+                Ok(listener) => return listener,
+                Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("{address}: {error}"),
+            }
+        }
+    })
+    .await
+    .unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn children_preserve_stdio_without_inheriting_listeners() {
+        use std::{net::TcpListener, os::fd::AsRawFd, process::Stdio};
+        use tokio::io::AsyncWriteExt;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        // Reproduce the interval between socket() and fcntl(FD_CLOEXEC) deterministically.
+        // SAFETY: the descriptor belongs to this listener and is still open.
+        assert_eq!(
+            unsafe { nix::libc::fcntl(listener.as_raw_fd(), nix::libc::F_SETFD, 0) },
+            0
+        );
+        let mut child = command("/bin/cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        drop(listener);
+        let _released = rebind_after_close(address).await;
+        assert!(child.try_wait().unwrap().is_none());
+        let mut input = child.stdin.take().unwrap();
+        input.write_all(b"fixture\n").await.unwrap();
+        drop(input);
+        let output = child.wait_with_output().await.unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"fixture\n");
+        assert!(output.stderr.is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_missing_program_is_reported_as_a_spawn_error() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            std_command(directory.path().join("missing"))
+                .spawn()
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+    }
 
     #[test]
     fn this_process_is_alive_and_an_unused_id_is_not() {

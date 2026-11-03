@@ -24,7 +24,7 @@ pub async fn find(folder: &Path, query: &str, limit: usize) -> Result<Vec<String
 async fn tracked(folder: &Path) -> Option<Vec<String>> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        tokio::process::Command::new("git")
+        crate::platform::command("git")
             .arg("-C")
             .arg(folder)
             .args([
