@@ -1,5 +1,5 @@
 import { cn } from "cn";
-import { creationDateLabel, harnessLabels } from "@zerolux/chat";
+import { creationDateLabel, harnessLabels, harnessMarks } from "@zerolux/chat";
 import type { Actor, ChatSession, Harness } from "@zerolux/chat";
 import { Lamp } from "@/components/lamp";
 import type { LampState } from "@/components/lamp";
@@ -51,7 +51,7 @@ export function HarnessMark({
         className,
       )}
     >
-      {harness === "claude-code" ? "CC" : harness === "codex" ? "CX" : "pi"}
+      {harnessMarks[harness]}
     </span>
   );
 }
