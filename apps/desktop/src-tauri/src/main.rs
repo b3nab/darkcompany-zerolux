@@ -14,6 +14,8 @@ mod local;
 mod menu;
 mod notify;
 mod preferences;
+#[cfg(target_os = "macos")]
+mod quit;
 #[cfg(not(windows))]
 mod restart;
 mod tray;

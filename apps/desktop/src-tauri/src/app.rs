@@ -2525,6 +2525,13 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
         })
         .build(context)?;
     app.run(|handle, event| {
+        // A quit from the Dock, AppleScript, a logout or a shutdown takes the app's own way out,
+        // below, as its menu's Quit does: the kernel stops before the app ends.
+        #[cfg(target_os = "macos")]
+        if let RunEvent::Ready = event {
+            crate::quit::install(handle);
+            return;
+        }
         // The Dock's icon pressed with no window open: a workspace comes back.
         #[cfg(target_os = "macos")]
         if let RunEvent::Reopen {
