@@ -5,9 +5,13 @@
 //! what its first process started before it ended. Dropping one ends its tree at once.
 //!
 //! On Windows the job ends with the kernel, however the kernel ends. On Unix nothing ends a
-//! tree with its owner, so the kernel keeps a note of its trees on this computer: a kernel that
-//! ended without stopping them leaves its note behind, and the next one to start ends the trees
-//! whose first process is still the same process, by its start time.
+//! tree with its owner, so each tree has a watcher of its own: a small shell in the tree's
+//! process group, holding one end of a pipe whose other end only the kernel holds. Told that
+//! the tree is done, it leaves; when the pipe closes without that, the kernel has ended,
+//! however it ended, and the watcher ends the whole group. Its being in the group keeps the
+//! group's number from going to anything else meanwhile. The kernel also keeps a note of its
+//! trees on this computer: the next kernel to start ends those whose first process is still
+//! the same process, by its start time, should a watcher have been ended too.
 
 use std::{io, process::ExitStatus, time::Duration};
 
@@ -22,6 +26,9 @@ pub struct Owned {
     pid: Option<u32>,
     /// Its tree has been ended: nothing of it is signalled again.
     ended: bool,
+    /// The pipe its watcher holds the other end of.
+    #[cfg(unix)]
+    tether: Option<std::io::PipeWriter>,
 }
 
 impl Owned {
@@ -41,6 +48,8 @@ impl Owned {
             note::add(pid);
         }
         Ok(Self {
+            #[cfg(unix)]
+            tether: pid.and_then(|pid| tether(pid).ok()),
             child,
             pid,
             ended: false,
@@ -74,6 +83,8 @@ impl Owned {
             return;
         }
         #[cfg(unix)]
+        self.untether();
+        #[cfg(unix)]
         let _ = self.child.signal(nix::libc::SIGTERM);
         let _ = tokio::time::timeout(grace, self.whole_tree_ended()).await;
         self.end();
@@ -85,11 +96,22 @@ impl Owned {
         if self.ended {
             return;
         }
+        #[cfg(unix)]
+        self.untether();
         let _ = self.child.start_kill();
         self.ended = true;
         #[cfg(unix)]
         if let Some(pid) = self.pid {
             note::remove(pid);
+        }
+    }
+
+    /// Tells its watcher that the kernel ends the tree itself.
+    #[cfg(unix)]
+    fn untether(&mut self) {
+        use std::io::Write;
+        if let Some(mut tether) = self.tether.take() {
+            let _ = tether.write_all(b"done\n");
         }
     }
 
@@ -109,6 +131,33 @@ impl Drop for Owned {
     fn drop(&mut self) {
         self.end();
     }
+}
+
+/// What a tree's watcher runs, in the tree's group, with the pipe on its input: it ignores the
+/// signals the kernel sends the group, and leaves when told the tree is done. When the pipe
+/// closes without that, it asks the whole group to end, then forces it. It runs in the
+/// background of a shell that leaves at once, so it is no child of the kernel's.
+#[cfg(unix)]
+const WATCHER: &str = "exec 3<&0; (trap '' TERM INT HUP; IFS= read -r said <&3; \
+    [ \"$said\" = done ] && exit 0; kill -TERM 0; sleep 3; kill -KILL 0) & exit 0";
+
+/// A watcher for the tree led by `pid`: the end of the pipe the kernel keeps.
+#[cfg(unix)]
+fn tether(pid: u32) -> io::Result<std::io::PipeWriter> {
+    let (read, write) = std::io::pipe()?;
+    let pgid = i32::try_from(pid).map_err(io::Error::other)?;
+    let mut shell = std::process::Command::new("/bin/sh");
+    std::os::unix::process::CommandExt::process_group(&mut shell, pgid);
+    let status = shell
+        .args(["-c", WATCHER])
+        .stdin(read)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    if !status.success() {
+        return Err(io::Error::other("The tree's watcher did not start"));
+    }
+    Ok(write)
 }
 
 /// Whether a process of the group led by `pid` still runs.
@@ -398,6 +447,25 @@ mod tests {
         assert!(ends(started).await);
         // Ended, it leaves the note: a kernel that starts later has nothing of it to end.
         assert!(!noted(leader));
+    }
+
+    #[tokio::test]
+    async fn a_tree_ends_when_its_kernel_ends_without_stopping_it() {
+        let (mut owned, started) = tree().await;
+        // The kernel ends however it ends: its end of the pipe closes, nothing more is said.
+        drop(owned.tether.take());
+        std::mem::forget(owned);
+        assert!(ends(started).await);
+    }
+
+    #[tokio::test]
+    async fn a_stopped_tree_ends_without_waiting_for_its_watcher() {
+        let (mut owned, started) = tree().await;
+        let begun = std::time::Instant::now();
+        owned.stop(Duration::from_secs(10)).await;
+        assert!(ends(started).await);
+        assert!(begun.elapsed() < Duration::from_secs(3));
+        assert!(!group_alive(owned.id().unwrap()));
     }
 
     #[tokio::test]
