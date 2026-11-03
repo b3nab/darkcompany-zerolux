@@ -124,6 +124,11 @@ test("only well-formed chat events are accepted", () => {
   const second = parseEvent(bytes(changed))?.event_id;
   expect(first).toStartWith("extensions.changed:");
   expect(second).not.toBe(first);
+  // A queue's notice says only that it changed: each one is a notice of its own.
+  const queue = { type: "session.queue", session_id: "s" };
+  const once = parseEvent(bytes(queue))?.event_id;
+  expect(once).toStartWith("session.queue:s:");
+  expect(parseEvent(bytes(queue))?.event_id).not.toBe(once);
 });
 
 test("pages merge by sequence and newer copies replace delivery states", () => {

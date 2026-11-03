@@ -6,14 +6,15 @@ import type { Chat, NewSession } from "@zerolux/chat";
 afterEach(() => setKernelFetch());
 
 /** The chat hook against a fixture kernel, recording every request it makes. */
-function fixture() {
+function fixture(answer?: (url: string) => unknown) {
   const requests: { url: string; init: RequestInit }[] = [];
   setKernelFetch(async (url, init = {}) => {
     requests.push({ url, init });
     return Response.json(
-      url.endsWith("/sessions") && !init.body
-        ? { sessions: [] }
-        : { actor: null, session: { id: "s-1" } },
+      answer?.(url) ??
+        (url.endsWith("/sessions") && !init.body
+          ? { sessions: [] }
+          : { actor: null, session: { id: "s-1" } }),
     );
   });
   let chat: Chat | undefined;
@@ -62,6 +63,31 @@ for (const harness of ["claude-code", "codex", "pi"] as const) {
   }
 }
 
+test("an input waits in the session's queue by default, which is read again once it holds it", async () => {
+  const held = {
+    id: "q-1",
+    text: "Then the docs",
+    images: [],
+    created_at: 1,
+    author_id: "owner",
+  };
+  const { chat, requests } = fixture((url) =>
+    url.endsWith("/input")
+      ? { queued: held }
+      : url.endsWith("/queue")
+        ? { queue: [held] }
+        : undefined,
+  );
+  await chat.input("s-1", "Then the docs");
+  expect(JSON.parse(requests[0]!.init.body as string)).toEqual({
+    text: "Then the docs",
+    mode: "queue",
+  });
+  expect(requests[1]!.url).toBe(
+    "https://fixture.example.test/api/sessions/s-1/queue",
+  );
+});
+
 test("a session opens without an agent, and the owner pins, renames or archives it", async () => {
   const { chat, requests } = fixture();
   await chat.createSession({ harness: "pi", workspace: "/fixture/project" });
@@ -84,18 +110,21 @@ test("a session opens without an agent, and the owner pins, renames or archives 
     text: "Then the docs",
     mode: "queue",
   });
-  // A waiting input is rewritten or taken out of the queue.
+  // A waiting input is rewritten or taken out of the queue, which is then read again.
   await chat.editQueued("s-1", "q/1", "Then the README");
-  expect(requests.at(-1)!.url).toBe(
+  expect(requests.at(-2)!.url).toBe(
     "https://fixture.example.test/api/sessions/s-1/queue/q%2F1",
   );
-  expect(requests.at(-1)!.init.method).toBe("PATCH");
-  expect(JSON.parse(requests.at(-1)!.init.body as string)).toEqual({
+  expect(requests.at(-2)!.init.method).toBe("PATCH");
+  expect(JSON.parse(requests.at(-2)!.init.body as string)).toEqual({
     text: "Then the README",
   });
+  expect(requests.at(-1)!.url).toBe(
+    "https://fixture.example.test/api/sessions/s-1/queue",
+  );
   await chat.removeQueued("s-1", "q/1");
-  expect(requests.at(-1)!.init.method).toBe("DELETE");
-  expect(requests.at(-1)!.init.body).toBeUndefined();
+  expect(requests.at(-2)!.init.method).toBe("DELETE");
+  expect(requests.at(-2)!.init.body).toBeUndefined();
   await chat.updateSession("s-1", {
     pinned: true,
     title: "Release",

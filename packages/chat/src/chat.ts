@@ -206,6 +206,7 @@ export type ChatEvent = { event_id: string } & (
     }
   | { type: "conversation.changed"; conversation_id: string }
   | { type: "session.changed"; session_id: string }
+  | { type: "session.queue"; session_id: string }
   | { type: "delivery.changed"; conversation_id: string; message_id: string }
   | { type: "approval.changed"; approval_id: string }
   | { type: "subscriptions.changed"; subscriptions: Subscription[] }
@@ -560,6 +561,7 @@ const eventTypes = new Set<string>([
   "read.changed",
   "session.output",
   "session.live",
+  "session.queue",
   "terminal.output",
   "extensions.changed",
   "background_command.changed",
@@ -568,6 +570,7 @@ const eventTypes = new Set<string>([
 ]);
 let uiNotices = 0;
 let extensionNotices = 0;
+let queueNotices = 0;
 export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
   try {
     const event = JSON.parse(new TextDecoder().decode(payload)) as ChatEvent;
@@ -577,6 +580,9 @@ export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
     // Live changes are numbered per session: the first one names the notice.
     if (event.type === "session.live" && typeof event.event_id !== "string")
       event.event_id = `session.live:${event.session_id}:${event.first}`;
+    // A queue's notice says only that it changed: reading it twice costs nothing.
+    if (event.type === "session.queue" && typeof event.event_id !== "string")
+      event.event_id = `session.queue:${event.session_id}:${++queueNotices}`;
     // A terminal's notice names where its output ends, and whether it ended there.
     if (event.type === "terminal.output" && typeof event.event_id !== "string")
       event.event_id = `terminal.output:${event.terminal_id}:${event.end}${event.ended ? ":ended" : ""}`;

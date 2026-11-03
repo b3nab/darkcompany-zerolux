@@ -25,6 +25,7 @@ export * from "./subscriptions";
 export * from "./capabilities";
 export * from "./session-events";
 export * from "./live";
+export * from "./queue";
 export * from "./files";
 export * from "./terminals";
 export * from "./tool-view";

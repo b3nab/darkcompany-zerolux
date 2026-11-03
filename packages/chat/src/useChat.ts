@@ -45,6 +45,17 @@ import { backgroundNotice, backgroundResync } from "./background";
 import { uiNotice, uiResync } from "./extension-ui";
 import { terminalNotice, terminalResync } from "./terminals";
 import { recordsResync } from "./session-events";
+import {
+  clearQueue,
+  editQueued,
+  queueNotice,
+  queueResync,
+  readQueue,
+  removeQueued,
+  reorderQueue,
+  sendQueued,
+} from "./queue";
+import type { QueueItem } from "./queue";
 
 /** Chat state for the owner: LiveKit events say what to refetch from the kernel. */
 export function useChat(enabled: boolean, kernel = kernelUrl()) {
@@ -54,8 +65,6 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     request<T>(server, path, body);
   const patch = <T>(path: string, body: unknown) =>
     request<T>(server, path, body, undefined, "PATCH");
-  const remove = <T>(path: string) =>
-    request<T>(server, path, undefined, undefined, "DELETE");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
@@ -137,12 +146,20 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     };
     now("sending");
     try {
-      await api(`/sessions/${input.session_id}/input`, {
-        text: input.text,
-        mode: input.mode,
-        ...(input.images.length ? { images: input.images } : {}),
-      });
+      const { queued } = await api<{ queued?: QueueItem }>(
+        `/sessions/${input.session_id}/input`,
+        {
+          text: input.text,
+          mode: input.mode,
+          ...(input.images.length ? { images: input.images } : {}),
+        },
+      );
       now("sent");
+      // Held in the queue, it shows there from now on.
+      if (queued) {
+        await readQueue(server, input.session_id);
+        setInputs((all) => all.filter((i) => i.id !== input.id));
+      }
     } catch (e) {
       now("failed", errorMessage(e));
       throw e;
@@ -302,6 +319,8 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
         return seenTo(event.id, event.position);
       case "session.live":
         return liveNotice(event);
+      case "session.queue":
+        return queueNotice(server, event.session_id);
       case "terminal.output":
         return terminalNotice(event);
       case "extensions.changed":
@@ -333,6 +352,7 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
   // background commands are read again too.
   function resyncAll() {
     liveResync();
+    queueResync(server);
     recordsResync();
     terminalResync();
     extensionsNotice();
@@ -605,16 +625,17 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     },
     /**
      * Writes the owner's own words into a session as native input, not as a chat message. A
-     * session at rest starts a turn with them; a working one takes them into the running turn
-     * (`steer`), after it (`queue`), or in place of it (`interrupt`). Images go with them;
-     * with images the text may be empty. It shows at the session's end, by `sentInputs`,
-     * until the events show it; `after` is where the record shown ends, else the last notice
-     * says. A failed one stays there with its error.
+     * session at rest with nothing queued starts a turn with them; a working one queues them
+     * for a turn of their own after the one in progress (`queue`), or takes them into it
+     * (`steer`) or in place of it (`interrupt`). Images go with them; with images the text may
+     * be empty. It shows at the session's end, by `sentInputs`, until the events show it, or
+     * in the queue once held there; `after` is where the record shown ends, else the last
+     * notice says. A failed one stays there with its error.
      */
     input: (
       sessionId: string,
       text: string,
-      mode: InputMode = "steer",
+      mode: InputMode = "queue",
       images: InputImage[] = [],
       after = outputs[sessionId]?.end ?? 0,
     ) =>
@@ -659,22 +680,20 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       waitingInputs.current.delete(id);
       setInputs((all) => all.filter((i) => i.id !== id));
     },
-    /**
-     * Takes one of the owner's inputs out of a session's queue before it runs. Codex allows it;
-     * the other harnesses say they do not.
-     */
-    async removeQueued(sessionId: string, itemId: string) {
-      await remove(
-        `/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(itemId)}`,
-      );
-    },
-    /** Rewrites one of the owner's inputs waiting in a session's queue, where Codex allows it. */
-    async editQueued(sessionId: string, itemId: string, text: string) {
-      await patch(
-        `/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(itemId)}`,
-        { text },
-      );
-    },
+    /** Takes an input out of a session's queue before it runs. */
+    removeQueued: (sessionId: string, itemId: string) =>
+      removeQueued(server, sessionId, itemId),
+    /** Rewrites an input waiting in a session's queue. */
+    editQueued: (sessionId: string, itemId: string, text: string) =>
+      editQueued(server, sessionId, itemId, text),
+    /** Sends a waiting input now: into the turn in progress, or as a turn at rest. */
+    sendQueued: (sessionId: string, itemId: string) =>
+      sendQueued(server, sessionId, itemId),
+    /** Puts a session's waiting inputs in this order. */
+    reorderQueue: (sessionId: string, ids: string[]) =>
+      reorderQueue(server, sessionId, ids),
+    /** Empties a session's queue. */
+    clearQueue: (sessionId: string) => clearQueue(server, sessionId),
     /**
      * Starts the harness's own compaction of a session's history, to give its context room
      * again, with what the summary should keep. The session's events show the summary, or
