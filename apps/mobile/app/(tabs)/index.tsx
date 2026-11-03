@@ -81,7 +81,10 @@ export default function Tonight() {
 
   return (
     <Screen leading={<WorkspaceButton />} title={homeLabel()}>
-      <ScrollView contentContainerClassName="gap-7 px-5 pb-10">
+      <ScrollView
+        contentContainerClassName="gap-7 px-5 pb-10"
+        contentInsetAdjustmentBehavior="automatic"
+      >
         <View className="gap-2">
           <Eyebrow>
             {now.toLocaleDateString(undefined, {

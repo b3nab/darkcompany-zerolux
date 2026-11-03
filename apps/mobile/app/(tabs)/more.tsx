@@ -31,7 +31,10 @@ export default function More() {
   const next = <ChevronRightIcon color={faint} size={18} strokeWidth={1.5} />;
   return (
     <Screen title="More">
-      <ScrollView contentContainerClassName="gap-6 px-5 pb-10">
+      <ScrollView
+        contentContainerClassName="gap-6 px-5 pb-10"
+        contentInsetAdjustmentBehavior="automatic"
+      >
         {me ? (
           <Pressable
             onPress={go(`/member/${me.id}`)}

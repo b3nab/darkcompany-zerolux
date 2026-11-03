@@ -88,6 +88,7 @@ export default function Chats() {
         data={chats}
         keyExtractor={(c) => c.id}
         contentContainerClassName="pb-4"
+        contentInsetAdjustmentBehavior="automatic"
         ListEmptyComponent={
           <Text className="p-5 text-base leading-6 text-faint">
             {filter === "you"

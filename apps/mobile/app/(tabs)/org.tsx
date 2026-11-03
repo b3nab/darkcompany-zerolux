@@ -87,7 +87,10 @@ export default function Org() {
           choose={setView}
         />
       </View>
-      <ScrollView contentContainerClassName="gap-4 px-5 pb-10">
+      <ScrollView
+        contentContainerClassName="gap-4 px-5 pb-10"
+        contentInsetAdjustmentBehavior="automatic"
+      >
         {view === "shift" ? (
           <Text className="text-xs text-faint">Last 16 hours</Text>
         ) : null}
