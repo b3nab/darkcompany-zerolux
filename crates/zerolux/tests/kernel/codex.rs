@@ -21,8 +21,7 @@ use zerolux::{
     model::{AgentSettings, CodexApprovalPolicy, CodexSandbox},
 };
 
-#[path = "support/codex_runtime.rs"]
-mod codex_runtime;
+use crate::codex_runtime;
 use codex_runtime::{Runtime, STARTED, THREAD};
 const SESSION: &str = "chat-session";
 const DELIVERY: &str = "51d6a6dc-4c02-4794-adc5-cf4cb470b8c7";

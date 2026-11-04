@@ -892,6 +892,3 @@ async fn the_desktop_app_origin_is_accepted_as_the_request_it_makes_with_explici
     assert_eq!(refused.status(), 403);
     server.shutdown().await.unwrap();
 }
-
-#[path = "support/db.rs"]
-mod db;

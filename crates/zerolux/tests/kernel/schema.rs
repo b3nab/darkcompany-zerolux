@@ -9,8 +9,7 @@ use zerolux::{
     },
 };
 
-#[path = "support/db.rs"]
-mod fixture;
+use crate::db as fixture;
 
 #[tokio::test]
 async fn single_bootstrap_preserves_identity_history_settings_and_stops_on_reopen() {

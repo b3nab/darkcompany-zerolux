@@ -11,12 +11,10 @@ use zerolux::{
     model::*,
 };
 
-#[path = "support/db.rs"]
-mod db;
+use crate::db;
 
 #[allow(dead_code)]
-#[path = "support/codex_runtime.rs"]
-mod native;
+use crate::codex_runtime as native;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn native_backlog_and_later_messages_arrive_when_livekit_is_unavailable() {

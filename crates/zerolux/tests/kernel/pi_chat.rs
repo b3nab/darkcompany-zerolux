@@ -32,8 +32,7 @@ impl Drop for Process {
         let _ = self.0.wait();
     }
 }
-#[path = "support/owner.rs"]
-mod owner;
+use crate::owner;
 
 fn isolated(command: &mut Command, home: &Path, workspace: &Path, path: &std::ffi::OsStr) {
     command

@@ -6,8 +6,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use zerolux::{api, model::SetOwnerName};
 
-#[path = "support/db.rs"]
-mod db;
+use crate::db;
 
 struct Kernel {
     dir: TempDir,

@@ -8,12 +8,10 @@ use zerolux::{
     model::{HireChatSession, SetOwnerName},
 };
 
-#[path = "support/db.rs"]
-mod db;
+use crate::db;
 
 #[allow(dead_code)]
-#[path = "support/codex_runtime.rs"]
-mod native;
+use crate::codex_runtime as native;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn owner_stop_during_native_read_prevents_cold_resume() {

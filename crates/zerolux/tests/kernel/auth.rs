@@ -12,8 +12,7 @@ use zerolux::{
     server::{Server, ServerOptions},
 };
 
-#[path = "support/db.rs"]
-mod db;
+use crate::db;
 
 fn installed(program: &str) -> bool {
     std::process::Command::new(program)

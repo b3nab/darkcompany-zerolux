@@ -13,8 +13,7 @@ use zerolux::{
 };
 
 #[allow(dead_code, unused_imports)]
-#[path = "support/claude_owned.rs"]
-mod claude_owned;
+use crate::claude_owned;
 use claude_owned::*;
 
 #[tokio::test(flavor = "multi_thread")]

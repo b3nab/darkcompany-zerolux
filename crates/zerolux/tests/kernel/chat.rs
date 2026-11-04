@@ -3,8 +3,7 @@ use serde_json::json;
 use uuid::Uuid;
 use zerolux::{chat::Access, entity, harness::Harness, model::*, store::Error};
 
-#[path = "support/db.rs"]
-mod db;
+use crate::db;
 use db::TestDatabase;
 
 struct Fixture {

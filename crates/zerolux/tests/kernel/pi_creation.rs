@@ -96,8 +96,7 @@ impl Drop for Hosts {
         }
     }
 }
-#[path = "support/owner.rs"]
-mod owner;
+use crate::owner;
 
 fn executable(name: &str) -> PathBuf {
     let output = Command::new("/usr/bin/which").arg(name).output().unwrap();

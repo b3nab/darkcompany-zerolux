@@ -2,8 +2,7 @@
 //! shared database.
 use zerolux::{model::*, store::Error};
 
-#[path = "support/db.rs"]
-mod db;
+use crate::db;
 use db::TestDatabase;
 
 #[tokio::test]

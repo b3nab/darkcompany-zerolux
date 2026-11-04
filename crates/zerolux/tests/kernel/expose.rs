@@ -9,8 +9,7 @@ use zerolux::{
     model::SetOwnerName,
 };
 
-#[path = "support/db.rs"]
-mod db;
+use crate::db;
 
 const EXPOSED: &str = "192.0.2.7:4310";
 

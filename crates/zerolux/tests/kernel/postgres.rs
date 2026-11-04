@@ -78,8 +78,7 @@ async fn the_bootstrap_schema_applies_to_postgres_in_a_database_of_its_own() {
     assert_eq!(ledger, vec!["m0001_bootstrap".to_owned()]);
 }
 
-#[path = "support/db.rs"]
-mod db;
+use crate::db;
 
 use serde_json::json;
 use zerolux::{

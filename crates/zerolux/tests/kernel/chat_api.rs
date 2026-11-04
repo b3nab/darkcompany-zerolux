@@ -11,15 +11,12 @@ use zerolux::{
     store::Store,
 };
 
-#[path = "support/owner.rs"]
-mod owner;
+use crate::owner;
 
-#[path = "support/db.rs"]
-mod db;
+use crate::db;
 
 #[cfg(unix)]
-#[path = "support/codex_runtime.rs"]
-mod codex_runtime;
+use crate::codex_runtime;
 
 struct Kernel {
     _dir: tempfile::TempDir,

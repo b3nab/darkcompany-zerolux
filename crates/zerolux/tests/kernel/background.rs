@@ -13,8 +13,7 @@ use zerolux::{
     model::{HireChatSession, SetOwnerName},
 };
 
-#[path = "support/db.rs"]
-mod db;
+use crate::db;
 
 async fn call(
     client: &Client,

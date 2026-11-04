@@ -89,8 +89,7 @@ impl Drop for Hosts {
         }
     }
 }
-#[path = "support/owner.rs"]
-mod owner;
+use crate::owner;
 
 fn executable(name: &str) -> PathBuf {
     std::env::split_paths(&std::env::var_os("PATH").unwrap())

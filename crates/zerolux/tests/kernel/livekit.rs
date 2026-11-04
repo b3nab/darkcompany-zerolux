@@ -4,8 +4,7 @@ use std::{sync::Arc, time::Duration};
 use tokio::sync::{mpsc, watch};
 use zerolux::livekit::{LiveKit, LiveKitConfig};
 
-#[path = "support/livekit.rs"]
-mod support;
+use crate::livekit_support as support;
 use support::{installed, subscriber};
 
 async fn quiet(invalidations: &mut mpsc::Receiver<()>) -> bool {
