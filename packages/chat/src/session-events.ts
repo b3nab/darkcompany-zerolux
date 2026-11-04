@@ -131,6 +131,13 @@ export type SessionBlock = {
 );
 export type ToolBlock = Extract<SessionBlock, { kind: "tool" }>;
 
+/** What a message between agents is, by the harness's kind of it; another kind reads as named. */
+export const agentMessagePurposes: Record<string, string> = {
+  new_task: "Task",
+  message: "Message",
+  final_answer: "Answer",
+};
+
 /** Whose record a block is read from: a session of the workspace, or a native one of the project. */
 export interface RecordOf {
   sessionId: string;

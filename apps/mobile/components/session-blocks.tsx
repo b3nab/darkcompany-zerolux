@@ -9,6 +9,7 @@ import {
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { useCSSVariable } from "uniwind";
 import {
+  agentMessagePurposes,
   blockRuns,
   isSubagent,
   messageTime,
@@ -347,12 +348,6 @@ function Block({
   }
 }
 
-const purposes: Record<string, string> = {
-  new_task: "Task",
-  message: "Message",
-  final_answer: "Answer",
-};
-
 /**
  * A message between the harness's own agents: from whom to whom, by name where the session
  * knows them, what it is (a task, a message, an answer), and its words when they can be read.
@@ -376,7 +371,8 @@ function AgentMessage({
       </Text>
       {block.purpose ? (
         <Text className="font-mono text-[11px] text-faint uppercase">
-          {purposes[block.purpose] ?? block.purpose.replaceAll("_", " ")}
+          {agentMessagePurposes[block.purpose] ??
+            block.purpose.replaceAll("_", " ")}
         </Text>
       ) : null}
     </View>
