@@ -2,6 +2,11 @@ name: CI
 
 on:
   workflow_call:
+    inputs:
+      tests:
+        description: "The nextest profile: `ci` leaves out the tests slow by design, as on a push; `full` runs every one."
+        type: string
+        default: ci
   push:
     branches: ["**"]
     tags-ignore: ["v*"]
@@ -88,14 +93,14 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests (SQLite)
         if: ${{ !matrix.postgres }}
-        run: cargo nextest run --workspace --profile ci
+        run: cargo nextest run --workspace --profile ${{ inputs.tests || 'ci' }}
       # The whole workspace is built as the SQLite job builds it; only the kernel's tests read
       # the database.
       - name: Tests (PostgreSQL)
         if: matrix.postgres
         env:
           ZEROLUX_TEST_POSTGRES_URL: postgresql://zerolux_test:fixture-only-password@127.0.0.1:5432/zerolux_test
-        run: cargo nextest run --workspace --profile ci -E 'package(zerolux)'
+        run: cargo nextest run --workspace --profile ${{ inputs.tests || 'ci' }} -E 'package(zerolux)'
       # nextest runs no doctests: they run once, where they are the same on every system.
       - name: Doctests
         if: runner.os == 'Linux' && !matrix.postgres

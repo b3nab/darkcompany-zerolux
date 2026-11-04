@@ -18,11 +18,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # The checks run beside the builds: only publishing waits for them.
+  # The checks run beside the builds, every test with them: only publishing waits for them.
   checks:
     permissions:
       contents: read
     uses: ./.github/workflows/ci.yml
+    with:
+      tests: full
 
   draft:
     name: Draft
