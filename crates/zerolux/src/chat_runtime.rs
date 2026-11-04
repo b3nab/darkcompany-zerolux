@@ -742,6 +742,11 @@ impl ChatRuntime {
         self.live.state(id)
     }
 
+    /// Each change of the workspace, as it happens: what in the kernel follows it subscribes.
+    pub fn changes(&self) -> broadcast::Receiver<()> {
+        self.wake.subscribe()
+    }
+
     pub fn changed(&self) {
         // The in-process adapters first, directly: a publisher stuck on LiveKit must not
         // delay them. Then the publisher, for the clients outside.

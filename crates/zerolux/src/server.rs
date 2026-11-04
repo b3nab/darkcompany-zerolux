@@ -647,9 +647,18 @@ async fn run_workspace(
     );
     let relink = runtime.clone();
     let relinker = tokio::spawn(async move {
+        // A link lost is noticed when the workspace changes, as when its session goes to
+        // attention, at most a second later; the interval catches what no change announced.
+        let mut changes = relink.changes();
         let mut interval = tokio::time::interval(Duration::from_secs(10));
         loop {
-            interval.tick().await;
+            tokio::select! {
+                _ = interval.tick() => {}
+                _ = changes.recv() => {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    changes = changes.resubscribe();
+                }
+            }
             if let Err(error) = relink.reconnect_due().await {
                 tracing::error!(error = format!("{error:#}"), "Relinking sessions failed");
             }
