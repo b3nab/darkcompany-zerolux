@@ -105,7 +105,7 @@ impl Registry {
             .pi_entry
             .as_ref()
             .context("The pi runner is not installed on this execution host")?;
-        let mut command = tokio::process::Command::new(&self.program.bun);
+        let mut command = platform::command(&self.program.bun);
         homes.apply(&mut command).arg(entry).arg("fork").arg(file);
         if let Some(up_to) = up_to {
             command.arg(up_to);

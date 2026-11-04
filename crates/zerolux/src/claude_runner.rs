@@ -232,7 +232,7 @@ impl Registry {
         up_to: Option<&str>,
         homes: &crate::homes::Homes,
     ) -> Result<String> {
-        let mut command = tokio::process::Command::new(&self.program.bun);
+        let mut command = platform::command(&self.program.bun);
         homes
             .apply(&mut command)
             .arg(&self.program.entry)

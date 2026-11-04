@@ -49,6 +49,9 @@ pub struct ServerOptions {
     pub auth: Option<crate::auth::AuthEntry>,
 }
 
+/// How long a kernel handed an address with its database waits for the address to be free.
+const HANDED_ADDRESS: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Dropping requests shutdown; `shutdown`/`run_until` also wait for cleanup.
 /// Shutdown releases kernel links, never Stops or restarts native agents.
 pub struct Server {
@@ -117,12 +120,29 @@ impl Server {
             bail!("--expose takes one address of this computer on a private network");
         }
         // Bind before opening storage: a busy port must not recover another kernel's sessions.
-        let listener = TcpListener::bind(options.address).await.with_context(|| {
-            format!(
-                "Cannot listen on {}: another program uses this address",
-                options.address
-            )
-        })?;
+        // Handed the address with its database's lease, the previous kernel has closed it, but a
+        // process it was starting may still hold it until that process runs: a few moments.
+        let mut waited = std::time::Duration::ZERO;
+        let listener = loop {
+            match TcpListener::bind(options.address).await {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::AddrInUse
+                        && lease.is_some()
+                        && waited < HANDED_ADDRESS =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    waited += std::time::Duration::from_millis(50);
+                }
+                bound => {
+                    break bound.with_context(|| {
+                        format!(
+                            "Cannot listen on {}: another program uses this address",
+                            options.address
+                        )
+                    })?;
+                }
+            }
+        };
         let address = listener.local_addr()?;
         let exposed = match options.expose {
             Some(ip) => Some(
