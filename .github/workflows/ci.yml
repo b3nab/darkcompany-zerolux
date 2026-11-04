@@ -38,11 +38,45 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-  # The Rust workspace on each system: its lint and its tests, these in two halves side by side,
-  # each built from the shared cache. PostgreSQL runs on Linux only, in jobs of their own:
-  # GitHub runs service containers only there, and an empty image starts none.
+  # The Rust workspace's lint on each system, apart from its tests: each keeps its own build.
+  lint:
+    name: Lint (${{ matrix.system }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { system: Linux, os: ubuntu-24.04 }
+          - { system: Windows, os: windows-2025 }
+          - { system: macOS, os: macos-26 }
+    runs-on: ${{ matrix.os }}
+    env:
+      # On Windows, Rust's own LLD links the build scripts instead of Microsoft's linker.
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up (Rust, Bun)
+        uses: ./.github/actions/setup
+        with:
+          cache-key: lint
+          workspaces: ./apps/desktop
+      # The desktop crate embeds its icons and the web app it serves: its lint needs the icons
+      # and only the web app's folder, as the web build is checked once above.
+      - name: Desktop icons and the web app's folder
+        shell: bash
+        run: |
+          bun run --cwd apps/desktop assets icons
+          mkdir -p apps/desktop/dist/web && echo '<!doctype html>' > apps/desktop/dist/web/index.html
+      - name: Lint (clippy)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Leave WebRTC's download out of the cache
+        shell: bash
+        run: rm -rf target/debug/build/scratch-*/out/livekit_webrtc
+
+  # The Rust workspace's tests on each system, in two halves side by side, each built from the
+  # shared cache. PostgreSQL runs on Linux only, in jobs of their own: GitHub runs service
+  # containers only there, and an empty image starts none.
   rust:
-    name: Rust (${{ matrix.system }} ${{ matrix.part }}/2)
+    name: Tests (${{ matrix.system }} ${{ matrix.part }}/2)
     strategy:
       fail-fast: false
       matrix:
@@ -86,22 +120,19 @@ jobs:
       - name: Set up (Rust, nextest, Bun, uv, LiveKit)
         uses: ./.github/actions/setup
         with:
-          cache-key: check
+          cache-key: tests
           # The jobs of a system build the same: its first half keeps the cache.
           cache-save: ${{ matrix.part == 1 && !matrix.postgres }}
           # What the tests start: the runners, the sign-in service, and Tauri's icons tool.
           workspaces: ./harnesses/* ./packages/bridge ./services/auth ./apps/desktop
           livekit: "true"
-      # The desktop crate embeds its icons and the web app it serves: its lint and tests need
-      # the icons and only the web app's folder, as the web build is checked once above.
+      # The desktop crate embeds its icons and the web app it serves: its tests need the icons
+      # and only the web app's folder, as the web build is checked once above.
       - name: Desktop icons and the web app's folder
         shell: bash
         run: |
           bun run --cwd apps/desktop assets icons
           mkdir -p apps/desktop/dist/web && echo '<!doctype html>' > apps/desktop/dist/web/index.html
-      - name: Lint (clippy)
-        if: matrix.part == 1 && !matrix.postgres
-        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests (SQLite)
         if: ${{ !matrix.postgres }}
         env:
@@ -115,10 +146,17 @@ jobs:
           NEXTEST_TEST_THREADS: ${{ matrix.threads }}
           ZEROLUX_TEST_POSTGRES_URL: postgresql://zerolux_test:fixture-only-password@127.0.0.1:5432/zerolux_test
         run: cargo nextest run --workspace --profile ${{ inputs.tests || 'ci' }} --partition hash:${{ matrix.part }}/2 -E 'package(zerolux)'
-      # nextest runs no doctests: they run once, where they are the same on every system.
+      # nextest runs no doctests: they run once, where they are the same on every system, on
+      # the libraries the tests built.
       - name: Doctests
         if: runner.os == 'Linux' && matrix.part == 1 && !matrix.postgres
         run: cargo test --workspace --doc
+      # webrtc-sys carries WebRTC in its own library, and downloads it again if it builds again:
+      # the download, as large again, stays out of the cache.
+      - name: Leave WebRTC's download out of the cache
+        if: matrix.part == 1 && !matrix.postgres
+        shell: bash
+        run: rm -rf target/debug/build/scratch-*/out/livekit_webrtc
 
   js:
     name: JavaScript and Python (${{ matrix.name }})
