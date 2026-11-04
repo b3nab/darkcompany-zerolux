@@ -3,9 +3,12 @@
 //! count its open files keep binaries of their own beside this one, so `cargo test` never runs
 //! them among these.
 
+// Unix only, as the tests that use them.
+#[cfg(unix)]
 #[allow(dead_code, unused_imports)]
 #[path = "../support/claude_owned.rs"]
 mod claude_owned;
+#[cfg(unix)]
 #[path = "../support/codex_runtime.rs"]
 mod codex_runtime;
 #[path = "../support/db.rs"]
