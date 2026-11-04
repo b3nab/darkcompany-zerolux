@@ -44,6 +44,10 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
+      # The runner's own Android, .NET and Haskell SDKs, unused here, leave room for the build.
+      - name: Free disk space
+        if: runner.os == 'Linux'
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
       - uses: actions/checkout@v4
       - name: Set up (Bun, Rust, uv, LiveKit)
         uses: ./.github/actions/setup
@@ -59,11 +63,13 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Rust tests (SQLite)
         run: cargo test --workspace --no-fail-fast
+      # The whole workspace again, as the SQLite run built it: one package alone would build its
+      # dependencies again with other features, a second build beside the first.
       - name: Rust tests (PostgreSQL)
         if: runner.os == 'Linux'
         env:
           ZEROLUX_TEST_POSTGRES_URL: postgresql://zerolux_test:fixture-only-password@127.0.0.1:5432/zerolux_test
-        run: cargo test -p zerolux --no-fail-fast -- --test-threads=4
+        run: cargo test --workspace --no-fail-fast -- --test-threads=4
       - name: Typecheck
         run: bun run typecheck
       - name: JavaScript and Python tests

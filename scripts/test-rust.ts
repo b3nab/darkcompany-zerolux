@@ -5,9 +5,11 @@ const sqlite = { ...process.env };
 delete sqlite.ZEROLUX_TEST_POSTGRES_URL;
 for (const [label, args, env] of [
   ["SQLite", ["test", "--workspace"], sqlite],
+  // The whole workspace again, as the SQLite run built it: one package alone would build its
+  // dependencies again with other features.
   [
     "PostgreSQL",
-    ["test", "-p", "zerolux", "--", "--test-threads=4"],
+    ["test", "--workspace", "--", "--test-threads=4"],
     process.env,
   ],
 ] as const) {

@@ -16,7 +16,7 @@ async function run(extra: Record<string, string> = {}) {
   const log = join(root, "calls");
   await Bun.write(
     cargo,
-    `#!/bin/sh\nprintf '%s:%s\\n' "$*" "\${ZEROLUX_TEST_POSTGRES_URL:+postgres}" >> "$CARGO_FIXTURE_LOG"\ncase "$*" in *--workspace*) exit "\${FAIL_SQLITE:-0}";; esac\nexit "\${FAIL_POSTGRES:-0}"\n`,
+    `#!/bin/sh\nprintf '%s:%s\\n' "$*" "\${ZEROLUX_TEST_POSTGRES_URL:+postgres}" >> "$CARGO_FIXTURE_LOG"\n[ -n "\${ZEROLUX_TEST_POSTGRES_URL}" ] && exit "\${FAIL_POSTGRES:-0}"\nexit "\${FAIL_SQLITE:-0}"\n`,
   );
   await chmod(cargo, 0o700);
   const env: Record<string, string | undefined> = {
@@ -65,7 +65,7 @@ test.skipIf(windows)(
     const result = await run({ ZEROLUX_TEST_POSTGRES_URL: fixtureUrl });
     expect(result.status).toBe(0);
     expect(result.calls).toBe(
-      "test --workspace:\ntest -p zerolux -- --test-threads=4:postgres\n",
+      "test --workspace:\ntest --workspace -- --test-threads=4:postgres\n",
     );
     expect(result.stdout + result.stderr).not.toContain(fixtureUrl);
   },
@@ -90,7 +90,7 @@ test.skipIf(windows)(
     });
     expect(result.status).toBe(9);
     expect(result.calls).toBe(
-      "test --workspace:\ntest -p zerolux -- --test-threads=4:postgres\n",
+      "test --workspace:\ntest --workspace -- --test-threads=4:postgres\n",
     );
   },
 );
