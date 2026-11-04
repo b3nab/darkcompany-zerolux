@@ -76,11 +76,13 @@ jobs:
           # Both Linux jobs build the same: one keeps the cache.
           cache-save: ${{ !matrix.postgres }}
           livekit: "true"
-      # The desktop crate embeds the web app it serves: its lint and tests need only the
-      # folder, as the web build is checked once above.
-      - name: Web app's folder
+      # The desktop crate embeds its icons and the web app it serves: its lint and tests need
+      # the icons and only the web app's folder, as the web build is checked once above.
+      - name: Desktop icons and the web app's folder
         shell: bash
-        run: mkdir -p apps/desktop/dist/web && echo '<!doctype html>' > apps/desktop/dist/web/index.html
+        run: |
+          bun run --cwd apps/desktop assets icons
+          mkdir -p apps/desktop/dist/web && echo '<!doctype html>' > apps/desktop/dist/web/index.html
       - name: Lint (clippy)
         if: matrix.lint
         run: cargo clippy --workspace --all-targets -- -D warnings

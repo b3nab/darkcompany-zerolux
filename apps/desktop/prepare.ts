@@ -20,8 +20,31 @@ async function run(
   if ((await child.exited) !== 0) throw new Error(`Failed: ${args.join(" ")}`);
 }
 
+/** Platform icons from the existing web favicon; no independent desktop branding. */
+async function icons() {
+  const source = await readFile(join(root, "apps/web/index.html"), "utf8");
+  const favicon = source.match(/href="data:image\/svg\+xml,([^"]+)"/);
+  if (!favicon) throw new Error("Web favicon was not found");
+  await Bun.write(join(dist, "icon.svg"), decodeURIComponent(favicon[1]!));
+  await run([
+    "bun",
+    "x",
+    "--bun",
+    "tauri",
+    "icon",
+    join(dist, "icon.svg"),
+    "--output",
+    join(dist, "icons"),
+  ]);
+}
+
 // A desktop build never replaces the assets served by the running web kernel.
 await mkdir(dist, { recursive: true });
+// `icons`: only them, which the desktop crate's own checks compile with.
+if (process.argv[2] === "icons") {
+  await icons();
+  process.exit(0);
+}
 await rm(join(dist, "web"), { recursive: true, force: true });
 await run(["bun", "run", "build"], join(root, "apps/web"), {
   ZEROLUX_WEB_OUTDIR: join(dist, "web"),
@@ -126,18 +149,4 @@ for (const [name, path] of [
   await chmod(target, 0o755);
 }
 
-// Generate platform icons from the existing web favicon; no independent desktop branding.
-const source = await readFile(join(root, "apps/web/index.html"), "utf8");
-const favicon = source.match(/href="data:image\/svg\+xml,([^"]+)"/);
-if (!favicon) throw new Error("Web favicon was not found");
-await Bun.write(join(dist, "icon.svg"), decodeURIComponent(favicon[1]!));
-await run([
-  "bun",
-  "x",
-  "--bun",
-  "tauri",
-  "icon",
-  join(dist, "icon.svg"),
-  "--output",
-  join(dist, "icons"),
-]);
+await icons();
