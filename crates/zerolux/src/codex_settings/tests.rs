@@ -68,6 +68,7 @@ impl Fixture {
                     "thread/compact/start" => json!({}),
                     "turn/steer" => json!({"turnId":"turn"}),
                     "thread/queue/add" => json!({"queuedSubmission":{"id":"q"}}),
+                    "thread/queue/start" => json!({"turn":{"id":"queued","status":"inProgress"}}),
                     "thread/queue/list" => json!({"data":[
                         {"id":"q1","clientUserMessageId":"c1","input":[{"type":"text","text":"then the docs"}]},
                         {"id":"q2","clientUserMessageId":"c2","input":[{"type":"text","text":"and this"},{"type":"localImage","path":"/p.png"}]}],"nextCursor":null}),
@@ -344,6 +345,14 @@ async fn images_go_with_the_input_as_local_files() {
     assert_eq!(
         queued[1]["params"]["input"],
         json!([{"type":"text","text":"what is this?"},{"type":"localImage","path":"/data/b.jpg"}])
+    );
+    // With no turn running, each starts one at once: Codex holds its queue after a Stop.
+    let started = idle.calls("thread/queue/start");
+    assert_eq!(started.len(), 2);
+    assert!(
+        started
+            .iter()
+            .all(|call| call["params"]["queuedSubmissionId"] == "q")
     );
 }
 
