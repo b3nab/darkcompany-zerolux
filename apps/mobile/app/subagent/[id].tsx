@@ -11,6 +11,7 @@ import {
 import type { BlockRun, SessionBlock } from "@zerolux/chat";
 import { Screen } from "@/components/screen";
 import { SessionRunView } from "@/components/session-blocks";
+import { SessionFiles } from "@/components/local-files";
 import { SubagentLinks, useSubagentLinks } from "@/components/subagents";
 import { ChatList } from "@/components/ui/native";
 import { Text } from "@/components/ui/text";
@@ -31,6 +32,7 @@ export default function SubagentPage() {
   const runs = useMemo(() => blockRuns(blocks), [blocks]);
   const fresh = useArrivals(blocks);
   const links = useSubagentLinks(id, subagents);
+  const folder = chat.sessions.find((s) => s.id === id)?.workspace;
   return (
     <Screen
       back
@@ -38,31 +40,35 @@ export default function SubagentPage() {
       subtitle={subagent?.description ?? subagent?.kind ?? undefined}
     >
       <SubagentLinks value={links}>
-        <ChatList
-          data={runs}
-          keyExtractor={(run) => (run as BlockRun<SessionBlock>).key}
-          renderItem={({ item }) => (
-            <SessionRunView
-              run={item as BlockRun<SessionBlock>}
-              fresh={fresh}
-            />
-          )}
-          contentContainerClassName="gap-3 px-3 pt-3 pb-3"
-          alignItemsAtEnd
-          initialScrollAtEnd
-          maintainScrollAtEnd
-          onStartReached={more ? earlier : undefined}
-          onStartReachedThreshold={0.4}
-          ListEmptyComponent={
-            <Text
-              className={
-                error ? "text-sm text-destructive" : "text-sm text-faint"
-              }
-            >
-              {error || "Nothing recorded yet."}
-            </Text>
-          }
-        />
+        <SessionFiles
+          value={folder ? { sessionId: id, folder, kernel: url } : undefined}
+        >
+          <ChatList
+            data={runs}
+            keyExtractor={(run) => (run as BlockRun<SessionBlock>).key}
+            renderItem={({ item }) => (
+              <SessionRunView
+                run={item as BlockRun<SessionBlock>}
+                fresh={fresh}
+              />
+            )}
+            contentContainerClassName="gap-3 px-3 pt-3 pb-3"
+            alignItemsAtEnd
+            initialScrollAtEnd
+            maintainScrollAtEnd
+            onStartReached={more ? earlier : undefined}
+            onStartReachedThreshold={0.4}
+            ListEmptyComponent={
+              <Text
+                className={
+                  error ? "text-sm text-destructive" : "text-sm text-faint"
+                }
+              >
+                {error || "Nothing recorded yet."}
+              </Text>
+            }
+          />
+        </SessionFiles>
       </SubagentLinks>
     </Screen>
   );

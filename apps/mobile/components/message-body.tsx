@@ -2,8 +2,14 @@ import { Image, Linking, View } from "react-native";
 import { EnrichedMarkdownText } from "react-native-enriched-markdown";
 import type { MarkdownStyle } from "react-native-enriched-markdown";
 import { useCSSVariable } from "uniwind";
+import { localImage, localPath } from "@zerolux/chat";
+import {
+  LocalImages,
+  namedFiles,
+  useLocalFiles,
+} from "@/components/local-files";
 import Mermaid from "@/components/mermaid";
-import { segments } from "../src/markdown";
+import { hrefs, segments } from "../src/markdown";
 import { useTheme } from "../src/theme";
 
 const SAFE = /^(https?:|mailto:)/i;
@@ -28,7 +34,8 @@ const lightCode = {
 /**
  * Chat text as the author wrote it: Markdown with tables, code, links and lists, and Mermaid
  * diagrams drawn. Links open as http(s) or mailto. With `picture`, an image on a line of its
- * own shows from where `picture` says, as a README's own files.
+ * own shows from where `picture` says, as a README's own files. In a session, the images it
+ * names on the session's computer show small below it, and its links to files there open them.
  */
 export function MessageBody({
   text,
@@ -41,6 +48,10 @@ export function MessageBody({
   selectable?: boolean;
 }) {
   const { resolved } = useTheme();
+  const files = useLocalFiles();
+  const images = files
+    ? namedFiles(hrefs(text)).filter((path) => localImage(path))
+    : [];
   const [foreground, muted, link, card, border, accent, background] =
     useCSSVariable([
       "--color-foreground",
@@ -175,11 +186,17 @@ export function MessageBody({
             markdownStyle={style}
             selectable={selectable}
             onLinkPress={({ url }) => {
-              if (SAFE.test(url)) void Linking.openURL(url);
+              const path = files && localPath(url);
+              if (path) files.open(path, images);
+              else if (SAFE.test(url)) void Linking.openURL(url);
             }}
           />
         ),
       )}
+      {files && images.length ? (
+        <LocalImages paths={images} open={files.open} />
+      ) : null}
+      {files?.viewer}
     </View>
   );
 }

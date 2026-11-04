@@ -9,6 +9,7 @@ const IMAGE = /!\[([^\]]*)\]\([^)]*\)/g;
 const IMAGE_LINE = /^ {0,3}!\[([^\]]*)\]\(<?([^)\s>]+)>?[^)]*\) *$/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const INLINE_CODE = /(`+)[\s\S]*?[^`]\1(?!`)/g;
+const LINK = /!?\[[^\]]*\]\(\s*(<[^>]*>|[^)\s]+)(?:\s+"[^"]*")?\s*\)/g;
 
 /**
  * Chat text as the author wrote it: Markdown with tables, code, links and lists, and Mermaid
@@ -106,3 +107,24 @@ const words = (text: string, row: boolean) => {
   );
   return row ? shown : shown.replaceAll("||", "\\|\\|");
 };
+
+/** The addresses Markdown links to or shows, outside its code, in order. */
+export function hrefs(text: string): string[] {
+  const out: string[] = [];
+  let fence: string | undefined;
+  for (const line of text.split("\n")) {
+    const marker = FENCE.exec(line)?.[1];
+    if (fence) {
+      if (marker?.[0] === fence[0] && marker.length >= fence.length)
+        fence = undefined;
+      continue;
+    }
+    if (marker) {
+      fence = marker;
+      continue;
+    }
+    for (const link of line.replace(INLINE_CODE, "").matchAll(LINK))
+      out.push(link[1]!);
+  }
+  return out;
+}

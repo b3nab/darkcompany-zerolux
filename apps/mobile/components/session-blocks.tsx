@@ -4,6 +4,7 @@ import {
   ChevronRightIcon,
   CircleAlertIcon,
   InfoIcon,
+  MessagesSquareIcon,
 } from "lucide-react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { useCSSVariable } from "uniwind";
@@ -11,6 +12,7 @@ import {
   blockRuns,
   isSubagent,
   messageTime,
+  plainLine,
   thoughtLabel,
   toolItems,
   toolsPhrase,
@@ -36,6 +38,7 @@ import {
   Verb,
 } from "@/components/tool-call";
 import { Text } from "@/components/ui/text";
+import { useNamedAgent } from "@/components/subagents";
 import { cn } from "@/lib/utils";
 import { useDensity } from "../src/density";
 
@@ -339,7 +342,73 @@ function Block({
           ) : null}
         </Fold>
       );
+    case "agent_message":
+      return <AgentMessage block={block} />;
   }
+}
+
+const purposes: Record<string, string> = {
+  new_task: "Task",
+  message: "Message",
+  final_answer: "Answer",
+};
+
+/**
+ * A message between the harness's own agents: from whom to whom, by name where the session
+ * knows them, what it is (a task, a message, an answer), and its words when they can be read.
+ */
+function AgentMessage({
+  block,
+}: {
+  block: Extract<SessionBlock, { kind: "agent_message" }>;
+}) {
+  const named = useNamedAgent();
+  const faint = String(useCSSVariable("--color-faint"));
+  const who = (path: string) => named(path)?.name ?? path;
+  const head = (
+    <View className="flex-row items-center gap-2">
+      <MessagesSquareIcon color={faint} size={14} strokeWidth={1.75} />
+      <Text
+        numberOfLines={1}
+        className="shrink font-mono text-[11px] text-faint"
+      >
+        {`${who(block.from)} → ${who(block.to)}`}
+      </Text>
+      {block.purpose ? (
+        <Text className="font-mono text-[11px] text-faint uppercase">
+          {purposes[block.purpose] ?? block.purpose.replaceAll("_", " ")}
+        </Text>
+      ) : null}
+    </View>
+  );
+  if (!block.text)
+    return (
+      <View className="gap-1">
+        {head}
+        <Text className="ml-[22px] text-[12.5px] text-faint">Encrypted</Text>
+      </View>
+    );
+  return (
+    <Fold
+      summary={(open) => (
+        <View className="gap-1">
+          {head}
+          {open ? null : (
+            <Text
+              numberOfLines={2}
+              className="ml-[22px] text-[12.5px] text-muted-foreground"
+            >
+              {plainLine(block.text ?? "")}
+            </Text>
+          )}
+        </View>
+      )}
+    >
+      <View className="mt-1.5 ml-1.5 border-l border-border pl-3.5">
+        <MessageBody text={block.text} />
+      </View>
+    </Fold>
+  );
 }
 
 /** The last lines of a command's output, as a terminal shows them. */

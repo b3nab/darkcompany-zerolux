@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { segments } from "./markdown";
+import { hrefs, segments } from "./markdown";
 
 const markdown = (text: string) =>
   segments(text)
@@ -51,4 +51,24 @@ test("an image on its own line shows where the reader says, and only there", () 
     { kind: "markdown", text: "```\n![a](media/a.png)\n```" },
   ]);
   expect(markdown("![a](media/a.png)")).toBe("[image: a]");
+});
+
+test("the addresses Markdown links to or shows, outside its code, in order", () => {
+  expect(
+    hrefs(
+      [
+        "Evidence: [browser](/tmp/run/browser.png) and ![chart](<~/My Shots/c.png>)",
+        "`[not](/tmp/code.png)` [web](https://example.com)",
+        "```",
+        "[fenced](/tmp/fenced.png)",
+        "```",
+        '[titled](./out/a.png "A")',
+      ].join("\n"),
+    ),
+  ).toEqual([
+    "/tmp/run/browser.png",
+    "<~/My Shots/c.png>",
+    "https://example.com",
+    "./out/a.png",
+  ]);
 });

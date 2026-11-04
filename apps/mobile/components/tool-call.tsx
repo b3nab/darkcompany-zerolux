@@ -51,7 +51,7 @@ import type {
 } from "@zerolux/chat";
 import { Fold } from "@/components/fold";
 import { MessageBody } from "@/components/message-body";
-import { useSubagentLink } from "@/components/subagents";
+import { useNamedAgent, useSubagentLink } from "@/components/subagents";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 
@@ -85,29 +85,48 @@ export function ToolCall({
     [tool.result],
   );
   const state = toolState(tool, view, outcome);
-  const line = summary(view, outcome, state === "running", chatTitle);
+  const named = useNamedAgent();
+  const line = summary(
+    view,
+    outcome,
+    state === "running",
+    chatTitle,
+    (target) => named(target)?.name,
+  );
   const faint = String(useCSSVariable("--color-faint"));
-  return (
-    <Fold
-      summary={(open) => (
-        <View className="flex-row items-center gap-2 px-3 py-2">
-          <View className="size-4 items-center justify-center">
-            <StateIcon state={state} view={view} />
-          </View>
-          <Verb running={state === "running"}>
-            {state === "denied" ? "Declined" : line.verb}
-          </Verb>
-          <View className="min-w-0 flex-1">{line.subject}</View>
-          <View className="flex-row items-center gap-2 pl-1">
-            {line.meta}
-            <Elapsed tool={tool} />
-            <View style={{ transform: [{ rotate: open ? "90deg" : "0deg" }] }}>
-              <ChevronRightIcon color={faint} size={13} strokeWidth={2} />
-            </View>
-          </View>
+  // A call on another agent opens that agent's work, where its words are.
+  const agent =
+    view.kind === "agent" && view.target ? named(view.target) : undefined;
+  const head = (open: boolean) => (
+    <View className="flex-row items-center gap-2 px-3 py-2">
+      <View className="size-4 items-center justify-center">
+        <StateIcon state={state} view={view} />
+      </View>
+      <Verb running={state === "running"}>
+        {state === "denied" ? "Declined" : line.verb}
+      </Verb>
+      <View className="min-w-0 flex-1">{line.subject}</View>
+      <View className="flex-row items-center gap-2 pl-1">
+        {line.meta}
+        <Elapsed tool={tool} />
+        <View style={{ transform: [{ rotate: open ? "90deg" : "0deg" }] }}>
+          <ChevronRightIcon color={faint} size={13} strokeWidth={2} />
         </View>
-      )}
-    >
+      </View>
+    </View>
+  );
+  if (agent)
+    return (
+      <Pressable
+        onPress={agent.open}
+        accessibilityRole="button"
+        className="active:bg-accent"
+      >
+        {head(false)}
+      </Pressable>
+    );
+  return (
+    <Fold summary={head}>
       <View className="gap-2 border-t border-border px-3 py-2.5">
         <Opened view={view} tool={tool} chatTitle={chatTitle} />
       </View>
@@ -250,12 +269,15 @@ export function SubagentCard({
                 <ChevronRightIcon color={faint} size={13} strokeWidth={2} />
               </View>
             </View>
-            {!open && view.prompt ? (
+            {!open && (view.prompt || view.encrypted) ? (
               <Text
                 numberOfLines={1}
-                className="pl-6 text-[12.5px] text-muted-foreground"
+                className={cn(
+                  "pl-6 text-[12.5px]",
+                  view.prompt ? "text-muted-foreground" : "text-faint",
+                )}
               >
-                {plainLine(view.prompt)}
+                {view.prompt ? plainLine(view.prompt) : "Encrypted"}
               </Text>
             ) : null}
           </View>
@@ -266,6 +288,8 @@ export function SubagentCard({
             <Text selectable className="text-[13px] text-muted-foreground">
               {view.prompt}
             </Text>
+          ) : view.encrypted ? (
+            <Text className="text-[13px] text-faint">Encrypted</Text>
           ) : null}
           {outcome?.text ? (
             <View className="border-t border-agent/15 pt-2">
@@ -426,8 +450,9 @@ function summary(
   outcome: ToolOutcome | undefined,
   running: boolean,
   chatTitle?: ChatTitle,
+  agentName?: (target: string) => string | undefined,
 ): { verb: string; subject?: ReactNode; meta?: ReactNode } {
-  const { verb, subject } = toolPhrase(view, running, chatTitle);
+  const { verb, subject } = toolPhrase(view, running, chatTitle, agentName);
   const line = {
     verb,
     subject: subject ? (
@@ -500,6 +525,26 @@ function summary(
             <Meta>{view.server}</Meta>
           </View>
         ),
+      };
+    case "agent":
+      return {
+        ...line,
+        // Named, the agent shows where it is among the agents too.
+        subject:
+          subject && view.target && subject !== view.target ? (
+            <Text
+              numberOfLines={1}
+              className="font-mono text-xs text-muted-foreground"
+            >
+              {subject}
+              <Text className="font-mono text-xs text-faint">
+                {` ${view.target}`}
+              </Text>
+            </Text>
+          ) : (
+            line.subject
+          ),
+        meta: view.encrypted ? <Meta>Encrypted</Meta> : undefined,
       };
   }
   return line;
@@ -639,6 +684,8 @@ function Body({
             <Text selectable className="text-[13px] text-muted-foreground">
               {view.prompt}
             </Text>
+          ) : view.encrypted ? (
+            <Text className="text-[13px] text-faint">Encrypted</Text>
           ) : null}
           {outcome?.text ? (
             <View className="border-t border-border pt-2">

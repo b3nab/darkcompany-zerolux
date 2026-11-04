@@ -3,29 +3,52 @@ import { ChevronRightIcon } from "lucide-react-native";
 import { createContext, use } from "react";
 import { Pressable, View } from "react-native";
 import { useCSSVariable } from "uniwind";
-import { ago, subagentName } from "@zerolux/chat";
+import { ago, subagentAt, subagentName } from "@zerolux/chat";
 import type { Subagent } from "@zerolux/chat";
 import { Text } from "@/components/ui/text";
 
-/** From a tool call that started a subagent, the way to open its work; none when unknown. */
-export const SubagentLinks = createContext<
-  (toolCallId: string) => (() => void) | undefined
->(() => undefined);
+/** A subagent a call names: how it goes by, where it is among the agents, and its work. */
+interface Named {
+  name: string;
+  path?: string | null;
+  open: () => void;
+}
+
+/**
+ * A session's subagents for its work: from a tool call that started one, the way to open its
+ * work; from whom a call names (a path or a name), that subagent. None when unknown.
+ */
+export const SubagentLinks = createContext<{
+  started: (toolCallId: string) => (() => void) | undefined;
+  named: (target: string) => Named | undefined;
+}>({ started: () => undefined, named: () => undefined });
 export const useSubagentLink = (toolCallId: string) =>
-  use(SubagentLinks)(toolCallId);
+  use(SubagentLinks).started(toolCallId);
+export const useNamedAgent = () => use(SubagentLinks).named;
 
 /** The links of a session's subagents to their own screens. */
 export function useSubagentLinks(sessionId: string, subagents?: Subagent[]) {
   const router = useRouter();
-  return (toolCallId: string) => {
-    const subagent = subagents?.find((s) => s.tool_call_id === toolCallId);
-    return subagent
-      ? () =>
-          router.push({
-            pathname: "/subagent/[id]",
-            params: { id: sessionId, agent: subagent.id },
-          })
-      : undefined;
+  const open = (subagent: Subagent) => () =>
+    router.push({
+      pathname: "/subagent/[id]",
+      params: { id: sessionId, agent: subagent.id },
+    });
+  return {
+    started: (toolCallId: string) => {
+      const subagent = subagents?.find((s) => s.tool_call_id === toolCallId);
+      return subagent && open(subagent);
+    },
+    named: (target: string) => {
+      const subagent = subagents && subagentAt(subagents, target);
+      return (
+        subagent && {
+          name: subagentName(subagent),
+          path: subagent.path,
+          open: open(subagent),
+        }
+      );
+    },
   };
 }
 
