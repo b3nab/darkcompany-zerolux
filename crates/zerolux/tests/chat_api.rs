@@ -1716,6 +1716,103 @@ async fn sessions_scope_history_and_stop_revokes_only_its_token() {
     );
 }
 
+/// An image the agent names, wherever it wrote it: whoever can give the session work sees any
+/// image of its computer, whoever can only read it those of its folder, and nothing else is read.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_sessions_images_are_seen_by_whoever_may_see_them() {
+    let kernel = Kernel::start().await;
+    let session = kernel.agent("", None).await;
+    let folder = kernel._dir.path();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let png = b"\x89PNG\r\n\x1a\nfixture".to_vec();
+    std::fs::create_dir(folder.join("shots")).unwrap();
+    std::fs::write(folder.join("shots/run.png"), &png).unwrap();
+    std::fs::write(elsewhere.path().join("browser.png"), &png).unwrap();
+    std::fs::write(elsewhere.path().join("notes.txt"), "secret").unwrap();
+    std::fs::create_dir(elsewhere.path().join("folder.png")).unwrap();
+    std::os::unix::fs::symlink(
+        elsewhere.path().join("browser.png"),
+        folder.join("shots/linked.png"),
+    )
+    .unwrap();
+    let media = |path: &str| {
+        format!(
+            "/sessions/{}/media?path={}",
+            session.session.id,
+            url::form_urlencoded::byte_serialize(path.as_bytes()).collect::<String>()
+        )
+    };
+    let outside = elsewhere.path().join("browser.png");
+    let outside = outside.to_str().unwrap();
+
+    // Its person sees an image anywhere on the computer, named as the agent wrote it.
+    for path in [
+        "shots/run.png".to_owned(),
+        outside.to_owned(),
+        format!("file://{outside}"),
+    ] {
+        let seen = kernel.get(&media(&path), None).await;
+        assert_eq!(seen.status(), StatusCode::OK, "{path}");
+        assert_eq!(seen.headers()["content-type"], "image/png");
+        assert_eq!(seen.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(seen.bytes().await.unwrap().as_ref(), png.as_slice());
+    }
+    // Seen again unchanged, it is not sent again; written again, it is.
+    let tag = kernel.get(&media(outside), None).await.headers()["etag"].clone();
+    let again = kernel
+        .request(Method::GET, &media(outside), None)
+        .header("if-none-match", tag.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
+    std::fs::write(elsewhere.path().join("browser.png"), b"\x89PNG changed").unwrap();
+    let changed = kernel
+        .request(Method::GET, &media(outside), None)
+        .header("if-none-match", tag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(changed.status(), StatusCode::OK);
+    // No other file, nor a folder, is read as an image.
+    assert_eq!(
+        kernel
+            .get(
+                &media(elsewhere.path().join("notes.txt").to_str().unwrap()),
+                None
+            )
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    for missing in [
+        elsewhere.path().join("folder.png"),
+        elsewhere.path().join("none.png"),
+    ] {
+        assert_eq!(
+            kernel
+                .get(&media(missing.to_str().unwrap()), None)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    // Who can only read the session sees the images of its folder, not by a link out of it.
+    let reader = Some(session.token.as_str());
+    assert_eq!(
+        kernel.get(&media("shots/run.png"), reader).await.status(),
+        StatusCode::OK
+    );
+    for path in [outside, "shots/linked.png"] {
+        assert_eq!(
+            kernel.get(&media(path), reader).await.status(),
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn the_console_lists_reads_and_organizes_sessions_with_or_without_an_agent() {
     let kernel = Kernel::start().await;

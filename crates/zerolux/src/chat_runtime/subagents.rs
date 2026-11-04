@@ -16,6 +16,9 @@ pub struct Subagent {
     pub tool_call_id: Option<String>,
     /// The subagent that started it, for one started by another.
     pub parent_id: Option<String>,
+    /// Where it is among the session's agents, as the harness addresses it: Codex's
+    /// `/root/research`, which its tools between agents name as their `target`.
+    pub path: Option<String>,
     pub updated_at: Option<i64>,
 }
 
@@ -70,6 +73,7 @@ fn claude_subagents(transcript: &std::path::Path) -> Vec<Subagent> {
                 kind: text("agentType"),
                 tool_call_id: text("toolUseId"),
                 parent_id: None,
+                path: None,
             })
         })
         .collect();
@@ -110,6 +114,9 @@ fn codex_subagent(thread: &Value) -> Option<Subagent> {
         kind: text("agentRole"),
         tool_call_id: None,
         parent_id: text("parentThreadId"),
+        path: thread["source"]["subAgent"]["thread_spawn"]["agent_path"]
+            .as_str()
+            .map(str::to_owned),
         updated_at: seconds("updatedAt").or_else(|| seconds("createdAt")),
     })
 }
@@ -258,8 +265,10 @@ mod tests {
     #[test]
     fn codex_subagents_are_threads_spawned_from_the_session() {
         let thread = serde_json::json!({"id":"t2","agentNickname":"Ada","agentRole":"reviewer",
-            "preview":"Check the tests","parentThreadId":"t1","updatedAt":5});
+            "preview":"Check the tests","parentThreadId":"t1","updatedAt":5,
+            "source":{"subAgent":{"thread_spawn":{"parent_thread_id":"t1","depth":1,"agent_path":"/root/tests"}}}});
         let found = codex_subagent(&thread).unwrap();
+        assert_eq!(found.path.as_deref(), Some("/root/tests"));
         assert_eq!(found.name.as_deref(), Some("Ada"));
         assert_eq!(found.kind.as_deref(), Some("reviewer"));
         assert_eq!(found.parent_id.as_deref(), Some("t1"));

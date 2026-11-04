@@ -160,6 +160,14 @@ pub async fn folder(op: &str, folder: &Path, params: &Value) -> Result<Value> {
             let path: String = param(params, "path")?;
             json!({"path": path, "text": git::file(folder, &path).await?})
         }
+        "media" => {
+            crate::session_media::read_json(
+                folder,
+                &param::<String>(params, "path")?,
+                param(params, "anywhere")?,
+            )
+            .await?
+        }
         "files" => json!({"files": crate::workspace_files::find(
             folder,
             &param::<String>(params, "query")?,

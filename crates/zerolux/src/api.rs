@@ -726,6 +726,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         )
         .route("/sessions/{id}/files", get(session_files))
         .route("/sessions/{id}/file", get(session_file))
+        .route("/sessions/{id}/media", get(session_media))
         .route(
             "/sessions/{id}/terminals",
             get(session_terminals).post(open_terminal),
@@ -2210,6 +2211,59 @@ async fn session_file(
 ) -> Result<Json<Value>, ApiFailure> {
     let who = state.store.acting_for(&who, &id, Access::Read).await?;
     on_folder(&state, &who, &id, "file", json!({ "path": input.path })).await
+}
+
+/// An image the session's agent names, as `/tmp/run/browser.png`, read where the session runs.
+async fn session_media(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    Query(input): Query<PathQuery>,
+    headers: HeaderMap,
+) -> Result<Response, ApiFailure> {
+    // Whoever can give the session work can have its agent read any file there.
+    let anywhere = state
+        .store
+        .acting_for(&who, &id, Access::Write)
+        .await
+        .is_ok();
+    let who = state.store.acting_for(&who, &id, Access::Read).await?;
+    let session = state.store.chat_session(&who, &id).await?;
+    let folder = std::path::Path::new(&session.workspace);
+    let media = match session.host_id.as_deref() {
+        host if host == state.store.host() => {
+            crate::session_media::read(folder, &input.path, anywhere).await
+        }
+        Some(host) => runtime(&state)?
+            .hosts
+            .call(
+                host,
+                "folder",
+                json!({"op": "media", "folder": session.workspace,
+                    "params": {"path": input.path, "anywhere": anywhere}}),
+            )
+            .await
+            .and_then(|found| crate::session_media::from_json(&found)),
+        None => Err(Error::NotFound.into()),
+    }
+    .map_err(said)?;
+    let unchanged = headers
+        .get(header::IF_NONE_MATCH)
+        .is_some_and(|tag| tag.as_bytes() == media.tag.as_bytes());
+    let headers = [
+        (header::ETAG, media.tag),
+        (header::CACHE_CONTROL, "private, no-cache".to_owned()),
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+    ];
+    if unchanged {
+        return Ok((StatusCode::NOT_MODIFIED, headers).into_response());
+    }
+    Ok((
+        [(header::CONTENT_TYPE, media.media_type.to_owned())],
+        headers,
+        media.bytes,
+    )
+        .into_response())
 }
 
 /// What git says has changed in the session's folder.

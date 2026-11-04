@@ -60,6 +60,15 @@ pub enum Event {
     Notice {
         text: String,
     },
+    /// A message between a harness's own agents, each named by its path (`/root`,
+    /// `/root/research`). `kind` is the harness's (`new_task`, `message`, `final_answer`);
+    /// `text` is none when the harness encrypted it for the model alone.
+    AgentMessage {
+        from: String,
+        to: String,
+        kind: Option<String>,
+        text: Option<String>,
+    },
 }
 
 /// How a session's record ends, for the Console's inbox.
@@ -120,6 +129,8 @@ fn step(name: &str, input: &Value) -> String {
         "query",
         "url",
         "description",
+        "task_name",
+        "target",
     ]
     .iter()
     .find_map(|key| input[*key].as_str())
@@ -529,6 +540,52 @@ fn codex_user(content: &Value) -> Vec<Event> {
     vec![input(text_of(content, &["input_text"]))]
 }
 
+/// A message between Codex's agents: `Message Type: …\nTask name: …\nSender: …\nPayload:\n…`,
+/// its payload in plain text or encrypted for the model alone.
+fn agent_message(payload: &Value) -> Option<Event> {
+    let blocks = payload["content"].as_array()?;
+    let encrypted = blocks
+        .iter()
+        .any(|block| block["type"] == "encrypted_content");
+    let said = text_of(&payload["content"], &["input_text"]);
+    let (kind, body) = match said.strip_prefix("Message Type: ") {
+        Some(rest) => {
+            let (header, body) = rest.split_once("Payload:\n").unwrap_or((rest, ""));
+            let kind = header.lines().next().unwrap_or_default().trim();
+            (Some(kind.to_ascii_lowercase()), body)
+        }
+        None => (None, said.as_str()),
+    };
+    Some(Event::AgentMessage {
+        from: payload["author"].as_str()?.to_owned(),
+        to: payload["recipient"].as_str()?.to_owned(),
+        kind: kind.filter(|kind| !kind.is_empty()),
+        text: Some(body.trim().to_owned()).filter(|text| !encrypted && !text.is_empty()),
+    })
+}
+
+/// Codex's tools between agents carry their message encrypted for the model alone, unless the
+/// call says its arguments are plain text: a ciphertext tells no one anything, so it is left out.
+fn sealed(payload: &Value, mut input: Value) -> Value {
+    let messaging = payload["namespace"] == "collaboration"
+        && matches!(
+            payload["name"].as_str(),
+            Some("spawn_agent" | "send_message" | "followup_task")
+        );
+    let plain = payload["encrypted_function_args"]
+        .as_array()
+        .is_some_and(Vec::is_empty);
+    if messaging
+        && !plain
+        && let Some(fields) = input.as_object_mut()
+        && fields.contains_key("message")
+    {
+        fields.insert("message".into(), Value::Null);
+        fields.insert("encrypted".into(), Value::Bool(true));
+    }
+    input
+}
+
 /// `<subagent_notification>{"agent_path":"/root/a","status":{"completed":"…"}}</…>`: how a
 /// subagent ended, in one line. Statuses that end nothing tell nothing.
 fn subagent_notice(text: &str) -> Option<Event> {
@@ -589,8 +646,11 @@ fn codex(record: &Value) -> Vec<Event> {
             vec![Event::ToolCall {
                 id: payload["call_id"].as_str().unwrap_or_default().to_owned(),
                 name: payload["name"].as_str().unwrap_or_default().to_owned(),
-                input,
+                input: sealed(payload, input),
             }]
+        }
+        (Some("response_item"), Some("agent_message")) => {
+            agent_message(payload).into_iter().collect()
         }
         (Some("response_item"), Some("function_call_output" | "custom_tool_call_output")) => {
             vec![Event::ToolResult {
@@ -934,6 +994,67 @@ mod tests {
             ]
             .map(|text| Event::Notice { text: text.into() })
             .to_vec()
+        );
+    }
+
+    #[test]
+    fn codex_messages_between_agents_never_carry_their_ciphertext() {
+        let call = |name: &str, plain: bool| {
+            let mut payload = json!({"type":"function_call","namespace":"collaboration","call_id":name,"name":name,
+                "arguments":"{\"target\":\"/root/a\",\"message\":\"gAAAAsecret\"}"});
+            if plain {
+                payload["encrypted_function_args"] = json!([]);
+            }
+            json!({"type":"response_item","payload":payload})
+        };
+        let received = |content: Value| {
+            json!({"type":"response_item","payload":{"type":"agent_message",
+            "author":"/root/a","recipient":"/root","content":content}})
+        };
+        let projected = events(
+            "codex",
+            vec![
+                call("send_message", false),
+                call("followup_task", true),
+                received(
+                    json!([{"type":"input_text","text":"Message Type: NEW_TASK\nTask name: /root\nSender: /root/a\nPayload:\n"},
+                    {"type":"encrypted_content","encrypted_content":"gAAAAsecret"}]),
+                ),
+                received(
+                    json!([{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/a\nPayload:\nAll green"}]),
+                ),
+            ],
+        );
+        // Only the call that says its arguments are plain text keeps its message.
+        let sealed_events = serde_json::to_string(&[&projected[0], &projected[2]]).unwrap();
+        assert!(!sealed_events.contains("gAAAAsecret"));
+        let Event::ToolCall { input: sealed, .. } = &projected[0] else {
+            panic!("{projected:?}")
+        };
+        assert_eq!(sealed["target"], "/root/a");
+        assert!(sealed["message"].is_null());
+        assert_eq!(sealed["encrypted"], true);
+        let Event::ToolCall { input: plain, .. } = &projected[1] else {
+            panic!("{projected:?}")
+        };
+        assert_eq!(plain["message"], "gAAAAsecret");
+        assert!(plain.get("encrypted").is_none());
+        assert_eq!(
+            projected[2..],
+            [
+                Event::AgentMessage {
+                    from: "/root/a".into(),
+                    to: "/root".into(),
+                    kind: Some("new_task".into()),
+                    text: None,
+                },
+                Event::AgentMessage {
+                    from: "/root/a".into(),
+                    to: "/root".into(),
+                    kind: Some("final_answer".into()),
+                    text: Some("All green".into()),
+                },
+            ]
         );
     }
 

@@ -43,6 +43,7 @@ pub mod queue;
 pub mod requests;
 pub mod schedules;
 pub mod server;
+pub mod session_media;
 pub mod sessions;
 pub mod store;
 pub mod subscriptions;
