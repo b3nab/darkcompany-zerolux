@@ -20,6 +20,7 @@ import {
   folderName,
   harnessMarks,
   harnessLabels,
+  resumable,
   rowState,
   rowTime,
   sessionComputer,
@@ -29,6 +30,7 @@ import {
   shareChoice,
   sharedAs,
   shareLabels,
+  takeable,
 } from "@zerolux/chat";
 import type {
   Actor,
@@ -247,6 +249,10 @@ export function SessionRow({
             .catch((e) => Alert.alert("Not stopped", errorMessage(e))),
       },
     ]);
+  const resume = () =>
+    void chat
+      .resume(session.id)
+      .catch((e: unknown) => Alert.alert("Not resumed", errorMessage(e)));
   const menu: MenuEntry[] = person
     ? []
     : [
@@ -274,6 +280,9 @@ export function SessionRow({
         },
         { divider: true },
         { title: "Fork", icon: "git-fork", onPress: fork },
+        ...(resumable(session)
+          ? [{ title: "Resume", icon: "play", onPress: resume }]
+          : []),
         ...(session.status === "stopped"
           ? []
           : ([
@@ -505,15 +514,6 @@ export function Interrupt({ session }: { session: ChatSession }) {
     </View>
   );
 }
-
-// Sessions ZeroLux runs, and pi ones it can continue from their saved file with a verified
-// profile: the kernel refuses what it cannot verify, never picks defaults.
-const resumable = (s: ChatSession) =>
-  (s.harness === "pi" || s.origin === "owned") &&
-  (s.status === "stopped" || s.status === "attention");
-// A pi hired from a terminal: ZeroLux can take it over while it is idle there.
-const takeable = (s: ChatSession) =>
-  s.harness === "pi" && s.origin === "attached" && s.status === "connected";
 
 /**
  * One session of an agent with its controls: Interrupt, Take over, Stop and Resume, and with

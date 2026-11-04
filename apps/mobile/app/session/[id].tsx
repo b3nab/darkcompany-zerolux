@@ -49,6 +49,7 @@ import {
   sessionCommand,
   sessionName,
   sessionOutputAt,
+  resumable,
   sessionState,
   sessionTone,
   useArrivals,
@@ -729,6 +730,7 @@ function Composer({
   const above = (
     <>
       {children}
+      {write && resumable(session) ? <ResumeBar session={session} /> : null}
       {compacting ? (
         <View className="flex-row items-center gap-2 px-1.5">
           <ActivityIndicator
@@ -1329,6 +1331,31 @@ function SentInputView({ input }: { input: SentInput }) {
           {input.status === "sending" ? "Sending…" : "Sent"}
         </Text>
       )}
+    </View>
+  );
+}
+
+/** A stopped session, or one whose link was lost, continued where it was with a tap. */
+function ResumeBar({ session }: { session: ChatSession }) {
+  const { chat } = useSession();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const resume = () => {
+    setBusy(true);
+    setError("");
+    chat
+      .resume(session.id)
+      .catch((e: unknown) => setError(errorMessage(e)))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <View className="gap-1.5">
+      <Button disabled={busy} onPress={resume}>
+        <Text>{busy ? "Resuming…" : "Resume"}</Text>
+      </Button>
+      {error ? (
+        <Text className="px-1.5 text-xs text-destructive">{error}</Text>
+      ) : null}
     </View>
   );
 }
