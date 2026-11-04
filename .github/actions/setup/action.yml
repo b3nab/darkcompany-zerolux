@@ -17,6 +17,9 @@ inputs:
   target:
     description: A Rust target to build for besides this runner's system, as x86_64-apple-darwin.
     default: ""
+  workspaces:
+    description: "The JavaScript workspaces to install, as Bun's filters separated by spaces: './harnesses/*'; all of them when empty."
+    default: ""
   livekit:
     description: Also build the LiveKit server, first on the PATH.
     default: "false"
@@ -97,7 +100,13 @@ runs:
         version: "0.13.1"
         enable-cache: true
     - shell: bash
-      run: bun install --frozen-lockfile
+      env:
+        WORKSPACES: ${{ inputs.workspaces }}
+      run: |
+        set -f
+        filters=()
+        for workspace in $WORKSPACES; do filters+=(--filter "$workspace"); done
+        bun install --frozen-lockfile "${filters[@]}"
     - if: inputs.livekit == 'true'
       uses: ./.github/actions/livekit
       with:

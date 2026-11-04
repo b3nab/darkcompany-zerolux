@@ -38,21 +38,25 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-  # The Rust workspace on each system: its lint and its tests, side by side. PostgreSQL runs on
-  # Linux only, in a job of its own: GitHub runs service containers only there, and an empty
-  # image starts none.
+  # The Rust workspace on each system: its lint and its tests, these in two halves side by side,
+  # each built from the shared cache. PostgreSQL runs on Linux only, in jobs of their own:
+  # GitHub runs service containers only there, and an empty image starts none.
   rust:
-    name: Rust (${{ matrix.name }})
+    name: Rust (${{ matrix.system }} ${{ matrix.part }}/2)
     strategy:
       fail-fast: false
       matrix:
+        system: [Linux, Linux PostgreSQL, Windows, macOS]
+        part: [1, 2]
+        # Two tests a core: most of the slow ones wait on processes and timers, not the CPU.
         include:
-          - { name: Linux, os: ubuntu-24.04, lint: true }
-          - name: Linux PostgreSQL
+          - { system: Linux, os: ubuntu-24.04, threads: 8 }
+          - system: Linux PostgreSQL
             os: ubuntu-24.04
+            threads: 8
             postgres: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
-          - { name: Windows, os: windows-2025, lint: true }
-          - { name: macOS, os: macos-26, lint: true }
+          - { system: Windows, os: windows-2025, threads: 8 }
+          - { system: macOS, os: macos-26, threads: 6 }
     runs-on: ${{ matrix.os }}
     services:
       postgres:
@@ -78,8 +82,10 @@ jobs:
         uses: ./.github/actions/setup
         with:
           cache-key: check
-          # Both Linux jobs build the same: one keeps the cache.
-          cache-save: ${{ !matrix.postgres }}
+          # The jobs of a system build the same: its first half keeps the cache.
+          cache-save: ${{ matrix.part == 1 && !matrix.postgres }}
+          # What the tests start: the runners, the sign-in service, and Tauri's icons tool.
+          workspaces: ./harnesses/* ./packages/bridge ./services/auth ./apps/desktop
           livekit: "true"
       # The desktop crate embeds its icons and the web app it serves: its lint and tests need
       # the icons and only the web app's folder, as the web build is checked once above.
@@ -89,21 +95,24 @@ jobs:
           bun run --cwd apps/desktop assets icons
           mkdir -p apps/desktop/dist/web && echo '<!doctype html>' > apps/desktop/dist/web/index.html
       - name: Lint (clippy)
-        if: matrix.lint
+        if: matrix.part == 1 && !matrix.postgres
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests (SQLite)
         if: ${{ !matrix.postgres }}
-        run: cargo nextest run --workspace --profile ${{ inputs.tests || 'ci' }}
-      # The whole workspace is built as the SQLite job builds it; only the kernel's tests read
+        env:
+          NEXTEST_TEST_THREADS: ${{ matrix.threads }}
+        run: cargo nextest run --workspace --profile ${{ inputs.tests || 'ci' }} --partition hash:${{ matrix.part }}/2
+      # The whole workspace is built as the SQLite jobs build it; only the kernel's tests read
       # the database.
       - name: Tests (PostgreSQL)
         if: matrix.postgres
         env:
+          NEXTEST_TEST_THREADS: ${{ matrix.threads }}
           ZEROLUX_TEST_POSTGRES_URL: postgresql://zerolux_test:fixture-only-password@127.0.0.1:5432/zerolux_test
-        run: cargo nextest run --workspace --profile ${{ inputs.tests || 'ci' }} -E 'package(zerolux)'
+        run: cargo nextest run --workspace --profile ${{ inputs.tests || 'ci' }} --partition hash:${{ matrix.part }}/2 -E 'package(zerolux)'
       # nextest runs no doctests: they run once, where they are the same on every system.
       - name: Doctests
-        if: runner.os == 'Linux' && !matrix.postgres
+        if: runner.os == 'Linux' && matrix.part == 1 && !matrix.postgres
         run: cargo test --workspace --doc
 
   js:
