@@ -1642,7 +1642,8 @@ impl ChatRuntime {
             })
     }
 
-    /// A failing relink is retried after 10 s, then less and less often, up to 5 minutes.
+    /// A failing relink is retried after 2 s, then less and less often, up to 5 minutes: a relink
+    /// tried as soon as a link is lost may find its native process still ending.
     fn retry_due(&self, id: &str) -> bool {
         self.retries
             .lock()
@@ -1658,8 +1659,7 @@ impl ChatRuntime {
             return;
         }
         let failures = retries.get(id).map_or(0, |(failures, _)| *failures) + 1;
-        let wait =
-            Duration::from_secs(10 * 2u64.pow(failures.min(5))).min(Duration::from_secs(300));
+        let wait = Duration::from_secs(2u64.pow(failures.min(9))).min(Duration::from_secs(300));
         retries.insert(id.to_owned(), (failures, std::time::Instant::now() + wait));
     }
 
