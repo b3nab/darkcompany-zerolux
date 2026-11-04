@@ -247,12 +247,17 @@ jobs:
         working-directory: apps/mobile
         run: bun x --bun expo prebuild --platform android --no-install
       # Expo's template packs the Gradle wrapper so that `java -jar` cannot open it: Gradle
-      # writes its own again, of the version the project names.
+      # writes its own again, of the version the project names, in an empty project, which it
+      # configures at once, unlike the app's.
       - name: Write the Gradle wrapper again
         working-directory: apps/mobile/android
         run: |
           version="$(sed -n 's/.*gradle-\(.*\)-bin\.zip/\1/p' gradle/wrapper/gradle-wrapper.properties)"
-          java -cp gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain wrapper --gradle-version "$version"
+          empty="$RUNNER_TEMP/gradle-wrapper"
+          mkdir -p "$empty" && touch "$empty/settings.gradle"
+          java -cp gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain -p "$empty" wrapper --gradle-version "$version" --no-daemon
+          cp "$empty/gradle/wrapper/gradle-wrapper.jar" gradle/wrapper/
+          cp "$empty/gradlew" "$empty/gradlew.bat" .
       # Gradle's build cache, kept with its downloads, and more memory than the template's for
       # shrinking and dexing.
       - name: Build the APK
