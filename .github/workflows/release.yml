@@ -232,6 +232,17 @@ jobs:
           # Gradle's downloads, kept by the packages the Android project is generated from.
           cache: gradle
           cache-dependency-path: bun.lock
+      # The native modules' C++ compiles through ccache, which the NDK runs when `NDK_CCACHE`
+      # names it: its results are kept from one release to the next.
+      - name: Install ccache
+        run: command -v ccache || { sudo apt-get update && sudo apt-get install -y --no-install-recommends ccache; }
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-android-${{ hashFiles('bun.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-android-${{ hashFiles('bun.lock') }}-
+            ccache-android-
       - name: Generate the Android project
         working-directory: apps/mobile
         run: bun x --bun expo prebuild --platform android --no-install
@@ -242,9 +253,20 @@ jobs:
         run: |
           version="$(sed -n 's/.*gradle-\(.*\)-bin\.zip/\1/p' gradle/wrapper/gradle-wrapper.properties)"
           java -cp gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain wrapper --gradle-version "$version"
+      # Gradle's build cache, kept with its downloads, and more memory than the template's for
+      # shrinking and dexing.
       - name: Build the APK
         working-directory: apps/mobile/android
-        run: ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon
+        env:
+          CCACHE_BASEDIR: ${{ github.workspace }}
+          # React Native's advice for CI: by the compiler's content, not its timestamp.
+          CCACHE_COMPILERCHECK: content
+          CCACHE_MAXSIZE: 2G
+        run: |
+          export CCACHE_DIR="$HOME/.cache/ccache" NDK_CCACHE="$(command -v ccache)"
+          echo "org.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g" >> gradle.properties
+          ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --build-cache
+          ccache --show-stats
       - name: Sign it and upload it
         env:
           GH_TOKEN: ${{ github.token }}
