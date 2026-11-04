@@ -27,23 +27,46 @@ inputs:
 runs:
   using: composite
   steps:
-    # webrtc-sys uses Chromium's hermetic libc++, which requires Clang 21+.
-    # https://github.com/livekit/rust-sdks#building
+    # webrtc-sys builds its C++ against Chromium's hermetic libc++, which requires Clang 21+,
+    # newer than the runner's. https://github.com/livekit/rust-sdks#building
+    # The packages the runner lacks are downloaded once per runner image, LLVM's from
+    # apt.llvm.org, then installed from the kept files.
+    - id: image
+      if: runner.os == 'Linux' && inputs.rust == 'build'
+      shell: bash
+      run: echo "image=$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
+    - id: packages
+      if: runner.os == 'Linux' && inputs.rust == 'build'
+      uses: actions/cache@v4
+      with:
+        path: ~/apt-packages
+        key: apt-${{ steps.image.outputs.image }}-${{ runner.arch }}-${{ hashFiles('.github/actions/setup/action.yml') }}
     - name: Install Clang and the desktop's native libraries and packaging tools
       if: runner.os == 'Linux' && inputs.rust == 'build'
       shell: bash
+      env:
+        KEPT: ${{ steps.packages.outputs.cache-hit }}
       run: |
-        curl --fail --silent --show-error --location https://apt.llvm.org/llvm-snapshot.gpg.key -o llvm.asc
-        fingerprint="$(gpg --batch --show-keys --with-colons llvm.asc | awk -F: '$1 == "fpr" { print $10; exit }')"
-        test "$fingerprint" = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
-        sudo install -m 0644 llvm.asc /usr/share/keyrings/apt-llvm.asc
-        codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
-        echo "deb [signed-by=/usr/share/keyrings/apt-llvm.asc] https://apt.llvm.org/$codename/ llvm-toolchain-$codename-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
-        rm llvm.asc
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends build-essential clang-21 libclang-21-dev libc6-dev libglib2.0-dev libjpeg-turbo8-dev pkg-config libwebkit2gtk-4.1-dev libdbus-1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils
+        if [[ "$KEPT" != true ]]; then
+          curl --fail --silent --show-error --location https://apt.llvm.org/llvm-snapshot.gpg.key -o llvm.asc
+          fingerprint="$(gpg --batch --show-keys --with-colons llvm.asc | awk -F: '$1 == "fpr" { print $10; exit }')"
+          test "$fingerprint" = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
+          sudo install -m 0644 llvm.asc /usr/share/keyrings/apt-llvm.asc
+          codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+          echo "deb [signed-by=/usr/share/keyrings/apt-llvm.asc] https://apt.llvm.org/$codename/ llvm-toolchain-$codename-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
+          rm llvm.asc
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends --download-only build-essential clang-21 libclang-21-dev libc6-dev libglib2.0-dev libjpeg-turbo8-dev pkg-config libwebkit2gtk-4.1-dev libdbus-1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils
+          mkdir -p ~/apt-packages
+          cp /var/cache/apt/archives/*.deb ~/apt-packages/ 2>/dev/null || true
+        fi
+        shopt -s nullglob
+        packages=(~/apt-packages/*.deb)
+        if (( ${#packages[@]} )); then
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+        fi
         clang-21 --version
-        pkg-config --exists glib-2.0 gobject-2.0 gio-2.0
+        pkg-config --exists glib-2.0 gobject-2.0 gio-2.0 webkit2gtk-4.1
         {
           echo "CC=clang-21"
           echo "CXX=clang++-21"
@@ -73,11 +96,6 @@ runs:
       with:
         version: "0.13.1"
         enable-cache: true
-    - uses: actions/cache@v4
-      with:
-        path: ~/.bun/install/cache
-        key: bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}
-        restore-keys: bun-${{ runner.os }}-${{ runner.arch }}-
     - shell: bash
       run: bun install --frozen-lockfile
     - if: inputs.livekit == 'true'
