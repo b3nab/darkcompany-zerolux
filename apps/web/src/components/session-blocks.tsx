@@ -8,6 +8,7 @@ import {
   MessagesSquareIcon,
 } from "lucide-react";
 import {
+  agentMessagePurposes,
   blockRuns,
   isSubagent,
   messageTime,
@@ -388,13 +389,6 @@ function Block({
   }
 }
 
-/** What a message between agents is, by the harness's own kind of it. */
-const purposes: Record<string, string> = {
-  new_task: "Task",
-  message: "Message",
-  final_answer: "Answer",
-};
-
 /**
  * A message between the harness's own agents: from whom to whom, by name where the session
  * knows them, what it is (a task, a message, an answer), and its words when they can be read.
@@ -417,7 +411,8 @@ function AgentMessage({
       </span>
       {block.purpose && (
         <span className="shrink-0 font-mono text-[11px] text-faint uppercase">
-          {purposes[block.purpose] ?? block.purpose.replaceAll("_", " ")}
+          {agentMessagePurposes[block.purpose] ??
+            block.purpose.replaceAll("_", " ")}
         </span>
       )}
     </>
