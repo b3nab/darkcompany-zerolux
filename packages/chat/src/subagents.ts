@@ -17,12 +17,30 @@ export interface Subagent {
   tool_call_id: string | null;
   /** The subagent that started it, for one started by another. */
   parent_id: string | null;
+  /** Where Codex places it among its agents, as its calls name it: `/root/logs`. */
+  path?: string | null;
   updated_at: number | null;
 }
 
 /** How a subagent goes by: its name, its role, what it was asked, or plainly. */
 export const subagentName = (subagent: Subagent) =>
   subagent.name ?? subagent.kind ?? subagent.description ?? "Subagent";
+
+/**
+ * The subagent a call names as `target`: by its Codex path or ID, else by a path under the
+ * caller's (Codex's relative ones) or its name.
+ */
+export const subagentAt = (subagents: Subagent[], target: string) =>
+  subagents.find((s) => s.path === target || s.id === target) ??
+  subagents.find((s) => s.path?.endsWith(`/${target}`) || s.name === target);
+
+/** Whom calls name, by the session's subagents: their names, for `toolPhrase`. */
+export const agentNames =
+  (subagents: Subagent[]) =>
+  (target: string): string | undefined => {
+    const found = subagentAt(subagents, target);
+    return found && subagentName(found);
+  };
 
 /**
  * A session's subagents, the latest first, read again when `revision` changes (as when its

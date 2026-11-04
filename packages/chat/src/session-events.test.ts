@@ -119,6 +119,42 @@ test("a harness's own notice is a line of its own, not the owner's input, and st
   expect(blocks[2]).toMatchObject({ kind: "turn", since: "t1" });
 });
 
+test("a message between agents is a line of its own, from whom to whom, its words only when readable", () => {
+  const blocks = sessionBlocks([
+    at(
+      {
+        type: "agent_message",
+        from: "/root",
+        to: "/root/logs",
+        kind: "new_task",
+        text: null,
+      },
+      0,
+      "t0",
+    ),
+    at(
+      {
+        type: "agent_message",
+        from: "/root/logs",
+        to: "/root",
+        kind: "final_answer",
+        text: "All green",
+      },
+      10,
+      "t1",
+    ),
+  ]);
+  expect(blocks).toMatchObject([
+    { kind: "agent_message", from: "/root", to: "/root/logs", text: null },
+    {
+      kind: "agent_message",
+      from: "/root/logs",
+      purpose: "final_answer",
+      text: "All green",
+    },
+  ]);
+});
+
 test("a tool reads as one line of what it was given, and its values as text", () => {
   expect(toolLine({ command: "bun test", description: "Run" })).toBe(
     "bun test",

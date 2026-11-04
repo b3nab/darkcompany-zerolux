@@ -5,10 +5,12 @@ import {
   diffLines,
   exploration,
   exploredPhrase,
+  isSubagent,
   latestPlan,
   plainLine,
   toolItems,
   toolOutcome,
+  toolPhrase,
   toolState,
   toolView,
   toolsPhrase,
@@ -86,7 +88,12 @@ test("files, searches, the web, subagents and plans each get their own view", ()
   ).toEqual({ kind: "web", url: "https://example.com" });
   expect(
     toolView("Agent", { description: "Find the bug", prompt: "Look at…" }),
-  ).toEqual({ kind: "agent", title: "Find the bug", prompt: "Look at…" });
+  ).toEqual({
+    kind: "agent",
+    action: "start",
+    title: "Find the bug",
+    prompt: "Look at…",
+  });
   expect(
     toolView("TodoWrite", {
       todos: [
@@ -349,4 +356,116 @@ test("a run of tools in a few words, and the plan as it stands now", () => {
     ]),
   ).toEqual([{ text: "Fix", status: "done" }]);
   expect(latestPlan([])).toBeUndefined();
+});
+
+const sealedText = `gAAAAAB${"x".repeat(80)}==`;
+
+test("agents' calls on each other name whom they act on, and a sealed message never shows", () => {
+  const views = [
+    toolView("spawn_agent", { task_name: "logs", message: sealedText }),
+    toolView("send_message", { target: "/root/logs", message: sealedText }),
+    toolView("followup_task", { target: "logs", encrypted: true }),
+    toolView("send_input", { target: "a-1", message: "Check the logs" }),
+    toolView("SendMessage", {
+      to: "lead",
+      summary: "Report",
+      message: "Done.",
+    }),
+    toolView("interrupt_agent", { target: "/root/logs" }),
+    toolView("close_agent", { target: "a-1" }),
+    toolView("resume_agent", { id: "a-1" }),
+    toolView("TaskStop", { task_id: "b-9" }),
+    toolView("wait_agent", { timeout_ms: 60000 }),
+    toolView("list_agents", { path_prefix: "/root" }),
+    toolView("SubagentHandback", { message: "The note is written." }),
+  ];
+  expect(
+    views.map(
+      (view) =>
+        view.kind === "agent" && [
+          view.action,
+          view.target,
+          view.encrypted ?? false,
+          Boolean(view.prompt),
+        ],
+    ),
+  ).toEqual([
+    ["start", undefined, true, false],
+    ["message", "/root/logs", true, false],
+    ["task", "logs", true, false],
+    ["message", "a-1", false, true],
+    ["message", "lead", false, true],
+    ["interrupt", "/root/logs", false, false],
+    ["close", "a-1", false, false],
+    ["resume", "a-1", false, false],
+    ["stop", "b-9", false, false],
+    ["wait", undefined, false, false],
+    ["list", "/root", false, false],
+    ["handback", undefined, false, true],
+  ]);
+  // The agent a call names reads by its name; sealed words are nowhere.
+  const names: Record<string, string> = {
+    "/root/logs": "Aspen",
+    logs: "Aspen",
+  };
+  for (const view of views) {
+    const phrase = toolPhrase(
+      view,
+      false,
+      undefined,
+      (target) => names[target],
+    );
+    expect(JSON.stringify([view, phrase])).not.toContain(sealedText);
+    if (view.kind === "agent" && view.target && names[view.target])
+      expect(phrase.subject).toBe("Aspen");
+  }
+  // Only a started agent is drawn as a subagent; the other calls are tools in a row.
+  expect(isSubagent(call("spawn_agent", { task_name: "logs" }))).toBe(true);
+  expect(isSubagent(call("Agent", { description: "Find it" }))).toBe(true);
+  expect(isSubagent(call("send_message", { target: "/root" }))).toBe(false);
+  expect(isSubagent(call("SendMessage", { to: "lead", message: "Hi" }))).toBe(
+    false,
+  );
+});
+
+test("the tools agents call most read in words, never as their raw name, arguments or sealed text", () => {
+  const frequent: [string, unknown][] = [
+    [
+      "mcp__claude-in-chrome__browser_batch",
+      { actions: [{ name: "computer", input: { action: "screenshot" } }] },
+    ],
+    [
+      "mcp__claude-in-chrome__javascript_tool",
+      { action: "javascript_exec", text: "document.title", tabId: 1 },
+    ],
+    ["mcp__claude-in-chrome__computer", { action: "left_click", tabId: 1 }],
+    ["mcp__claude-in-chrome__navigate", { url: "https://example.com/a" }],
+    ["mcp__claude-in-chrome__tabs_context_mcp", { createIfEmpty: true }],
+    ["mcp__claude-in-chrome__find", { query: "Send", tabId: 1 }],
+    ["mcp__claude-in-chrome__tabs_close_mcp", { tabId: 1 }],
+    [
+      "mcp__deepwiki__ask_wiki_question",
+      { repoName: "aspen/birch", question: "Which version?" },
+    ],
+    ["ToolSearch", { query: "select:WebFetch", max_results: 1 }],
+    ["sleep", { duration_ms: 45000 }],
+    ["js", { code: "1 + 1", title: "Add" }],
+    ["request_user_input_async", { questions: [{ title: "Which?" }] }],
+    ["zerolux_background_run", { command: "bun test" }],
+    ["zerolux_background_read", { id: "b-1" }],
+    ["mcp__zerolux__session_start", { harness: "pi", prompt: "Fix it" }],
+    ["send_message", { target: "/root", message: sealedText }],
+    ["followup_task", { target: "/root/logs", message: sealedText }],
+    ["wait_agent", { timeout_ms: 30000 }],
+    ["list_agents", {}],
+    ["SendMessage", { to: "lead", message: "Done." }],
+    ["SubagentHandback", { message: "Done." }],
+    ["TaskStop", { task_id: "b-9" }],
+  ];
+  for (const [name, args] of frequent) {
+    const { verb, subject } = toolPhrase(toolView(name, args), false);
+    const bare = name.replace(/^mcp__.+?__|^zerolux_/, "");
+    expect([bare, bare.replaceAll("_", " ")]).not.toContain(verb);
+    expect(`${verb} ${subject ?? ""}`).not.toMatch(/[{}]|gAAAAA/);
+  }
 });

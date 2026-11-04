@@ -38,6 +38,7 @@ export * from "./goal";
 export * from "./history";
 export * from "./triggers";
 export * from "./subagents";
+export * from "./media";
 export * from "./hosts";
 export * from "./accounts";
 export * from "./action-form";

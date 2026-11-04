@@ -42,6 +42,18 @@ export type SessionEvent = {
   | { type: "command"; text: string }
   /** What the harness tells the session by itself, as a background task's end: no one's input. */
   | { type: "notice"; text: string }
+  /**
+   * A message between the harness's own agents, each named by its path (`/root`,
+   * `/root/logs`): `kind` is the harness's own (`new_task`, `message`, `final_answer`), and
+   * `text` is null when the harness sealed it for the model alone.
+   */
+  | {
+      type: "agent_message";
+      from: string;
+      to: string;
+      kind: string | null;
+      text: string | null;
+    }
 );
 
 export interface SessionEventPage {
@@ -108,6 +120,14 @@ export type SessionBlock = {
   | { kind: "compacted"; summary: string | null }
   | { kind: "command"; text: string }
   | { kind: "notice"; text: string }
+  /** A message between agents: `purpose` is the harness's kind of it; `text` null when sealed. */
+  | {
+      kind: "agent_message";
+      from: string;
+      to: string;
+      purpose: string | null;
+      text: string | null;
+    }
 );
 export type ToolBlock = Extract<SessionBlock, { kind: "tool" }>;
 
@@ -236,6 +256,17 @@ export function sessionBlocks(events: SessionEvent[]): SessionBlock[] {
         break;
       case "notice":
         blocks.push({ key, time, kind: "notice", text: event.text });
+        break;
+      case "agent_message":
+        blocks.push({
+          key,
+          time,
+          kind: "agent_message",
+          from: event.from,
+          to: event.to,
+          purpose: event.kind,
+          text: event.text,
+        });
         break;
       case "thinking":
         thought = { key, time, kind: "thinking", text: event.text };

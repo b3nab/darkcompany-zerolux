@@ -19,12 +19,24 @@ export type ToolView =
   | { kind: "patch"; files: string[]; patch: string }
   | { kind: "search"; pattern: string; path?: string }
   | { kind: "web"; query?: string; url?: string }
-  | { kind: "agent"; title: string; prompt?: string }
+  | {
+      kind: "agent";
+      action: AgentAction;
+      /** What a started agent is to do, in a few words. */
+      title?: string;
+      /** What it is told or hands back, when it can be read. */
+      prompt?: string;
+      /** Whom it acts on: an agent's name, a Codex agent's path, or a task's ID. */
+      target?: string;
+      /** What it is told is sealed by its provider, and cannot be read here. */
+      encrypted?: boolean;
+    }
   | { kind: "plan"; steps: PlanStep[] }
   | {
       kind: "zerolux";
-      action: "send" | "reply" | "inbox" | "thread" | "close" | "reload";
+      action: (typeof ZEROLUX)[keyof typeof ZEROLUX];
       chat?: string;
+      /** What it says, starts or runs: a message, a session's first input, a command. */
       text?: string;
       title?: string;
     }
@@ -36,6 +48,22 @@ export type ToolView =
     }
   | { kind: "other"; name: string; args: unknown };
 
+/**
+ * What one agent does with others: starts one, writes to one, gives it a task, waits for them,
+ * interrupts, closes or resumes one, stops a task, lists them, or hands its work back.
+ */
+export type AgentAction =
+  | "start"
+  | "message"
+  | "task"
+  | "wait"
+  | "interrupt"
+  | "close"
+  | "resume"
+  | "stop"
+  | "list"
+  | "handback";
+
 export interface TextChange {
   before: string;
   after: string;
@@ -44,6 +72,10 @@ export interface PlanStep {
   text: string;
   status: "pending" | "active" | "done";
 }
+
+/** A message its provider sealed (Codex's agents' own): it has no words to show here. */
+const sealed = (value: unknown) =>
+  typeof value === "string" && /^gAAAAA[\w-]{40,}={0,2}$/.test(value);
 
 /** A short line for what a tool was given: its command, path, pattern, query or first text. */
 export function toolLine(input: unknown): string {
@@ -55,7 +87,9 @@ export function toolLine(input: unknown): string {
     fields.path ??
     fields.pattern ??
     fields.query ??
-    Object.values(fields).find((value) => typeof value === "string");
+    Object.values(fields).find(
+      (value) => typeof value === "string" && !sealed(value),
+    );
   return typeof first === "string" ? first : "";
 }
 
@@ -97,7 +131,34 @@ const ZEROLUX = {
   thread: "thread",
   close_thread: "close",
   reload: "reload",
+  session_start: "start-session",
+  task_start: "start-session",
+  session_read: "read-session",
+  task_read: "read-session",
+  session_send: "write-session",
+  session_stop: "stop-session",
+  background_run: "run",
+  background_read: "read-run",
+  background_stop: "stop-run",
+  background_list: "list-runs",
 } as const;
+
+/** One agent's call on others, from what its harness gave it. */
+function agentCall(
+  action: AgentAction,
+  args: Record<string, unknown>,
+  said: unknown,
+  target?: unknown,
+): Extract<ToolView, { kind: "agent" }> {
+  const encrypted = args.encrypted === true || sealed(said);
+  return {
+    kind: "agent",
+    action,
+    prompt: (!encrypted && text(said)) || undefined,
+    target: text(target) || undefined,
+    ...(encrypted ? { encrypted } : {}),
+  };
+}
 
 const PLAN = {
   pending: "pending",
@@ -114,7 +175,7 @@ export function toolView(name: string, input: unknown): ToolView {
       kind: "zerolux",
       action: ZEROLUX[zerolux as keyof typeof ZEROLUX],
       chat: text(args.chat) || undefined,
-      text: text(args.text) || undefined,
+      text: text(args.text ?? args.prompt ?? args.command) || undefined,
       title: text(args.title) || undefined,
     };
   const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
@@ -204,10 +265,31 @@ export function toolView(name: string, input: unknown): ToolView {
     case "Task":
     case "spawn_agent":
       return {
-        kind: "agent",
+        ...agentCall("start", args, args.prompt ?? args.message),
         title: text(args.description ?? args.task_name) || "Subagent",
-        prompt: text(args.prompt ?? args.message) || undefined,
       };
+    case "send_message":
+    case "send_input":
+    case "SendMessage":
+      return agentCall("message", args, args.message, args.target ?? args.to);
+    case "followup_task":
+      return agentCall("task", args, args.message, args.target);
+    case "wait_agent":
+    case "wait":
+      return agentCall("wait", args, undefined);
+    case "interrupt_agent":
+      return agentCall("interrupt", args, undefined, args.target);
+    case "close_agent":
+      return agentCall("close", args, undefined, args.target);
+    case "resume_agent":
+      return agentCall("resume", args, undefined, args.id);
+    case "TaskStop":
+      return agentCall("stop", args, undefined, args.task_id ?? args.shell_id);
+    case "list_agents":
+    case "ListAgents":
+      return agentCall("list", args, undefined, args.path_prefix);
+    case "SubagentHandback":
+      return agentCall("handback", args, args.message);
     case "TodoWrite":
     case "update_plan": {
       const items = (Array.isArray(args.todos) ? args.todos : args.plan) ?? [];
@@ -416,16 +498,131 @@ const host = (url: string) => {
   }
 };
 
+const firstLine = (value: unknown) => text(value).split("\n")[0]?.trim();
+const question = (value: unknown) => {
+  const first = fields(Array.isArray(value) ? value[0] : undefined);
+  return text(first.question ?? first.title) || undefined;
+};
+
+/**
+ * Tools without a kind of their own, by name, in words: what they do now and once done, and
+ * what they work on. The ones agents call most.
+ */
+const WORDS: Record<
+  string,
+  [now: string, done: string, on?: (args: Record<string, unknown>) => unknown]
+> = {
+  browser_batch: [
+    "Using the browser",
+    "Used the browser",
+    (args) =>
+      Array.isArray(args.actions)
+        ? args.actions
+            .map((step) => {
+              const each = fields(step);
+              return text(fields(each.input).action) || text(each.name);
+            })
+            .filter(Boolean)
+            .join(", ")
+            .replaceAll("_", " ")
+        : undefined,
+  ],
+  computer: [
+    "Using the browser",
+    "Used the browser",
+    (args) => text(args.action).replaceAll("_", " "),
+  ],
+  javascript_tool: [
+    "Running JavaScript",
+    "Ran JavaScript",
+    (args) => firstLine(args.text),
+  ],
+  navigate: ["Opening", "Opened", (args) => args.url && host(text(args.url))],
+  find: ["Finding", "Found", (args) => args.query],
+  tabs_context_mcp: ["Reading the tabs", "Read the tabs"],
+  tabs_create_mcp: ["Opening a tab", "Opened a tab"],
+  tabs_close_mcp: ["Closing a tab", "Closed a tab"],
+  get_page_text: ["Reading the page", "Read the page"],
+  read_page: ["Reading the page", "Read the page"],
+  read_console_messages: [
+    "Reading the console",
+    "Read the console",
+    (args) => args.pattern,
+  ],
+  read_network_requests: ["Reading the network", "Read the network"],
+  form_input: ["Filling a field", "Filled a field"],
+  resize_window: ["Resizing the window", "Resized the window"],
+  ask_wiki_question: [
+    "Asking DeepWiki",
+    "Asked DeepWiki",
+    (args) => args.question,
+  ],
+  ask_question: ["Asking DeepWiki", "Asked DeepWiki", (args) => args.question],
+  ios_screenshot: ["Taking a screenshot", "Took a screenshot"],
+  screenshot: ["Taking a screenshot", "Took a screenshot"],
+  tap: ["Tapping", "Tapped", (args) => args.text],
+  input_text: ["Typing", "Typed", (args) => args.text],
+  execute_in_app: [
+    "Running in the app",
+    "Ran in the app",
+    (args) => firstLine(args.expression ?? args.code),
+  ],
+  sleep: [
+    "Waiting",
+    "Waited",
+    (args) =>
+      typeof args.duration_ms === "number" &&
+      `${Math.round(args.duration_ms / 1000)}s`,
+  ],
+  js: [
+    "Running JavaScript",
+    "Ran JavaScript",
+    (args) => text(args.title) || firstLine(args.code),
+  ],
+  request_user_input: [
+    "Asking you",
+    "Asked you",
+    (args) => question(args.questions),
+  ],
+  request_user_input_async: [
+    "Asking you",
+    "Asked you",
+    (args) => question(args.questions),
+  ],
+  AskUserQuestion: [
+    "Asking you",
+    "Asked you",
+    (args) => question(args.questions),
+  ],
+  ToolSearch: [
+    "Loading tools",
+    "Loaded tools",
+    (args) => text(args.query).replace(/^select:/, ""),
+  ],
+  Skill: ["Using a skill", "Used a skill", (args) => args.skill],
+};
+
 /**
  * A tool in a few words: a verb in the tense of its state ("Running", "Ran") and what it works
- * on, as plain text. `chatTitle` names the chats ZeroLux tools write in.
+ * on, as plain text. `chatTitle` names the chats ZeroLux tools write in, and `agentName` the
+ * agents a tool acts on, from their path or name.
  */
 export function toolPhrase(
   view: ToolView,
   running: boolean,
   chatTitle?: (id: string) => string | undefined,
+  agentName?: (target: string) => string | undefined,
 ): { verb: string; subject?: string } {
   const tense = (now: string, done: string) => (running ? now : done);
+  const named = (name: string, args: unknown) => {
+    const words = WORDS[name];
+    if (!words) return undefined;
+    const on = words[2]?.(fields(args));
+    return {
+      verb: tense(words[0], words[1]),
+      subject: (typeof on === "string" && on) || undefined,
+    };
+  };
   switch (view.kind) {
     case "command":
       return {
@@ -452,8 +649,44 @@ export function toolPhrase(
             subject: view.query,
           }
         : { verb: tense("Fetching", "Fetched"), subject: host(view.url ?? "") };
-    case "agent":
-      return { verb: tense("Delegating", "Delegated"), subject: view.title };
+    case "agent": {
+      const who = view.target && (agentName?.(view.target) ?? view.target);
+      switch (view.action) {
+        case "start":
+          return {
+            verb: tense("Delegating", "Delegated"),
+            subject: view.title,
+          };
+        case "message":
+          return { verb: tense("Writing to", "Wrote to"), subject: who };
+        case "task":
+          return {
+            verb: tense("Giving a task to", "Gave a task to"),
+            subject: who,
+          };
+        case "wait":
+          return { verb: tense("Waiting for agents", "Waited for agents") };
+        case "interrupt":
+          return { verb: tense("Interrupting", "Interrupted"), subject: who };
+        case "close":
+          return { verb: tense("Closing", "Closed"), subject: who };
+        case "resume":
+          return { verb: tense("Resuming", "Resumed"), subject: who };
+        case "stop":
+          return { verb: tense("Stopping", "Stopped"), subject: who };
+        case "list":
+          return {
+            verb: tense("Listing agents", "Listed agents"),
+            subject: who,
+          };
+        case "handback":
+          return {
+            verb: tense("Handing back", "Handed back"),
+            subject: view.prompt && plainLine(view.prompt),
+          };
+      }
+      break;
+    }
     case "plan":
       return {
         verb: "Plan",
@@ -484,16 +717,66 @@ export function toolPhrase(
           };
         case "reload":
           return { verb: tense("Reloading", "Reloaded") };
+        case "start-session":
+          return {
+            verb: tense("Starting a session", "Started a session"),
+            subject: said,
+          };
+        case "read-session":
+          return { verb: tense("Reading a session", "Read a session") };
+        case "write-session":
+          return {
+            verb: tense("Writing to a session", "Wrote to a session"),
+            subject: said,
+          };
+        case "stop-session":
+          return { verb: tense("Stopping a session", "Stopped a session") };
+        case "run":
+          return {
+            verb: tense(
+              "Starting in the background",
+              "Started in the background",
+            ),
+            subject: view.text,
+          };
+        case "read-run":
+          return {
+            verb: tense(
+              "Reading a background command",
+              "Read a background command",
+            ),
+          };
+        case "stop-run":
+          return {
+            verb: tense(
+              "Stopping a background command",
+              "Stopped a background command",
+            ),
+          };
+        case "list-runs":
+          return {
+            verb: tense(
+              "Listing background commands",
+              "Listed background commands",
+            ),
+          };
       }
       break;
     }
     case "mcp":
-      return {
-        verb: view.tool.replaceAll("_", " "),
-        subject: toolLine(view.args),
-      };
+      return (
+        named(view.tool, view.args) ?? {
+          verb: view.tool.replaceAll("_", " "),
+          subject: toolLine(view.args),
+        }
+      );
   }
-  return { verb: view.name, subject: toolLine(view.args) };
+  return (
+    named(view.name, view.args) ?? {
+      verb: view.name,
+      subject: toolLine(view.args),
+    }
+  );
 }
 
 /** Looking around rather than changing things: reading a file, listing a folder, searching. */
@@ -637,8 +920,10 @@ export function latestPlan(blocks: SessionBlock[]): PlanStep[] | undefined {
 }
 
 /** A subagent's call: its work is drawn as a card of its own, not as a line among tools. */
-export const isSubagent = (tool: ToolBlock) =>
-  toolView(tool.name, tool.input).kind === "agent";
+export const isSubagent = (tool: ToolBlock) => {
+  const view = toolView(tool.name, tool.input);
+  return view.kind === "agent" && view.action === "start";
+};
 
 /** Tools run one after another, in a few words: "Ran 3 commands · edited 2 files · read 4 files". */
 export function toolsPhrase(tools: ToolBlock[]): string {
@@ -648,6 +933,7 @@ export function toolsPhrase(tools: ToolBlock[]): string {
     searches: 0,
     web: 0,
     messages: 0,
+    agents: 0,
     mcp: 0,
     plans: 0,
     other: 0,
@@ -664,6 +950,7 @@ export function toolsPhrase(tools: ToolBlock[]): string {
     else if (view.kind === "search") count.searches++;
     else if (view.kind === "web") count.web++;
     else if (view.kind === "zerolux") count.messages++;
+    else if (view.kind === "agent") count.agents++;
     else if (view.kind === "mcp") count.mcp++;
     else if (view.kind === "plan") count.plans++;
     else count.other++;
@@ -680,6 +967,7 @@ export function toolsPhrase(tools: ToolBlock[]): string {
     part(count.searches, "search", "searches"),
     part(count.web, "web lookup", "web lookups"),
     part(count.messages, "ZeroLux message", "ZeroLux messages"),
+    count.agents ? "coordinated agents" : "",
     part(count.mcp, "MCP tool", "MCP tools") &&
       `called ${part(count.mcp, "MCP tool", "MCP tools")}`,
     count.plans ? "updated the plan" : "",

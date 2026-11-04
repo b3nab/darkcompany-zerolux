@@ -225,7 +225,7 @@ export function SubagentCard({
   const faint = String(useCSSVariable("--color-faint"));
   // Its own work, where the harness keeps it apart: Claude Code's and Codex's.
   const openWork = useSubagentLink(tool.id);
-  if (view.kind !== "agent")
+  if (view.kind !== "agent" || view.action !== "start")
     return <ToolCall tool={tool} chatTitle={chatTitle} />;
   const running = state === "running";
   return (
@@ -241,7 +241,7 @@ export function SubagentCard({
                 Subagent
               </Text>
               <View className="min-w-0 flex-1">
-                <Verb running={running}>{view.title}</Verb>
+                <Verb running={running}>{view.title ?? "Subagent"}</Verb>
               </View>
               <Elapsed tool={tool} />
               <View
