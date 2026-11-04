@@ -1152,7 +1152,25 @@ impl CodexDriver {
                         queued["queuedSubmission"]["clientUserMessageId"] == delivery.id,
                         "Codex returned a different queued message"
                     );
-                    string(&queued["queuedSubmission"], "id")?.to_owned()
+                    let queue_id = string(&queued["queuedSubmission"], "id")?.to_owned();
+                    // Codex holds its queue after an interrupted turn until it is started
+                    // again: with no turn running, the message starts one now. A refusal
+                    // means Codex started it by itself.
+                    if self.active_turn.is_none()
+                        && let Err(error) = self
+                            .rpc
+                            .request(
+                                "thread/queue/start",
+                                json!({"threadId":self.thread_id,"queuedSubmissionId":queue_id}),
+                            )
+                            .await
+                    {
+                        tracing::debug!(
+                            error = format!("{error:#}"),
+                            "Codex's queue was not started"
+                        );
+                    }
+                    queue_id
                 }
             };
             self.notified(kernel, &delivery.id, &queue_id).await?;

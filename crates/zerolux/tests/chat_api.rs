@@ -1089,6 +1089,16 @@ async fn live_chat_round_trip_and_stop_use_the_real_runtime() {
     })
     .await;
     assert_eq!(native.count("thread/queue/add"), 1);
+    // With no turn running, the message starts one at once, even when Codex holds its queue
+    // after an interrupted turn.
+    native
+        .wait(|state| {
+            state.requests.iter().any(|request| {
+                request["method"] == "thread/queue/start"
+                    && request["params"]["queuedSubmissionId"] == state.queue[0]["id"]
+            })
+        })
+        .await;
     let turn = json!({
         "id": "fixture-turn", "status": "completed", "itemsView": "full", "items": [
             { "type": "userMessage", "id": "fixture-user", "clientId": delivery,
@@ -2621,8 +2631,10 @@ async fn a_codex_session_runs_on_a_joined_computer() {
         "{}",
         sent.text().await.unwrap()
     );
-    // Idle, it waits in Codex's own queue and starts the next turn there.
+    // Idle, it goes through Codex's own queue and starts a turn at once, even when Codex holds
+    // its queue after an interrupted turn.
     assert_eq!(native.count("thread/queue/add"), 1);
+    assert_eq!(native.count("thread/queue/start"), 1);
     // Images go with it, kept on the computer where its Codex reads them.
     let pictured = kernel
         .post(

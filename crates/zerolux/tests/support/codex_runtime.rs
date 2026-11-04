@@ -308,6 +308,11 @@ fn native_response(state: &mut NativeState, request: &Value) -> Option<Value> {
             }
             json!({"queuedSubmission":queued})
         }
+        // Codex holds its queue after an interrupted turn until it is started again; the
+        // fixture keeps the queued input for the test to read.
+        "thread/queue/start" => {
+            json!({"turn":{"id":"queued-turn","status":"inProgress","items":[]}})
+        }
         "thread/queue/delete" => {
             let before = state.queue.len();
             state

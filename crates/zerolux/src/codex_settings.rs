@@ -156,7 +156,8 @@ impl CodexSettings {
                 }
             }
         }
-        self.rpc
+        let added = self
+            .rpc
             .request(
                 "thread/queue/add",
                 json!({"threadId": self.thread_id,
@@ -164,7 +165,29 @@ impl CodexSettings {
             )
             .await
             .context("Codex did not confirm the input; it was not sent again")?;
+        // Codex holds its queue after an interrupted turn until it is started again. ZeroLux
+        // keeps the queue itself: with no turn running, what it hands Codex starts one now.
+        if mode == crate::model::InputMode::Interrupt || self.turn.borrow().is_none() {
+            self.start_queue(added["queuedSubmission"]["id"].as_str())
+                .await;
+        }
         Ok(())
+    }
+
+    /// Starts Codex's queue from `item`. A refusal means Codex started it by itself, or a turn
+    /// already runs, which takes it when it ends.
+    async fn start_queue(&self, item: Option<&str>) {
+        let mut params = json!({"threadId": self.thread_id});
+        if let Some(item) = item {
+            params["queuedSubmissionId"] = json!(item);
+        }
+        if let Err(error) = self.rpc.request("thread/queue/start", params).await {
+            tracing::debug!(
+                thread = %self.thread_id,
+                error = format!("{error:#}"),
+                "Codex's queue was not started"
+            );
+        }
     }
 
     /// The thread's skills, enabled, for its folder.
