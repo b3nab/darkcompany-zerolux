@@ -73,7 +73,11 @@ impl ChatRuntime {
         images: &[InputImage],
     ) -> Result<Option<crate::queue::Queued>> {
         async {
-            if mode != InputMode::Queue {
+            let session = self.store.chat_session(who, id).await?;
+            // A session still connecting, as one just started, has no harness to take it yet:
+            // whatever the mode, it waits in ZeroLux's queue and goes as soon as it connects.
+            let connecting = session.stopped_at.is_none() && session.status == "connecting";
+            if mode != InputMode::Queue && !connecting {
                 return self
                     .input_native(who, id, text, mode, images)
                     .await
@@ -85,8 +89,8 @@ impl ChatRuntime {
                 return Err(Error::Invalid("Write up to 64 KiB, or send an image".into()).into());
             }
             decode_images(images)?;
-            let session = self.store.chat_session(who, id).await?;
-            let busy = session.activity.as_deref() == Some("working")
+            let busy = connecting
+                || session.activity.as_deref() == Some("working")
                 || self.queue_awaits(id)
                 || self.store.has_queue(id).await?;
             if !busy {

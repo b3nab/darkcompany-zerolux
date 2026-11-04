@@ -2862,6 +2862,46 @@ async fn a_sessions_queue_is_kept_by_zerolux_changed_and_never_lost() {
                 .collect::<Vec<_>>()
         }
     };
+    // A session still connecting, as one just started, takes its input as soon as it connects:
+    // whatever the mode, it waits in the queue meanwhile.
+    let status = |status: &'static str| {
+        let (store, id) = (kernel.store.clone(), id.clone());
+        async move {
+            sea_orm::ConnectionTrait::execute_unprepared(
+                store.db(),
+                &format!("UPDATE sessions SET status='{status}' WHERE id='{id}'"),
+            )
+            .await
+            .unwrap();
+        }
+    };
+    status("connecting").await;
+    let early: Value = kernel
+        .post(
+            &format!("/sessions/{id}/input"),
+            None,
+            json!({ "text": "early" }),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(early["queued"]["text"], "early");
+    let early = early["queued"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        kernel
+            .request(
+                Method::DELETE,
+                &format!("/sessions/{id}/queue/{early}"),
+                None
+            )
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    status("connected").await;
     activity("working").await;
     for text in ["one", "two", "three"] {
         let sent: Value = kernel
