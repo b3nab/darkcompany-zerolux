@@ -2,3 +2,10 @@
 # to the end whatever fails.
 [profile.ci]
 fail-fast = false
+# Two minutes by design, a token's minute plus the minute of leeway LiveKit grants an expired
+# one: every push runs the rest, and the Release runs it too, with the `full` profile.
+default-filter = "not (binary_id(zerolux::livekit) & test(=a_kept_token_outlives_a_sign_out_by_its_minute_at_most))"
+
+# Every test, for the Release.
+[profile.full]
+fail-fast = false
