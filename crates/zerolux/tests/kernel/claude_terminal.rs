@@ -393,8 +393,9 @@ async fn entrusted_terminal_is_resumed_after_exit_without_changing_context() {
     drop(kernel);
     let _kernel = start(&root, port);
     ready(&client, &base).await;
-    // Longer than the server's reconnect interval: explicit Stop stays stopped.
-    tokio::time::sleep(Duration::from_secs(11)).await;
+    // Longer than the relink a kernel runs as it starts: explicit Stop stays stopped. Every
+    // later sweep runs the same relink, on the same sessions.
+    tokio::time::sleep(Duration::from_secs(3)).await;
     let sessions = api(&client, &base, "/sessions", None).await;
     assert!(
         sessions["sessions"]
