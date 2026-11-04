@@ -7,7 +7,7 @@
     "start": "bun x --bun expo start --dev-client",
     "ios": "bun x --bun expo run:ios",
     "android": "bun x --bun expo run:android",
-    "typecheck": "bun x --bun tsc --noEmit"
+    "typecheck": "bun node_modules/@typescript/native/bin/tsc --noEmit"
   },
   "dependencies": {
     "@config-plugins/react-native-webrtc": "^15.0.2",
@@ -78,6 +78,7 @@
   "devDependencies": {
     "@types/node": "^26.6.5",
     "@types/react": "~19.3.0",
-    "typescript": "^7.0.2"
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
   }
 }
