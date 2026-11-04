@@ -1,34 +1,55 @@
 name: Build the LiveKit server
-description: livekit-server from its source, for this runner's system, first on the PATH. ZeroLux carries it, and LiveKit publishes no build for macOS.
+description: livekit-server from its source, for this runner's system or another architecture, first on the PATH. ZeroLux carries it, and LiveKit publishes no build for macOS.
 
 inputs:
   version:
     description: The LiveKit server release to build.
     default: v1.13.7
+  arch:
+    description: The architecture it runs on, as Go names it (amd64, arm64), when it is not this runner's.
+    default: ""
 
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v4
+    # Built once per release and system, then kept.
+    - id: built
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/livekit
+        key: livekit-${{ inputs.version }}-${{ runner.os }}-${{ inputs.arch || runner.arch }}
+    - if: steps.built.outputs.cache-hit != 'true'
+      uses: actions/checkout@v4
       with:
         repository: livekit/livekit
         ref: ${{ inputs.version }}
         path: .livekit
-    - uses: actions/setup-go@v5
+    - if: steps.built.outputs.cache-hit != 'true'
+      uses: actions/setup-go@v5
       with:
         go-version-file: .livekit/go.mod
         cache-dependency-path: .livekit/go.sum
     - name: Build it
+      if: steps.built.outputs.cache-hit != 'true'
       shell: bash
       working-directory: .livekit
+      env:
+        ARCH: ${{ inputs.arch }}
       run: |
         go generate ./...
         # On macOS it reads the CPU's load through cgo; elsewhere it is pure Go.
         if [[ "$RUNNER_OS" == macOS ]]; then export CGO_ENABLED=1; else export CGO_ENABLED=0; fi
+        if [[ -n "$ARCH" ]]; then
+          export GOARCH="$ARCH"
+          [[ "$RUNNER_OS" == macOS ]] && export CC="clang -arch $([[ "$ARCH" == amd64 ]] && echo x86_64 || echo "$ARCH")"
+        fi
         extension=""
         [[ "$RUNNER_OS" == Windows ]] && extension=".exe"
         mkdir -p "$RUNNER_TEMP/livekit"
         go build -trimpath -ldflags "-s -w" -o "$RUNNER_TEMP/livekit/livekit-server$extension" ./cmd/server
-        echo "$RUNNER_TEMP/livekit" >> "$GITHUB_PATH"
     - shell: bash
+      run: echo "$RUNNER_TEMP/livekit" >> "$GITHUB_PATH"
+    # One for another architecture is not run here.
+    - if: inputs.arch == ''
+      shell: bash
       run: livekit-server --version

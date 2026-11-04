@@ -18,6 +18,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The checks run beside the builds: only publishing waits for them.
   checks:
     permissions:
       contents: read
@@ -25,7 +26,6 @@ jobs:
 
   draft:
     name: Draft
-    needs: checks
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.build.outputs.version }}
@@ -76,15 +76,23 @@ jobs:
           cp "$RUNNER_TEMP/zerolux-build.json" "$RUNNER_TEMP/build.json"
           gh release upload "$TAG" "$RUNNER_TEMP/build.json" --clobber
 
-  kernel:
-    name: Kernel (${{ matrix.name }})
+  # The app and the kernel for each system from one build: the kernel's own program is built
+  # after the app, from the same compiled dependencies.
+  desktop:
+    name: Desktop and kernel (${{ matrix.name }})
     needs: draft
     strategy:
       fail-fast: false
       matrix:
         include:
           - { name: macOS arm64, os: macos-26, target: aarch64-apple-darwin }
-          - { name: macOS x64, os: macos-26-intel, target: x86_64-apple-darwin }
+          # Built on Apple silicon for Intel Macs, with the programs the kernel carries for them.
+          - {
+              name: macOS x64,
+              os: macos-26,
+              target: x86_64-apple-darwin,
+              intel: true,
+            }
           # The oldest supported Ubuntu, so the builds run with older glibc versions too.
           - {
               name: Linux x64,
@@ -96,54 +104,6 @@ jobs:
               os: windows-2025,
               target: x86_64-pc-windows-msvc,
             }
-    runs-on: ${{ matrix.os }}
-    env:
-      ZEROLUX_BUILD_VERSION: ${{ needs.draft.outputs.version }}
-      ZEROLUX_BUILD_CHANNEL: ${{ needs.draft.outputs.channel }}
-      ZEROLUX_BUILD_COMMIT: ${{ needs.draft.outputs.commit }}
-      ZEROLUX_BUILD_BUILT_AT: ${{ needs.draft.outputs.built_at }}
-      ZEROLUX_UPDATE_PUBLIC_KEY: ${{ vars.ZEROLUX_UPDATE_PUBLIC_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up (Bun, Rust, uv, LiveKit)
-        uses: ./.github/actions/setup
-        with:
-          cache-key: release
-          livekit: "true"
-      - name: Prepare what the kernel carries
-        run: bun run --cwd apps/desktop assets
-      # One file: the kernel with its web app, sign-in, runners, Bun and LiveKit server inside.
-      - name: Build the kernel
-        env:
-          ZEROLUX_CARRY: ${{ github.workspace }}/apps/desktop/dist
-        run: cargo build --release --locked -p zerolux
-      - name: Sign and upload it
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.draft.outputs.tag }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          extension=""
-          [[ "$RUNNER_OS" == Windows ]] && extension=".exe"
-          file="$GITHUB_WORKSPACE/zerolux-$TAG-${{ matrix.target }}$extension"
-          cp "target/release/zerolux$extension" "$file"
-          cd apps/desktop
-          bun x --bun tauri signer sign --app-version "$ZEROLUX_BUILD_VERSION" "$file"
-          gh release upload "$TAG" "$file" "$file.sig" --clobber
-
-  desktop:
-    name: Desktop (${{ matrix.name }})
-    needs: draft
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: macOS arm64, os: macos-26 }
-          - { name: macOS x64, os: macos-26-intel }
-          - { name: Linux x64, os: ubuntu-22.04 }
-          - { name: Windows x64, os: windows-2025 }
     runs-on: ${{ matrix.os }}
     env:
       # Tauri names the installed binary zerolux; keep its output separate from the CLI.
@@ -160,9 +120,32 @@ jobs:
       - name: Set up (Bun, Rust, uv, LiveKit)
         uses: ./.github/actions/setup
         with:
-          cache-key: release-desktop
+          cache-key: release-${{ matrix.target }}
           cache-target: target/desktop
+          target: ${{ matrix.target }}
           livekit: "true"
+          livekit-arch: ${{ matrix.intel && 'amd64' || '' }}
+      # The same Bun and uv the setup installs, for Intel, from their verified releases.
+      - name: Bun and uv for Intel Macs
+        if: matrix.intel
+        working-directory: ${{ runner.temp }}
+        run: |
+          bun="https://github.com/oven-sh/bun/releases/download/bun-v1.4.2"
+          uv="https://github.com/astral-sh/uv/releases/download/0.13.1"
+          curl -fsSLO "$bun/bun-darwin-x64.zip" -fsSLO "$bun/SHASUMS256.txt"
+          grep ' bun-darwin-x64.zip$' SHASUMS256.txt | shasum -a 256 -c -
+          curl -fsSLO "$uv/uv-x86_64-apple-darwin.tar.gz" -fsSLO "$uv/uv-x86_64-apple-darwin.tar.gz.sha256"
+          shasum -a 256 -c uv-x86_64-apple-darwin.tar.gz.sha256
+          unzip -q bun-darwin-x64.zip
+          tar xzf uv-x86_64-apple-darwin.tar.gz
+          echo "ZEROLUX_CARRY_BUN=$RUNNER_TEMP/bun-darwin-x64/bun" >> "$GITHUB_ENV"
+          echo "ZEROLUX_CARRY_UV=$RUNNER_TEMP/uv-x86_64-apple-darwin/uv" >> "$GITHUB_ENV"
+      # The packaging tools Tauri downloads for Linux, kept.
+      - if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/tauri
+          key: tauri-tools-${{ runner.os }}
       # Signed and notarized with the Apple Developer ID when its secrets are set; otherwise
       # signed ad hoc, which Apple Silicon needs to open it at all.
       - name: Choose how the macOS app is signed
@@ -195,8 +178,32 @@ jobs:
           tauriScript: bun x --bun tauri
           tagName: ${{ needs.draft.outputs.tag }}
           releaseDraft: true
-          args: --config ${{ runner.temp }}/zerolux-tauri.json --verbose
+          args: --config ${{ runner.temp }}/zerolux-tauri.json --target ${{ matrix.target }} --verbose
           updaterJsonPreferNsis: true
+      # One file: the kernel with its web app, sign-in, runners, Bun and LiveKit server inside.
+      # Both packages resolve their dependencies as the app's build did, and on macOS for the
+      # same oldest system, so only the kernel's own program is compiled.
+      - name: Build the kernel
+        shell: bash
+        working-directory: apps/desktop/src-tauri
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            export MACOSX_DEPLOYMENT_TARGET="$(bun -e 'console.log((await Bun.file("tauri.conf.json").json()).bundle.macOS.minimumSystemVersion)')"
+          fi
+          cargo build --release --locked -p zerolux-desktop -p zerolux --bin zerolux --target ${{ matrix.target }}
+      - name: Sign and upload it
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.draft.outputs.tag }}
+        run: |
+          extension=""
+          [[ "$RUNNER_OS" == Windows ]] && extension=".exe"
+          file="$GITHUB_WORKSPACE/zerolux-$TAG-${{ matrix.target }}$extension"
+          cp "$CARGO_TARGET_DIR/${{ matrix.target }}/release/zerolux$extension" "$file"
+          cd apps/desktop
+          bun x --bun tauri signer sign --app-version "$ZEROLUX_BUILD_VERSION" "$file"
+          gh release upload "$TAG" "$file" "$file.sig" --clobber
 
   # The mobile app for Android, as an APK for 64-bit ARM phones. Signed with the release key
   # when its secrets are set; otherwise with the debug key, which installs but cannot be
@@ -220,6 +227,9 @@ jobs:
         with:
           distribution: zulu
           java-version: "17"
+          # Gradle's downloads, kept by the packages the Android project is generated from.
+          cache: gradle
+          cache-dependency-path: bun.lock
       - name: Generate the Android project
         working-directory: apps/mobile
         run: bun x --bun expo prebuild --platform android --no-install
@@ -256,7 +266,7 @@ jobs:
 
   publish:
     name: Publish
-    needs: [draft, kernel, desktop, android]
+    needs: [checks, draft, desktop, android]
     runs-on: ubuntu-24.04
     env:
       TAG: ${{ needs.draft.outputs.tag }}

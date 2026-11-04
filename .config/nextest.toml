@@ -1,0 +1,4 @@
+# How the workspace's tests run in CI: each in a process of its own, side by side, all of them
+# to the end whatever fails.
+[profile.ci]
+fail-fast = false

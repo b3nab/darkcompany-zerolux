@@ -15,19 +15,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The same checks on each system. PostgreSQL runs on Linux only: GitHub runs service
-  # containers only there, and an empty image starts none.
-  ci:
-    name: ${{ matrix.name }}
+  # What is the same on every system, once: the format, the types and the web app's build.
+  checks:
+    name: Format, types and web
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up (Bun, rustfmt)
+        uses: ./.github/actions/setup
+        with:
+          rust: format
+      - name: Format
+        run: cargo fmt --all -- --check && bun run format:check
+      # It also writes the renderer the web app's types import.
+      - name: Web build
+        run: bun run --cwd apps/web build
+      - name: Typecheck
+        run: bun run typecheck
+
+  # The Rust workspace on each system: its lint and its tests, side by side. PostgreSQL runs on
+  # Linux only, in a job of its own: GitHub runs service containers only there, and an empty
+  # image starts none.
+  rust:
+    name: Rust (${{ matrix.name }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: Linux
+          - { name: Linux, os: ubuntu-24.04, lint: true }
+          - name: Linux PostgreSQL
             os: ubuntu-24.04
             postgres: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
-          - { name: Windows, os: windows-2025, postgres: "" }
-          - { name: macOS, os: macos-26, postgres: "" }
+          - { name: Windows, os: windows-2025, lint: true }
+          - { name: macOS, os: macos-26, lint: true }
     runs-on: ${{ matrix.os }}
     services:
       postgres:
@@ -44,33 +64,56 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      # The runner's own Android, .NET and Haskell SDKs, unused here, leave room for the build.
+      # The runner's own Android, .NET and Haskell SDKs, unused here, go while the job sets up.
       - name: Free disk space
         if: runner.os == 'Linux'
-        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+        run: nohup sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup > /dev/null 2>&1 &
       - uses: actions/checkout@v4
-      - name: Set up (Bun, Rust, uv, LiveKit)
+      - name: Set up (Rust, nextest, Bun, uv, LiveKit)
         uses: ./.github/actions/setup
         with:
           cache-key: check
+          # Both Linux jobs build the same: one keeps the cache.
+          cache-save: ${{ !matrix.postgres }}
           livekit: "true"
-      - name: Format
-        run: cargo fmt --all -- --check && bun run format:check
-      # The desktop crate compiles against the built web app, so it comes before Lint.
-      - name: Web build
-        run: bun run --cwd apps/desktop assets
+      # The desktop crate embeds the web app it serves: its lint and tests need only the
+      # folder, as the web build is checked once above.
+      - name: Web app's folder
+        shell: bash
+        run: mkdir -p apps/desktop/dist/web && echo '<!doctype html>' > apps/desktop/dist/web/index.html
       - name: Lint (clippy)
+        if: matrix.lint
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Rust tests (SQLite)
-        run: cargo test --workspace --no-fail-fast
-      # The whole workspace again, as the SQLite run built it: one package alone would build its
-      # dependencies again with other features, a second build beside the first.
-      - name: Rust tests (PostgreSQL)
-        if: runner.os == 'Linux'
+      - name: Tests (SQLite)
+        if: ${{ !matrix.postgres }}
+        run: cargo nextest run --workspace --profile ci
+      # The whole workspace is built as the SQLite job builds it; only the kernel's tests read
+      # the database.
+      - name: Tests (PostgreSQL)
+        if: matrix.postgres
         env:
           ZEROLUX_TEST_POSTGRES_URL: postgresql://zerolux_test:fixture-only-password@127.0.0.1:5432/zerolux_test
-        run: cargo test --workspace --no-fail-fast -- --test-threads=4
-      - name: Typecheck
-        run: bun run typecheck
+        run: cargo nextest run --workspace --profile ci -E 'package(zerolux)'
+      # nextest runs no doctests: they run once, where they are the same on every system.
+      - name: Doctests
+        if: runner.os == 'Linux' && !matrix.postgres
+        run: cargo test --workspace --doc
+
+  js:
+    name: JavaScript and Python (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux, os: ubuntu-24.04 }
+          - { name: Windows, os: windows-2025 }
+          - { name: macOS, os: macos-26 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up (Bun, uv)
+        uses: ./.github/actions/setup
+        with:
+          rust: none
       - name: JavaScript and Python tests
         run: bun run test

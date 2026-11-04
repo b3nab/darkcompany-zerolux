@@ -108,6 +108,11 @@
     "macOS": {
       "minimumSystemVersion": "14.0",
       "entitlements": "./Entitlements.plist"
+    },
+    "linux": {
+      "rpm": {
+        "compression": { "type": "zstd", "level": 1 }
+      }
     }
   },
   "plugins": {

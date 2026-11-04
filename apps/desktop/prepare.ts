@@ -107,11 +107,13 @@ if (!piExtension.success)
 
 // What a release's kernel carries inside itself (`ZEROLUX_CARRY` = this folder): beside the
 // web app, sign-in and runners above, the programs it starts: Bun, the LiveKit server, and uv
-// for the Python parts of extensions.
+// for the Python parts of extensions. A build for another system names its own.
+const { ZEROLUX_CARRY_BUN, ZEROLUX_CARRY_LIVEKIT, ZEROLUX_CARRY_UV } =
+  process.env;
 for (const [name, path] of [
-  ["bun", process.execPath],
-  ["livekit-server", Bun.which("livekit-server")],
-  ["uv", Bun.which("uv")],
+  ["bun", ZEROLUX_CARRY_BUN ?? process.execPath],
+  ["livekit-server", ZEROLUX_CARRY_LIVEKIT ?? Bun.which("livekit-server")],
+  ["uv", ZEROLUX_CARRY_UV ?? Bun.which("uv")],
 ] as const) {
   if (!path)
     throw new Error(`${name} is not on the PATH: the kernel carries it`);

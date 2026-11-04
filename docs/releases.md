@@ -47,14 +47,18 @@ The completed feeds are verified against the public key with Minisign before pub
 a mismatched key pair cannot advance a channel. These keys are separate from platform signing
 certificates and the Android keystore.
 
-The workflow runs the full CI checks, then builds the kernels, desktop installers and Android
-app. Windows MSI keeps a separate numeric version; the update feed compares the full release
-version. Kernel binaries and desktop update bundles are signed with their release version.
+The workflow runs the full CI checks beside the builds, and publishes only once they pass. Each
+system's job builds the desktop installers and then, from the same compiled dependencies, the
+kernel; the Intel Mac builds are made on Apple silicon, carrying Intel's Bun, uv and LiveKit
+server. Android builds beside them. Windows MSI keeps a separate numeric version; the update
+feed compares the full release version. Kernel binaries and desktop update bundles are signed
+with their release version.
 
-Desktop release builds use `target/desktop/release`, separately from the CLI's
-`target/release`. Tauri packages the desktop's main executable as `zerolux` and discovers
-its installers and updater artifacts in that desktop target directory. The CI cache follows
-the same split; `CARGO_TARGET_DIR` can select another absolute desktop output directory.
+Release builds use `target/desktop/<target>/release`, separately from the CLI's
+`target/release` in a checkout. Tauri packages the desktop's main executable as `zerolux` and
+discovers its installers and updater artifacts in that desktop target directory; the kernel's
+own program is built there after them. The CI cache follows the same split; `CARGO_TARGET_DIR`
+can select another absolute desktop output directory.
 
 Each version has immutable artifacts on its GitHub release. Once every build succeeds, the
 workflow publishes the release and advances signed `nightly.json`, `beta.json` and
