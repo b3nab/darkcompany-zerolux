@@ -794,15 +794,30 @@ export const sameMembers = (conversation: Conversation, ids: string[]) =>
   );
 
 /**
+ * Whether ZeroLux continues a session after it stops: any pi or Codex one, from its harness's
+ * own record; a Claude Code one only when ZeroLux runs it.
+ */
+const continued = (s: ChatSession) =>
+  s.harness === "pi" || s.harness === "codex" || s.origin === "owned";
+
+/** A stopped session, or one that lost its link, that Resume continues. */
+export const resumable = (s: ChatSession) =>
+  continued(s) && (s.status === "stopped" || s.status === "attention");
+
+/** A pi hired from a terminal: ZeroLux can take it over while it is idle there. */
+export const takeable = (s: ChatSession) =>
+  s.harness === "pi" && s.origin === "attached" && s.status === "connected";
+
+/**
  * What the team list shows: live sessions, those needing attention, and the latest stopped
- * resumable session (managed Claude or pi) that is not live again.
+ * session ZeroLux can resume that is not live again.
  */
 export const listedSessions = (sessions: ChatSession[]) =>
   sessions.filter(
     (s, i) =>
       s.status !== "stopped" ||
       Boolean(s.attention_reason) ||
-      ((s.origin === "owned" || s.harness === "pi") &&
+      (continued(s) &&
         !sessions.some(
           (o, j) =>
             o.harness === s.harness &&

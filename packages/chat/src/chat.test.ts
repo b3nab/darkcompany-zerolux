@@ -19,6 +19,7 @@ import {
   isThread,
   listedSessions,
   liveSessions,
+  resumable,
   threadsOf,
   workingIn,
 } from "./chat";
@@ -642,14 +643,24 @@ test("the team lists live sessions, ones needing attention, and the latest stopp
     s("owned-live", "n5", "connected", "owned"),
     { ...s("pi-old", "n1", "stopped", "attached"), harness: "pi" },
     { ...s("pi-stopped", "n1", "stopped", "attached"), harness: "pi" },
-  ]).map((x) => x.id);
-  expect(listed).toEqual([
+    // Codex continues any thread of its own, one ZeroLux joined too.
+    { ...s("codex-stopped", "n6", "stopped", "attached"), harness: "codex" },
+  ]);
+  expect(listed.map((x) => x.id)).toEqual([
     "live",
     "unconfirmed",
     "owned-new",
     "owned-live",
     "pi-stopped",
+    "codex-stopped",
   ]);
+  // A stopped one listed for no attention is one Resume continues.
+  expect(
+    listed
+      .filter((x) => x.status === "stopped" && !x.attention_reason)
+      .every(resumable),
+  ).toBe(true);
+  expect(resumable(s("gone", "n2", "stopped", "attached"))).toBe(false);
 });
 
 test("a new chat offers agents with a live session and reuses a direct chat", () => {

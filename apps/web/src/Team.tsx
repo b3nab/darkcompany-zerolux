@@ -26,6 +26,8 @@ import {
   joinedHarnesses,
   contextShare,
   percent,
+  resumable,
+  takeable,
   tokenCount,
   usdCost,
 } from "@zerolux/chat";
@@ -761,14 +763,6 @@ export function AgentPage({
     </section>
   );
 }
-
-/** Sessions ZeroLux runs, and pi ones it can continue from their saved file. */
-export const resumable = (s: ChatSession) =>
-  (s.harness === "pi" || s.origin === "owned") &&
-  (s.status === "stopped" || s.status === "attention");
-/** A pi hired from a terminal: ZeroLux can take it over while it is idle there. */
-export const takeable = (s: ChatSession) =>
-  s.harness === "pi" && s.origin === "attached" && s.status === "connected";
 
 /** An agent's profile: who it is, what it does now, where it runs, and its chats. */
 export function AgentProfile({

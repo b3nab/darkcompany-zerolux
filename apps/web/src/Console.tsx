@@ -35,6 +35,8 @@ import {
 import {
   accountReady,
   agentSettingFields,
+  resumable,
+  takeable,
   ago,
   briefAgo,
   commandsFor,
@@ -152,7 +154,7 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from "@/components/ui/native-select";
-import { SessionCard, StartSession, resumable, takeable } from "./Team";
+import { SessionCard, StartSession } from "./Team";
 import { ApprovalCard, ApprovalReceipt } from "./Approvals";
 import { sendsOnEnter } from "./ChatView";
 import { useMe } from "./AuthGate";
