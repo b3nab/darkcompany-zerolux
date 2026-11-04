@@ -61,6 +61,8 @@ jobs:
     env:
       # No debug info in these builds: less to write and link; a panic still says where.
       CARGO_PROFILE_DEV_DEBUG: "0"
+      # On Windows, Rust's own LLD links instead of Microsoft's linker; elsewhere it is unused.
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
     services:
       postgres:
         image: ${{ matrix.postgres }}
