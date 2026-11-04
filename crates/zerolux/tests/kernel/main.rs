@@ -15,6 +15,7 @@ mod codex_runtime;
 mod db;
 #[path = "../support/livekit.rs"]
 mod livekit_support;
+#[cfg(unix)]
 #[path = "../support/owner.rs"]
 mod owner;
 

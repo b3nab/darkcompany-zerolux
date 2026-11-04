@@ -11,6 +11,7 @@ use zerolux::{
     store::Store,
 };
 
+#[cfg(unix)]
 use crate::owner;
 
 use crate::db;
