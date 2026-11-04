@@ -32,25 +32,30 @@ runs:
   steps:
     # webrtc-sys builds its C++ against Chromium's hermetic libc++, which requires Clang 21+,
     # newer than the runner's. https://github.com/livekit/rust-sdks#building
-    # The packages the runner lacks are downloaded once per runner image, LLVM's from
-    # apt.llvm.org, then installed from the kept files.
+    # The packages the runner lacks are kept once downloaded, LLVM's from apt.llvm.org: a new
+    # runner image starts from the last ones kept, and downloads again only what apt refuses.
     - id: image
       if: runner.os == 'Linux' && inputs.rust == 'build'
       shell: bash
-      run: echo "image=$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
-    - id: packages
-      if: runner.os == 'Linux' && inputs.rust == 'build'
+      run: |
+        echo "os=$ImageOS" >> "$GITHUB_OUTPUT"
+        echo "version=$ImageVersion" >> "$GITHUB_OUTPUT"
+    - if: runner.os == 'Linux' && inputs.rust == 'build'
       uses: actions/cache@v4
       with:
         path: ~/apt-packages
-        key: apt-${{ steps.image.outputs.image }}-${{ runner.arch }}-${{ hashFiles('.github/actions/setup/action.yml') }}
+        key: apt-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ hashFiles('.github/actions/setup/action.yml') }}-${{ steps.image.outputs.version }}
+        restore-keys: apt-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ hashFiles('.github/actions/setup/action.yml') }}-
     - name: Install Clang and the desktop's native libraries and packaging tools
       if: runner.os == 'Linux' && inputs.rust == 'build'
       shell: bash
-      env:
-        KEPT: ${{ steps.packages.outputs.cache-hit }}
       run: |
-        if [[ "$KEPT" != true ]]; then
+        packages=(build-essential clang-21 libclang-21-dev libc6-dev libglib2.0-dev libjpeg-turbo8-dev pkg-config libwebkit2gtk-4.1-dev libdbus-1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils)
+        shopt -s nullglob
+        kept=(~/apt-packages/*.deb)
+        # The kept files, unless this image needs newer or other packages: apt refuses them
+        # before changing anything, and they are downloaded again.
+        if ! (( ${#kept[@]} )) || ! sudo apt-get install -y --no-install-recommends "${kept[@]}"; then
           curl --fail --silent --show-error --location https://apt.llvm.org/llvm-snapshot.gpg.key -o llvm.asc
           fingerprint="$(gpg --batch --show-keys --with-colons llvm.asc | awk -F: '$1 == "fpr" { print $10; exit }')"
           test "$fingerprint" = "6084F3CF814B57C1CF12EFD515CF4D18AF4F7421"
@@ -59,13 +64,9 @@ runs:
           echo "deb [signed-by=/usr/share/keyrings/apt-llvm.asc] https://apt.llvm.org/$codename/ llvm-toolchain-$codename-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
           rm llvm.asc
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends --download-only build-essential clang-21 libclang-21-dev libc6-dev libglib2.0-dev libjpeg-turbo8-dev pkg-config libwebkit2gtk-4.1-dev libdbus-1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils
-          mkdir -p ~/apt-packages
-          cp /var/cache/apt/archives/*.deb ~/apt-packages/ 2>/dev/null || true
-        fi
-        shopt -s nullglob
-        packages=(~/apt-packages/*.deb)
-        if (( ${#packages[@]} )); then
+          sudo apt-get install -y --no-install-recommends --download-only "${packages[@]}"
+          rm -rf ~/apt-packages && mkdir ~/apt-packages
+          cp /var/cache/apt/archives/*.deb ~/apt-packages/
           sudo apt-get install -y --no-install-recommends "${packages[@]}"
         fi
         clang-21 --version
