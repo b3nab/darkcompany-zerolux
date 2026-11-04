@@ -28,6 +28,8 @@ fn main() {
             "desktop_workspaces",
             "desktop_switch",
             "desktop_page",
+            "reveal_file",
+            "open_image",
             "menu_commands",
             "menu_sections",
             "menu_run",

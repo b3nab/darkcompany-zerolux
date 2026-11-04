@@ -978,6 +978,7 @@ export function FilesPanel({
   perform,
   send,
   close,
+  file,
 }: {
   session: ChatSession;
   name: string;
@@ -986,9 +987,11 @@ export function FilesPanel({
   perform: Perform;
   send?: (text: string) => Promise<void>;
   close: () => void;
+  /** The file it opens on, by its path in the folder. */
+  file?: string;
 }) {
   const [query, setQuery] = useState("");
-  const [open, setOpen] = useState<string>();
+  const [open, setOpen] = useState(file);
   const files = useSessionFiles(session.id, query);
   const [read, setRead] = useState<{
     path: string;

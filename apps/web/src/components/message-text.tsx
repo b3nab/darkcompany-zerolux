@@ -9,12 +9,15 @@ import type { ReactNode } from "react";
 import remarkBreaks from "remark-breaks";
 import {
   Streamdown,
+  defaultComponents,
   defaultRehypePlugins,
   defaultRemarkPlugins,
 } from "streamdown";
 import type { PluginConfig, StreamdownProps } from "streamdown";
 import codeRenderer from "../../generated/renderer/code.js" with { type: "file" };
 import mermaidRenderer from "../../generated/renderer/mermaid.js" with { type: "file" };
+import { localImage, localPath } from "@zerolux/chat";
+import { LocalFile, Thumbnails } from "@/components/local-files";
 import { useTheme } from "../theme";
 
 // A chat keeps the line breaks people type; a document's are Markdown's.
@@ -22,6 +25,8 @@ const documentRemark = Object.values(defaultRemarkPlugins);
 const chatRemark = [...documentRemark, remarkBreaks];
 const [harden] = defaultRehypePlugins.harden as [unknown, unknown];
 type Hast = {
+  type?: string;
+  value?: string;
   tagName?: string;
   properties?: Record<string, unknown>;
   children?: Hast[];
@@ -36,13 +41,81 @@ const relativeImages = () => (tree: Hast) => {
   };
   walk(tree);
 };
+/** Where a file named on the agent's computer is kept, past the link rules: by its path. */
+const LOCAL = "#local:";
 /**
- * Raw HTML shows as text; links only to the web or mail; no images in a message, and in a
- * document only those its `image` finds.
+ * A message's links and images to files on its computer, as `[shot](/tmp/x.png)` or
+ * `![](~/x.png)`: kept by their path for a chip, never a link the page follows.
+ */
+const localFiles = () => (tree: Hast) => {
+  const walk = (node: Hast) => {
+    const url =
+      node.tagName === "a"
+        ? node.properties?.href
+        : node.tagName === "img"
+          ? node.properties?.src
+          : undefined;
+    const path = typeof url === "string" ? localPath(url) : undefined;
+    if (path !== undefined) {
+      if (node.tagName === "img") {
+        const alt = node.properties?.alt;
+        node.tagName = "a";
+        node.children = [
+          {
+            type: "text",
+            value: typeof alt === "string" && alt ? alt : path,
+          },
+        ];
+      }
+      node.properties = { href: LOCAL + encodeURIComponent(path) };
+    }
+    node.children?.forEach(walk);
+  };
+  walk(tree);
+};
+const pathOf = (href: string) => decodeURIComponent(href.slice(LOCAL.length));
+/** The images on its computer that a paragraph or a list item's own lines name. */
+const imagesOf = (node: Hast | undefined): string[] =>
+  (node?.children ?? []).flatMap((child) => {
+    const href = child.tagName === "a" ? child.properties?.href : undefined;
+    if (typeof href === "string" && href.startsWith(LOCAL))
+      return localImage(pathOf(href)) ? [pathOf(href)] : [];
+    // A paragraph or a list inside shows its own.
+    return ["p", "ul", "ol"].includes(child.tagName ?? "")
+      ? []
+      : imagesOf(child);
+  });
+/**
+ * Links as Streamdown draws them, a file on the agent's computer as a chip; the images a
+ * paragraph or a list item names, small, under its text.
+ */
+const messageComponents: StreamdownProps["components"] = {
+  a: (props) =>
+    props.href?.startsWith(LOCAL) ? (
+      <LocalFile path={pathOf(props.href)}>{props.children}</LocalFile>
+    ) : (
+      <defaultComponents.a {...props} />
+    ),
+  p: (props) => (
+    <>
+      <defaultComponents.p {...props} />
+      <Thumbnails paths={imagesOf(props.node as Hast | undefined)} />
+    </>
+  ),
+  li: ({ children, ...props }) => (
+    <defaultComponents.li {...props}>
+      {children}
+      <Thumbnails paths={imagesOf(props.node as Hast | undefined)} />
+    </defaultComponents.li>
+  ),
+};
+/**
+ * Raw HTML shows as text; links only to the web or mail, a message's files on its computer as
+ * chips; in a document only the images its `image` finds.
  */
 const rehype = (images: boolean) =>
   [
-    ...(images ? [relativeImages] : []),
+    images ? relativeImages : localFiles,
     defaultRehypePlugins.sanitize,
     [
       harden,
@@ -157,15 +230,20 @@ export const MessageText = memo(function MessageText({
     () => plugins,
   );
   const { resolved } = useTheme();
-  // A document draws its images; a message has none.
+  // A document draws its images; a message, the files its agent names.
   const components = useMemo<StreamdownProps["components"]>(
     () =>
-      document && {
-        img: ({ src, alt }) =>
-          typeof src === "string"
-            ? document.image(decodeURI(src.replace(/^\.?\//, "")), alt ?? "")
-            : null,
-      },
+      document
+        ? {
+            img: ({ src, alt }) =>
+              typeof src === "string"
+                ? document.image(
+                    decodeURI(src.replace(/^\.?\//, "")),
+                    alt ?? "",
+                  )
+                : null,
+          }
+        : messageComponents,
     [document],
   );
   const needs = pluginsFor(text).join();

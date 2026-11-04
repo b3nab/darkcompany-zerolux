@@ -6,6 +6,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -90,6 +91,8 @@ import {
   useSessionQueue,
   useSessionSettings,
   useSessionSubagents,
+  agentNames,
+  subagentAt,
   useSessionUsage,
   useUiPieces,
   useVoice,
@@ -128,7 +131,7 @@ import {
 } from "@/components/session-blocks";
 import { Listen } from "@/components/listen";
 import { useReadAloud } from "./read-aloud";
-import { PlanSteps } from "@/components/tool-call";
+import { PlanSteps, SessionAgents } from "@/components/tool-call";
 import { Reveal } from "@/components/reveal";
 import { setDensity, useDensity } from "@/components/density";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -176,6 +179,9 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { SidePanel } from "@/components/side-panel";
+import { SessionFilesProvider, imagesIn } from "@/components/local-files";
+import type { SessionFiles } from "@/components/local-files";
+import { desktopHere } from "./desktop";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { XL, useMedia } from "./media";
 
@@ -950,6 +956,16 @@ export function SessionView({
     chat.outputs[session.id]?.end,
   );
   const blocks = sessionBlocks(events);
+  // The images its agent's words show, in their order, for the lightbox.
+  const images = useMemo(
+    () =>
+      imagesIn(
+        blocks.flatMap((block) => (block.kind === "text" ? [block.text] : [])),
+      ),
+    // The blocks are its events'.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [events],
+  );
   // What it produces before its record has it, after the recorded work.
   const live = useSessionLive(session.id, chat.live, events.length);
   // Its context being summarized, asked for or the harness's own.
@@ -970,6 +986,26 @@ export function SessionView({
   const git = useSessionGit(access.read ? session.id : undefined, at);
   const changed = git.status?.changes.length ?? 0;
   const [pane, setPane] = useState<CodePane>();
+  // A file of its folder that its words name, opened in the file viewer.
+  const [file, setFile] = useState<{ path: string; at: number }>();
+  // The files its words name, read from its computer; on this one, in the desktop app, the
+  // Finder shows them too.
+  const here = desktopHere() && !computer;
+  const files = useMemo<SessionFiles>(
+    () => ({
+      id: session.id,
+      folder: session.workspace,
+      images,
+      here,
+      openFile: access.read
+        ? (path) => {
+            setFile({ path, at: Date.now() });
+            setPane("files");
+          }
+        : undefined,
+    }),
+    [session.id, session.workspace, images, here, access.read],
+  );
   // The subagents it started, each with work of its own to open beside its own.
   const { subagents = [] } = useSessionSubagents(session.id, at);
   const [shownSubagent, setShownSubagent] = useState<string>();
@@ -978,6 +1014,19 @@ export function SessionView({
     setShownSubagent(id);
     setPane("subagent");
   };
+  // Its agents as their calls and messages name them: Codex's root is the session's own.
+  const agents = useMemo<SessionAgents>(() => {
+    const names = agentNames(subagents);
+    return {
+      name: (target) => (target === "/root" ? name : names(target)),
+      open: (target) => {
+        const found = subagentAt(subagents, target);
+        return found && (() => openSubagent(found.id));
+      },
+    };
+    // Opening one sets only state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subagents, name]);
   // The session that started this one, and those this one started, to delegate work.
   const parent = delegatedBy(session, chat.sessions);
   const delegates = delegatedTo(session.id, chat.sessions);
@@ -1032,6 +1081,8 @@ export function SessionView({
       />
     ) : pane === "files" ? (
       <FilesPanel
+        key={file?.at}
+        file={file?.path}
         session={session}
         name={name}
         revision={at}
@@ -1244,423 +1295,425 @@ export function SessionView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, working, access.write]);
   return (
-    <>
-      <SidePanel
-        id="session-code"
-        wide={wide}
-        panel={wide && code}
-        size={520}
-        min={340}
-        max={1000}
-        className="flex min-h-0 min-w-0 flex-1"
-      >
-        <section
-          aria-label={`${name}'s session`}
-          className="@container flex min-h-0 min-w-0 flex-1 flex-col"
+    <SessionFilesProvider files={files}>
+      <SessionAgents.Provider value={agents}>
+        <SidePanel
+          id="session-code"
+          wide={wide}
+          panel={wide && code}
+          size={520}
+          min={340}
+          max={1000}
+          className="flex min-h-0 min-w-0 flex-1"
         >
-          <header className="flex min-h-14 shrink-0 items-center gap-3 border-b px-3 py-2 md:px-5">
-            <Link
-              to="/console"
-              aria-label="All sessions"
-              className={buttonVariants({
-                variant: "ghost",
-                size: "icon-sm",
-                className: "md:hidden",
-              })}
-            >
-              <ChevronLeftIcon />
-            </Link>
-            <SessionMark
-              session={session}
-              actors={actors}
-              state={tone}
-              className="size-8"
-            />
-            <div className="min-w-0 flex-1">
-              {title !== undefined ? (
-                <form className="flex gap-2" onSubmit={(e) => void rename(e)}>
-                  <Input
-                    aria-label="Session title"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    maxLength={200}
-                    autoFocus
-                    className="h-7"
-                  />
-                  <Button
-                    type="submit"
-                    size="sm"
-                    disabled={busy || !title.trim()}
-                  >
-                    Save
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setTitle(undefined)}
-                  >
-                    Cancel
-                  </Button>
-                </form>
-              ) : agent ? (
-                <h2 className="truncate font-mono text-[15px] font-medium text-agent-foreground">
-                  {name}
-                  <span className="font-sans text-faint">
-                    {" "}
-                    · {session.title || "Untitled session"}
-                  </span>
-                </h2>
-              ) : (
-                <h2 className="truncate text-[15px] font-medium">{name}</h2>
-              )}
-              <p className="truncate text-xs text-muted-foreground">
-                {sessionState(session)} ·{" "}
-                {harnessLabels[session.harness] ?? session.harness} ·{" "}
-                <span title={session.workspace} className="font-mono">
-                  {folderName(session.workspace)}
-                </span>
-              </p>
-            </div>
-            {/* The pane's own width decides what the header has room for: the agent and the
-                session's title always stay. */}
-            <Presence tone={tone} className="@max-6xl:hidden">
-              {outputLine(chat, session) ?? sessionState(session)}
-            </Presence>
-            <Segmented<Density>
-              label="Density"
-              className="@max-3xl:hidden"
-              value={density}
-              choose={setDensity}
-              options={Object.entries(densityLabels) as [Density, string][]}
-            />
-            {access.read && (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  aria-pressed={pane === "changes"}
-                  title="Changes"
-                  onClick={() => toggle("changes")}
-                  className="aria-pressed:bg-accent"
-                >
-                  <GitCompareArrowsIcon data-icon="inline-start" />
-                  <span className="@max-5xl:sr-only">Changes</span>
-                  {changed > 0 && (
-                    <span className="font-mono text-[11px] text-attention">
-                      {changed}
+          <section
+            aria-label={`${name}'s session`}
+            className="@container flex min-h-0 min-w-0 flex-1 flex-col"
+          >
+            <header className="flex min-h-14 shrink-0 items-center gap-3 border-b px-3 py-2 md:px-5">
+              <Link
+                to="/console"
+                aria-label="All sessions"
+                className={buttonVariants({
+                  variant: "ghost",
+                  size: "icon-sm",
+                  className: "md:hidden",
+                })}
+              >
+                <ChevronLeftIcon />
+              </Link>
+              <SessionMark
+                session={session}
+                actors={actors}
+                state={tone}
+                className="size-8"
+              />
+              <div className="min-w-0 flex-1">
+                {title !== undefined ? (
+                  <form className="flex gap-2" onSubmit={(e) => void rename(e)}>
+                    <Input
+                      aria-label="Session title"
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      maxLength={200}
+                      autoFocus
+                      className="h-7"
+                    />
+                    <Button
+                      type="submit"
+                      size="sm"
+                      disabled={busy || !title.trim()}
+                    >
+                      Save
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setTitle(undefined)}
+                    >
+                      Cancel
+                    </Button>
+                  </form>
+                ) : agent ? (
+                  <h2 className="truncate font-mono text-[15px] font-medium text-agent-foreground">
+                    {name}
+                    <span className="font-sans text-faint">
+                      {" "}
+                      · {session.title || "Untitled session"}
                     </span>
-                  )}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  aria-pressed={pane === "files"}
-                  title="Files"
-                  onClick={() => toggle("files")}
-                  className="aria-pressed:bg-accent"
-                >
-                  <FileSearchIcon data-icon="inline-start" />
-                  <span className="@max-5xl:sr-only">Files</span>
-                </Button>
-                {access.write && (
+                  </h2>
+                ) : (
+                  <h2 className="truncate text-[15px] font-medium">{name}</h2>
+                )}
+                <p className="truncate text-xs text-muted-foreground">
+                  {sessionState(session)} ·{" "}
+                  {harnessLabels[session.harness] ?? session.harness} ·{" "}
+                  <span title={session.workspace} className="font-mono">
+                    {folderName(session.workspace)}
+                  </span>
+                </p>
+              </div>
+              {/* The pane's own width decides what the header has room for: the agent and the
+                session's title always stay. */}
+              <Presence tone={tone} className="@max-6xl:hidden">
+                {outputLine(chat, session) ?? sessionState(session)}
+              </Presence>
+              <Segmented<Density>
+                label="Density"
+                className="@max-3xl:hidden"
+                value={density}
+                choose={setDensity}
+                options={Object.entries(densityLabels) as [Density, string][]}
+              />
+              {access.read && (
+                <>
                   <Button
                     variant="outline"
                     size="sm"
-                    aria-pressed={pane === "terminal"}
-                    title="Terminal"
-                    onClick={() => toggle("terminal")}
+                    aria-pressed={pane === "changes"}
+                    title="Changes"
+                    onClick={() => toggle("changes")}
                     className="aria-pressed:bg-accent"
                   >
-                    <SquareTerminalIcon data-icon="inline-start" />
-                    <span className="@max-5xl:sr-only">Terminal</span>
+                    <GitCompareArrowsIcon data-icon="inline-start" />
+                    <span className="@max-5xl:sr-only">Changes</span>
+                    {changed > 0 && (
+                      <span className="font-mono text-[11px] text-attention">
+                        {changed}
+                      </span>
+                    )}
                   </Button>
-                )}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  aria-pressed={pane === "background"}
-                  title="Background"
-                  onClick={() => toggle("background")}
-                  className="aria-pressed:bg-accent"
-                >
-                  <ActivityIcon data-icon="inline-start" />
-                  <span className="@max-5xl:sr-only">Background</span>
-                  {running > 0 && (
-                    <span className="font-mono text-[11px] text-agent-foreground">
-                      {running}
-                    </span>
-                  )}
-                </Button>
-                {panels.map((piece) => {
-                  const Icon = pieceIcon(piece);
-                  return (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    aria-pressed={pane === "files"}
+                    title="Files"
+                    onClick={() => toggle("files")}
+                    className="aria-pressed:bg-accent"
+                  >
+                    <FileSearchIcon data-icon="inline-start" />
+                    <span className="@max-5xl:sr-only">Files</span>
+                  </Button>
+                  {access.write && (
                     <Button
-                      key={panelKey(piece)}
                       variant="outline"
                       size="sm"
-                      aria-pressed={pane === panelKey(piece)}
-                      title={piece.title}
-                      onClick={() => toggle(panelKey(piece))}
+                      aria-pressed={pane === "terminal"}
+                      title="Terminal"
+                      onClick={() => toggle("terminal")}
                       className="aria-pressed:bg-accent"
                     >
-                      <Icon data-icon="inline-start" />
-                      <span className="@max-5xl:sr-only">{piece.title}</span>
+                      <SquareTerminalIcon data-icon="inline-start" />
+                      <span className="@max-5xl:sr-only">Terminal</span>
                     </Button>
-                  );
-                })}
-              </>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              aria-pressed={pane === "about"}
-              title="About"
-              onClick={() => toggle("about")}
-              className="aria-pressed:bg-accent"
-            >
-              <InfoIcon data-icon="inline-start" />
-              <span className="@max-5xl:sr-only">About</span>
-            </Button>
-            {access.mine && (
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  render={
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label="Session actions"
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    aria-pressed={pane === "background"}
+                    title="Background"
+                    onClick={() => toggle("background")}
+                    className="aria-pressed:bg-accent"
+                  >
+                    <ActivityIcon data-icon="inline-start" />
+                    <span className="@max-5xl:sr-only">Background</span>
+                    {running > 0 && (
+                      <span className="font-mono text-[11px] text-agent-foreground">
+                        {running}
+                      </span>
+                    )}
+                  </Button>
+                  {panels.map((piece) => {
+                    const Icon = pieceIcon(piece);
+                    return (
+                      <Button
+                        key={panelKey(piece)}
+                        variant="outline"
+                        size="sm"
+                        aria-pressed={pane === panelKey(piece)}
+                        title={piece.title}
+                        onClick={() => toggle(panelKey(piece))}
+                        className="aria-pressed:bg-accent"
+                      >
+                        <Icon data-icon="inline-start" />
+                        <span className="@max-5xl:sr-only">{piece.title}</span>
+                      </Button>
+                    );
+                  })}
+                </>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                aria-pressed={pane === "about"}
+                title="About"
+                onClick={() => toggle("about")}
+                className="aria-pressed:bg-accent"
+              >
+                <InfoIcon data-icon="inline-start" />
+                <span className="@max-5xl:sr-only">About</span>
+              </Button>
+              {access.mine && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="Session actions"
+                      />
+                    }
+                  >
+                    <EllipsisIcon />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-52">
+                    <MenuEntries
+                      entries={sessionMenu(session, {
+                        chat,
+                        perform,
+                        navigate,
+                        rename: () => setTitle(session.title),
+                        ask: () => setAsking(true),
+                        continueThere: ownComputer
+                          ? () => setContinuing(true)
+                          : undefined,
+                      })}
                     />
-                  }
-                >
-                  <EllipsisIcon />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="min-w-52">
-                  <MenuEntries
-                    entries={sessionMenu(session, {
-                      chat,
-                      perform,
-                      navigate,
-                      rename: () => setTitle(session.title),
-                      ask: () => setAsking(true),
-                      continueThere: ownComputer
-                        ? () => setContinuing(true)
-                        : undefined,
-                    })}
-                  />
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-          </header>
-          <div
-            ref={reading.scroller}
-            className="min-h-0 flex-1 overflow-y-auto px-3 py-4 [overflow-anchor:none] md:px-6"
-            onScroll={reading.onScroll}
-          >
-            <LoadingEarlier
-              loading={reading.loadingEarlier}
-              label="Loading earlier work"
-            />
-            <div ref={reading.top} />
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </header>
             <div
-              ref={reading.list}
-              className="mx-auto flex max-w-3xl flex-col gap-3"
+              ref={reading.scroller}
+              className="min-h-0 flex-1 overflow-y-auto px-3 py-4 [overflow-anchor:none] md:px-6"
+              onScroll={reading.onScroll}
             >
-              <SessionBlocks
-                record={{ sessionId: session.id }}
-                blocks={placeApprovals(
-                  blocks,
-                  chat.approvals.filter((a) => a.session_id === session.id),
-                )}
-                chatTitle={chatTitle}
-                openSubagent={(toolCallId) => {
-                  const started = subagents.find(
-                    (s) => s.tool_call_id === toolCallId,
-                  );
-                  return started && (() => openSubagent(started.id));
-                }}
-                textActions={(text) => (
-                  <>
-                    {/* A fork that keeps the work up to these words: its person's. */}
-                    {access.mine && (
-                      <ForkHere
-                        busy={busy}
-                        fork={() => void fork(forkAfter(blocks, text.key))}
-                      />
-                    )}
-                    {speaker && (
-                      <Listen
-                        reading={aloud.reading === text.key}
-                        error={
-                          aloud.failed?.id === text.key
-                            ? aloud.failed.error
-                            : undefined
-                        }
-                        toggle={() =>
-                          aloud.reading === text.key
-                            ? aloud.stop()
-                            : void aloud.read(text.key, speaker, text.text)
-                        }
-                      />
-                    )}
-                  </>
-                )}
-                inputActions={
-                  access.write
-                    ? (input) => (
-                        <InputActions
-                          input={input}
-                          // A fork is its person's; rewinding works the session's files.
-                          fork={access.mine ? fork : undefined}
-                          // Claude Code keeps checkpoints of the files; the others do not.
-                          rewind={
-                            session.harness === "claude-code"
-                              ? (at, dryRun) =>
-                                  chat.rewindFiles(session.id, at, dryRun)
+              <LoadingEarlier
+                loading={reading.loadingEarlier}
+                label="Loading earlier work"
+              />
+              <div ref={reading.top} />
+              <div
+                ref={reading.list}
+                className="mx-auto flex max-w-3xl flex-col gap-3"
+              >
+                <SessionBlocks
+                  record={{ sessionId: session.id }}
+                  blocks={placeApprovals(
+                    blocks,
+                    chat.approvals.filter((a) => a.session_id === session.id),
+                  )}
+                  chatTitle={chatTitle}
+                  openSubagent={(toolCallId) => {
+                    const started = subagents.find(
+                      (s) => s.tool_call_id === toolCallId,
+                    );
+                    return started && (() => openSubagent(started.id));
+                  }}
+                  textActions={(text) => (
+                    <>
+                      {/* A fork that keeps the work up to these words: its person's. */}
+                      {access.mine && (
+                        <ForkHere
+                          busy={busy}
+                          fork={() => void fork(forkAfter(blocks, text.key))}
+                        />
+                      )}
+                      {speaker && (
+                        <Listen
+                          reading={aloud.reading === text.key}
+                          error={
+                            aloud.failed?.id === text.key
+                              ? aloud.failed.error
                               : undefined
                           }
-                          busy={busy}
-                          perform={perform}
+                          toggle={() =>
+                            aloud.reading === text.key
+                              ? aloud.stop()
+                              : void aloud.read(text.key, speaker, text.text)
+                          }
                         />
-                      )
+                      )}
+                    </>
+                  )}
+                  inputActions={
+                    access.write
+                      ? (input) => (
+                          <InputActions
+                            input={input}
+                            // A fork is its person's; rewinding works the session's files.
+                            fork={access.mine ? fork : undefined}
+                            // Claude Code keeps checkpoints of the files; the others do not.
+                            rewind={
+                              session.harness === "claude-code"
+                                ? (at, dryRun) =>
+                                    chat.rewindFiles(session.id, at, dryRun)
+                                : undefined
+                            }
+                            busy={busy}
+                            perform={perform}
+                          />
+                        )
+                      : undefined
+                  }
+                  renderApproval={(approval) =>
+                    approval.status === "pending" ? (
+                      <ApprovalCard
+                        approval={approval}
+                        chat={chat}
+                        actors={actors}
+                        busy={busy}
+                        perform={perform}
+                      />
+                    ) : (
+                      <ApprovalReceipt approval={approval} />
+                    )
+                  }
+                />
+                {sent.map((input) => (
+                  <SentInputBubble
+                    key={input.id}
+                    input={input}
+                    retry={() => void chat.retryInput(input.id).catch(() => {})}
+                    drop={() => chat.dropInput(input.id)}
+                  />
+                ))}
+                <LiveItems items={live} />
+                {compacting && <Compacting />}
+                {!blocks.length &&
+                  !live.length &&
+                  !sent.length &&
+                  !compacting &&
+                  !error && (
+                    <p className="text-sm text-faint">Nothing recorded yet.</p>
+                  )}
+                {error && (
+                  <p role="alert" className="text-sm text-destructive">
+                    {error}
+                  </p>
+                )}
+              </div>
+              <ToLatest
+                shown={reading.away}
+                label="Back to the latest work"
+                onClick={reading.toLatest}
+              />
+            </div>
+            <SessionInput
+              key={session.id}
+              session={session}
+              name={name}
+              owner={access.write}
+              working={working}
+              busy={busy}
+              perform={perform}
+              send={(text, mode, images) =>
+                chat.input(
+                  session.id,
+                  text,
+                  mode,
+                  images,
+                  events.length ? events[events.length - 1]!.at + 1 : undefined,
+                )
+              }
+              compact={(instructions) => chat.compact(session.id, instructions)}
+              interrupt={interrupt}
+              usage={usage}
+              transcription={voice.available}
+            >
+              {plan?.some((step) => step.status !== "done") && (
+                <PlanBar steps={plan} />
+              )}
+              <SessionQueue
+                queue={waiting}
+                steering={queue}
+                busy={busy}
+                act={
+                  access.write
+                    ? {
+                        edit: (item, text) =>
+                          perform(() =>
+                            chat.editQueued(session.id, item.id, text),
+                          ),
+                        remove: (item) =>
+                          perform(() => chat.removeQueued(session.id, item.id)),
+                        send: (item) =>
+                          perform(() => chat.sendQueued(session.id, item.id)),
+                        order: (ids) =>
+                          perform(() => chat.reorderQueue(session.id, ids)),
+                        clear: () => perform(() => chat.clearQueue(session.id)),
+                      }
                     : undefined
                 }
-                renderApproval={(approval) =>
-                  approval.status === "pending" ? (
-                    <ApprovalCard
-                      approval={approval}
-                      chat={chat}
-                      actors={actors}
-                      busy={busy}
-                      perform={perform}
-                    />
-                  ) : (
-                    <ApprovalReceipt approval={approval} />
-                  )
-                }
               />
-              {sent.map((input) => (
-                <SentInputBubble
-                  key={input.id}
-                  input={input}
-                  retry={() => void chat.retryInput(input.id).catch(() => {})}
-                  drop={() => chat.dropInput(input.id)}
-                />
-              ))}
-              <LiveItems items={live} />
-              {compacting && <Compacting />}
-              {!blocks.length &&
-                !live.length &&
-                !sent.length &&
-                !compacting &&
-                !error && (
-                  <p className="text-sm text-faint">Nothing recorded yet.</p>
-                )}
-              {error && (
-                <p role="alert" className="text-sm text-destructive">
-                  {error}
-                </p>
-              )}
-            </div>
-            <ToLatest
-              shown={reading.away}
-              label="Back to the latest work"
-              onClick={reading.toLatest}
-            />
-          </div>
-          <SessionInput
-            key={session.id}
-            session={session}
-            name={name}
-            owner={access.write}
-            working={working}
-            busy={busy}
-            perform={perform}
-            send={(text, mode, images) =>
-              chat.input(
-                session.id,
-                text,
-                mode,
-                images,
-                events.length ? events[events.length - 1]!.at + 1 : undefined,
-              )
-            }
-            compact={(instructions) => chat.compact(session.id, instructions)}
-            interrupt={interrupt}
-            usage={usage}
-            transcription={voice.available}
+            </SessionInput>
+          </section>
+        </SidePanel>
+        <AskOnTheSide
+          open={asking}
+          close={() => setAsking(false)}
+          fork={fork}
+          busy={busy}
+        />
+        <ContinueInTerminal
+          session={session}
+          hosts={hosts}
+          open={continuing}
+          close={() => setContinuing(false)}
+          stop={() => chat.stop(session.id)}
+          busy={busy}
+          perform={perform}
+        />
+        {!wide && (
+          <Sheet
+            open={!!code}
+            onOpenChange={(open) => !open && setPane(undefined)}
           >
-            {plan?.some((step) => step.status !== "done") && (
-              <PlanBar steps={plan} />
-            )}
-            <SessionQueue
-              queue={waiting}
-              steering={queue}
-              busy={busy}
-              act={
-                access.write
-                  ? {
-                      edit: (item, text) =>
-                        perform(() =>
-                          chat.editQueued(session.id, item.id, text),
-                        ),
-                      remove: (item) =>
-                        perform(() => chat.removeQueued(session.id, item.id)),
-                      send: (item) =>
-                        perform(() => chat.sendQueued(session.id, item.id)),
-                      order: (ids) =>
-                        perform(() => chat.reorderQueue(session.id, ids)),
-                      clear: () => perform(() => chat.clearQueue(session.id)),
-                    }
-                  : undefined
-              }
-            />
-          </SessionInput>
-        </section>
-      </SidePanel>
-      <AskOnTheSide
-        open={asking}
-        close={() => setAsking(false)}
-        fork={fork}
-        busy={busy}
-      />
-      <ContinueInTerminal
-        session={session}
-        hosts={hosts}
-        open={continuing}
-        close={() => setContinuing(false)}
-        stop={() => chat.stop(session.id)}
-        busy={busy}
-        perform={perform}
-      />
-      {!wide && (
-        <Sheet
-          open={!!code}
-          onOpenChange={(open) => !open && setPane(undefined)}
-        >
-          <SheetContent
-            side="right"
-            showCloseButton={false}
-            className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl"
-          >
-            <SheetTitle className="sr-only">
-              {panel
-                ? panel.title
-                : pane === "about"
-                  ? "About"
-                  : pane === "background"
-                    ? "Background"
-                    : pane === "terminal"
-                      ? "Terminal"
-                      : pane === "files"
-                        ? "Files"
-                        : "Changes"}
-            </SheetTitle>
-            {code}
-          </SheetContent>
-        </Sheet>
-      )}
-    </>
+            <SheetContent
+              side="right"
+              showCloseButton={false}
+              className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl"
+            >
+              <SheetTitle className="sr-only">
+                {panel
+                  ? panel.title
+                  : pane === "about"
+                    ? "About"
+                    : pane === "background"
+                      ? "Background"
+                      : pane === "terminal"
+                        ? "Terminal"
+                        : pane === "files"
+                          ? "Files"
+                          : "Changes"}
+              </SheetTitle>
+              {code}
+            </SheetContent>
+          </Sheet>
+        )}
+      </SessionAgents.Provider>
+    </SessionFilesProvider>
   );
 }
 

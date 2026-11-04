@@ -243,6 +243,72 @@ fn desktop_switch(
     Ok(())
 }
 
+/// The images a session's words show, as the kernel serves them.
+const IMAGES: [&str; 7] = ["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp"];
+
+/// A file an agent's words name on this computer, from a window of this computer's ZeroLux,
+/// where its sessions run: absolute, or under the home folder as `~/`.
+fn file_here(window: &WebviewWindow, commands: &Commands, path: &str) -> Result<PathBuf, String> {
+    let profile = workspace_window(window)?;
+    let here = commands
+        .view
+        .lock()
+        .expect("desktop view lock")
+        .profiles
+        .iter()
+        .any(|entry| entry.profile.id == profile && entry.profile.source == Source::Local);
+    if !here {
+        return Err("Only this computer's ZeroLux shows its files".into());
+    }
+    let path = match path.strip_prefix("~/") {
+        Some(rest) => window
+            .path()
+            .home_dir()
+            .map_err(|error| error.to_string())?
+            .join(rest),
+        None => PathBuf::from(path),
+    };
+    if !path.is_absolute() {
+        return Err("A file is named by its whole path".into());
+    }
+    std::fs::canonicalize(path).map_err(|error| error.to_string())
+}
+
+/// A file an agent's words name, shown in the Finder or the system's file manager.
+#[tauri::command]
+async fn reveal_file(
+    window: WebviewWindow,
+    commands: tauri::State<'_, Commands>,
+    path: String,
+) -> Result<(), String> {
+    let path = file_here(&window, &commands, &path)?;
+    window
+        .opener()
+        .reveal_item_in_dir(path)
+        .map_err(|error| error.to_string())
+}
+
+/// An image an agent's words show, in the system's viewer: only an image, never a program.
+#[tauri::command]
+async fn open_image(
+    window: WebviewWindow,
+    commands: tauri::State<'_, Commands>,
+    path: String,
+) -> Result<(), String> {
+    let path = file_here(&window, &commands, &path)?;
+    let image = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| IMAGES.contains(&extension.to_ascii_lowercase().as_str()));
+    if !image || !path.is_file() {
+        return Err("Only an image opens from here".into());
+    }
+    window
+        .opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
 #[derive(Serialize)]
 struct AdoptionPreview {
     id: String,
@@ -2446,6 +2512,8 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             desktop_workspaces,
             desktop_switch,
             desktop_page,
+            reveal_file,
+            open_image,
             crate::menu::menu_commands,
             crate::menu::menu_sections,
             crate::menu::menu_run,

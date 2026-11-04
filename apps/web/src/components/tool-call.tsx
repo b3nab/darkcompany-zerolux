@@ -63,6 +63,15 @@ export type ChatTitle = (id: string | null) => string | undefined;
 /** The record the tools shown come from: an output a page carried cut is read whole there. */
 export const ToolRecord = createContext<RecordOf | undefined>(undefined);
 
+/** The session's own agents as its calls name them: by their names, each one's work opened. */
+export interface SessionAgents {
+  name: (target: string) => string | undefined;
+  open: (target: string) => (() => void) | undefined;
+}
+export const SessionAgents = createContext<SessionAgents | undefined>(
+  undefined,
+);
+
 /** A tool opened: its whole output, read from its record when a page carried only the start. */
 function useOpened(tool: ToolBlock) {
   const whole = useWholeOutput(tool, useContext(ToolRecord));
@@ -174,7 +183,14 @@ export function ToolCall({
   const state = toolState(tool, view, outcome);
   const [open, setOpen] = useOpen();
   const panel = useId();
-  const line = summary(view, outcome, state === "running", chatTitle);
+  const agents = useContext(SessionAgents);
+  const line = summary(
+    view,
+    outcome,
+    state === "running",
+    chatTitle,
+    agents?.name,
+  );
   return (
     <div data-state={state}>
       <button
@@ -328,7 +344,7 @@ export function SubagentCard({
   const state = toolState(tool, view, outcome);
   const [open, setOpen] = useOpen();
   const panel = useId();
-  if (view.kind !== "agent")
+  if (view.kind !== "agent" || view.action !== "start")
     return <ToolCall tool={tool} chatTitle={chatTitle} />;
   const running = state === "running";
   return (
@@ -367,7 +383,7 @@ export function SubagentCard({
             running && "sweep",
           )}
         >
-          {view.title}
+          {view.title ?? "Subagent"}
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-2 pl-2 font-mono text-[11px] text-faint">
           <Elapsed tool={tool} />
@@ -447,8 +463,9 @@ function summary(
   outcome: ToolOutcome | undefined,
   running: boolean,
   chatTitle?: ChatTitle,
+  agentName?: SessionAgents["name"],
 ): { verb: string; subject?: ReactNode; meta?: ReactNode } {
-  const { verb, subject } = toolPhrase(view, running, chatTitle);
+  const { verb, subject } = toolPhrase(view, running, chatTitle, agentName);
   const line = { verb, subject: subject as ReactNode };
   switch (view.kind) {
     case "command":
@@ -498,6 +515,11 @@ function summary(
         ...line,
         meta: <span className="rounded-xs border px-1">{view.server}</span>,
       };
+    case "agent":
+      // Named, the agent's own path beside its name.
+      return view.target && agentName?.(view.target)
+        ? { ...line, meta: <span className="truncate">{view.target}</span> }
+        : line;
   }
   return line;
 }
@@ -543,6 +565,7 @@ function Body({
   outcome?: ToolOutcome;
   chatTitle?: ChatTitle;
 }) {
+  const agents = useContext(SessionAgents);
   const failed =
     tool.result?.error || !!outcome?.exit || outcome?.timedOut || undefined;
   const plain = outcome && (
@@ -620,7 +643,8 @@ function Body({
           ))}
         </Code>
       );
-    case "agent":
+    case "agent": {
+      const work = view.target ? agents?.open(view.target) : undefined;
       return (
         <>
           {view.prompt && (
@@ -628,13 +652,27 @@ function Body({
               {view.prompt}
             </p>
           )}
+          {/* Sealed by its provider for the model alone: there is no text to show. */}
+          {view.encrypted && (
+            <p className="font-mono text-[11px] text-faint">Encrypted</p>
+          )}
           {outcome?.text && (
             <div className="border-t pt-2">
               <MessageText text={outcome.text} />
             </div>
           )}
+          {work && (
+            <button
+              type="button"
+              onClick={work}
+              className="self-start font-mono text-[11px] text-agent-foreground/80 outline-none hover:underline focus-visible:underline"
+            >
+              Open its work →
+            </button>
+          )}
         </>
       );
+    }
     case "plan":
       return <PlanSteps steps={view.steps} />;
     case "zerolux":

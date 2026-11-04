@@ -83,6 +83,8 @@
             "allow-desktop-workspaces",
             "allow-desktop-switch",
             "allow-desktop-page",
+            "allow-reveal-file",
+            "allow-open-image",
             "allow-menu-commands",
             "allow-menu-sections",
             "allow-menu-run",

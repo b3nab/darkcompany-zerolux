@@ -1,11 +1,17 @@
-import { memo, useId } from "react";
+import { memo, useContext, useId } from "react";
 import type { ReactNode } from "react";
 import { cn } from "cn";
-import { BellIcon, ChevronRightIcon, CircleAlertIcon } from "lucide-react";
+import {
+  BellIcon,
+  ChevronRightIcon,
+  CircleAlertIcon,
+  MessagesSquareIcon,
+} from "lucide-react";
 import {
   blockRuns,
   isSubagent,
   messageTime,
+  plainLine,
   thoughtLabel,
   toolItems,
   toolsPhrase,
@@ -24,6 +30,7 @@ import { MessageText } from "@/components/message-text";
 import {
   Copy,
   ExploredCalls,
+  SessionAgents,
   SubagentCard,
   ToolCall,
   ToolRecord,
@@ -359,6 +366,8 @@ function Block({
           <Stamp time={block.time} />
         </p>
       );
+    case "agent_message":
+      return <AgentMessage block={block} />;
     case "compacted":
       return (
         <Fold
@@ -377,6 +386,66 @@ function Block({
         </Fold>
       );
   }
+}
+
+/** What a message between agents is, by the harness's own kind of it. */
+const purposes: Record<string, string> = {
+  new_task: "Task",
+  message: "Message",
+  final_answer: "Answer",
+};
+
+/**
+ * A message between the harness's own agents: from whom to whom, by name where the session
+ * knows them, what it is (a task, a message, an answer), and its words when they can be read.
+ */
+function AgentMessage({
+  block,
+}: {
+  block: Extract<SessionBlock, { kind: "agent_message" }>;
+}) {
+  const agents = useContext(SessionAgents);
+  const who = (path: string) => agents?.name(path) ?? path;
+  const head = (
+    <>
+      <MessagesSquareIcon
+        aria-hidden
+        className="size-3 shrink-0 self-center text-faint"
+      />
+      <span className="min-w-0 truncate font-mono text-[11px] text-faint">
+        {`${who(block.from)} → ${who(block.to)}`}
+      </span>
+      {block.purpose && (
+        <span className="shrink-0 font-mono text-[11px] text-faint uppercase">
+          {purposes[block.purpose] ?? block.purpose.replaceAll("_", " ")}
+        </span>
+      )}
+    </>
+  );
+  if (!block.text)
+    return (
+      <p className="flex items-baseline gap-2">
+        {head}
+        <span className="text-[12.5px] text-faint">Encrypted</span>
+      </p>
+    );
+  return (
+    <Fold
+      className="text-sm"
+      trigger={
+        <>
+          {head}
+          <span className="min-w-0 truncate text-[12.5px] text-muted-foreground group-aria-expanded/fold:invisible">
+            {plainLine(block.text)}
+          </span>
+        </>
+      }
+    >
+      <div className="mt-1.5 ml-1.5 border-l pl-3.5">
+        <MessageText text={block.text} />
+      </div>
+    </Fold>
+  );
 }
 
 /** The session's context being summarized now, whoever started it: at the end of its stream. */

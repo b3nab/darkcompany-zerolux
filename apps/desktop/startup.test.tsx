@@ -139,6 +139,9 @@ test("registry commands are restricted to the packaged manager, not workspace pa
     "allow-desktop-switch",
     // That it went to another page: the desktop reads which from its own web view.
     "allow-desktop-page",
+    // What an agent's words name on this computer: shown in the Finder; an image, opened.
+    "allow-reveal-file",
+    "allow-open-image",
     // The app's menu: its commands, the bar's sections, and the window's own menu button.
     "allow-menu-commands",
     "allow-menu-sections",

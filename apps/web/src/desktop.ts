@@ -110,6 +110,21 @@ export function kernelHere() {
   }
 }
 
+/** The desktop app whose own ZeroLux this window shows: its sessions' files are on this computer. */
+export const desktopHere = () => desktopConnection()?.managed === true;
+
+/** A file an agent's words name, shown in the Finder or the system's file manager. */
+export async function revealFile(path: string) {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("reveal_file", { path });
+}
+
+/** An image an agent's words show, opened in the system's viewer. */
+export async function openImage(path: string) {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("open_image", { path });
+}
+
 /** A folder chosen in the system's own panel, from `start`; nothing when it is cancelled. */
 export async function chooseFolder(start?: string) {
   const { invoke } = await import("@tauri-apps/api/core");
