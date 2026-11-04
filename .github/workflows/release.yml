@@ -206,6 +206,12 @@ jobs:
           cd apps/desktop
           bun x --bun tauri signer sign --app-version "$ZEROLUX_BUILD_VERSION" "$file"
           gh release upload "$TAG" "$file" "$file.sig" --clobber
+      # webrtc-sys carries WebRTC in its own library, and downloads it again if it builds again:
+      # the download, as large again, stays out of the cache. Build scripts' own dependencies,
+      # as the one it downloads into, build for this runner, outside the target's folder.
+      - name: Leave WebRTC's download out of the cache
+        shell: bash
+        run: rm -rf "$CARGO_TARGET_DIR"/release/build/scratch-*/out/livekit_webrtc "$CARGO_TARGET_DIR"/*/release/build/scratch-*/out/livekit_webrtc
 
   # The mobile app for Android, as an APK for 64-bit ARM phones. Signed with the release key
   # when its secrets are set; otherwise with the debug key, which installs but cannot be
@@ -239,10 +245,9 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
-          key: ccache-android-${{ hashFiles('bun.lock') }}-${{ github.run_id }}
-          restore-keys: |
-            ccache-android-${{ hashFiles('bun.lock') }}-
-            ccache-android-
+          # One entry for the native modules' versions: the repository's cache is shared.
+          key: ccache-android-${{ hashFiles('bun.lock') }}
+          restore-keys: ccache-android-
       - name: Generate the Android project
         working-directory: apps/mobile
         run: bun x --bun expo prebuild --platform android --no-install
@@ -269,7 +274,8 @@ jobs:
           CCACHE_MAXSIZE: 2G
         run: |
           export CCACHE_DIR="$HOME/.cache/ccache" NDK_CCACHE="$(command -v ccache)"
-          echo "org.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g" >> gradle.properties
+          # On a line of its own: Expo's file ends without one, on a value read as JSON.
+          printf '\norg.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g\n' >> gradle.properties
           ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --build-cache
           ccache --show-stats
       - name: Sign it and upload it
