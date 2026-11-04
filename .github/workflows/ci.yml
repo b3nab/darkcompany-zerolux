@@ -38,9 +38,32 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-  # The Rust workspace's lint on each system, apart from its tests: each keeps its own build.
+  # Which jobs a push needs, by the files it changed: a release, a nightly and a tag run all.
+  changes:
+    name: Changes
+    runs-on: ubuntu-24.04
+    outputs:
+      rust: ${{ steps.needs.outputs.rust }}
+      desktop: ${{ steps.needs.outputs.desktop }}
+      js: ${{ steps.needs.outputs.js }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - id: needs
+        env:
+          ALL: ${{ (github.event_name != 'push' && github.event_name != 'pull_request') || startsWith(github.ref, 'refs/tags/') }}
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.sha }}
+        run: bun scripts/ci-changes.ts
+
+  # The Rust workspace's lint on each system, but the desktop's, apart from its tests: each keeps
+  # its own build.
   lint:
     name: Lint (${{ matrix.system }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -54,29 +77,25 @@ jobs:
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
     steps:
       - uses: actions/checkout@v4
-      - name: Set up (Rust, Bun)
+      - name: Set up (Rust)
         uses: ./.github/actions/setup
         with:
-          cache-key: lint
-          workspaces: ./apps/desktop
-      # The desktop crate embeds its icons and the web app it serves: its lint needs the icons
-      # and only the web app's folder, as the web build is checked once above.
-      - name: Desktop icons and the web app's folder
-        shell: bash
-        run: |
-          bun run --cwd apps/desktop assets icons
-          mkdir -p apps/desktop/dist/web && echo '<!doctype html>' > apps/desktop/dist/web/index.html
+          native: kernel
+          cache-key: kernel-lint
+          javascript: "false"
       - name: Lint (clippy)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude zerolux-desktop --all-targets -- -D warnings
       - name: Leave WebRTC's download out of the cache
         shell: bash
         run: rm -rf target/debug/build/scratch-*/out/livekit_webrtc
 
-  # The Rust workspace's tests on each system, in two halves side by side, each built from the
-  # shared cache. PostgreSQL runs on Linux only, in jobs of their own: GitHub runs service
-  # containers only there, and an empty image starts none.
+  # The Rust workspace's tests on each system, but the desktop's, in two halves side by side,
+  # each built from the shared cache. PostgreSQL runs on Linux only, in jobs of their own:
+  # GitHub runs service containers only there, and an empty image starts none.
   rust:
     name: Tests (${{ matrix.system }} ${{ matrix.part }}/2)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -120,24 +139,18 @@ jobs:
       - name: Set up (Rust, nextest, Bun, uv, LiveKit)
         uses: ./.github/actions/setup
         with:
-          cache-key: tests
+          native: kernel
+          cache-key: kernel-tests
           # The jobs of a system build the same: its first half keeps the cache.
           cache-save: ${{ matrix.part == 1 && !matrix.postgres }}
-          # What the tests start: the runners, the sign-in service, and Tauri's icons tool.
-          workspaces: ./harnesses/* ./packages/bridge ./services/auth ./apps/desktop
+          # What the tests start: the runners and the sign-in service.
+          workspaces: ./harnesses/* ./packages/bridge ./services/auth
           livekit: "true"
-      # The desktop crate embeds its icons and the web app it serves: its tests need the icons
-      # and only the web app's folder, as the web build is checked once above.
-      - name: Desktop icons and the web app's folder
-        shell: bash
-        run: |
-          bun run --cwd apps/desktop assets icons
-          mkdir -p apps/desktop/dist/web && echo '<!doctype html>' > apps/desktop/dist/web/index.html
       - name: Tests (SQLite)
         if: ${{ !matrix.postgres }}
         env:
           NEXTEST_TEST_THREADS: ${{ matrix.threads }}
-        run: cargo nextest run --workspace --profile ${{ inputs.tests || 'ci' }} --partition hash:${{ matrix.part }}/2
+        run: cargo nextest run --workspace --exclude zerolux-desktop --profile ${{ inputs.tests || 'ci' }} --partition hash:${{ matrix.part }}/2
       # The whole workspace is built as the SQLite jobs build it; only the kernel's tests read
       # the database.
       - name: Tests (PostgreSQL)
@@ -145,12 +158,7 @@ jobs:
         env:
           NEXTEST_TEST_THREADS: ${{ matrix.threads }}
           ZEROLUX_TEST_POSTGRES_URL: postgresql://zerolux_test:fixture-only-password@127.0.0.1:5432/zerolux_test
-        run: cargo nextest run --workspace --profile ${{ inputs.tests || 'ci' }} --partition hash:${{ matrix.part }}/2 -E 'package(zerolux)'
-      # nextest runs no doctests: they run once, where they are the same on every system, on
-      # the libraries the tests built.
-      - name: Doctests
-        if: runner.os == 'Linux' && matrix.part == 1 && !matrix.postgres
-        run: cargo test --workspace --doc
+        run: cargo nextest run --workspace --exclude zerolux-desktop --profile ${{ inputs.tests || 'ci' }} --partition hash:${{ matrix.part }}/2 -E 'package(zerolux)'
       # webrtc-sys carries WebRTC in its own library, and downloads it again if it builds again:
       # the download, as large again, stays out of the cache.
       - name: Leave WebRTC's download out of the cache
@@ -158,15 +166,60 @@ jobs:
         shell: bash
         run: rm -rf target/debug/build/scratch-*/out/livekit_webrtc
 
-  js:
-    name: JavaScript and Python (${{ matrix.name }})
+  # The desktop crate on each system, its lint and tests, with the native libraries only it
+  # links and a build of its own.
+  desktop:
+    name: Desktop (${{ matrix.system }})
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: Linux, os: ubuntu-24.04 }
-          - { name: Windows, os: windows-2025 }
-          - { name: macOS, os: macos-26 }
+          - { system: Linux, os: ubuntu-24.04 }
+          - { system: Windows, os: windows-2025 }
+          - { system: macOS, os: macos-26 }
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
+    steps:
+      - name: Free disk space
+        if: runner.os == 'Linux'
+        run: nohup sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup > /dev/null 2>&1 &
+      - uses: actions/checkout@v4
+      - name: Set up (Rust, nextest, Bun)
+        uses: ./.github/actions/setup
+        with:
+          cache-key: desktop
+          # Tauri's icons tool.
+          workspaces: ./apps/desktop
+      # The desktop crate embeds its icons and the web app it serves: its lint and tests need
+      # the icons and only the web app's folder, as the web build is checked once above.
+      - name: Desktop icons and the web app's folder
+        shell: bash
+        run: |
+          bun run --cwd apps/desktop assets icons
+          mkdir -p apps/desktop/dist/web && echo '<!doctype html>' > apps/desktop/dist/web/index.html
+      - name: Lint (clippy)
+        run: cargo clippy -p zerolux-desktop --all-targets -- -D warnings
+      - name: Tests
+        run: cargo nextest run -p zerolux-desktop --profile ${{ inputs.tests || 'ci' }}
+      - name: Leave WebRTC's download out of the cache
+        shell: bash
+        run: rm -rf target/debug/build/scratch-*/out/livekit_webrtc
+
+  js:
+    name: JavaScript and Python (${{ matrix.system }})
+    needs: changes
+    if: needs.changes.outputs.js == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { system: Linux, os: ubuntu-24.04 }
+          - { system: Windows, os: windows-2025 }
+          - { system: macOS, os: macos-26 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
