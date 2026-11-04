@@ -128,11 +128,10 @@ pub fn from_json(value: &Value) -> Result<Media> {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn a_written_path_points_where_the_agent_meant() {
         let folder = Path::new("/work");
