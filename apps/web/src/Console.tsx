@@ -28,6 +28,7 @@ import {
   LoaderIcon,
   PinIcon,
   PinOffIcon,
+  PlayIcon,
   SearchIcon,
   PlusIcon,
   SquareTerminalIcon,
@@ -350,9 +351,20 @@ function sessionMenu(
           },
         ]
       : []),
+    ...(resumable(session) || session.status !== "stopped"
+      ? ([{ divider: true }] as const)
+      : []),
+    ...(resumable(session)
+      ? [
+          {
+            title: "Resume",
+            icon: "play",
+            onPress: () => void perform(() => chat.resume(session.id)),
+          },
+        ]
+      : []),
     ...(session.status !== "stopped"
       ? ([
-          { divider: true },
           {
             title: "Stop",
             icon: "square",
@@ -1646,6 +1658,22 @@ export function SessionView({
             >
               {plan?.some((step) => step.status !== "done") && (
                 <PlanBar steps={plan} />
+              )}
+              {/* Stopped, or its link lost: its box opens again once resumed. */}
+              {access.write && resumable(session) && (
+                <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3 rounded-md border bg-card py-1.5 pr-1.5 pl-3 text-sm">
+                  <span className="text-muted-foreground">
+                    {sessionState(session)}
+                  </span>
+                  <Button
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void perform(() => chat.resume(session.id))}
+                  >
+                    <PlayIcon />
+                    Resume
+                  </Button>
+                </div>
               )}
               <SessionQueue
                 queue={waiting}

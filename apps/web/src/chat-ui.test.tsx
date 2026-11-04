@@ -1119,6 +1119,30 @@ test("managed Claude and terminal pi offer Resume; other attached sessions do no
   expect(html).toContain("Stopped here; the running turn may still finish.");
 });
 
+test("a stopped Codex session, whoever started it, resumes from above its box; an attached Claude Code one does not", () => {
+  const view = (stopped: ChatSession) =>
+    renderToStaticMarkup(
+      <SessionView
+        session={stopped}
+        chat={fakeChat({ sessions: [stopped] })}
+        actors={actors}
+        busy={false}
+        perform={perform}
+      />,
+    );
+  const resume = /<button[^>]*>(?:<svg[^]*?<\/svg>)?Resume<\/button>/;
+  expect(
+    view({
+      ...session("s-codex", BIRCH, "stopped"),
+      harness: "codex",
+      origin: "attached",
+    }),
+  ).toMatch(resume);
+  expect(
+    view({ ...session("s-claude", BIRCH, "stopped"), origin: "attached" }),
+  ).not.toMatch(resume);
+});
+
 const company: Workspace = {
   workspace: {
     id: "workspace",
