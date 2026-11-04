@@ -14,6 +14,8 @@ The pi extension `harnesses/pi/src/web-search.ts` (loaded from `.pi/extensions/w
 
 **Research** writes a Markdown report with sections and numbered sources to `.zerolux/research/<date>_<provider>_<slug>.md` and returns its path and opening. It times out after 10 minutes.
 
-Each call runs in an empty temporary directory, without the project's files or instructions, with only the web search and fetch tools. While it runs, pi shows each search and page fetch; cancelling the pi turn stops it.
+A search runs in the background. The tool answers at once and the session goes on: it takes messages and keeps working. When the search ends, its outcome, or why it failed, arrives as a message of its own: into the turn in progress, or starting a turn when the session is idle. pi renders it with what ran, each search and page fetch, and the answer with its links. Ending the session stops the searches still running; ending a turn does not.
+
+Each call runs in an empty temporary directory, without the project's files or instructions, with only the web search and fetch tools.
 
 `bun test harnesses/pi` covers both tools with a fake CLI.

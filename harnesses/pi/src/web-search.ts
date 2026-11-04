@@ -2,8 +2,10 @@
 // Each call runs the CLI isolated in a temporary directory: no project instructions, no
 // global memory rituals, no shell. Quick mode returns cited results as JSON; research mode
 // writes a Markdown report under .zerolux/research/ and returns its path with an abstract.
-// The tool row shows what runs (provider, mode, model, effort, query), each search and
-// fetch as it happens, then the answer with numbered links.
+// A search runs in the background: the tool answers at once, the session goes on taking
+// messages and working, and the outcome arrives as a message of its own when it is ready,
+// rendered with what ran (provider, mode, model, effort, query), its searches and fetches,
+// and the answer with numbered links.
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -66,7 +68,12 @@ export interface Details {
   steps: Step[];
   elapsedMs: number;
   outcome?: Outcome;
+  /** Why the search failed, when it did. */
+  error?: string;
 }
+
+/** The message a finished search arrives as. */
+export const RESULT_MESSAGE = "web-search-result";
 
 export interface RunOptions {
   cwd: string;
@@ -212,8 +219,7 @@ function parseLine(line: string): unknown {
 /** The web steps in one line of Claude's stream-json: WebSearch and WebFetch tool uses. */
 export function claudeSteps(line: string): Step[] {
   const event = parseLine(line) as
-    | { type?: string; message?: { content?: unknown } }
-    | undefined;
+    { type?: string; message?: { content?: unknown } } | undefined;
   if (event?.type !== "assistant" || !Array.isArray(event.message?.content))
     return [];
   const steps: Step[] = [];
@@ -422,6 +428,8 @@ export function formatOutcome(outcome: Outcome): string {
 /** Runs a CLI (pi runs on Node, tests on Bun), feeding the prompt on stdin and killing it on abort or timeout. */
 export const spawnRunner: Runner = (cmd, args, options) =>
   new Promise((resolve, reject) => {
+    // Stopped before it started: nothing to run.
+    if (options.signal?.aborted) return reject(new Error("Search cancelled"));
     const proc = spawn(cmd, args, {
       cwd: options.cwd,
       env: { ...process.env, ...options.env },
@@ -617,6 +625,41 @@ export default function webSearch(
   pi: ExtensionAPI,
   deps: (cwd: string) => Deps = defaultDeps,
 ) {
+  // Searches in the background, by tool call; the session's end stops them.
+  const running = new Map<string, AbortController>();
+  pi.on("session_shutdown", () => {
+    for (const controller of running.values()) controller.abort();
+    running.clear();
+  });
+  pi.registerMessageRenderer<Details>(
+    RESULT_MESSAGE,
+    (message, options, theme) => {
+      const details = message.details;
+      if (!details) return undefined;
+      const lines = [
+        formatCall(
+          details.provider,
+          {
+            query: details.query,
+            mode: details.mode,
+            model: details.model,
+            effort: details.effort,
+          },
+          theme,
+        ),
+      ];
+      lines.push(
+        details.error
+          ? theme.fg("error", `failed: ${details.error}`)
+          : formatResult(
+              details,
+              { expanded: options.expanded, isPartial: false },
+              theme,
+            ),
+      );
+      return new Text(lines.join("\n"), 0, 0);
+    },
+  );
   for (const provider of ["claude", "codex"] as const) {
     const cli = provider === "claude" ? "Claude Code" : "Codex";
     pi.registerTool<typeof parameters, Details>({
@@ -625,8 +668,7 @@ export default function webSearch(
       description: `Search the web through the ${cli} CLI and its built-in web search. Use quick mode for a cited answer, research mode for an in-depth Markdown report. Each call costs a model run; pick model and effort to match the question.`,
       parameters,
       executionMode: "parallel",
-      async execute(_id, args, signal, onUpdate, ctx) {
-        const started = Date.now();
+      async execute(id, args, _signal, _onUpdate, ctx) {
         const details: Details = {
           provider,
           mode: args.mode ?? "quick",
@@ -636,43 +678,56 @@ export default function webSearch(
           steps: [],
           elapsedMs: 0,
         };
-        const update = () => {
+        // The search outlives this call: it runs in the background and is stopped only by its
+        // own time limit or the session's end, never by the turn that started it.
+        const controller = new AbortController();
+        running.set(id, controller);
+        const started = Date.now();
+        const finish = (text: string) => {
           details.elapsedMs = Date.now() - started;
-          // A copy per update: the UI keeps the last partial, the steps keep growing.
-          onUpdate?.({
-            content: [],
-            details: { ...details, steps: [...details.steps] },
-          });
-        };
-        // A heartbeat keeps the elapsed time and spinner moving between steps.
-        const heartbeat = setInterval(update, 1000);
-        try {
-          update();
-          const outcome = await search(
-            provider,
+          pi.sendMessage(
             {
-              query: args.query,
-              mode: details.mode,
-              model: args.model,
-              effort: args.effort,
-              maxResults: args.max_results ?? 8,
+              customType: RESULT_MESSAGE,
+              content: text,
+              display: true,
+              details: { ...details, steps: [...details.steps] },
             },
-            deps(ctx.cwd),
-            signal,
-            (step) => {
-              details.steps.push(step);
-              update();
-            },
+            { triggerTurn: true, deliverAs: "steer" },
           );
-          details.outcome = outcome;
-          details.elapsedMs = Date.now() - started;
-          return {
-            content: [{ type: "text", text: formatOutcome(outcome) }],
-            details,
-          };
-        } finally {
-          clearInterval(heartbeat);
-        }
+        };
+        void search(
+          provider,
+          {
+            query: args.query,
+            mode: details.mode,
+            model: args.model,
+            effort: args.effort,
+            maxResults: args.max_results ?? 8,
+          },
+          deps(ctx.cwd),
+          controller.signal,
+          (step) => details.steps.push(step),
+        )
+          .then((outcome) => {
+            details.outcome = outcome;
+            finish(`Web search: ${args.query}\n\n${formatOutcome(outcome)}`);
+          })
+          .catch((error: unknown) => {
+            if (controller.signal.aborted) return;
+            details.error =
+              error instanceof Error ? error.message : String(error);
+            finish(`Web search failed: ${args.query}\n\n${details.error}`);
+          })
+          .finally(() => running.delete(id));
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Searching in the background. The result arrives as a message when it is ready; go on with other work meanwhile.",
+            },
+          ],
+          details,
+        };
       },
       renderCall(args, theme, context) {
         const text =
@@ -683,10 +738,12 @@ export default function webSearch(
       renderResult(result, options, theme, context) {
         const text =
           (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-        const state = context.state as { tick?: number };
-        state.tick = (state.tick ?? 0) + 1;
+        // The row only says the search went to the background; its result is a message.
         text.setText(
-          formatResult(result.details ?? undefined, options, theme, state.tick),
+          theme.fg(
+            "muted",
+            "searching in the background; the result arrives as a message",
+          ),
         );
         return text;
       },

@@ -11,6 +11,7 @@ import webSearch, {
   codexArgs,
   codexSteps,
   formatResult,
+  RESULT_MESSAGE,
   parseQuick,
   reportName,
   search,
@@ -249,37 +250,64 @@ test("helpers: args without optional flags, slug, report name, abstract", () => 
   expect(abstractOf("a".repeat(1000)).length).toBe(801);
 });
 
-test("the extension registers both tools, runs them with the session cwd and reports progress", async () => {
+/** A pi that records what the extension registers and sends. */
+function fakePi() {
   const tools: any[] = [];
-  const updates: any[] = [];
-  const fake = fakeRunner(async () => ({
-    stdout: claudeStream(JSON.stringify(answer)),
-  }));
+  const sent: { message: any; options: any }[] = [];
+  const handlers = new Map<string, () => void>();
+  const renderers = new Map<string, unknown>();
+  const pi = {
+    registerTool: (tool: any) => tools.push(tool),
+    registerMessageRenderer: (type: string, renderer: unknown) =>
+      renderers.set(type, renderer),
+    on: (event: string, handler: () => void) => handlers.set(event, handler),
+    sendMessage: (message: any, options: any) =>
+      sent.push({ message, options }),
+  } as unknown as ExtensionAPI;
+  return { pi, tools, sent, handlers, renderers };
+}
+
+test("a search runs in the background: the tool answers at once and the outcome arrives as a message", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const fake = fakeRunner(async () => {
+    await held;
+    return { stdout: claudeStream(JSON.stringify(answer)) };
+  });
   await withDeps(async (deps, dir) => {
     let seen = "";
-    webSearch(
-      {
-        registerTool: (tool: any) => tools.push(tool),
-      } as unknown as ExtensionAPI,
-      (cwd) => {
-        seen = cwd;
-        return deps;
-      },
-    );
+    const { pi, tools, sent, renderers } = fakePi();
+    webSearch(pi, (cwd) => {
+      seen = cwd;
+      return deps;
+    });
     expect(tools.map((tool) => tool.name)).toEqual([
       "web_search_claude",
       "web_search_codex",
     ]);
-    const result = await tools[0].execute(
+    expect(renderers.has(RESULT_MESSAGE)).toBe(true);
+    const started = await tools[0].execute(
       "call",
       { query: quick.query, max_results: 2, model: "sonnet", effort: "low" },
       undefined,
-      (partial: unknown) => updates.push(partial),
+      undefined,
       { cwd: dir },
     );
+    // Answered while the CLI still runs: nothing delivered yet.
+    expect(started.details.outcome).toBeUndefined();
+    expect(sent).toHaveLength(0);
+    release();
+    await Bun.sleep(0);
+    for (let tries = 0; sent.length === 0 && tries < 100; tries++)
+      await Bun.sleep(10);
     expect(seen).toBe(dir);
-    expect(result.details.outcome.results).toHaveLength(2);
-    expect(result.details).toMatchObject({
+    expect(sent).toHaveLength(1);
+    const { message, options } = sent[0]!;
+    // It reaches the session wherever it is: into a running turn, or starting one.
+    expect(options).toEqual({ triggerTurn: true, deliverAs: "steer" });
+    expect(message.customType).toBe(RESULT_MESSAGE);
+    expect(message.display).toBe(true);
+    expect(message.details).toMatchObject({
       provider: "claude",
       mode: "quick",
       model: "sonnet",
@@ -287,15 +315,61 @@ test("the extension registers both tools, runs them with the session cwd and rep
       query: quick.query,
       steps: [{ kind: "search", text: "tauri" }],
     });
-    expect(result.content[0].text).toContain(answer.answer);
+    expect(message.details.outcome.results).toHaveLength(2);
     expect(fake.calls).toHaveLength(1);
-    // First update: nothing yet; after the step: one search, no outcome.
-    expect(updates[0].details.steps).toEqual([]);
-    expect(updates.at(-1).details.steps).toEqual([
-      { kind: "search", text: "tauri" },
-    ]);
-    expect(updates.at(-1).details.outcome).toBeUndefined();
   }, fake.run);
+});
+
+test("a failed search arrives as a failure; the session's end stops a running one silently", async () => {
+  const failing = fakeRunner(async () => ({ code: 1, stderr: "offline" }));
+  await withDeps(async (deps, dir) => {
+    const { pi, tools, sent } = fakePi();
+    webSearch(pi, () => deps);
+    await tools[1].execute(
+      "call",
+      { query: quick.query },
+      undefined,
+      undefined,
+      {
+        cwd: dir,
+      },
+    );
+    for (let tries = 0; sent.length === 0 && tries < 100; tries++)
+      await Bun.sleep(10);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.message.details.error).toBeTruthy();
+    expect(sent[0]!.message.details.outcome).toBeUndefined();
+  }, failing.run);
+  let aborted = false;
+  const endless = fakeRunner(
+    (_cmd, _args, options) =>
+      new Promise((_resolve, reject) => {
+        const stop = () => {
+          aborted = true;
+          reject(new Error("Search cancelled"));
+        };
+        if (options.signal?.aborted) stop();
+        else options.signal?.addEventListener("abort", stop);
+      }),
+  );
+  await withDeps(async (deps, dir) => {
+    const { pi, tools, sent, handlers } = fakePi();
+    webSearch(pi, () => deps);
+    await tools[0].execute(
+      "call",
+      { query: quick.query },
+      undefined,
+      undefined,
+      {
+        cwd: dir,
+      },
+    );
+    handlers.get("session_shutdown")!();
+    for (let tries = 0; !aborted && tries < 100; tries++) await Bun.sleep(10);
+    await Bun.sleep(20);
+    expect(aborted).toBe(true);
+    expect(sent).toHaveLength(0);
+  }, endless.run);
 });
 
 test("progress parsers read Claude's stream-json and Codex's --json web steps", () => {
