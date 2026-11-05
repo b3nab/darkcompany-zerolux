@@ -87,6 +87,7 @@ export function HostAccounts({
   busy: boolean;
   perform: Perform;
 }) {
+  const account = useHostAccounts(host.id);
   const {
     accounts,
     error,
@@ -96,7 +97,7 @@ export function HostAccounts({
     codexDeviceCode,
     codexSignOut,
     setPi,
-  } = useHostAccounts(host.id);
+  } = account;
   const [claude, setClaudeSecret] = useState({
     kind: "api_key" as "api_key" | "oauth_token",
     value: "",
@@ -127,7 +128,7 @@ export function HostAccounts({
         )}
         {!accounts.claude.signed_in && (
           <div className="self-start">
-            <ClaudeSignIn hostId={host.id} busy={busy} perform={perform} />
+            <ClaudeSignIn account={account} busy={busy} perform={perform} />
           </div>
         )}
         {!own && (

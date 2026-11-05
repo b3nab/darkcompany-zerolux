@@ -20,22 +20,25 @@ export function onKernelComputer() {
   }
 }
 
+/** One's accounts on a computer, as read once for everything that shows them. */
+export type AccountsRead = ReturnType<typeof useHostAccounts>;
+
 /**
  * Claude Code's own sign-in on a computer, from here: Sign in starts it there and gives the
  * page to sign in at; the code that page shows, when it shows one, goes back to Claude Code.
- * While it waits, the account is read again until Claude Code is signed in.
+ * While it waits, the same accounts its place shows are read again until Claude Code is
+ * signed in, so everything showing them changes together.
  */
 export function ClaudeSignIn({
-  hostId,
+  account,
   busy,
   perform,
 }: {
-  hostId: string;
+  account: AccountsRead;
   busy: boolean;
   perform: Perform;
 }) {
-  const { accounts, reload, claudeLogin, claudeLoginCode } =
-    useHostAccounts(hostId);
+  const { accounts, reload, claudeLogin, claudeLoginCode } = account;
   const [url, setUrl] = useState<string>();
   const [code, setCode] = useState("");
   const [sent, setSent] = useState(false);
@@ -130,15 +133,23 @@ export function ClaudeSignedOut({
   busy: boolean;
   perform: Perform;
 }) {
-  const { accounts } = useHostAccounts(hostId);
-  if (!accounts || accounts.claude.signed_in) return null;
+  const account = useHostAccounts(hostId);
+  const signedOut = account.accounts?.claude.signed_in === false;
+  // A sign-in made anywhere else, in Accounts, the tray or a terminal, takes it away too.
+  const { reload } = account;
+  useEffect(() => {
+    if (!signedOut) return;
+    const timer = setInterval(() => void reload(), 5000);
+    return () => clearInterval(timer);
+  }, [signedOut, reload]);
+  if (!signedOut) return null;
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center justify-between gap-3 rounded-md border border-attention/40 bg-card py-1.5 pr-1.5 pl-3 text-sm">
       <span className="flex items-center gap-2 text-attention">
         <CircleAlertIcon aria-hidden className="size-3.5 shrink-0" />
         Claude Code is signed out
       </span>
-      <ClaudeSignIn hostId={hostId} busy={busy} perform={perform} />
+      <ClaudeSignIn account={account} busy={busy} perform={perform} />
     </div>
   );
 }
