@@ -246,6 +246,25 @@ impl ChatRuntime {
                 &[actor],
             )
             .await;
+        if signed_in && harness == crate::harness::Harness::ClaudeCode.id() {
+            // Its sessions here that failed only for the sign-in are no longer failed.
+            let ids: Vec<String> = self
+                .store
+                .sessions(who)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|session| {
+                    session.harness == harness
+                        && session.host_id.as_deref() == self.store.host()
+                        && session.host_id.as_deref() == Some(host)
+                })
+                .map(|session| session.id)
+                .collect();
+            for id in crate::native_output::signed_in_again(&ids) {
+                let _ = self.store.session_changed(&id).await;
+            }
+        }
         if signed_in {
             self.read_plans(who).await;
         }

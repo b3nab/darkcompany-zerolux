@@ -449,6 +449,15 @@ impl Store {
         self.event_in(db, kind, payload, actors).await
     }
 
+    /// Whoever may read the session hears it changed, as when its own row does.
+    pub(crate) async fn session_changed(&self, id: &str) -> Result<()> {
+        let tx = self.write().await?;
+        self.personal_event(&tx, "session.changed", id, json!({"session_id": id}))
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub(crate) async fn personal_event<C: ConnectionTrait>(
         &self,
         db: &C,

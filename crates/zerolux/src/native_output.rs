@@ -59,6 +59,29 @@ static FOUND: LazyLock<Mutex<HashMap<String, PathBuf>>> = LazyLock::new(Default:
 /// How each running session's record ends, kept by the watcher as the record grows.
 static TAILS: LazyLock<Mutex<HashMap<String, Tail>>> = LazyLock::new(Default::default);
 
+/// Its harness signed in again: of `sessions`, those whose last turn failed only because the
+/// sign-in was gone no longer read as failed, until their records say anything new. Answers
+/// those that changed.
+pub fn signed_in_again(sessions: &[String]) -> Vec<String> {
+    let Ok(mut tails) = TAILS.lock() else {
+        return Vec::new();
+    };
+    sessions
+        .iter()
+        .filter(|id| {
+            tails
+                .get_mut(*id)
+                .filter(|tail| tail.last_error.as_deref() == Some("signed_out"))
+                .map(|tail| {
+                    tail.last_turn = None;
+                    tail.last_error = None;
+                })
+                .is_some()
+        })
+        .cloned()
+        .collect()
+}
+
 /// Sessions with how their records end, as far as the watcher has read them.
 pub fn with_tails(mut sessions: Vec<ChatSession>) -> Vec<ChatSession> {
     if let Ok(tails) = TAILS.lock() {
@@ -564,6 +587,30 @@ mod tests {
             )
         );
         assert_eq!(ending.summary.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn a_session_failed_only_for_its_sign_in_is_no_longer_failed_once_signed_in() {
+        let failed = |error: Option<&str>| Tail {
+            output_at: Some(1),
+            last_turn: Some("error".into()),
+            last_error: error.map(str::to_owned),
+            summary: None,
+        };
+        let (signed_out, other) = (
+            "signed-in-again-a".to_owned(),
+            "signed-in-again-b".to_owned(),
+        );
+        TAILS.lock().unwrap().extend([
+            (signed_out.clone(), failed(Some("signed_out"))),
+            (other.clone(), failed(None)),
+        ]);
+        let changed = signed_in_again(&[signed_out.clone(), other.clone(), "unknown".into()]);
+        assert_eq!(changed, std::slice::from_ref(&signed_out));
+        let tails = TAILS.lock().unwrap();
+        assert_eq!(tails[&signed_out].last_turn, None);
+        assert_eq!(tails[&signed_out].last_error, None);
+        assert_eq!(tails[&other].last_turn.as_deref(), Some("error"));
     }
 
     #[test]
