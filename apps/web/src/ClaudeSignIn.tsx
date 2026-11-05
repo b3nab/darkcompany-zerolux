@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { kernelUrl, useHostAccounts } from "@zerolux/chat";
 import type { Perform } from "@zerolux/chat";
-import { CircleAlertIcon, LogInIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { CircleAlertIcon, ExternalLinkIcon, LogInIcon } from "lucide-react";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { desktopHere } from "./desktop";
 
@@ -25,7 +25,8 @@ export type AccountsRead = ReturnType<typeof useHostAccounts>;
 
 /**
  * Claude Code's own sign-in on a computer, from here: Sign in starts it there and gives the
- * page to sign in at; the code that page shows, when it shows one, goes back to Claude Code.
+ * page to sign in at, which the kernel's computer opens by itself; the code that page shows,
+ * when it shows one, goes back to Claude Code.
  * While it waits, the same accounts its place shows are read again until Claude Code is
  * signed in, so everything showing them changes together.
  */
@@ -73,7 +74,7 @@ export function ClaudeSignIn({
     );
   return (
     <form
-      className="flex w-full flex-col gap-2"
+      className="flex w-full flex-wrap items-center gap-2"
       onSubmit={(event) => {
         event.preventDefault();
         const value = code.trim();
@@ -84,37 +85,33 @@ export function ClaudeSignIn({
           });
       }}
     >
-      <p className="text-sm text-muted-foreground">
-        Sign in on{" "}
-        <a
-          href={url}
-          target="_blank"
-          rel="noreferrer"
-          className="text-foreground underline underline-offset-4"
-        >
-          the Claude sign-in page
-        </a>
-        {onKernelComputer() ? ", open in your browser" : ""}. If it shows a
-        code, paste it here.
-      </p>
-      <div className="flex items-center gap-2">
-        <Input
-          aria-label="Sign-in code"
-          placeholder="Code"
-          autoComplete="off"
-          value={code}
-          onChange={(event) => {
-            setCode(event.target.value);
-            setSent(false);
-          }}
-          className="h-8 min-w-0 flex-1 font-mono text-[12.5px]"
-        />
-        <Button type="submit" size="sm" disabled={busy || !code.trim()}>
-          Send
-        </Button>
-      </div>
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        className={buttonVariants({ variant: "outline", size: "sm" })}
+      >
+        <ExternalLinkIcon />
+        Sign-in page
+      </a>
+      <Input
+        aria-label="Sign-in code"
+        placeholder="Code"
+        autoComplete="off"
+        value={code}
+        onChange={(event) => {
+          setCode(event.target.value);
+          setSent(false);
+        }}
+        className="h-8 min-w-0 flex-1 basis-32 font-mono text-[12.5px]"
+      />
+      <Button type="submit" size="sm" disabled={busy || !code.trim()}>
+        Send
+      </Button>
       {sent && (
-        <p className="text-xs text-muted-foreground">Checking the code…</p>
+        <span className="text-xs text-muted-foreground">
+          Checking the code…
+        </span>
       )}
     </form>
   );
