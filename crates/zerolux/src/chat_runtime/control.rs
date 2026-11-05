@@ -137,8 +137,10 @@ impl ChatRuntime {
         })
     }
 
-    /// Each session whose turn has ended gets the first input of its queue as its next turn,
-    /// one at a time: an input is sent only once its session shows it is idle again.
+    /// Each session whose turn has ended gets its whole queue as its next turn, in order, as
+    /// its harness takes queued messages: what one person wrote while it worked goes together,
+    /// once the session shows it is idle again. Another person's inputs after theirs take the
+    /// turn after.
     pub async fn run_queues(&self) -> Result<()> {
         const STARTING: std::time::Duration = std::time::Duration::from_secs(20);
         const RETRY: std::time::Duration = std::time::Duration::from_secs(30);
@@ -165,7 +167,20 @@ impl ChatRuntime {
             if waiting(&self.queue_sent, STARTING) || waiting(&self.queue_failed, RETRY) {
                 continue;
             }
-            let Some(next) = self.store.take_queue(&id, false).await?.pop() else {
+            let mut queued = self.store.take_queue(&id, true).await?;
+            let Some(author) = queued.first().map(|first| first.author.actor_id.clone()) else {
+                continue;
+            };
+            // One turn speaks for one person: the inputs of whoever wrote first, up to another's.
+            let theirs = queued
+                .iter()
+                .position(|input| input.author.actor_id != author)
+                .unwrap_or(queued.len());
+            let later = queued.split_off(theirs);
+            if !later.is_empty() {
+                self.store.put_back(&id, &later).await?;
+            }
+            let Some(next) = crate::queue::Due::joined(queued.clone()) else {
                 continue;
             };
             self.mark_queue_sent(&id);
@@ -184,9 +199,7 @@ impl ChatRuntime {
                     error = format!("{error:#}"),
                     "A queued input was not sent"
                 );
-                self.store
-                    .put_back(&id, std::slice::from_ref(&next))
-                    .await?;
+                self.store.put_back(&id, &queued).await?;
                 self.queue_failed
                     .lock()
                     .expect("queue")

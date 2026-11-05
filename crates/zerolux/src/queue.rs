@@ -1,7 +1,7 @@
 //! A session's queue: the inputs its people write while it works, kept by ZeroLux rather than
-//! by the harness. Each waits for the turn in progress to end, then starts a turn of its own,
-//! one at a time, in order. Until then it is changed, taken back, put in another place or sent
-//! at once. Stopping the session sends the whole queue at once, as its next turn.
+//! by the harness. They wait for the turn in progress to end, then all go together, in order,
+//! as the next turn. Until then each is changed, taken back, put in another place or sent at
+//! once. Stopping the session sends the whole queue at once, as its next turn.
 
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set, sea_query::Expr,
