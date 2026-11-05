@@ -59,11 +59,12 @@ if (import.meta.main) {
   }
   const kept = caches.filter((cache) => !gone.includes(cache));
   const gb = (bytes: number) => (bytes / 1e9).toFixed(2);
-  const total = (list: Cache[]) =>
-    gb(list.reduce((sum, cache) => sum + cache.sizeInBytes, 0));
-  console.log(
-    `Deleted ${gone.length}, ${total(gone)} GB; kept ${kept.length}, ${total(kept)} GB:`,
-  );
-  for (const cache of kept.sort((a, b) => b.sizeInBytes - a.sizeInBytes))
-    console.log(`${gb(cache.sizeInBytes)} GB  ${cache.ref}  ${cache.key}`);
+  const show = (title: string, list: Cache[]) => {
+    const bytes = list.reduce((sum, cache) => sum + cache.sizeInBytes, 0);
+    console.log(`${title} ${list.length}, ${gb(bytes)} GB:`);
+    for (const cache of list.sort((a, b) => b.sizeInBytes - a.sizeInBytes))
+      console.log(`${gb(cache.sizeInBytes)} GB  ${cache.ref}  ${cache.key}`);
+  };
+  show("Deleted", gone);
+  show("Kept", kept);
 }
