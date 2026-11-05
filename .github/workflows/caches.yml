@@ -1,0 +1,28 @@
+name: Caches
+
+# After each CI and Release run, the caches no run restores again go, so that GitHub's limit
+# keeps the ones in use, the nightly's builds among them.
+on:
+  workflow_run:
+    workflows: [CI, Release]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: caches
+
+jobs:
+  prune:
+    name: Prune
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun scripts/ci-cache-prune.ts

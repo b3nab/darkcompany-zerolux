@@ -58,7 +58,9 @@ Release builds use `target/desktop/<target>/release`, separately from the CLI's
 `target/release` in a checkout. Tauri packages the desktop's main executable as `zerolux` and
 discovers its installers and updater artifacts in that desktop target directory; the kernel's
 own program is built there after them. The CI cache follows the same split; `CARGO_TARGET_DIR`
-can select another absolute desktop output directory.
+can select another absolute desktop output directory. After each CI and Release run, the caches
+no run restores again are deleted: an entry a newer one of its kind replaced on its branch, and
+a tag's.
 
 Each version has immutable artifacts on its GitHub release. Once every build succeeds, the
 workflow publishes the release and advances signed `nightly.json`, `beta.json` and
