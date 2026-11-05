@@ -216,19 +216,21 @@ function ClaudeSignIn({
     );
   return (
     <View className="gap-2">
-      <Text className="text-[13px] text-muted-foreground">
-        Sign in on the Claude page, then paste the code it shows.
-      </Text>
       <Pressable
         accessibilityRole="link"
         onPress={() => void Linking.openURL(url)}
         className="self-start"
       >
         <Text className="text-[13px] font-medium text-human-foreground">
-          Open the sign-in page
+          Sign-in page
         </Text>
       </Pressable>
       <SecretField placeholder="Code" busy={busy} save={code} label="Send" />
+      {busy ? (
+        <Text className="text-[13px] text-muted-foreground">
+          Checking the code…
+        </Text>
+      ) : null}
     </View>
   );
 }

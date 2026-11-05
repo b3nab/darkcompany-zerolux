@@ -136,8 +136,7 @@ import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { setDensity, useDensity } from "../../src/density";
 import { useSession } from "../../src/kernel";
-import { useMe } from "../../src/me";
-import { useAccess } from "../../src/me";
+import { useAccess, useMe } from "../../src/me";
 import { dismissNotice } from "../../src/notices";
 import { pickPhotos } from "../../src/photos";
 import type { Photo } from "../../src/photos";
@@ -1341,7 +1340,6 @@ function SentInputView({ input }: { input: SentInput }) {
   );
 }
 
-/** A stopped session, or one whose link was lost, continued where it was with a tap. */
 /**
  * A Claude Code session whose last turn failed because its sign-in is gone, on the kernel's
  * computer and its person's: until Claude Code signs in again, Sign in opens its accounts.
@@ -1353,11 +1351,18 @@ function SignedOutBar({ session }: { session: ChatSession }) {
   const host = hosts.hosts?.find((h) => h.here);
   const mine = session.owner_id === me?.id;
   const onKernel = !session.host_id || session.host_id === host?.id;
-  const { accounts } = useHostAccounts(
+  const { accounts, reload } = useHostAccounts(
     host && mine && onKernel ? host.id : undefined,
     url,
   );
-  if (!host || !accounts || accounts.claude.signed_in) return null;
+  const signedOut = accounts?.claude.signed_in === false;
+  // Signed in from Accounts or anywhere else: the bar goes once it reads so.
+  useEffect(() => {
+    if (!signedOut) return;
+    const timer = setInterval(() => void reload(), 5000);
+    return () => clearInterval(timer);
+  }, [signedOut, reload]);
+  if (!host || !signedOut) return null;
   return (
     <View className="flex-row items-center justify-between gap-3 rounded-md border border-attention/40 bg-card py-1.5 pr-1.5 pl-3">
       <Text className="flex-1 text-[13px] text-attention">
@@ -1370,6 +1375,7 @@ function SignedOutBar({ session }: { session: ChatSession }) {
   );
 }
 
+/** A stopped session, or one whose link was lost, continued where it was with a tap. */
 function ResumeBar({ session }: { session: ChatSession }) {
   const { chat } = useSession();
   const [busy, setBusy] = useState(false);
