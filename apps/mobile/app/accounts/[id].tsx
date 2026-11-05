@@ -73,7 +73,6 @@ export default function AccountsPage() {
               save={(secret) => act(() => accounts.setClaude(secret))}
               login={accounts.claudeLogin}
               code={(code) => act(() => accounts.claudeLoginCode(code))}
-              reload={accounts.reload}
               failed={(e) => setError(errorMessage(e))}
             />
             <Codex
@@ -179,24 +178,16 @@ function ClaudeSignIn({
   busy,
   login,
   code,
-  reload,
   failed,
 }: {
   signedIn: boolean;
   busy: boolean;
   login: (browser: boolean) => Promise<{ url: string }>;
   code: (code: string) => Promise<boolean>;
-  reload: () => Promise<unknown>;
   failed: (e: unknown) => void;
 }) {
+  // The kernel says when the sign-in ends: the account is read again then.
   const [url, setUrl] = useState<string>();
-  // While it waits, the account is read again until Claude Code is signed in.
-  useEffect(() => {
-    if (!url) return;
-    if (signedIn) return setUrl(undefined);
-    const timer = setInterval(() => void reload(), 3000);
-    return () => clearInterval(timer);
-  }, [url, signedIn, reload]);
   if (signedIn) return null;
   if (!url)
     return (
@@ -242,7 +233,6 @@ function Claude({
   save,
   login,
   code,
-  reload,
   failed,
 }: {
   claude: HostAccounts["claude"];
@@ -253,7 +243,6 @@ function Claude({
   ) => Promise<boolean>;
   login: (browser: boolean) => Promise<{ url: string }>;
   code: (code: string) => Promise<boolean>;
-  reload: () => Promise<unknown>;
   failed: (e: unknown) => void;
 }) {
   const [kind, setKind] = useState<"api_key" | "oauth_token">("api_key");
@@ -283,7 +272,6 @@ function Claude({
         busy={busy}
         login={login}
         code={code}
-        reload={reload}
         failed={failed}
       />
       {own ? null : (

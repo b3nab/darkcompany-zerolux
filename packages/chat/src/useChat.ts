@@ -45,6 +45,7 @@ import { backgroundNotice, backgroundResync } from "./background";
 import { uiNotice, uiResync } from "./extension-ui";
 import { terminalNotice, terminalResync } from "./terminals";
 import { recordsResync } from "./session-events";
+import { accountsNotice } from "./accounts";
 import {
   clearQueue,
   editQueued,
@@ -321,6 +322,8 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
         return liveNotice(event);
       case "session.queue":
         return queueNotice(server, event.session_id);
+      case "accounts.changed":
+        return accountsNotice();
       case "terminal.output":
         return terminalNotice(event);
       case "extensions.changed":
@@ -353,6 +356,7 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
   function resyncAll() {
     liveResync();
     queueResync(server);
+    accountsNotice();
     recordsResync();
     terminalResync();
     extensionsNotice();
@@ -626,7 +630,7 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     /**
      * Writes the owner's own words into a session as native input, not as a chat message. A
      * session at rest with nothing queued starts a turn with them; a working one queues them
-     * for a turn of their own after the one in progress (`queue`), or takes them into it
+     * for the next turn, with all that waits, after the one in progress (`queue`), or takes them into it
      * (`steer`) or in place of it (`interrupt`). Images go with them; with images the text may
      * be empty. It shows at the session's end, by `sentInputs`, until the events show it, or
      * in the queue once held there; `after` is where the record shown ends, else the last

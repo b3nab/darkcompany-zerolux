@@ -142,9 +142,9 @@ export function QueueStack({
 }
 
 /**
- * An input of the owner's waiting above the box: `queued`, it goes as a turn of its own when
- * the one before ends; else its harness takes it into the turn at its next step. Where it can
- * be, it is edited in place or taken out, and a queued one sent now.
+ * An input of the owner's waiting above the box: `queued`, it goes with the whole queue as the
+ * next turn when the one in progress ends; else its harness takes it into the turn at its next
+ * step. Where it can be, it is edited in place or taken out, and a queued one sent now.
  */
 export function QueueCard({
   session,

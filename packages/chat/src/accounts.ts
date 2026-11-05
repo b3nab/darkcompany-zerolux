@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { errorMessage, kernelUrl, request } from "./client";
 
+// The accounts shown now, each read again when the kernel says one signed in or out.
+const shown = new Set<() => void>();
+
+/** The kernel says an account signed in or out, or notices may have been missed: read again. */
+export const accountsNotice = () => shown.forEach((reload) => reload());
+
 /**
  * One's harness accounts on a computer: the computer's own on one's own computer; on one open
  * to one, one's own, which the sessions one runs there use. What is connected, never secrets.
@@ -58,8 +64,8 @@ const base = (hostId: string) =>
 
 /**
  * One's accounts on the computer the kernel runs on, one's own or one open to one, and the ways
- * to connect them. Each change reads them again; so does `reload` when `accounts.changed` says
- * a sign-in ended.
+ * to connect them. Each change reads them again, and so does the kernel's word that one signed
+ * in or out.
  */
 export function useHostAccounts(
   hostId: string | undefined,
@@ -85,7 +91,12 @@ export function useHostAccounts(
           ),
     [kernel, hostId, host],
   );
-  useEffect(() => void reload(), [reload]);
+  useEffect(() => {
+    const again = () => void reload();
+    again();
+    shown.add(again);
+    return () => void shown.delete(again);
+  }, [reload]);
   const current = read?.host === host ? read : undefined;
   const andReload = <T>(work: Promise<T>) =>
     work.then(async (value) => {

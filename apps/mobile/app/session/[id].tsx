@@ -1356,7 +1356,7 @@ function SignedOutBar({ session }: { session: ChatSession }) {
     url,
   );
   const signedOut = accounts?.claude.signed_in === false;
-  // Signed in from Accounts or anywhere else: the bar goes once it reads so.
+  // A sign-in from ZeroLux is announced; one made elsewhere shows by reading again.
   useEffect(() => {
     if (!signedOut) return;
     const timer = setInterval(() => void reload(), 5000);

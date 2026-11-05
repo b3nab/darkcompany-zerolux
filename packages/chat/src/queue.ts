@@ -3,8 +3,8 @@ import { kernelUrl, request } from "./client";
 import { rereadShown, sharedRead, useSharedRead } from "./shared-read";
 
 /**
- * An input sent while its session worked: ZeroLux holds it, and sends it as a turn of its own
- * when the turn before ends, in order. A Stop sends the whole queue at once.
+ * An input sent while its session worked: ZeroLux holds it, and when the turn in progress ends
+ * or is stopped, the whole queue goes, in order, as the next turn.
  */
 export interface QueueItem {
   id: string;
@@ -79,7 +79,7 @@ export const removeQueued = (
   itemId: string,
 ) => change(kernel, sessionId, item(itemId), undefined, "DELETE");
 
-/** Sends a waiting input now: into the turn in progress, or as a turn of its own at rest. */
+/** Sends a waiting input now: into the turn in progress, or as a turn at rest. */
 export const sendQueued = (kernel: string, sessionId: string, itemId: string) =>
   change(kernel, sessionId, `${item(itemId)}/send`, {});
 
