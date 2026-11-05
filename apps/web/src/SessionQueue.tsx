@@ -11,7 +11,7 @@ import type { InputMode, QueueItem, QueuedInput } from "@zerolux/chat";
 import { Button } from "@/components/ui/button";
 
 /**
- * How Enter sends: into ZeroLux's queue, for a turn of its own (at rest with nothing queued it
+ * How Enter sends: into ZeroLux's queue, for the next turn (at rest with nothing queued it
  * starts one at once); with ⌘ or Ctrl while the session works, into the turn in progress.
  */
 export const sendModeOf = (
@@ -38,8 +38,8 @@ export interface QueueActions {
 }
 
 /**
- * Above the box: the inputs ZeroLux keeps for the session's next turns, in the order they will
- * go, one a turn. Each is rewritten in place, sent now, taken out or dragged to another place;
+ * Above the box: the inputs ZeroLux keeps for the session's next turn, in the order they will
+ * go, all together, one person's at a time. Each is rewritten in place, sent now, taken out or dragged to another place;
  * the whole queue emptied. Below them, the words already given to the turn in progress that the
  * harness has not taken yet.
  */

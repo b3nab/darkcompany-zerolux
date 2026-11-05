@@ -2028,8 +2028,8 @@ function SessionInput({
   const modes = !(
     session.harness === "claude-code" && session.origin !== "owned"
   );
-  // Sent while it works, an input waits in ZeroLux's queue for a turn of its own; at rest with
-  // nothing queued it starts one. ⌘/Ctrl Enter puts it into the turn in progress instead.
+  // Sent while it works, an input waits in ZeroLux's queue, all of which goes as the next turn;
+  // at rest with nothing queued it starts one. ⌘/Ctrl Enter puts it into the turn in progress instead.
   async function submit(mode: InputMode = "queue") {
     if (!open || empty || tooLong || imagesError) return;
     const sent = text;

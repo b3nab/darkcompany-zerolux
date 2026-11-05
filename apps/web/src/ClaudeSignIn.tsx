@@ -27,8 +27,7 @@ export type AccountsRead = ReturnType<typeof useHostAccounts>;
  * Claude Code's own sign-in on a computer, from here: Sign in starts it there and gives the
  * page to sign in at, which the kernel's computer opens by itself; the code that page shows,
  * when it shows one, goes back to Claude Code.
- * While it waits, the same accounts its place shows are read again until Claude Code is
- * signed in, so everything showing them changes together.
+ * Its end reads again every place that shows the accounts, as the kernel says it.
  */
 export function ClaudeSignIn({
   account,
@@ -39,16 +38,11 @@ export function ClaudeSignIn({
   busy: boolean;
   perform: Perform;
 }) {
-  const { accounts, reload, claudeLogin, claudeLoginCode } = account;
+  const { accounts, claudeLogin, claudeLoginCode } = account;
   const [url, setUrl] = useState<string>();
   const [code, setCode] = useState("");
   const [sent, setSent] = useState(false);
   const signedIn = accounts?.claude.signed_in ?? false;
-  useEffect(() => {
-    if (!url || signedIn) return;
-    const timer = setInterval(() => void reload(), 2000);
-    return () => clearInterval(timer);
-  }, [url, signedIn, reload]);
   useEffect(() => {
     if (signedIn) {
       setUrl(undefined);

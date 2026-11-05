@@ -20,7 +20,7 @@ const act = {
   clear: done,
 };
 
-test("Enter queues an input for a turn of its own; with ⌘ or Ctrl it goes into the turn in progress", () => {
+test("Enter queues an input for the next turn; with ⌘ or Ctrl it goes into the turn in progress", () => {
   const plain = { metaKey: false, ctrlKey: false };
   expect(sendModeOf(plain, true)).toBe("queue");
   expect(sendModeOf({ ...plain, metaKey: true }, true)).toBe("steer");
