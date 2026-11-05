@@ -75,6 +75,8 @@ export interface ChatSession {
   seen_at?: number | null;
   /** How its last turn ended; null while one runs or before the first. */
   last_turn?: "completed" | "interrupted" | "error" | null;
+  /** What its last turn's error was, when the harness said it: its sign-in is gone. */
+  last_error?: "signed_out" | null;
   /** Its latest text or step, in one line. */
   summary?: string | null;
 }
@@ -210,6 +212,7 @@ export type ChatEvent = { event_id: string } & (
   | { type: "delivery.changed"; conversation_id: string; message_id: string }
   | { type: "approval.changed"; approval_id: string }
   | { type: "subscriptions.changed"; subscriptions: Subscription[] }
+  | AccountsNotice
   | ReadNotice
   | ({
       type: "session.output";
@@ -222,6 +225,13 @@ export type ChatEvent = { event_id: string } & (
   | BackgroundNotice
   | (UiNotice & { event_id: string })
 );
+/** A harness account of the person's on a computer signed in or out. */
+export type AccountsNotice = {
+  type: "accounts.changed";
+  host_id: string;
+  harness: "claude-code" | "codex" | "pi";
+  signed_in: boolean;
+};
 /**
  * The person read a chat up to a message, or saw a session's work up to a time, on one of
  * their clients: the others follow.
@@ -234,7 +244,7 @@ export type ReadNotice = {
 };
 /** How a session's native record ends, as the kernel's watcher last read it. */
 export type SessionTail = Partial<
-  Pick<ChatSession, "output_at" | "last_turn" | "summary">
+  Pick<ChatSession, "output_at" | "last_turn" | "last_error" | "summary">
 >;
 /** A new session ZeroLux starts in a folder: with an agent (`actor_id`, or a new one by
  * `name`) or the owner's own. What is left out, the harness decides with its own settings. */
@@ -558,6 +568,7 @@ const eventTypes = new Set<string>([
   "delivery.changed",
   "approval.changed",
   "subscriptions.changed",
+  "accounts.changed",
   "read.changed",
   "session.output",
   "session.live",
@@ -599,6 +610,9 @@ export function parseEvent(payload: Uint8Array): ChatEvent | undefined {
       typeof event.event_id !== "string"
     )
       event.event_id = `background_command.changed:${event.background_command_id}:${event.status}`;
+    // A sign-in ends once: each notice is its own.
+    if (event.type === "accounts.changed" && typeof event.event_id !== "string")
+      event.event_id = `accounts.changed:${event.host_id}:${event.harness}:${++uiNotices}`;
     // A read position only moves forward: where it is names the notice.
     if (event.type === "read.changed" && typeof event.event_id !== "string")
       event.event_id = `read.changed:${event.kind}:${event.id}:${event.position}`;

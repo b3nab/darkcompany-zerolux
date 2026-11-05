@@ -2,11 +2,23 @@ import { useCallback, useEffect, useState } from "react";
 import { errorMessage, kernelUrl, request } from "./client";
 
 /**
- * One's own harness accounts on a computer open to one: the sessions one runs there use them,
- * never the computer's. What is connected, never the secrets.
+ * One's harness accounts on a computer: the computer's own on one's own computer; on one open
+ * to one, one's own, which the sessions one runs there use. What is connected, never secrets.
  */
 export interface HostAccounts {
-  claude: { method: "oauth_token" | "api_key" | null };
+  claude: {
+    /** A guest's `oauth_token` or `api_key`, else as Claude Code says (`claude.ai`…). */
+    method: string | null;
+    /** Claude Code can work: its sign-in is there. */
+    signed_in: boolean;
+    email: string | null;
+    /** Its plan, as Claude Code names it (`max`). */
+    plan: string | null;
+    /** A sign-in started from ZeroLux waits for the person. */
+    signing_in: boolean;
+    /** Why Claude Code could not say. */
+    error: string | null;
+  };
   codex: {
     signed_in: boolean;
     method: "chatgpt" | "api_key" | null;
@@ -35,7 +47,7 @@ export function accountReady(
 ) {
   if (!accounts) return false;
   return harness === "claude-code"
-    ? accounts.claude.method !== null
+    ? accounts.claude.signed_in || accounts.claude.method !== null
     : harness === "codex"
       ? accounts.codex.signed_in
       : accounts.pi.providers.length > 0;
@@ -45,8 +57,9 @@ const base = (hostId: string) =>
   `/hosts/${encodeURIComponent(hostId)}/accounts`;
 
 /**
- * One's own accounts on a computer open to one, and the ways to connect them. Each change reads
- * them again. Only for a guest on the computer the kernel runs on.
+ * One's accounts on the computer the kernel runs on, one's own or one open to one, and the ways
+ * to connect them. Each change reads them again; so does `reload` when `accounts.changed` says
+ * a sign-in ended.
  */
 export function useHostAccounts(
   hostId: string | undefined,
@@ -94,6 +107,20 @@ export function useHostAccounts(
           "PUT",
         ),
       ),
+    /**
+     * Claude Code's own sign-in: the address to sign in at. With `browser` the computer's
+     * browser opens it too and returns to Claude Code by itself; anywhere else the browser
+     * shows a code for `claudeLoginCode`.
+     */
+    claudeLogin: (browser: boolean) =>
+      andReload(
+        request<{ url: string }>(kernel, `${base(hostId!)}/claude-code/login`, {
+          browser,
+        }),
+      ),
+    /** The code the browser showed, for the sign-in waiting. */
+    claudeLoginCode: (code: string) =>
+      request(kernel, `${base(hostId!)}/claude-code/login/code`, { code }),
     /** Codex with an API key. */
     codexKey: (api_key: string) =>
       andReload(request(kernel, `${base(hostId!)}/codex`, { api_key })),

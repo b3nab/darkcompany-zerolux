@@ -50,6 +50,7 @@ import {
   sessionName,
   sessionOutputAt,
   resumable,
+  useHostAccounts,
   sessionState,
   sessionTone,
   useArrivals,
@@ -135,6 +136,7 @@ import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { setDensity, useDensity } from "../../src/density";
 import { useSession } from "../../src/kernel";
+import { useMe } from "../../src/me";
 import { useAccess } from "../../src/me";
 import { dismissNotice } from "../../src/notices";
 import { pickPhotos } from "../../src/photos";
@@ -731,6 +733,10 @@ function Composer({
     <>
       {children}
       {write && resumable(session) ? <ResumeBar session={session} /> : null}
+      {session.harness === "claude-code" &&
+      session.last_error === "signed_out" ? (
+        <SignedOutBar session={session} />
+      ) : null}
       {compacting ? (
         <View className="flex-row items-center gap-2 px-1.5">
           <ActivityIndicator
@@ -1336,6 +1342,34 @@ function SentInputView({ input }: { input: SentInput }) {
 }
 
 /** A stopped session, or one whose link was lost, continued where it was with a tap. */
+/**
+ * A Claude Code session whose last turn failed because its sign-in is gone, on the kernel's
+ * computer and its person's: until Claude Code signs in again, Sign in opens its accounts.
+ */
+function SignedOutBar({ session }: { session: ChatSession }) {
+  const { hosts, url } = useSession();
+  const { me } = useMe();
+  const router = useRouter();
+  const host = hosts.hosts?.find((h) => h.here);
+  const mine = session.owner_id === me?.id;
+  const onKernel = !session.host_id || session.host_id === host?.id;
+  const { accounts } = useHostAccounts(
+    host && mine && onKernel ? host.id : undefined,
+    url,
+  );
+  if (!host || !accounts || accounts.claude.signed_in) return null;
+  return (
+    <View className="flex-row items-center justify-between gap-3 rounded-md border border-attention/40 bg-card py-1.5 pr-1.5 pl-3">
+      <Text className="flex-1 text-[13px] text-attention">
+        Claude Code is signed out
+      </Text>
+      <Button size="sm" onPress={() => router.push(`/accounts/${host.id}`)}>
+        <Text>Sign in</Text>
+      </Button>
+    </View>
+  );
+}
+
 function ResumeBar({ session }: { session: ChatSession }) {
   const { chat } = useSession();
   const [busy, setBusy] = useState(false);

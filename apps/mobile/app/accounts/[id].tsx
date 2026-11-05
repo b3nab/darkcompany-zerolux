@@ -5,23 +5,32 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Linking, Pressable, ScrollView, TextInput, View } from "react-native";
 import { useCSSVariable } from "uniwind";
-import { errorMessage, piProviders, useHostAccounts } from "@zerolux/chat";
-import type { DeviceCode } from "@zerolux/chat";
+import {
+  errorMessage,
+  piProviders,
+  planName,
+  useHostAccounts,
+} from "@zerolux/chat";
+import type { DeviceCode, HostAccounts } from "@zerolux/chat";
 import { Screen } from "@/components/screen";
 import { Segmented } from "@/components/segmented";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 import { useSession } from "../../src/kernel";
+import { useMe } from "../../src/me";
 
 /**
- * One's own harness accounts on a computer open to one: the sessions one starts there use
- * them, never the computer's own. Secrets go in once and never come back.
+ * One's harness accounts on the kernel's computer. On one's own, the computer's: whether each
+ * is signed in, and Claude Code's and Codex's sign-in. On one open to one, one's own, which the
+ * sessions one starts there use, never the computer's. Secrets go in once and never come back.
  */
 export default function AccountsPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { url, hosts } = useSession();
+  const { me } = useMe();
   const host = hosts.hosts?.find((h) => h.id === id);
+  const own = !!host && host.person_id === me?.id;
   const accounts = useHostAccounts(id, url);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -41,7 +50,11 @@ export default function AccountsPage() {
   };
   const a = accounts.accounts;
   return (
-    <Screen back title="Your accounts here" subtitle={host?.name}>
+    <Screen
+      back
+      title={own ? "Accounts" : "Your accounts here"}
+      subtitle={host?.name}
+    >
       <ScrollView
         contentContainerClassName="gap-6 px-5 py-5"
         keyboardShouldPersistTaps="handled"
@@ -54,9 +67,14 @@ export default function AccountsPage() {
         {a ? (
           <>
             <Claude
-              method={a.claude.method}
+              claude={a.claude}
+              own={own}
               busy={busy}
               save={(secret) => act(() => accounts.setClaude(secret))}
+              login={accounts.claudeLogin}
+              code={(code) => act(() => accounts.claudeLoginCode(code))}
+              reload={accounts.reload}
+              failed={(e) => setError(errorMessage(e))}
             />
             <Codex
               codex={a.codex}
@@ -69,6 +87,7 @@ export default function AccountsPage() {
             />
             <Pi
               providers={a.pi.providers}
+              own={own}
               busy={busy}
               save={(provider, key) => act(() => accounts.setPi(provider, key))}
             />
@@ -151,59 +170,157 @@ function SecretField({
   );
 }
 
+/**
+ * Claude Code's own sign-in, from the phone: Sign in starts it on the computer and opens the
+ * Claude sign-in page here; the code that page shows goes back to Claude Code.
+ */
+function ClaudeSignIn({
+  signedIn,
+  busy,
+  login,
+  code,
+  reload,
+  failed,
+}: {
+  signedIn: boolean;
+  busy: boolean;
+  login: (browser: boolean) => Promise<{ url: string }>;
+  code: (code: string) => Promise<boolean>;
+  reload: () => Promise<unknown>;
+  failed: (e: unknown) => void;
+}) {
+  const [url, setUrl] = useState<string>();
+  // While it waits, the account is read again until Claude Code is signed in.
+  useEffect(() => {
+    if (!url) return;
+    if (signedIn) return setUrl(undefined);
+    const timer = setInterval(() => void reload(), 3000);
+    return () => clearInterval(timer);
+  }, [url, signedIn, reload]);
+  if (signedIn) return null;
+  if (!url)
+    return (
+      <Button
+        size="sm"
+        className="self-start"
+        disabled={busy}
+        onPress={() =>
+          void login(false).then(({ url }) => {
+            setUrl(url);
+            void Linking.openURL(url);
+          }, failed)
+        }
+      >
+        <Text>Sign in</Text>
+      </Button>
+    );
+  return (
+    <View className="gap-2">
+      <Text className="text-[13px] text-muted-foreground">
+        Sign in on the Claude page, then paste the code it shows.
+      </Text>
+      <Pressable
+        accessibilityRole="link"
+        onPress={() => void Linking.openURL(url)}
+        className="self-start"
+      >
+        <Text className="text-[13px] font-medium text-human-foreground">
+          Open the sign-in page
+        </Text>
+      </Pressable>
+      <SecretField placeholder="Code" busy={busy} save={code} label="Send" />
+    </View>
+  );
+}
+
 function Claude({
-  method,
+  claude,
+  own,
   busy,
   save,
+  login,
+  code,
+  reload,
+  failed,
 }: {
-  method: "oauth_token" | "api_key" | null;
+  claude: HostAccounts["claude"];
+  own: boolean;
   busy: boolean;
   save: (
     secret: { oauth_token: string } | { api_key: string } | null,
   ) => Promise<boolean>;
+  login: (browser: boolean) => Promise<{ url: string }>;
+  code: (code: string) => Promise<boolean>;
+  reload: () => Promise<unknown>;
+  failed: (e: unknown) => void;
 }) {
   const [kind, setKind] = useState<"api_key" | "oauth_token">("api_key");
+  const method = claude.method;
   return (
     <Card
       title="Claude Code"
-      ready={method !== null}
+      ready={claude.signed_in || method !== null}
       status={
         method === "api_key"
           ? "Connected with your API key"
           : method === "oauth_token"
             ? "Connected with your subscription token"
-            : "Not connected"
+            : claude.signed_in
+              ? [
+                  "Signed in",
+                  claude.email,
+                  claude.plan && planName(claude.plan),
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
+              : (claude.error ?? "Signed out")
       }
     >
-      <Segmented<"api_key" | "oauth_token">
-        options={[
-          ["api_key", "API key"],
-          ["oauth_token", "Subscription token"],
-        ]}
-        value={kind}
-        choose={setKind}
-      />
-      <SecretField
-        placeholder={
-          kind === "api_key" ? "sk-ant-…" : "From claude setup-token"
-        }
+      <ClaudeSignIn
+        signedIn={claude.signed_in}
         busy={busy}
-        save={(value) =>
-          save(kind === "api_key" ? { api_key: value } : { oauth_token: value })
-        }
+        login={login}
+        code={code}
+        reload={reload}
+        failed={failed}
       />
-      {method !== null ? (
-        <Pressable
-          accessibilityRole="button"
-          disabled={busy}
-          onPress={() => void save(null)}
-          className="self-start"
-        >
-          <Text className="text-[13px] font-medium text-destructive">
-            Remove
-          </Text>
-        </Pressable>
-      ) : null}
+      {own ? null : (
+        <>
+          <Segmented<"api_key" | "oauth_token">
+            options={[
+              ["api_key", "API key"],
+              ["oauth_token", "Subscription token"],
+            ]}
+            value={kind}
+            choose={setKind}
+          />
+          <SecretField
+            placeholder={
+              kind === "api_key" ? "sk-ant-…" : "From claude setup-token"
+            }
+            busy={busy}
+            save={(value) =>
+              save(
+                kind === "api_key"
+                  ? { api_key: value }
+                  : { oauth_token: value },
+              )
+            }
+          />
+          {method === "api_key" || method === "oauth_token" ? (
+            <Pressable
+              accessibilityRole="button"
+              disabled={busy}
+              onPress={() => void save(null)}
+              className="self-start"
+            >
+              <Text className="text-[13px] font-medium text-destructive">
+                Remove
+              </Text>
+            </Pressable>
+          ) : null}
+        </>
+      )}
     </Card>
   );
 }
@@ -315,10 +432,13 @@ function Codex({
 
 function Pi({
   providers,
+  own,
   busy,
   save,
 }: {
   providers: string[];
+  /** The computer's own pi: its keys are kept there, not given here. */
+  own: boolean;
   busy: boolean;
   save: (provider: string, key: string) => Promise<boolean>;
 }) {
@@ -331,41 +451,47 @@ function Pi({
         providers.length ? `Keys for ${providers.join(", ")}` : "Not connected"
       }
     >
-      {providers.map((name) => (
-        <View key={name} className="flex-row items-center justify-between">
-          <Text className="font-mono text-[14px]">{name}</Text>
-          <Pressable
-            accessibilityRole="button"
-            disabled={busy}
-            onPress={() => void save(name, "")}
-          >
-            <Text className="text-[13px] font-medium text-destructive">
-              Remove
-            </Text>
-          </Pressable>
-        </View>
-      ))}
-      <View className="flex-row flex-wrap gap-1.5">
-        {piProviders.map((name) => (
-          <Pressable
-            key={name}
-            accessibilityRole="button"
-            accessibilityState={{ selected: provider === name }}
-            onPress={() => setProvider(name)}
-            className={cn(
-              "rounded-full border px-2.5 py-1",
-              provider === name ? "border-human bg-human/10" : "border-border",
-            )}
-          >
-            <Text className="text-xs">{name}</Text>
-          </Pressable>
-        ))}
-      </View>
-      <SecretField
-        placeholder={`Key for ${provider}`}
-        busy={busy}
-        save={(key) => save(provider, key)}
-      />
+      {own ? null : (
+        <>
+          {providers.map((name) => (
+            <View key={name} className="flex-row items-center justify-between">
+              <Text className="font-mono text-[14px]">{name}</Text>
+              <Pressable
+                accessibilityRole="button"
+                disabled={busy}
+                onPress={() => void save(name, "")}
+              >
+                <Text className="text-[13px] font-medium text-destructive">
+                  Remove
+                </Text>
+              </Pressable>
+            </View>
+          ))}
+          <View className="flex-row flex-wrap gap-1.5">
+            {piProviders.map((name) => (
+              <Pressable
+                key={name}
+                accessibilityRole="button"
+                accessibilityState={{ selected: provider === name }}
+                onPress={() => setProvider(name)}
+                className={cn(
+                  "rounded-full border px-2.5 py-1",
+                  provider === name
+                    ? "border-human bg-human/10"
+                    : "border-border",
+                )}
+              >
+                <Text className="text-xs">{name}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <SecretField
+            placeholder={`Key for ${provider}`}
+            busy={busy}
+            save={(key) => save(provider, key)}
+          />
+        </>
+      )}
     </Card>
   );
 }

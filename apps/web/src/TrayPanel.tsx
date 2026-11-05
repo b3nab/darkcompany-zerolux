@@ -3,6 +3,7 @@ import {
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  CircleAlertIcon,
   SquareArrowOutUpRightIcon,
 } from "lucide-react";
 import {
@@ -78,6 +79,8 @@ interface Heard {
   approvals: Approval[];
   /** None where its kernel has no subscriptions to give. */
   subscriptions?: Subscription[];
+  /** The person heard, once known. */
+  me?: string;
   error?: string;
 }
 
@@ -214,6 +217,7 @@ function Hear({
         ]);
         me = whoAmI(identity, actors, signIn).me?.id;
         set({
+          me,
           actors,
           sessions,
           approvals: mine(approvals, sessions),
@@ -653,6 +657,17 @@ export function TrayPanel() {
       ),
     ).values(),
   ];
+  // Workspaces where a Claude Code session of yours failed because its sign-in is gone.
+  const signedOut = ordered.filter((workspace) => {
+    const state = heard[workspace.key];
+    return state?.sessions.some(
+      (session) =>
+        session.harness === "claude-code" &&
+        session.last_error === "signed_out" &&
+        session.status !== "stopped" &&
+        session.owner_id === state.me,
+    );
+  });
   const live = ordered.some((w) => heard[w.key]?.live);
   const focused = Math.min(focus, Math.max(0, waiting.length - 1));
 
@@ -941,8 +956,31 @@ export function TrayPanel() {
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div ref={content} className="pb-1">
-          <Label count={waiting.length}>Needs you</Label>
-          {waiting.length === 0 ? (
+          <Label count={waiting.length + signedOut.length}>Needs you</Label>
+          {signedOut.map((workspace) => (
+            <p
+              key={`signed-out:${workspace.key}`}
+              className="mx-2 mb-1.5 flex items-center gap-2 rounded-[10px] border border-attention/40 py-1.5 pr-1.5 pl-3 text-[12.5px]"
+            >
+              <CircleAlertIcon
+                aria-hidden
+                className="size-3.5 shrink-0 text-attention"
+              />
+              <span className="min-w-0 flex-1 truncate">
+                Claude Code is signed out
+                {workspaces.length > 1 ? ` · ${workspace.name}` : ""}
+              </span>
+              <Button
+                size="sm"
+                onClick={() =>
+                  void trayOpen(workspace.profile, `${workspace.page}/settings`)
+                }
+              >
+                Sign in
+              </Button>
+            </p>
+          ))}
+          {waiting.length === 0 && signedOut.length === 0 ? (
             <p className="mx-2 mb-1.5 flex items-center gap-2 rounded-[10px] border border-dashed p-3 text-[12.5px] text-muted-foreground">
               <CheckIcon className="size-3.5 text-success" />
               Nothing needs you

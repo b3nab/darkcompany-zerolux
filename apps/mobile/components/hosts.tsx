@@ -108,14 +108,14 @@ export function Hosts() {
                   .join(" · ")}
               </Text>
             </Pressable>
-            {!mine && host.here && host.open ? (
+            {host.here && (mine || host.open) ? (
               <Pressable
                 accessibilityRole="button"
                 onPress={() => router.push(`/accounts/${host.id}`)}
                 hitSlop={6}
               >
                 <Text className="text-[13px] font-medium text-human-foreground">
-                  Your accounts
+                  {mine ? "Accounts" : "Your accounts"}
                 </Text>
               </Pressable>
             ) : null}

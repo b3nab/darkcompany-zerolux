@@ -185,6 +185,7 @@ import { SidePanel } from "@/components/side-panel";
 import { SessionFilesProvider, imagesIn } from "@/components/local-files";
 import type { SessionFiles } from "@/components/local-files";
 import { desktopHere } from "./desktop";
+import { ClaudeSignedOut } from "./ClaudeSignIn";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { XL, useMedia } from "./media";
 
@@ -941,6 +942,8 @@ export function SessionView({
 }) {
   // The joined computer it runs on, if one: About says which and whether it is online.
   const computer = sessionComputer(session, hosts);
+  // The kernel's own computer, where its person signs Claude Code in again.
+  const kernelHost = hosts?.find((host) => host.here);
   const name = sessionName(session, actors);
   const agent = actors.find((a) => a.id === session.actor_id);
   const tone = sessionTone(session);
@@ -1675,6 +1678,17 @@ export function SessionView({
                   </Button>
                 </div>
               )}
+              {session.harness === "claude-code" &&
+                session.last_error === "signed_out" &&
+                !computer &&
+                kernelHost &&
+                session.owner_id === me?.id && (
+                  <ClaudeSignedOut
+                    hostId={kernelHost.id}
+                    busy={busy}
+                    perform={perform}
+                  />
+                )}
               <SessionQueue
                 queue={waiting}
                 steering={queue}

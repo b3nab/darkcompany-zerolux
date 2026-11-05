@@ -399,8 +399,13 @@ function Computers({
                   {host.open ? "Open" : "Closed"}
                 </p>
               )}
-              {!mine && host.open && host.here && (
-                <HostAccounts host={host} busy={busy} perform={perform} />
+              {host.here && (mine || host.open) && (
+                <HostAccounts
+                  host={host}
+                  own={mine}
+                  busy={busy}
+                  perform={perform}
+                />
               )}
             </li>
           );

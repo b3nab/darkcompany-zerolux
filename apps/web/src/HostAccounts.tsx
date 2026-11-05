@@ -1,12 +1,29 @@
 import { useEffect, useState } from "react";
-import { piProviders, useHostAccounts } from "@zerolux/chat";
-import type { DeviceCode, Host, Perform } from "@zerolux/chat";
+import { piProviders, planName, useHostAccounts } from "@zerolux/chat";
+import type {
+  DeviceCode,
+  Host,
+  HostAccounts as Accounts,
+  Perform,
+} from "@zerolux/chat";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   NativeSelect,
   NativeSelectOption,
 } from "@/components/ui/native-select";
+import { ClaudeSignIn } from "./ClaudeSignIn";
+
+/** How Claude Code signs in: a token or key given here, else its own sign-in and plan. */
+function claudeStatus(claude: Accounts["claude"]) {
+  if (claude.method === "api_key") return "API key";
+  if (claude.method === "oauth_token") return "Subscription token";
+  if (claude.signed_in)
+    return ["Claude", claude.email, claude.plan && planName(claude.plan)]
+      .filter(Boolean)
+      .join(" · ");
+  return claude.error ? "Unknown" : "Signed out";
+}
 
 /** A secret as it is typed: hidden, never filled in or kept by the browser. */
 function Secret({
@@ -53,15 +70,20 @@ function Account({
 }
 
 /**
- * One's own harness accounts on a computer open to one: the sessions one starts there use
- * them, never its person's. Secrets go to the kernel and never come back.
+ * One's harness accounts on the kernel's computer. On one's own, the computer's: whether each
+ * is signed in, and Claude Code's and Codex's sign-in. On one open to one, one's own, which the
+ * sessions one starts there use, never its person's. Secrets go to the kernel and never come
+ * back.
  */
 export function HostAccounts({
   host,
+  own = false,
   busy,
   perform,
 }: {
   host: Host;
+  /** The computer is one's own: its accounts are the computer's. */
+  own?: boolean;
   busy: boolean;
   perform: Perform;
 }) {
@@ -93,82 +115,85 @@ export function HostAccounts({
     return error ? <p className="text-xs text-destructive">{error}</p> : null;
   return (
     <section
-      aria-label="Your accounts here"
+      aria-label={own ? "Accounts" : "Your accounts here"}
       className="flex flex-col gap-2 rounded-lg bg-muted/40 p-3"
     >
-      <h3 className="text-sm font-medium">Your accounts here</h3>
-      <Account
-        name="Claude Code"
-        status={
-          accounts.claude.method === "api_key"
-            ? "API key"
-            : accounts.claude.method === "oauth_token"
-              ? "Subscription token"
-              : "Not connected"
-        }
-      >
-        <form
-          className="flex flex-wrap items-center gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const value = claude.value.trim();
-            if (value)
-              void perform(async () => {
-                await setClaude(
-                  claude.kind === "api_key"
-                    ? { api_key: value }
-                    : { oauth_token: value },
-                );
-                setClaudeSecret({ ...claude, value: "" });
-              });
-          }}
-        >
-          <NativeSelect
-            size="sm"
-            aria-label="Credential"
-            value={claude.kind}
-            onChange={(event) =>
-              setClaudeSecret({
-                kind: event.target.value as "api_key" | "oauth_token",
-                value: "",
-              })
-            }
+      <h3 className="text-sm font-medium">
+        {own ? "Accounts" : "Your accounts here"}
+      </h3>
+      <Account name="Claude Code" status={claudeStatus(accounts.claude)}>
+        {accounts.claude.error && (
+          <p className="text-xs text-attention">{accounts.claude.error}</p>
+        )}
+        {!accounts.claude.signed_in && (
+          <div className="self-start">
+            <ClaudeSignIn hostId={host.id} busy={busy} perform={perform} />
+          </div>
+        )}
+        {!own && (
+          <form
+            className="flex flex-wrap items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const value = claude.value.trim();
+              if (value)
+                void perform(async () => {
+                  await setClaude(
+                    claude.kind === "api_key"
+                      ? { api_key: value }
+                      : { oauth_token: value },
+                  );
+                  setClaudeSecret({ ...claude, value: "" });
+                });
+            }}
           >
-            <NativeSelectOption value="api_key">API key</NativeSelectOption>
-            <NativeSelectOption value="oauth_token">
-              Subscription token
-            </NativeSelectOption>
-          </NativeSelect>
-          <Secret
-            label={
-              claude.kind === "api_key"
-                ? "Anthropic API key"
-                : "Subscription token"
-            }
-            value={claude.value}
-            set={(value) => setClaudeSecret({ ...claude, value })}
-          />
-          <Button
-            type="submit"
-            size="sm"
-            disabled={busy || !claude.value.trim()}
-          >
-            Connect
-          </Button>
-          {accounts.claude.method && (
-            <Button
-              type="button"
+            <NativeSelect
               size="sm"
-              variant="ghost"
-              disabled={busy}
-              onClick={() =>
-                void perform(async () => void (await setClaude(null)))
+              aria-label="Credential"
+              value={claude.kind}
+              onChange={(event) =>
+                setClaudeSecret({
+                  kind: event.target.value as "api_key" | "oauth_token",
+                  value: "",
+                })
               }
             >
-              Remove
+              <NativeSelectOption value="api_key">API key</NativeSelectOption>
+              <NativeSelectOption value="oauth_token">
+                Subscription token
+              </NativeSelectOption>
+            </NativeSelect>
+            <Secret
+              label={
+                claude.kind === "api_key"
+                  ? "Anthropic API key"
+                  : "Subscription token"
+              }
+              value={claude.value}
+              set={(value) => setClaudeSecret({ ...claude, value })}
+            />
+            <Button
+              type="submit"
+              size="sm"
+              disabled={busy || !claude.value.trim()}
+            >
+              Connect
             </Button>
-          )}
-        </form>
+            {accounts.claude.method && (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() =>
+                  void perform(async () => void (await setClaude(null)))
+                }
+              >
+                Remove
+              </Button>
+            )}
+          </form>
+        )}
       </Account>
       <Account
         name="Codex"
@@ -255,59 +280,62 @@ export function HostAccounts({
             : "No provider"
         }
       >
-        {accounts.pi.providers.map((provider) => (
-          <p
-            key={provider}
-            className="flex items-center justify-between gap-2 text-sm"
+        {!own &&
+          accounts.pi.providers.map((provider) => (
+            <p
+              key={provider}
+              className="flex items-center justify-between gap-2 text-sm"
+            >
+              <span className="font-mono text-[12.5px]">{provider}</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() =>
+                  void perform(async () => void (await setPi(provider, "")))
+                }
+              >
+                Remove
+              </Button>
+            </p>
+          ))}
+        {!own && (
+          <form
+            className="flex flex-wrap items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const key = pi.key.trim();
+              if (key)
+                void perform(async () => {
+                  await setPi(pi.provider, key);
+                  setPiKey({ ...pi, key: "" });
+                });
+            }}
           >
-            <span className="font-mono text-[12.5px]">{provider}</span>
-            <Button
+            <NativeSelect
               size="sm"
-              variant="ghost"
-              disabled={busy}
-              onClick={() =>
-                void perform(async () => void (await setPi(provider, "")))
+              aria-label="Provider"
+              value={pi.provider}
+              onChange={(event) =>
+                setPiKey({ ...pi, provider: event.target.value })
               }
             >
-              Remove
+              {piProviders.map((provider) => (
+                <NativeSelectOption key={provider} value={provider}>
+                  {provider}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+            <Secret
+              label="Provider API key"
+              value={pi.key}
+              set={(key) => setPiKey({ ...pi, key })}
+            />
+            <Button type="submit" size="sm" disabled={busy || !pi.key.trim()}>
+              Connect
             </Button>
-          </p>
-        ))}
-        <form
-          className="flex flex-wrap items-center gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const key = pi.key.trim();
-            if (key)
-              void perform(async () => {
-                await setPi(pi.provider, key);
-                setPiKey({ ...pi, key: "" });
-              });
-          }}
-        >
-          <NativeSelect
-            size="sm"
-            aria-label="Provider"
-            value={pi.provider}
-            onChange={(event) =>
-              setPiKey({ ...pi, provider: event.target.value })
-            }
-          >
-            {piProviders.map((provider) => (
-              <NativeSelectOption key={provider} value={provider}>
-                {provider}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
-          <Secret
-            label="Provider API key"
-            value={pi.key}
-            set={(key) => setPiKey({ ...pi, key })}
-          />
-          <Button type="submit" size="sm" disabled={busy || !pi.key.trim()}>
-            Connect
-          </Button>
-        </form>
+          </form>
+        )}
       </Account>
     </section>
   );

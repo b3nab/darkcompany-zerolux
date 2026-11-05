@@ -36,7 +36,8 @@ export type SessionEvent = {
     }
   | { type: "turn_started" }
   | { type: "turn_ended"; status: string }
-  | { type: "error"; message: string }
+  /** `code` `signed_out`: the harness's sign-in is gone and must be made again. */
+  | { type: "error"; message: string; code?: "signed_out" }
   | { type: "compacted"; summary: string | null }
   /** A command of the owner's to the harness, as `/compact`: it opens no turn. */
   | { type: "command"; text: string }
@@ -116,7 +117,7 @@ export type SessionBlock = {
       /** When the turn's first event was recorded: with `time`, how long it worked. */
       since: string | null;
     }
-  | { kind: "error"; message: string }
+  | { kind: "error"; message: string; code?: "signed_out" }
   | { kind: "compacted"; summary: string | null }
   | { kind: "command"; text: string }
   | { kind: "notice"; text: string }
@@ -324,7 +325,13 @@ export function sessionBlocks(events: SessionEvent[]): SessionBlock[] {
         since = null;
         break;
       case "error":
-        blocks.push({ key, time, kind: "error", message: event.message });
+        blocks.push({
+          key,
+          time,
+          kind: "error",
+          message: event.message,
+          ...(event.code ? { code: event.code } : {}),
+        });
         break;
       case "compacted":
         blocks.push({ key, time, kind: "compacted", summary: event.summary });

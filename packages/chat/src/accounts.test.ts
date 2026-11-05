@@ -4,7 +4,14 @@ import type { HostAccounts } from "./accounts";
 
 test("a harness is ready on a computer once one's own account is connected", () => {
   const none: HostAccounts = {
-    claude: { method: null },
+    claude: {
+      method: null,
+      signed_in: false,
+      email: null,
+      plan: null,
+      signing_in: false,
+      error: null,
+    },
     codex: {
       signed_in: false,
       method: null,
@@ -18,7 +25,7 @@ test("a harness is ready on a computer once one's own account is connected", () 
   expect(accountReady(none, "codex")).toBe(false);
   expect(accountReady(none, "pi")).toBe(false);
   const all: HostAccounts = {
-    claude: { method: "api_key" },
+    claude: { ...none.claude, method: "api_key" },
     codex: { ...none.codex, signed_in: true, method: "chatgpt" },
     pi: { providers: ["anthropic"] },
   };
@@ -26,4 +33,10 @@ test("a harness is ready on a computer once one's own account is connected", () 
   expect(accountReady(all, "codex")).toBe(true);
   expect(accountReady(all, "pi")).toBe(true);
   expect(accountReady(undefined, "pi")).toBe(false);
+  // Claude Code signed in with its own sign-in is ready too.
+  const signedIn: HostAccounts = {
+    ...none,
+    claude: { ...none.claude, signed_in: true, method: "claude.ai" },
+  };
+  expect(accountReady(signedIn, "claude-code")).toBe(true);
 });
