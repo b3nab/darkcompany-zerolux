@@ -40,6 +40,8 @@ import type {
   Approval,
   ApprovalScope,
   ChatSession,
+  Host,
+  HostAccounts,
   PlanLimit,
   Subscription,
   Workspace,
@@ -81,6 +83,8 @@ interface Heard {
   subscriptions?: Subscription[];
   /** The person heard, once known. */
   me?: string;
+  /** Whether Claude Code is signed in on the kernel's computer; unknown until read. */
+  claude?: boolean;
   error?: string;
 }
 
@@ -201,6 +205,31 @@ function Hear({
       request<{ approvals: Approval[] }>(kernel, "/chat/approvals").then(
         ({ approvals }) => approvals,
       );
+    // A session of yours failed because Claude Code's sign-in was gone: whether it still is.
+    const signedOut = (sessions: ChatSession[]) =>
+      sessions.some(
+        (session) =>
+          session.harness === "claude-code" &&
+          session.last_error === "signed_out" &&
+          session.owner_id === me,
+      );
+    async function readClaude() {
+      try {
+        const { hosts } = await request<{ hosts: Host[] }>(kernel, "/hosts");
+        const here = hosts.find((host) => host.here);
+        if (!here) return set({ claude: undefined });
+        const { accounts } = await request<{ accounts: HostAccounts }>(
+          kernel,
+          `/hosts/${encodeURIComponent(here.id)}/accounts`,
+        );
+        set({ claude: accounts.claude.signed_in });
+      } catch {
+        // Unknown: what was read last stays.
+      }
+    }
+    const sessionsRead = (sessions: ChatSession[]) => {
+      if (signedOut(sessions)) void readClaude();
+    };
     const readPlans = () =>
       readSubscriptions(kernel).then(
         (subscriptions) => set({ subscriptions }),
@@ -223,6 +252,7 @@ function Hear({
           approvals: mine(approvals, sessions),
           error: undefined,
         });
+        sessionsRead(sessions);
       } catch (error) {
         set({ error: errorMessage(error) });
       }
@@ -239,6 +269,7 @@ function Hear({
           approvals: mine(approvals, sessions),
           error: undefined,
         });
+        sessionsRead(sessions);
       } catch (error) {
         set({ error: errorMessage(error) });
       }
@@ -255,6 +286,22 @@ function Hear({
           void readRequests();
         else if (event.type === "subscriptions.changed")
           set({ subscriptions: event.subscriptions });
+        else if (event.type === "accounts.changed") void readClaude();
+        else if (event.type === "session.output") {
+          // How a record now ends rides on its notice: a new turn clears a sign-in failure.
+          const {
+            session_id,
+            end: _,
+            type: __,
+            event_id: ___,
+            ...tail
+          } = event;
+          set({
+            sessions: state.sessions.map((session) =>
+              session.id === session_id ? { ...session, ...tail } : session,
+            ),
+          });
+        }
       },
       sync: () => void readAll(),
       status: (status) => set({ live: status === "live" }),
@@ -660,12 +707,14 @@ export function TrayPanel() {
   // Workspaces where a Claude Code session of yours failed because its sign-in is gone.
   const signedOut = ordered.filter((workspace) => {
     const state = heard[workspace.key];
-    return state?.sessions.some(
-      (session) =>
-        session.harness === "claude-code" &&
-        session.last_error === "signed_out" &&
-        session.status !== "stopped" &&
-        session.owner_id === state.me,
+    return (
+      state?.sessions.some(
+        (session) =>
+          session.harness === "claude-code" &&
+          session.last_error === "signed_out" &&
+          session.status !== "stopped" &&
+          session.owner_id === state.me,
+      ) && state.claude === false
     );
   });
   const live = ordered.some((w) => heard[w.key]?.live);
