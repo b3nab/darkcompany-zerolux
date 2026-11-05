@@ -789,6 +789,14 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
             axum::routing::put(set_claude_account),
         )
         .route(
+            "/hosts/{id}/accounts/claude-code/login",
+            post(start_claude_login),
+        )
+        .route(
+            "/hosts/{id}/accounts/claude-code/login/code",
+            post(claude_login_code),
+        )
+        .route(
             "/hosts/{id}/accounts/codex",
             post(set_codex_account).delete(clear_codex_account),
         )
@@ -4302,8 +4310,9 @@ async fn change_host(
     ))
 }
 
-/// The harness folders of a guest on this kernel's host, where their accounts are kept.
-async fn guest_homes(
+/// A person's harness folders on this kernel's host, where their accounts are: the
+/// computer's own for its person, a guest's own on a host open to them.
+async fn person_homes(
     state: &AppState,
     who: &ChatIdentity,
     host: &str,
@@ -4315,13 +4324,13 @@ async fn guest_homes(
     Ok(state.store.homes(who).await?)
 }
 
-/// One's own harness accounts on a host open to one.
+/// One's own harness accounts on one's computer, or on a host open to one.
 async fn host_accounts(
     State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let homes = guest_homes(&state, &who, &id).await?;
+    let homes = person_homes(&state, &who, &id).await?;
     let accounts = crate::accounts::read(&homes).await.map_err(said)?;
     Ok(Json(json!({ "accounts": accounts })))
 }
@@ -4332,9 +4341,68 @@ async fn set_claude_account(
     Path(id): Path<String>,
     ChatJson(account): ChatJson<crate::accounts::ClaudeAccount>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let homes = guest_homes(&state, &who, &id).await?;
+    let homes = person_homes(&state, &who, &id).await?;
     crate::accounts::set_claude(&homes, account).map_err(said)?;
     Ok(Json(json!({ "saved": true })))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ClaudeLogin {
+    /// Also open this computer's browser, for a person at it.
+    #[serde(default)]
+    browser: bool,
+}
+
+/// Starts Claude Code's sign-in on the host, answering the address to sign in at. When it ends
+/// its person hears `accounts.changed`.
+async fn start_claude_login(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(login): ChatJson<ClaudeLogin>,
+) -> Result<Json<Value>, ApiFailure> {
+    let homes = person_homes(&state, &who, &id).await?;
+    let runtime = runtime(&state)?;
+    let weak = Arc::downgrade(&runtime);
+    let (person, host) = (who.clone(), id.clone());
+    let url = crate::accounts::start_claude_login(
+        &crate::platform::executable("claude"),
+        &homes,
+        login.browser,
+        move |signed_in| {
+            tokio::spawn(async move {
+                if let Some(runtime) = weak.upgrade() {
+                    runtime
+                        .account_changed(&person, &host, "claude-code", signed_in)
+                        .await;
+                }
+            });
+        },
+    )
+    .await
+    .map_err(said)?;
+    Ok(Json(json!({ "url": url })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClaudeLoginCode {
+    code: String,
+}
+
+/// The code the browser showed, for the sign-in waiting on the host.
+async fn claude_login_code(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<ClaudeLoginCode>,
+) -> Result<Json<Value>, ApiFailure> {
+    let homes = person_homes(&state, &who, &id).await?;
+    crate::accounts::claude_login_code(&homes, &input.code)
+        .await
+        .map_err(said)?;
+    Ok(Json(json!({ "sent": true })))
 }
 
 async fn set_codex_account(
@@ -4343,7 +4411,7 @@ async fn set_codex_account(
     Path(id): Path<String>,
     ChatJson(account): ChatJson<crate::accounts::CodexAccount>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let homes = guest_homes(&state, &who, &id).await?;
+    let homes = person_homes(&state, &who, &id).await?;
     let started = crate::accounts::set_codex(&homes, account)
         .await
         .map_err(said)?;
@@ -4355,7 +4423,7 @@ async fn clear_codex_account(
     Extension(who): Extension<ChatIdentity>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let homes = guest_homes(&state, &who, &id).await?;
+    let homes = person_homes(&state, &who, &id).await?;
     crate::accounts::clear_codex(&homes).await.map_err(said)?;
     Ok(Json(json!({ "signed_out": true })))
 }
@@ -4366,7 +4434,7 @@ async fn set_pi_account(
     Path(id): Path<String>,
     ChatJson(account): ChatJson<crate::accounts::PiAccount>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let homes = guest_homes(&state, &who, &id).await?;
+    let homes = person_homes(&state, &who, &id).await?;
     crate::accounts::set_pi(&homes, account).map_err(said)?;
     Ok(Json(json!({ "saved": true })))
 }

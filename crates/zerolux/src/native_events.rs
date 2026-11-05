@@ -45,6 +45,10 @@ pub enum Event {
     },
     Error {
         message: String,
+        /// What went wrong, when the harness says it in a way ZeroLux can act on:
+        /// `signed_out` when its account's sign-in is gone and must be made again.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
     },
     /// The harness compacted its context.
     Compacted {
@@ -78,6 +82,9 @@ pub struct Tail {
     pub output_at: Option<i64>,
     /// `completed`, `interrupted` or `error`; none while a turn runs, or before the first.
     pub last_turn: Option<String>,
+    /// What the last turn's error was, when the harness said it: `signed_out`.
+    #[serde(default)]
+    pub last_error: Option<String>,
     /// The agent's latest text on one line, or else its latest step, up to 200 characters.
     pub summary: Option<String>,
 }
@@ -111,9 +118,20 @@ pub fn tail(items: &[Item], output_at: Option<i64>) -> Tail {
     })
     .map(|text| one_line(&text))
     .filter(|line| !line.is_empty());
+    // The last turn's error: after its input, before anything newer starts.
+    let last_error = items
+        .iter()
+        .rev()
+        .take_while(|item| !matches!(item.event, Event::Input { .. } | Event::TurnStarted))
+        .find_map(|item| match &item.event {
+            Event::Error { code, .. } => code.clone(),
+            _ => None,
+        })
+        .filter(|_| last_turn.as_deref() == Some("error"));
     Tail {
         output_at,
         last_turn,
+        last_error,
         summary,
     }
 }
@@ -284,6 +302,7 @@ fn pi(record: &Value) -> Vec<Event> {
                                     .as_str()
                                     .unwrap_or("The model returned an error")
                                     .to_owned(),
+                                code: None,
                             });
                             events.push(Event::TurnEnded {
                                 status: "error".into(),
@@ -327,6 +346,7 @@ fn pi(record: &Value) -> Vec<Event> {
                     .as_str()
                     .unwrap_or("Compaction failed")
                     .to_owned(),
+                code: None,
             }]
         }
         _ => Vec::new(),
@@ -399,6 +419,12 @@ fn claude_command(text: &str) -> Option<Event> {
     })
 }
 
+/// What a Claude Code API error means for ZeroLux, from its structured code: its sign-in is
+/// gone (`authentication_failed`) and must be made again.
+fn claude_error(code: Option<&str>) -> Option<String> {
+    matches!(code, Some("authentication_failed")).then(|| "signed_out".to_owned())
+}
+
 fn claude(record: &Value) -> Vec<Event> {
     match record["type"].as_str() {
         Some("user") if record["isCompactSummary"] == true => vec![Event::Compacted {
@@ -452,6 +478,7 @@ fn claude(record: &Value) -> Vec<Event> {
             if record["isApiErrorMessage"] == true {
                 return vec![Event::Error {
                     message: text_of(&message["content"], &["text"]),
+                    code: claude_error(record["error"].as_str()),
                 }];
             }
             message["content"]
@@ -673,6 +700,7 @@ fn codex(record: &Value) -> Vec<Event> {
         }],
         (Some("event_msg"), Some("error")) => vec![Event::Error {
             message: payload["message"].as_str().unwrap_or_default().to_owned(),
+            code: None,
         }],
         (Some("compacted"), _) => vec![Event::Compacted {
             summary: payload["message"]
@@ -810,7 +838,8 @@ mod tests {
                     text: "/compact keep the plan".into()
                 },
                 Event::Error {
-                    message: "Compaction failed: 429".into()
+                    message: "Compaction failed: 429".into(),
+                    code: None,
                 },
                 Event::Command {
                     text: "/compact".into()
@@ -902,6 +931,35 @@ mod tests {
     }
 
     #[test]
+    fn a_claude_session_signed_out_says_so_until_its_next_turn() {
+        let failed = |error: &str| {
+            json!({"type":"assistant","isApiErrorMessage":true,"error":error,
+                "message":{"content":[{"type":"text","text":"x"}]}})
+        };
+        let ask = json!({"type":"user","message":{"content":"go"}});
+        let ending = |records: Vec<Value>| {
+            let records: Vec<Record> = records
+                .into_iter()
+                .enumerate()
+                .map(|(at, record)| Record {
+                    at: at as u64,
+                    record,
+                })
+                .collect();
+            tail(&project("claude-code", &records), None)
+        };
+        let signed_out = ending(vec![ask.clone(), failed("authentication_failed")]);
+        assert_eq!(signed_out.last_turn.as_deref(), Some("error"));
+        assert_eq!(signed_out.last_error.as_deref(), Some("signed_out"));
+        let other = ending(vec![ask.clone(), failed("rate_limit")]);
+        assert_eq!(other.last_turn.as_deref(), Some("error"));
+        assert_eq!(other.last_error, None);
+        let again = ending(vec![ask.clone(), failed("authentication_failed"), ask]);
+        assert_eq!(again.last_turn, None);
+        assert_eq!(again.last_error, None);
+    }
+
+    #[test]
     fn a_tail_says_how_the_last_turn_ended_and_the_latest_line() {
         let at = |events: Vec<Event>| -> Vec<Item> {
             events
@@ -942,6 +1000,7 @@ mod tests {
             Tail {
                 output_at: Some(7),
                 last_turn: Some("completed".into()),
+                last_error: None,
                 summary: Some("Fixed the build. All tests pass.".into()),
             }
         );
@@ -958,7 +1017,8 @@ mod tests {
         assert_eq!(
             tail(
                 &at(vec![Event::Error {
-                    message: "x".into()
+                    message: "x".into(),
+                    code: None,
                 }]),
                 None
             )

@@ -226,6 +226,31 @@ impl ChatRuntime {
         }
     }
 
+    /// A harness account of `who`'s on `host` signed in or out: they hear `accounts.changed`,
+    /// and their plans are read again.
+    pub async fn account_changed(
+        &self,
+        who: &ChatIdentity,
+        host: &str,
+        harness: &str,
+        signed_in: bool,
+    ) {
+        let Ok(actor) = who.actor().map(str::to_owned) else {
+            return;
+        };
+        let _ = self
+            .livekit
+            .notify(
+                &json!({"type": "accounts.changed", "host_id": host, "harness": harness,
+                    "signed_in": signed_in}),
+                &[actor],
+            )
+            .await;
+        if signed_in {
+            self.read_plans(who).await;
+        }
+    }
+
     /// After a session's turn, its person's plans are read again soon.
     pub(super) async fn plans_after_turn(&self, session: &str) {
         let Ok(owner) = self.store.session_person(session).await else {

@@ -571,6 +571,7 @@ mod tests {
         let tail = |summary: &str| Tail {
             output_at: Some(1),
             last_turn: None,
+            last_error: None,
             summary: Some(summary.into()),
         };
         let mut all = HashMap::new();
