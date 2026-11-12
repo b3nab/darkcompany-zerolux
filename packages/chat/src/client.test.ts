@@ -19,16 +19,17 @@ test("the web app calls its own origin; an app calls the kernel address it was g
   expect(urls).toEqual(["/api/health", "http://192.0.2.10:4310/api/health"]);
 });
 
-test("a refusal carries its status, so a client can tell it from an unreachable kernel", async () => {
+test("an unsuccessful response carries its HTTP status and machine-readable reason", async () => {
   globalThis.fetch = (async () =>
     Response.json(
-      { error: "Conversation is paused" },
-      { status: 409 },
+      { error: "Fixture unconfirmed", code: "session_settings_unconfirmed" },
+      { status: 504 },
     )) as unknown as typeof fetch;
   const error = await api("/x", {}).catch((e: unknown) => e);
   expect(error).toBeInstanceOf(ApiError);
-  expect((error as ApiError).status).toBe(409);
-  expect((error as ApiError).message).toBe("Conversation is paused");
+  expect((error as ApiError).status).toBe(504);
+  expect((error as ApiError).code).toBe("session_settings_unconfirmed");
+  expect((error as ApiError).message).toBe("Fixture unconfirmed");
 });
 
 test("a call to a given kernel ignores the current one", async () => {

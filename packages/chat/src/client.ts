@@ -64,11 +64,12 @@ export function setKernelUrl(url: string) {
 }
 export const kernelUrl = () => base;
 
-/** The kernel answered and refused: unlike an unreachable kernel, retrying cannot help. */
+/** An unsuccessful HTTP response, with an optional machine-readable reason. */
 export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly code?: string,
   ) {
     super(message);
   }
@@ -154,12 +155,15 @@ async function send(
       clearCredential(kernel, credential);
     const text = await response.text();
     let message = text || `Request failed (${response.status})`;
+    let code: string | undefined;
     try {
-      message = (JSON.parse(text) as { error?: string }).error ?? message;
+      const failure = JSON.parse(text) as { error?: string; code?: unknown };
+      message = failure.error ?? message;
+      if (typeof failure.code === "string") code = failure.code;
     } catch {
       /* Plain framework error. */
     }
-    throw new ApiError(message, response.status);
+    throw new ApiError(message, response.status, code);
   }
   return response;
 }
