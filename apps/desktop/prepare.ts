@@ -119,10 +119,12 @@ if (!piHost.success)
 // The chat extension stock pi loads (`--extension`) beside the host. pi runs on Node and
 // supplies its own packages: those stay imports for pi's loader, nothing of pi is copied.
 const piExtension = await Bun.build({
-  entrypoints: [join(root, "harnesses/pi/src/chat-extension.ts")],
+  entrypoints: ["chat-extension", "catalog"].map((entry) =>
+    join(root, `harnesses/pi/src/${entry}.ts`),
+  ),
   target: "node",
   outdir: join(dist, "pi"),
-  naming: "chat-extension.js",
+  naming: "[name].js",
   external: ["@earendil-works/*"],
 });
 if (!piExtension.success)
