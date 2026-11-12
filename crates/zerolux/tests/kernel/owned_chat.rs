@@ -112,10 +112,10 @@ async fn legacy_helpers_keep_running_until_the_owner_stops_and_resumes_the_same_
         assert_eq!(count(&trace, event), 0, "{event}");
     }
     assert_eq!(std::fs::read(&first).unwrap(), original);
-    std::fs::remove_file(marker).unwrap();
     kernel
         .api(&format!("/sessions/{id}/stop"), Some(json!({})))
         .await;
+    std::fs::remove_file(marker).unwrap();
     kernel
         .api(&format!("/sessions/{id}/resume"), Some(json!({})))
         .await;
