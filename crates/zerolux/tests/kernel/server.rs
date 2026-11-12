@@ -490,21 +490,9 @@ async fn dropping_the_server_requests_shutdown_and_a_second_start_reuses_the_por
         .await
         .unwrap();
     let address = first.address();
-    // Drop only asks; waiting is `run_until`/`shutdown`. Give the lifecycle task time to end.
+    // Drop requests cleanup asynchronously. Acquire both the remembered port and data
+    // directly: a bind/drop probe would leave a race before the next server starts.
     drop(first);
-    let mut rebound = None;
-    for _ in 0..100 {
-        if let Ok(listener) = TcpListener::bind(address) {
-            rebound = Some(listener);
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    let rebound = rebound.expect("the port is released after drop");
-    drop(rebound);
-    // The desktop remembers its port: a later start on the same address and data works.
-    // The port goes first; the data lease ends only when the lifecycle task has stopped
-    // the runtime and LiveKit, so a start that meets the lease still held tries again.
     let mut second = None;
     for _ in 0..100 {
         match Server::start(options(dir.path(), address)).await {
@@ -512,13 +500,18 @@ async fn dropping_the_server_requests_shutdown_and_a_second_start_reuses_the_por
                 second = Some(server);
                 break;
             }
-            Err(error) if lease_contended(&error) => {
+            Err(error)
+                if lease_contended(&error)
+                    || error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|error| error.kind() == std::io::ErrorKind::AddrInUse) =>
+            {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
             Err(error) => panic!("{error:#}"),
         }
     }
-    let second = second.expect("the data lease is released after drop");
+    let second = second.expect("the port and data lease are released after drop");
     assert_eq!(second.address(), address);
     second.shutdown().await.unwrap();
 }
