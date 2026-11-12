@@ -33,6 +33,13 @@ async fn a_new_kernel_updates_a_surviving_runner_to_another_immutable_release() 
     kernel.shutdown().await;
     fixture.program.entry = next;
     let kernel = Kernel::start(&fixture, port).await;
+    kernel
+        .runtime
+        .as_ref()
+        .unwrap()
+        .refresh_settings()
+        .await
+        .unwrap();
     let response = kernel
         .client
         .patch(format!("{}/api/sessions/{id}/settings", kernel.url))
@@ -62,7 +69,7 @@ async fn a_new_kernel_updates_a_surviving_runner_to_another_immutable_release() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn legacy_helpers_keep_running_until_the_owner_stops_and_resumes_the_same_session() {
+async fn legacy_helpers_change_supported_settings_without_restarting() {
     let mut fixture = Fixture::new();
     let first = fixture.release_entry("legacy-release");
     let next = fixture.release_entry("current-release");
@@ -91,7 +98,9 @@ async fn legacy_helpers_keep_running_until_the_owner_stops_and_resumes_the_same_
     .await
     .unwrap()
     .unwrap();
-    assert!(!response.status().is_success());
+    assert_eq!(response.status(), StatusCode::OK);
+    let changed: Value = response.json().await.unwrap();
+    assert_eq!(changed["values"]["model"], "native-alternate");
     let current = fixture.control(native, json!({"method":"describe"})).await;
     assert_eq!(current["instance_id"], previous["instance_id"]);
     assert_eq!(current["native_pid"], previous["native_pid"]);
@@ -100,7 +109,7 @@ async fn legacy_helpers_keep_running_until_the_owner_stops_and_resumes_the_same_
         previous["integration_revision"]
     );
     assert_eq!(current["bound"], true);
-    assert_eq!(current["settings"]["model"], "native-default");
+    assert_eq!(current["settings"]["model"], "native-alternate");
     let session = kernel.api(&format!("/sessions/{id}"), None).await;
     assert_eq!(session["session"]["status"], "connected");
     let owner = kernel.store.chat_identity(None).await.unwrap();
@@ -108,26 +117,169 @@ async fn legacy_helpers_keep_running_until_the_owner_stops_and_resumes_the_same_
     assert!(locator["integration_update"].is_null());
     let trace = fixture.trace();
     assert_eq!(count(&trace, "start"), 1);
-    for event in ["update_control", "input", "settings", "close", "interrupt"] {
+    for event in ["update_control", "input", "close", "interrupt"] {
         assert_eq!(count(&trace, event), 0, "{event}");
     }
     assert_eq!(std::fs::read(&first).unwrap(), original);
     kernel
         .api(&format!("/sessions/{id}/stop"), Some(json!({})))
         .await;
-    std::fs::remove_file(marker).unwrap();
-    kernel
-        .api(&format!("/sessions/{id}/resume"), Some(json!({})))
+    kernel.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_settings_adapters_use_native_commands_once_without_replacing_the_session() {
+    // The previous release already advertises the new lifecycle protocol, but still
+    // validates settings against its startup catalog. Both adapter generations work.
+    for legacy in ["legacy-update", "legacy-settings"] {
+        let mut fixture = Fixture::new();
+        fixture.program.sdk_executable = Some(fixture.program.claude_cli.clone());
+        let folder = fixture.dir.path().join("workspace");
+        for marker in [legacy, "catalog-alias"] {
+            std::fs::write(folder.join(marker), "").unwrap();
+        }
+        let kernel = Kernel::start(&fixture, 0).await;
+        let started = kernel
+            .api(
+                "/sessions",
+                Some(json!({"harness":"claude-code",
+            "workspace":folder,"model":"native-alternate","permission_mode":"plan"})),
+            )
+            .await;
+        let id = started["session"]["id"].as_str().unwrap();
+        let native = started["session"]["native_session_id"].as_str().unwrap();
+        let previous = fixture.control(native, json!({"method":"describe"})).await;
+        let url = format!("{}/api/sessions/{id}/settings", kernel.url);
+        for invalid in [
+            json!({"model":"native-default", "permission_mode":"invalid"}),
+            json!({"model":"unknown extra-argument"}),
+            json!({"model":"native-default","effort":"invalid"}),
+        ] {
+            let response = kernel
+                .client
+                .patch(&url)
+                .json(&invalid)
+                .send()
+                .await
+                .unwrap();
+            assert!(!response.status().is_success());
+        }
+        std::fs::write(folder.join("no-setting-commands"), "").unwrap();
+        assert!(
+            !kernel
+                .client
+                .patch(&url)
+                .json(&json!({"model":"native-default"}))
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .is_success()
+        );
+        std::fs::remove_file(folder.join("no-setting-commands")).unwrap();
+        assert_eq!(count(&fixture.trace(), "input"), 0);
+        assert_eq!(count(&fixture.trace(), "settings"), 0);
+        for marker in ["hold-command", "lose-next-input-reply"] {
+            std::fs::write(folder.join(marker), "").unwrap();
+        }
+        let client = kernel.client.clone();
+        let changing = tokio::spawn(async move {
+            client
+                .patch(url)
+                .json(&json!({"model":"native-default", "effort":"low", "permission_mode":"auto"}))
+                .send()
+                .await
+                .unwrap()
+        });
+        fixture.wait_trace(|rows| count(rows, "command") == 1).await;
+        assert!(!changing.is_finished());
+        if legacy == "legacy-settings" {
+            std::fs::write(
+                &fixture.program.claude_cli,
+                "#!/bin/sh\nprintf '%s\\n' '[]'\n# installed during settings change\n",
+            )
+            .unwrap();
+            kernel
+                .runtime
+                .as_ref()
+                .unwrap()
+                .refresh_settings()
+                .await
+                .unwrap();
+            assert_eq!(count(&fixture.trace(), "update_control"), 0);
+        }
+        assert_eq!(count(&fixture.trace(), "start"), 1);
+        std::fs::remove_file(folder.join("hold-command")).unwrap();
+        let response = changing.await.unwrap();
+        let status = response.status();
+        let settings: Value = response.json().await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{settings}");
+        assert_eq!(settings["values"]["model"], "native-current");
+        assert_eq!(settings["values"]["effort"], "low");
+        assert_eq!(settings["values"]["permission_mode"], "auto");
+        let current = fixture.control(native, json!({"method":"describe"})).await;
+        assert_eq!(current["instance_id"], previous["instance_id"]);
+        assert_eq!(current["native_pid"], previous["native_pid"]);
+        assert_eq!(current["bound"], true);
+        let trace = fixture.trace();
+        let commands: Vec<_> = trace
+            .iter()
+            .filter(|row| row["event"] == "command")
+            .collect();
+        assert_eq!(commands.len(), 2);
+        assert_eq!(commands[0]["command"], "model");
+        assert_eq!(commands[0]["value"], "native-current");
+        assert_eq!(commands[1]["command"], "effort");
+        assert_eq!(count(&trace, "lost_input_ack"), 1);
+        assert_eq!(count(&trace, "start"), 1);
+        assert_eq!(count(&trace, "input"), 2);
+        for event in ["permission", "update_control", "close", "interrupt"] {
+            assert_eq!(count(&trace, event), 0);
+        }
+        // A later effort change on the same new model must also bypass the stale catalog.
+        let response = kernel
+            .client
+            .patch(format!("{}/api/sessions/{id}/settings", kernel.url))
+            .json(&json!({"effort":"high"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(count(&fixture.trace(), "command"), 3);
+        kernel
+            .api(&format!("/sessions/{id}/stop"), Some(json!({})))
+            .await;
+        kernel.shutdown().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn current_settings_adapters_apply_new_native_ids_directly() {
+    let fixture = Fixture::new();
+    let folder = fixture.dir.path().join("workspace");
+    std::fs::write(folder.join("catalog-alias"), "").unwrap();
+    let kernel = Kernel::start(&fixture, 0).await;
+    let started = kernel
+        .api(
+            "/sessions",
+            Some(json!({"harness":"claude-code",
+        "workspace":folder,"model":"native-alternate"})),
+        )
         .await;
-    let resumed = kernel.api(&format!("/sessions/{id}"), None).await;
-    assert_eq!(resumed["session"]["id"], id);
-    assert_eq!(resumed["session"]["native_session_id"], native);
-    let current = fixture.control(native, json!({"method":"describe"})).await;
-    assert_ne!(
-        current["integration_revision"],
-        previous["integration_revision"]
-    );
-    assert_eq!(count(&fixture.trace(), "start"), 2);
+    let id = started["session"]["id"].as_str().unwrap();
+    let response = kernel
+        .client
+        .patch(format!("{}/api/sessions/{id}/settings", kernel.url))
+        .json(&json!({"model":"native-default", "effort":"low"}))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let changed: Value = response.json().await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["values"]["model"], "native-current");
+    assert_eq!(changed["values"]["effort"], "low");
+    assert_eq!(count(&fixture.trace(), "start"), 1);
     assert_eq!(count(&fixture.trace(), "input"), 0);
     kernel
         .api(&format!("/sessions/{id}/stop"), Some(json!({})))
@@ -136,7 +288,7 @@ async fn legacy_helpers_keep_running_until_the_owner_stops_and_resumes_the_same_
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_installed_harness_update_preserves_the_session_before_changing_its_model() {
+async fn an_installed_harness_update_does_not_block_native_setting_changes() {
     let mut fixture = Fixture::new();
     fixture.program.sdk_executable = Some(fixture.program.claude_cli.clone());
     let kernel = Kernel::start(&fixture, 0).await;
@@ -179,7 +331,7 @@ async fn an_installed_harness_update_preserves_the_session_before_changing_its_m
     assert_eq!(current["session"]["native_session_id"], native);
     assert_eq!(current["session"]["id"], id);
     let trace = fixture.trace();
-    assert_eq!(count(&trace, "start"), 2);
+    assert_eq!(count(&trace, "start"), 1);
     assert_eq!(count(&trace, "input"), 0);
     kernel
         .api(&format!("/sessions/{id}/stop"), Some(json!({})))
@@ -1024,6 +1176,7 @@ async fn a_claude_session_runs_on_a_joined_computer() {
     )
     .unwrap();
     std::fs::write(root.join("workspace/lose-next-bind-reply"), "").unwrap();
+    runtime.refresh_settings().await.unwrap();
     let response = kernel
         .client
         .patch(format!("{}/api/sessions/{session}/settings", kernel.url))

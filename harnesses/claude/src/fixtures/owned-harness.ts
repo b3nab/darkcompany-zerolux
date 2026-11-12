@@ -7,7 +7,13 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { AgentLinkChild, chatRequest, integrationCode } from "@zerolux/bridge";
+import {
+  AgentLinkChild,
+  chatRequest,
+  checkModelChoice,
+  integrationCode,
+  settingsPatch,
+} from "@zerolux/bridge";
 import { launch, nativeCode, type Runner } from "../runner.ts";
 
 /**
@@ -48,6 +54,16 @@ function scripted(
 ): Query {
   const sessionId = options.resume ?? options.sessionId ?? "";
   let model = options.model ?? "native-default";
+  const nativeModels = models.map((entry) => ({
+    ...entry,
+    resolvedModel:
+      existsSync(join(workspace, "catalog-alias")) &&
+      entry.value === "native-default"
+        ? "native-previous"
+        : undefined,
+  }));
+  model =
+    nativeModels.find((entry) => entry.value === model)?.resolvedModel ?? model;
   let effort = options.effort ?? "high";
   let permissionMode = options.permissionMode ?? "default";
   // The model remains scripted in this fixture. A real, isolated child exercises the
@@ -123,6 +139,24 @@ function scripted(
       // Another agent's message: its envelope marks the author a peer.
       const owner = !text.includes('" (peer)');
       trace("input", { kind: owner ? "owner" : "peer", uuid });
+      const command = /^\/(model|effort) (\S+)$/.exec(text);
+      if (command) {
+        trace("command", { command: command[1], value: command[2], uuid });
+        while (existsSync(join(workspace, "hold-command")) && !closed)
+          await settle();
+        if (command[1] === "model") model = command[2]!;
+        else effort = command[2]! as typeof effort;
+        emit({
+          type: "result",
+          subtype: "success",
+          uuid: randomUUID(),
+          session_id: sessionId,
+          user_message_uuid: uuid,
+          user_message_uuids: [uuid],
+          local_command: command[1],
+        });
+        continue;
+      }
       state("running");
       emit({
         type: "assistant",
@@ -196,7 +230,15 @@ function scripted(
       applied: { model, effort },
       effective: { env: { PRIVATE_FIXTURE_VALUE: "must-not-be-published" } },
     }),
-    supportedModels: async () => models,
+    supportedModels: async () => nativeModels,
+    supportedCommands: async () =>
+      existsSync(join(workspace, "no-setting-commands"))
+        ? []
+        : ["model", "effort"].map((name) => ({
+            name,
+            description: "",
+            argumentHint: "<value>",
+          })),
     setModel: async (value: string) => {
       model = value;
       trace("settings", { model, effort });
@@ -242,6 +284,10 @@ if (process.argv[2] === "catalog") {
       models.map((model) => ({
         value: model.value,
         label: model.displayName,
+        ...(existsSync(join(process.cwd(), "catalog-alias")) &&
+        model.value === "native-default"
+          ? { resolved_model: "native-current" }
+          : {}),
         efforts: model.supportedEffortLevels,
       })),
     ),
@@ -283,12 +329,28 @@ launch(
     const handle = created.handle.bind(created);
     created.handle = async (method, request) => {
       if (method.startsWith("update")) trace("update_control", { method });
+      if (
+        method === "settings" &&
+        request.values &&
+        (existsSync(join(workspace, "legacy-update")) ||
+          existsSync(join(workspace, "legacy-settings")))
+      )
+        checkModelChoice(
+          await created.agent.settings.read(),
+          settingsPatch(request.values, ["model", "effort", "permission_mode"]),
+        );
       const result = await handle(method, request);
       const lost = join(workspace, "lose-next-bind-reply");
       if (method === "bind" && existsSync(lost)) {
         unlinkSync(lost);
         trace("lost_bind_ack");
         throw new Error("Fixture dropped the completed bind acknowledgement");
+      }
+      const lostInput = join(workspace, "lose-next-input-reply");
+      if (method === "input" && existsSync(lostInput)) {
+        unlinkSync(lostInput);
+        trace("lost_input_ack");
+        throw new Error("Fixture dropped the input acknowledgement");
       }
       return result;
     };
