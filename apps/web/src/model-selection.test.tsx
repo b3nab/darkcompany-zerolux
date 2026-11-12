@@ -255,7 +255,7 @@ test("new sessions can keep native defaults or submit a confirmed custom model",
   expect(started[1]).not.toHaveProperty("effort");
 });
 
-const configuredAgent: Actor = {
+const configuredAgent = {
   id: "fixture-agent",
   name: "Fixture",
   kind: "agent",
@@ -269,7 +269,7 @@ const configuredAgent: Actor = {
   sandbox: null,
   created_at: 0,
   archived: false,
-};
+} satisfies Actor;
 const agentSnapshot = (actor: Actor) => ({
   actor,
   models: snapshot("native-known").models,
@@ -277,7 +277,7 @@ const agentSnapshot = (actor: Actor) => ({
 });
 
 test("agent settings retain reported values while loading and save only a confirmed model", async () => {
-  let actor = configuredAgent;
+  let actor: Actor = configuredAgent;
   let loaded = false;
   let finish!: (response: Response) => void;
   const changes: AgentSettings[] = [];
