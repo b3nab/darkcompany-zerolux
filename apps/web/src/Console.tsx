@@ -36,6 +36,7 @@ import {
 import {
   accountReady,
   agentSettingFields,
+  agentModelValue,
   resumable,
   takeable,
   ago,
@@ -138,6 +139,7 @@ import { PlanSteps, SessionAgents } from "@/components/tool-call";
 import { Reveal } from "@/components/reveal";
 import { setDensity, useDensity } from "@/components/density";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { ModelSelect } from "@/components/model-select";
 import { Input } from "@/components/ui/input";
 import { Toggle } from "@/components/ui/toggle";
 import {
@@ -2365,11 +2367,16 @@ function SessionSettings({
   const shown = fields
     .filter(({ key }) => key === "model" || key === "effort")
     .flatMap(({ key, options }) => {
-      const value = values[key];
+      const value =
+        key === "model" ? agentModelValue(models, values.model) : values[key];
       return value ? [options[value] ?? value] : [];
     });
   return (
-    <Popover>
+    <Popover
+      onOpenChange={(open) => {
+        if (open) settings.refresh();
+      }}
+    >
       <PopoverTrigger
         render={
           <Button
@@ -2391,8 +2398,20 @@ function SessionSettings({
           aria-label="Session settings"
           className="flex flex-col gap-2"
         >
-          {fields.map(({ key, label, options }) => {
+          {fields.map(({ key, label, options, custom }) => {
             const value = values[key] ?? "";
+            if (key === "model")
+              return (
+                <ModelSelect
+                  key={key}
+                  value={value}
+                  models={models}
+                  custom={custom}
+                  disabled={!editable.includes(key)}
+                  onOpen={settings.refresh}
+                  onChange={(value) => change(key, value)}
+                />
+              );
             return (
               <NativeSelect
                 key={key}
@@ -2418,9 +2437,7 @@ function SessionSettings({
                 )}
                 {Object.entries(options).map(([option, text]) => (
                   <NativeSelectOption key={option} value={option}>
-                    {key === "model" || key === "effort"
-                      ? text
-                      : `${label}: ${text}`}
+                    {key === "effort" ? text : `${label}: ${text}`}
                   </NativeSelectOption>
                 ))}
               </NativeSelect>
