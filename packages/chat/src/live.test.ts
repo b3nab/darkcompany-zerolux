@@ -198,3 +198,46 @@ test("the context's share is known only when the harness says both numbers", () 
     }),
   ).toBe(1);
 });
+
+test("fresh usage survives an older live read and duplicate notices", async () => {
+  const session = "context-change";
+  const previous = {
+    context_tokens: 42_000,
+    context_window: 200_000,
+    total_tokens: null,
+    cost_usd: null,
+  };
+  const updated = { ...previous, context_window: 1_000_000 };
+  const oldRead: LiveRead = { seq: 10, items: [], usage: previous };
+  let reads = 0;
+  let finish!: (state: LiveRead) => void;
+  const stop = watchLive(
+    session,
+    () => {
+      reads++;
+      return reads === 1
+        ? Promise.resolve(oldRead)
+        : new Promise<LiveRead>((resolve) => (finish = resolve));
+    },
+    () => {},
+  );
+  try {
+    await Promise.resolve();
+    expect(contextShare(liveState(session).usage)).toBe(0.21);
+
+    liveResync();
+    liveNotice(notice(11, [{ type: "usage", ...updated }], session));
+    finish(oldRead);
+    await Promise.resolve();
+    expect(liveState(session).usage).toEqual(updated);
+    expect(contextShare(liveState(session).usage)).toBe(0.042);
+    expect(liveState(session).seq).toBe(11);
+
+    liveNotice(notice(10, [{ type: "usage", ...previous }], session));
+    expect(liveState(session).usage).toEqual(updated);
+    expect(liveState(session).seq).toBe(11);
+    expect(reads).toBe(2);
+  } finally {
+    stop();
+  }
+});

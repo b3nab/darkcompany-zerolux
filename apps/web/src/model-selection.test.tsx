@@ -6,6 +6,7 @@ import type {
   AgentSettings,
   Chat,
   ChatSession,
+  LiveRead,
   NewSession,
 } from "@zerolux/chat";
 
@@ -54,11 +55,16 @@ for (const [key, value] of Object.entries(globals))
   });
 
 const { createRoot } = await import("react-dom/client");
-const { lookWith, setKernelFetch, useSessionSettings } =
-  await import("@zerolux/chat");
+const {
+  liveNotice,
+  lookWith,
+  setKernelFetch,
+  useSessionSettings,
+  useSessionUsage,
+} = await import("@zerolux/chat");
 const { ModelSelect } = await import("./components/model-select");
 const { AgentSettingsForm, StartSession } = await import("./Team");
-const { SessionSettings } = await import("./Console");
+const { ContextMeter, SessionSettings } = await import("./Console");
 type Settings = ReturnType<typeof useSessionSettings>;
 let root: ReturnType<typeof createRoot> | undefined;
 let settings: Settings;
@@ -183,6 +189,53 @@ test("typing and cancelling keep the model; Enter and selecting submit one confi
   });
   expect(changes).toEqual([{ model: "native-new" }, { model: "native-known" }]);
   expect(settings.data?.values.model).toBe("native-known");
+});
+
+test("a confirmed model's usage updates the context meter without a new turn", async () => {
+  const id = "context-change";
+  const usage = {
+    context_tokens: 42_000,
+    context_window: 200_000,
+    total_tokens: null,
+    cost_usd: null,
+  };
+  const read = async (): Promise<LiveRead> => ({ seq: 1, items: [], usage });
+  function ContextProbe() {
+    const reported = useSessionUsage(id, read);
+    return (
+      <>
+        <Probe id={id} picker />
+        <ContextMeter usage={reported} />
+      </>
+    );
+  }
+  const changes: unknown[] = [];
+  let model = "native-known";
+  setKernelFetch(async (_url, init) => {
+    if (init?.method === "PATCH") {
+      const change = JSON.parse(String(init.body)) as { model: string };
+      changes.push(change);
+      model = change.model;
+      liveNotice({
+        type: "session.live",
+        session_id: id,
+        first: 2,
+        changes: [{ type: "usage", ...usage, context_window: 1_000_000 }],
+      });
+    }
+    return Response.json(snapshot(model));
+  });
+  await render(<ContextProbe />);
+  const meter = () =>
+    document.querySelector('[role="meter"]')?.getAttribute("aria-valuenow");
+  expect(meter()).toBe("21");
+  const input = await openPicker();
+  await type(input, "native-new");
+  expect(meter()).toBe("21");
+  await key(input, "Enter");
+  expect(changes).toEqual([{ model: "native-new" }]);
+  expect(settings.data?.values.model).toBe("native-new");
+  expect(meter()).toBe("4");
 });
 
 test("disabling an open model picker prevents both keyboard and pointer changes", async () => {
