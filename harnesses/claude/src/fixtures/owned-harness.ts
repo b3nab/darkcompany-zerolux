@@ -230,6 +230,15 @@ function scripted(
       applied: { model, effort },
       effective: { env: { PRIVATE_FIXTURE_VALUE: "must-not-be-published" } },
     }),
+    getContextUsage: async () => ({
+      model,
+      totalTokens: 42_000,
+      maxTokens: existsSync(join(workspace, "context-window"))
+        ? Number(readFileSync(join(workspace, "context-window"), "utf8"))
+        : model === "native-alternate"
+          ? 1_000_000
+          : 200_000,
+    }),
     supportedModels: async () => nativeModels,
     supportedCommands: async () =>
       existsSync(join(workspace, "no-setting-commands"))

@@ -354,9 +354,22 @@ async fn native_settings_are_confirmed_at_start_and_changed_without_new_input() 
         .await;
     let actor = started["actor"]["id"].as_str().unwrap();
     let session = started["session"]["id"].as_str().unwrap();
+    let live = format!("/sessions/{session}/live");
+    kernel
+        .wait(&live, |data| data["usage"]["context_window"] == 1_000_000)
+        .await;
+    // A native compaction policy can change without a model turn. Reading settings
+    // refreshes the effective window rather than retaining the previous usage report.
+    let context_window = fixture.dir.path().join("workspace/context-window");
+    std::fs::write(&context_window, "500000").unwrap();
     // The session's settings are its harness's, confirmed at start.
     let path = format!("/sessions/{session}/settings");
     let view = kernel.api(&path, None).await;
+    let usage = kernel
+        .wait(&live, |data| data["usage"]["context_window"] == 500_000)
+        .await;
+    assert_eq!(usage["usage"]["context_tokens"], 42_000);
+    std::fs::remove_file(context_window).unwrap();
     assert_eq!(view["values"]["model"], "native-alternate");
     assert_eq!(view["values"]["effort"], "medium");
     assert_eq!(view["values"]["permission_mode"], "plan");
@@ -380,6 +393,9 @@ async fn native_settings_are_confirmed_at_start_and_changed_without_new_input() 
     assert_eq!(changed["values"]["model"], "native-default");
     assert_eq!(changed["values"]["effort"], "low");
     assert_eq!(changed["values"]["permission_mode"], "auto");
+    kernel
+        .wait(&live, |data| data["usage"]["context_window"] == 200_000)
+        .await;
     let traces = fixture.trace();
     assert_eq!(count(&traces, "start"), 1);
     assert_eq!(count(&traces, "input"), 0);
@@ -1170,6 +1186,10 @@ async fn a_claude_session_runs_on_a_joined_computer() {
         .api(&format!("/sessions/{session}/settings"), None)
         .await;
     assert_eq!(view["values"]["permission_mode"], "plan");
+    let live = format!("/sessions/{session}/live");
+    kernel
+        .wait(&live, |data| data["usage"]["context_window"] == 200_000)
+        .await;
     std::fs::write(
         &fixture.program.claude_cli,
         "#!/bin/sh\nprintf '%s\\n' '[]'\n# installed remote update\n",
@@ -1188,6 +1208,10 @@ async fn a_claude_session_runs_on_a_joined_computer() {
     let changed: Value = response.json().await.unwrap();
     assert_eq!(status, StatusCode::OK, "{changed}");
     assert_eq!(changed["values"]["model"], "native-alternate");
+    let usage = kernel
+        .wait(&live, |data| data["usage"]["context_window"] == 1_000_000)
+        .await;
+    assert_eq!(usage["usage"]["context_tokens"], 42_000);
     let restored = kernel.api(&format!("/sessions/{session}"), None).await;
     assert_eq!(
         restored["session"]["native_session_id"],
