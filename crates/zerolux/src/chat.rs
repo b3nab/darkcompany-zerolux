@@ -1887,6 +1887,7 @@ impl Store {
         native_id: &str,
         instance_id: &str,
         revision: &str,
+        host_id: Option<&str>,
     ) -> Result<bool> {
         let tx = self.write().await?;
         let session = sessions::Entity::find_by_id(self.key(session_id))
@@ -1895,7 +1896,7 @@ impl Store {
             .one(&tx)
             .await?
             .ok_or(Error::StoppedByOwner)?;
-        if session.host_id.as_deref() != self.host() {
+        if session.host_id.as_deref() != host_id {
             return Err(Error::Forbidden);
         }
         let mut locator: Value = decode(&session.native_locator_json)?;
@@ -1904,6 +1905,47 @@ impl Store {
             return Ok(false);
         }
         locator["integration_update"] = intent;
+        sessions::Entity::update_many()
+            .filter(sessions::Column::WorkspaceId.eq(&self.workspace))
+            .filter(sessions::Column::Id.eq(session_id))
+            .col_expr(
+                sessions::Column::NativeLocatorJson,
+                Expr::value(locator.to_string()),
+            )
+            .exec(&tx)
+            .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    /// A cancellation or replacement bind was acknowledged. Clear only its matching
+    /// checkpoint; a changed update, Stop, or host transfer must win.
+    pub(crate) async fn clear_integration_update(
+        &self,
+        session_id: &str,
+        native_id: &str,
+        instance_id: &str,
+        revision: &str,
+        host_id: Option<&str>,
+    ) -> Result<bool> {
+        let tx = self.write().await?;
+        let session = sessions::Entity::find_by_id(self.key(session_id))
+            .filter(sessions::Column::NativeSessionId.eq(native_id))
+            .filter(sessions::Column::StoppedAt.is_null())
+            .one(&tx)
+            .await?
+            .ok_or(Error::StoppedByOwner)?;
+        if session.host_id.as_deref() != host_id {
+            return Err(Error::Forbidden);
+        }
+        let mut locator: Value = decode(&session.native_locator_json)?;
+        if locator["integration_update"] != json!({"instance_id":instance_id,"revision":revision}) {
+            return Ok(false);
+        }
+        locator
+            .as_object_mut()
+            .ok_or_else(|| Error::Invalid("Invalid session locator".into()))?
+            .remove("integration_update");
         sessions::Entity::update_many()
             .filter(sessions::Column::WorkspaceId.eq(&self.workspace))
             .filter(sessions::Column::Id.eq(session_id))

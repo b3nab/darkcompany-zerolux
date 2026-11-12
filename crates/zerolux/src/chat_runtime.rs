@@ -1398,6 +1398,12 @@ impl ChatRuntime {
                 continue;
             }
             if let Some(mode) = self.owned_mode(&owner, &session.id).await? {
+                // A settings change may already be awaiting this same native update.
+                // Its cold recovery owns the session until it has rebound the new helper.
+                let gate = self.settings_gate(&session.id).await;
+                let Ok(_guard) = gate.try_lock() else {
+                    continue;
+                };
                 match self.reconnect_owned(&owner, &session, mode).await {
                     Ok(()) => self.retried(&session.id, true),
                     Err(error) => {
