@@ -2200,7 +2200,7 @@ function SessionInput({
             }}
           />
           {/* Shown where the kernel reads them: not yet Codex's on a joined computer. */}
-          {open && <SessionSettings session={session} perform={perform} />}
+          {owner && <SessionSettings session={session} />}
         </>
       }
       meter={
@@ -2342,13 +2342,7 @@ function PlanBar({ steps }: { steps: PlanStep[] }) {
  * The session's own model, effort and permissions, under its box: read from its harness,
  * changed through it at once. Only what the harness lets change now is offered.
  */
-function SessionSettings({
-  session,
-  perform,
-}: {
-  session: ChatSession;
-  perform: Perform;
-}) {
+export function SessionSettings({ session }: { session: ChatSession }) {
   const settings = useSessionSettings(
     session.id,
     `${session.status}:${session.activity}`,
@@ -2359,10 +2353,10 @@ function SessionSettings({
   const fields = agentSettingFields(session.harness, models, values.model);
   // Plan first, in each harness's own setting: Codex's mode, Claude Code's permissions.
   const plan = planMode(session.harness, values, editable);
-  if (!settings.data || !editable.length) return null;
+  const disabled = settings.pending || session.status !== "connected";
   // One field at a time; the harness confirms it, or says why not.
   const change = (key: keyof AgentSettings, value: string) =>
-    void perform(async () => void (await settings.apply({ [key]: value })));
+    void settings.apply({ [key]: value }).catch(() => {});
   // The pill names the model and the effort, and Plan while it plans.
   const shown = fields
     .filter(({ key }) => key === "model" || key === "effort")
@@ -2396,6 +2390,7 @@ function SessionSettings({
         <div
           role="group"
           aria-label="Session settings"
+          aria-busy={settings.pending}
           className="flex flex-col gap-2"
         >
           {fields.map(({ key, label, options, custom }) => {
@@ -2407,7 +2402,7 @@ function SessionSettings({
                   value={value}
                   models={models}
                   custom={custom}
-                  disabled={!editable.includes(key)}
+                  disabled={disabled || !editable.includes(key)}
                   onOpen={settings.refresh}
                   onChange={(value) => change(key, value)}
                 />
@@ -2421,7 +2416,9 @@ function SessionSettings({
                 title={label}
                 value={value}
                 disabled={
-                  !editable.includes(key) || Object.keys(options).length === 0
+                  disabled ||
+                  !editable.includes(key) ||
+                  Object.keys(options).length === 0
                 }
                 onChange={(event) => change(key, event.target.value)}
               >
@@ -2448,19 +2445,35 @@ function SessionSettings({
               size="sm"
               variant="outline"
               pressed={plan.on}
+              disabled={disabled}
               title="Plan mode"
               onPressedChange={(on) =>
-                void perform(
-                  async () => void (await settings.apply(plan.change(on))),
-                )
+                void settings.apply(plan.change(on)).catch(() => {})
               }
             >
               <ListChecksIcon />
               Plan
             </Toggle>
           )}
+          {settings.pending && (
+            <span className="text-xs text-muted-foreground">
+              Applying settings…
+            </span>
+          )}
           {settings.error && (
-            <span className="text-xs text-attention">{settings.error}</span>
+            <span role="alert" className="text-xs text-attention">
+              {settings.error}
+            </span>
+          )}
+          {settings.error && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={settings.pending || settings.loading}
+              onClick={settings.recheck}
+            >
+              Refresh
+            </Button>
           )}
         </div>
       </PopoverContent>

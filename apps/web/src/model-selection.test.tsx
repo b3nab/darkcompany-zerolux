@@ -58,6 +58,7 @@ const { lookWith, setKernelFetch, useSessionSettings } =
   await import("@zerolux/chat");
 const { ModelSelect } = await import("./components/model-select");
 const { AgentSettingsForm, StartSession } = await import("./Team");
+const { SessionSettings } = await import("./Console");
 type Settings = ReturnType<typeof useSessionSettings>;
 let root: ReturnType<typeof createRoot> | undefined;
 let settings: Settings;
@@ -358,6 +359,120 @@ test("busy agent settings preserve unknown values and prevent editing or submitt
   expect(changes).toHaveLength(0);
 });
 
+const settingsSession = {
+  id: "fixture-session",
+  harness: "claude-code",
+  status: "connected",
+  activity: "idle",
+} as ChatSession;
+
+test("a refused change is shown in its settings panel without retrying the PATCH", async () => {
+  const calls: string[] = [];
+  setKernelFetch(async (_url, init) => {
+    calls.push(init?.method ?? "GET");
+    if (init?.method === "PATCH")
+      return Response.json({ error: "Fixture refusal" }, { status: 400 });
+    return Response.json(snapshot("native-known"));
+  });
+  await render(<SessionSettings session={settingsSession} />);
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>("button")!.click(),
+  );
+  const input = await openPicker('[role="group"] button');
+  await type(input, "native-new");
+  await key(input, "Enter");
+  const group = document.querySelector<HTMLElement>('[role="group"]')!;
+  expect(group.querySelector('[role="alert"]')).not.toBeNull();
+  expect(group.getAttribute("aria-busy")).toBe("false");
+  expect(calls.filter((method) => method === "PATCH")).toHaveLength(1);
+  await act(async () =>
+    group.querySelector<HTMLButtonElement>('[role="alert"] + button')!.click(),
+  );
+  expect(group.querySelector('[role="alert"]')).toBeNull();
+  expect(calls.filter((method) => method === "PATCH")).toHaveLength(1);
+  expect(calls.at(-1)).toBe("GET");
+});
+
+test("the picker keeps its confirmed value and disables controls while a change reconnects the session", async () => {
+  let finish!: (response: Response) => void;
+  setKernelFetch(async (_url, init) =>
+    init?.method === "PATCH"
+      ? new Promise<Response>((resolve) => {
+          finish = resolve;
+        })
+      : Response.json(snapshot("native-known")),
+  );
+  await render(<SessionSettings session={settingsSession} />);
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>("button")!.click(),
+  );
+  const input = await openPicker('[role="group"] button');
+  const group = document.querySelector<HTMLElement>('[role="group"]')!;
+  const model = group.querySelector<HTMLButtonElement>("button")!;
+  const confirmed = model.textContent;
+  await type(input, "native-new");
+  await key(input, "Enter");
+  expect(model.textContent).toBe(confirmed);
+  expect(model.disabled).toBe(true);
+  expect(group.getAttribute("aria-busy")).toBe("true");
+  await render(
+    <SessionSettings session={{ ...settingsSession, status: "connecting" }} />,
+  );
+  expect(document.querySelector('[role="group"]')).not.toBeNull();
+  await act(async () => finish(Response.json(snapshot("native-new"))));
+  expect(model.textContent).toBe("native-new");
+  expect(group.getAttribute("aria-busy")).toBe("false");
+  expect(model.disabled).toBe(true);
+});
+
+test("a failed settings read keeps a working refresh control accessible", async () => {
+  let available = false;
+  setKernelFetch(async () =>
+    available
+      ? Response.json(snapshot("native-known"))
+      : Response.json({ error: "Fixture unavailable" }, { status: 503 }),
+  );
+  await render(<SessionSettings session={settingsSession} />);
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>("button")!.click(),
+  );
+  const group = document.querySelector<HTMLElement>('[role="group"]')!;
+  expect(group.querySelector('[role="alert"]')).not.toBeNull();
+  expect(group.querySelector<HTMLButtonElement>("button")!.disabled).toBe(true);
+  available = true;
+  await act(async () =>
+    group.querySelector<HTMLButtonElement>('[role="alert"] + button')!.click(),
+  );
+  expect(group.querySelector('[role="alert"]')).toBeNull();
+  expect(group.querySelector<HTMLButtonElement>("button")!.disabled).toBe(
+    false,
+  );
+});
+
+test("an uncertain PATCH observes actual settings once without replaying", async () => {
+  const calls: string[] = [];
+  let model = "native-known";
+  setKernelFetch(async (_url, init) => {
+    calls.push(init?.method ?? "GET");
+    if (init?.method === "PATCH") {
+      model = "native-new";
+      return Response.json(
+        { error: "Fixture unconfirmed", code: "session_settings_unconfirmed" },
+        { status: 504 },
+      );
+    }
+    return Response.json(snapshot(model));
+  });
+  await render(<Probe />);
+  await act(async () => {
+    await settings.apply({ model: "native-new" }).catch(() => {});
+  });
+  expect(calls).toEqual(["GET", "PATCH", "GET"]);
+  expect(settings.data?.values.model).toBe("native-new");
+  expect(settings.pending).toBe(false);
+  expect(calls).toEqual(["GET", "PATCH", "GET"]);
+});
+
 function pendingKernel() {
   const pending: {
     url: string;
@@ -380,6 +495,66 @@ function pendingKernel() {
       act(async () => pending[index]!.finish(model)),
   };
 }
+
+test("returning to a session with a pending change follows that operation without sending another PATCH", async () => {
+  const { pending, finish } = pendingKernel();
+  await render(<Probe id="a" />);
+  await finish(0, "native-a");
+  let first!: Promise<unknown>;
+  await act(async () => {
+    first = settings.apply({ model: "native-new-a" });
+  });
+  await render(<Probe id="b" />);
+  await finish(2, "native-b");
+  let other!: Promise<unknown>;
+  await act(async () => {
+    other = settings.apply({ model: "native-new-b" });
+  });
+  await render(<Probe id="a" />);
+  expect(settings.pending).toBe(true);
+  let duplicate!: Promise<unknown>;
+  await act(async () => {
+    duplicate = settings.apply({ model: "native-new-a" });
+  });
+  expect(pending.map(({ method }) => method)).toEqual([
+    "GET",
+    "PATCH",
+    "GET",
+    "PATCH",
+    "GET",
+  ]);
+  await finish(1, "native-new-a");
+  await finish(4, "native-a");
+  await finish(3, "native-new-b");
+  await Promise.all([first, duplicate, other]);
+  expect(settings.pending).toBe(false);
+  expect(settings.loading).toBe(false);
+  expect(settings.data?.values.model).toBe("native-new-a");
+});
+
+test("remounting a session keeps its pending operation and confirmed result", async () => {
+  const { pending, finish } = pendingKernel();
+  await render(<Probe />);
+  await finish(0, "native-old");
+  let first!: Promise<unknown>;
+  await act(async () => {
+    first = settings.apply({ model: "native-new" });
+  });
+  await render(null);
+  await render(<Probe />);
+  expect(settings.pending).toBe(true);
+  let duplicate!: Promise<unknown>;
+  await act(async () => {
+    duplicate = settings.apply({ model: "native-new" });
+  });
+  expect(pending.map(({ method }) => method)).toEqual(["GET", "PATCH", "GET"]);
+  await finish(1, "native-new");
+  await finish(2, "native-old");
+  await Promise.all([first, duplicate]);
+  expect(settings.pending).toBe(false);
+  expect(settings.loading).toBe(false);
+  expect(settings.data?.values.model).toBe("native-new");
+});
 
 test("a foreground read started before a PATCH confirmation cannot undo that confirmation", async () => {
   const { pending, finish } = pendingKernel();
