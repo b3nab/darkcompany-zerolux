@@ -124,6 +124,7 @@ impl HostRuntime {
                 Ok(json!(crate::codex_settings::models(&rpc).await?))
             }
             "claude.revision" => Ok(json!(self.claude.native_revision()?)),
+            "claude.target" => self.claude.target(),
             "pi.catalog" => {
                 let folder = params["workspace"]
                     .as_str()

@@ -79,6 +79,7 @@ pub(crate) struct Registry {
     path: PathBuf,
     program: RunnerProgram,
     catalogs: tokio::sync::Mutex<Vec<Catalog>>,
+    target: Option<Value>,
 }
 
 struct Catalog {
@@ -150,11 +151,24 @@ fn leased(registry: &Path, native_id: &str) -> Result<bool> {
 
 impl Registry {
     pub(crate) fn new(path: PathBuf, program: RunnerProgram) -> Self {
+        let target = program.entry.canonical().ok().and_then(|entry| {
+            crate::integration_code::revision(&entry)
+                .ok()
+                .map(|revision| json!({"entry":entry,"revision":revision}))
+        });
         Self {
             path,
             program,
             catalogs: tokio::sync::Mutex::default(),
+            target,
         }
+    }
+
+    /// This execution host's activated immutable release, never a path from an API payload.
+    pub(crate) fn target(&self) -> Result<Value> {
+        self.target
+            .clone()
+            .context("The installed Claude integration could not be verified")
     }
 
     /// The installed native executable, independently of the helper's code revision.
