@@ -17,6 +17,58 @@ use crate::claude_owned;
 use claude_owned::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_installed_harness_update_preserves_the_session_before_changing_its_model() {
+    let mut fixture = Fixture::new();
+    fixture.program.sdk_executable = Some(fixture.program.claude_cli.clone());
+    let kernel = Kernel::start(&fixture, 0).await;
+    // Listing models does not require, create, or resume any session.
+    let catalog = kernel
+        .api("/sessions/catalog?harness=claude-code", None)
+        .await;
+    assert_eq!(catalog["models"].as_array().unwrap().len(), 2);
+    assert_eq!(count(&fixture.trace(), "start"), 0);
+    let started = kernel
+        .api(
+            "/sessions",
+            Some(json!({
+                "harness":"claude-code", "workspace":fixture.dir.path().join("workspace"),
+                "model":"native-default", "permission_mode":"plan",
+            })),
+        )
+        .await;
+    let id = started["session"]["id"].as_str().unwrap();
+    let native = started["session"]["native_session_id"].clone();
+    // The helper code is unchanged; only the installed native executable changed.
+    std::fs::write(
+        &fixture.program.claude_cli,
+        "#!/bin/sh\nprintf '%s\\n' '[]'\n# installed update\n",
+    )
+    .unwrap();
+    let response = kernel
+        .client
+        .patch(format!("{}/api/sessions/{id}/settings", kernel.url))
+        .json(&json!({"model":"native-alternate"}))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let changed: Value = response.json().await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["values"]["model"], "native-alternate");
+    assert_eq!(changed["values"]["permission_mode"], "plan");
+    let current = kernel.api(&format!("/sessions/{id}"), None).await;
+    assert_eq!(current["session"]["native_session_id"], native);
+    assert_eq!(current["session"]["id"], id);
+    let trace = fixture.trace();
+    assert_eq!(count(&trace, "start"), 2);
+    assert_eq!(count(&trace, "input"), 0);
+    kernel
+        .api(&format!("/sessions/{id}/stop"), Some(json!({})))
+        .await;
+    kernel.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn native_settings_are_confirmed_at_start_and_changed_without_new_input() {
     let fixture = Fixture::new();
     let kernel = Kernel::start(&fixture, 0).await;
@@ -780,7 +832,8 @@ async fn an_explicit_sdk_executable_must_be_an_absolute_existing_file_before_any
 /// it over the computer's channel.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_claude_session_runs_on_a_joined_computer() {
-    let fixture = Fixture::new();
+    let mut fixture = Fixture::new();
+    fixture.program.sdk_executable = Some(fixture.program.claude_cli.clone());
     let kernel = Kernel::start(&fixture, 0).await;
     let runtime = kernel.runtime.clone().unwrap();
     let root = fixture.dir.path();
@@ -814,6 +867,14 @@ async fn a_claude_session_runs_on_a_joined_computer() {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    let catalog = kernel
+        .api(
+            &format!("/sessions/catalog?harness=claude-code&host={host}"),
+            None,
+        )
+        .await;
+    assert_eq!(catalog["models"].as_array().unwrap().len(), 2);
+    assert_eq!(count(&fixture.trace(), "start"), 0);
     let started = kernel
         .api(
             "/sessions",
@@ -838,6 +899,33 @@ async fn a_claude_session_runs_on_a_joined_computer() {
         .api(&format!("/sessions/{session}/settings"), None)
         .await;
     assert_eq!(view["values"]["permission_mode"], "plan");
+    std::fs::write(
+        &fixture.program.claude_cli,
+        "#!/bin/sh\nprintf '%s\\n' '[]'\n# installed remote update\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("workspace/lose-next-bind-reply"), "").unwrap();
+    let response = kernel
+        .client
+        .patch(format!("{}/api/sessions/{session}/settings", kernel.url))
+        .json(&json!({"model":"native-alternate"}))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let changed: Value = response.json().await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["values"]["model"], "native-alternate");
+    let restored = kernel.api(&format!("/sessions/{session}"), None).await;
+    assert_eq!(
+        restored["session"]["native_session_id"],
+        started["session"]["native_session_id"]
+    );
+    assert_eq!(restored["session"]["host_id"], host);
+    assert_eq!(restored["session"]["status"], "connected");
+    assert_eq!(count(&fixture.trace(), "lost_bind_ack"), 1);
+    assert_eq!(count(&fixture.trace(), "start"), 2);
+    assert_eq!(count(&fixture.trace(), "input"), 0);
     // A fork is made there by Claude Code and opened there.
     let forked = kernel
         .api(&format!("/sessions/{session}/fork"), Some(json!({})))
@@ -845,7 +933,7 @@ async fn a_claude_session_runs_on_a_joined_computer() {
     assert_eq!(forked["session"]["host_id"], host);
     assert_eq!(forked["session"]["created"], true);
     fixture
-        .wait_trace(|rows| count(rows, "fork") == 1 && count(rows, "start") == 2)
+        .wait_trace(|rows| count(rows, "fork") == 1 && count(rows, "start") == 3)
         .await;
     kernel
         .api(&format!("/sessions/{session}/stop"), Some(json!({})))
