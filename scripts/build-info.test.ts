@@ -10,7 +10,20 @@ import {
   kernelTargets,
   releaseFeed,
   resumeBuild,
+  rpmVersion,
 } from "./release-ci";
+
+test("RPM prereleases use a separate release without changing the app version", () => {
+  for (const stage of ["alpha.20260101.1", "beta.2", "rc.3"]) {
+    const version = `1.2.3-${stage}`;
+    const rpm = rpmVersion(version);
+    expect(rpm).toEqual({ version: "1.2.3", release: `0.${stage}` });
+    expect(`${rpm.version}-${rpm.release.slice(2)}`).toBe(version);
+  }
+  expect(rpmVersion("1.2.3")).toEqual({ version: "1.2.3", release: "1" });
+  for (const invalid of ["1.2.3-dev", "1.2", "1.2.3-rc.0"])
+    expect(() => rpmVersion(invalid)).toThrow();
+});
 
 test("nightly numbering is per UTC day and version, and skips failed reserved tags", () => {
   const date = new Date("2026-10-24T00:05:00+02:00");
@@ -88,6 +101,29 @@ test("a channel feed requires every signed immutable artifact from the same rele
   ).toThrow();
   expect(() =>
     releaseFeed(build, { version: build.version, platforms }, {}, ""),
+  ).toThrow();
+  const { ["linux-x86_64-rpm"]: rpm, ...withoutRpm } = platforms;
+  expect(() =>
+    releaseFeed(
+      build,
+      { version: build.version, platforms: withoutRpm },
+      kernels,
+      "",
+    ),
+  ).toThrow();
+  expect(() =>
+    releaseFeed(
+      build,
+      {
+        version: build.version,
+        platforms: {
+          ...platforms,
+          "linux-x86_64-rpm": { ...rpm!, signature: "" },
+        },
+      },
+      kernels,
+      "",
+    ),
   ).toThrow();
   expect(() =>
     releaseFeed(

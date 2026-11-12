@@ -23,9 +23,18 @@ export const desktopTargets = [
   "darwin-aarch64",
   "darwin-x86_64",
   "linux-x86_64",
+  "linux-x86_64-rpm",
   "windows-x86_64",
 ];
 type Artifact = { url: string; signature: string };
+
+/** RPM keeps a prerelease in its release field, ordered before the stable release (1). */
+export function rpmVersion(version: string) {
+  if (!releaseVersion.test(version))
+    throw new Error(`Invalid release version: ${version}`);
+  const [base, prerelease] = version.split("-");
+  return { version: base!, release: prerelease ? `0.${prerelease}` : "1" };
+}
 
 export function resumeBuild(build: BuildInfo, saved: BuildInfo): BuildInfo {
   if (
@@ -209,6 +218,19 @@ if (import.meta.main) {
         plugins: { updater: { pubkey, requireSignedVersion: true } },
       }),
     );
+  } else if (action === "rpm-config") {
+    const rpm = rpmVersion(buildInfo(root).version);
+    // `tauri bundle` packages the existing executable; its compiled version stays intact.
+    await Bun.write(
+      process.argv[3]!,
+      JSON.stringify({
+        version: rpm.version,
+        bundle: {
+          createUpdaterArtifacts: false,
+          linux: { rpm: { release: rpm.release } },
+        },
+      }),
+    );
   } else if (action === "feed") {
     const dir = process.argv[3]!;
     const build = (await Bun.file(join(dir, "build.json")).json()) as BuildInfo;
@@ -237,6 +259,14 @@ if (import.meta.main) {
         throw new Error(`Desktop artifact is not in this release: ${platform}`);
       artifact.url = `${prefix}${encodeURIComponent(asset.name)}`;
     }
+    const rpm = rpmVersion(build.version);
+    const rpmName = `ZeroLux-${rpm.version}-${rpm.release}.x86_64.rpm`;
+    if (!release.assets.some((asset) => asset.name === rpmName))
+      throw new Error("The release is missing its RPM");
+    desktop.platforms["linux-x86_64-rpm"] = {
+      url: `${prefix}${encodeURIComponent(rpmName)}`,
+      signature: (await Bun.file(join(dir, `${rpmName}.sig`)).text()).trim(),
+    };
     const kernels: Record<string, Artifact> = {};
     for (const target of kernelTargets) {
       const name = `zerolux-v${build.version}-${target}${target.includes("windows") ? ".exe" : ""}`;
@@ -305,6 +335,6 @@ if (import.meta.main) {
     );
   } else
     throw new Error(
-      "Usage: release-ci.ts prepare | config <path> | feed <folder> | restore <folder> | verify <feed>",
+      "Usage: release-ci.ts prepare | config <path> | rpm-config <path> | feed <folder> | restore <folder> | verify <feed>",
     );
 }
