@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type {
   Options,
@@ -7,8 +7,8 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { AgentLinkChild, chatRequest } from "@zerolux/bridge";
-import { launch, type Runner } from "../runner.ts";
+import { AgentLinkChild, chatRequest, integrationCode } from "@zerolux/bridge";
+import { launch, nativeCode, type Runner } from "../runner.ts";
 
 /**
  * The real runner with a scripted model instead of Claude, for the kernel's end-to-end tests.
@@ -27,6 +27,18 @@ const trace = (event: string, fields: Record<string, unknown> = {}) =>
     `${JSON.stringify({ event, pid: process.pid, at: Date.now(), ...fields })}\n`,
   );
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+const models = [
+  {
+    value: "native-default",
+    displayName: "Native default",
+    supportedEffortLevels: ["low", "high"],
+  },
+  {
+    value: "native-alternate",
+    displayName: "Native alternate",
+    supportedEffortLevels: ["medium", "high"],
+  },
+];
 
 let runner!: Runner;
 
@@ -184,18 +196,11 @@ function scripted(
       applied: { model, effort },
       effective: { env: { PRIVATE_FIXTURE_VALUE: "must-not-be-published" } },
     }),
-    supportedModels: async () => [
-      {
-        value: "native-default",
-        displayName: "Native default",
-        supportedEffortLevels: ["low", "high"],
-      },
-      {
-        value: "native-alternate",
-        displayName: "Native alternate",
-        supportedEffortLevels: ["medium", "high"],
-      },
-    ],
+    supportedModels: async () => models,
+    setModel: async (value: string) => {
+      model = value;
+      trace("settings", { model, effort });
+    },
     applyFlagSettings: async (settings: {
       model?: string;
       effortLevel?: Options["effort"];
@@ -231,6 +236,19 @@ function scripted(
 }
 
 // Claude Code's own fork of a saved session, as the runner's `fork` answers: a new ID.
+if (process.argv[2] === "catalog") {
+  console.log(
+    JSON.stringify(
+      models.map((model) => ({
+        value: model.value,
+        label: model.displayName,
+        efforts: model.supportedEffortLevels,
+      })),
+    ),
+  );
+  process.exit(0);
+}
+
 if (process.argv[2] === "fork") {
   trace("fork", { session: process.argv[3], up_to: process.argv[4] ?? null });
   console.log(JSON.stringify({ session_id: randomUUID() }));
@@ -239,6 +257,10 @@ if (process.argv[2] === "fork") {
 
 launch(
   {
+    code: integrationCode(import.meta.url),
+    native: process.env.ZEROLUX_CLAUDE_EXECUTABLE
+      ? nativeCode(process.env.ZEROLUX_CLAUDE_EXECUTABLE)
+      : undefined,
     start: ({ prompt, options }) => scripted(prompt, options),
     subscriber: (invalidate, lost) => new AgentLinkChild(invalidate, lost),
     connect: (base, token) => {
@@ -258,6 +280,17 @@ launch(
   },
   (created) => {
     runner = created;
+    const handle = created.handle.bind(created);
+    created.handle = async (method, request) => {
+      const result = await handle(method, request);
+      const lost = join(workspace, "lose-next-bind-reply");
+      if (method === "bind" && existsSync(lost)) {
+        unlinkSync(lost);
+        trace("lost_bind_ack");
+        throw new Error("Fixture dropped the completed bind acknowledgement");
+      }
+      return result;
+    };
     const describe = created.describe.bind(created);
     created.describe = () => {
       const state = describe();
