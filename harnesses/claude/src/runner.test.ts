@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import type {
   Options,
   Query,
@@ -11,10 +13,11 @@ import {
   Transport,
   type ChatRequest,
   type Inbox,
+  type IntegrationCode,
 } from "@zerolux/bridge";
 import type { StartQuery } from "./agent.ts";
 import type { ClaudeExecution } from "./execution.ts";
-import { Runner } from "./runner.ts";
+import { catalog, nativeCode, Runner } from "./runner.ts";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -27,6 +30,8 @@ function fixture(
     initial?: { model: string; effort: string };
     appliedModel?: string;
     subscriberStart?: (executable: string) => void;
+    code?: IntegrationCode;
+    native?: IntegrationCode;
   } = {},
 ) {
   const session = {
@@ -134,7 +139,9 @@ function fixture(
       }
     }
     return Object.assign(stream(), {
-      initializationResult: async () => ({}),
+      initializationResult: async () => ({
+        current_permission_mode: "default",
+      }),
       supportedModels: async () =>
         ["native-model", "other-model"].map((value) => ({
           value,
@@ -179,6 +186,8 @@ function fixture(
         return saved;
       },
       execution: options.execution,
+      code: options.code,
+      native: options.native,
       subscriber: () => ({
         start: async (executable, _base, token) => {
           options.subscriberStart?.(executable);
@@ -838,4 +847,221 @@ test("host shutdown waits for actual native exit", async () => {
     await closing;
   }
   expect(closed).toBe(true);
+});
+
+test("a native executable update uses the existing checkpoint and waits for native exit without owner input", async () => {
+  let exit!: () => void;
+  const exited = new Promise<void>((resolve) => (exit = resolve));
+  const revision = "a".repeat(64);
+  const native = { revision: "old-native", current: () => "new-native" };
+  const execution = {
+    requestStop() {},
+    describe: () => ({ native_pid: 1, native_phase: "running" }),
+    waitForExit: () => exited,
+  } as unknown as ClaudeExecution;
+  const f = fixture(true, {
+    managed: true,
+    execution,
+    code: { revision, current: () => revision },
+    native,
+  });
+  const request = { link_id: "link", revision, native_revision: "new-native" };
+  try {
+    await f.bind("t1", true);
+    await tick();
+    expect(f.runner.describe().native_revision).toBe(native.revision);
+    expect(await f.runner.handle("update", request)).toMatchObject({
+      ready: true,
+      settings: {
+        model: "native-model",
+        effort: "high",
+        permission_mode: "default",
+      },
+    });
+    let committed = false;
+    const committing = f.runner.handle("update_commit", request).then(() => {
+      committed = true;
+    });
+    await tick();
+    expect(committed).toBe(false);
+    expect(f.closes()).toBe(1);
+    expect(f.inputs).toHaveLength(0);
+    exit();
+    await committing;
+    expect(committed).toBe(true);
+    expect(f.starts).toHaveLength(1);
+    expect(f.interrupts()).toBe(0);
+  } finally {
+    exit();
+    f.runner.agent.close();
+  }
+});
+
+test("native updates wait for existing work and refuse a changed executable checkpoint", async () => {
+  const revision = "a".repeat(64);
+  let installed = "new-native";
+  const execution = {
+    requestStop() {},
+    describe: () => ({ native_pid: 1, native_phase: "running" }),
+    waitForExit: async () => {},
+  } as unknown as ClaudeExecution;
+  const f = fixture(true, {
+    managed: true,
+    execution,
+    code: { revision, current: () => revision },
+    native: { revision: "old-native", current: () => installed },
+  });
+  const request = { link_id: "link", revision, native_revision: installed };
+  try {
+    await f.bind("t1", true);
+    f.state("running");
+    await tick();
+    expect(await f.runner.handle("update", request)).toEqual({ pending: true });
+    expect(f.closes()).toBe(0);
+    f.state("idle");
+    await tick();
+    expect(await f.runner.handle("update", request)).toMatchObject({
+      ready: true,
+    });
+    installed = "another-native";
+    await expect(f.runner.handle("update_commit", request)).rejects.toThrow();
+    expect(f.runner.describe().bound).toBe(true);
+    expect(f.closes()).toBe(0);
+    expect(f.inputs).toHaveLength(0);
+  } finally {
+    f.runner.agent.close();
+  }
+});
+
+test("an integration update still accepts the existing protocol without a native revision", async () => {
+  const revision = "b".repeat(64);
+  const execution = {
+    requestStop() {},
+    describe: () => ({ native_pid: 1, native_phase: "running" }),
+    waitForExit: async () => {},
+  } as unknown as ClaudeExecution;
+  const f = fixture(true, {
+    managed: true,
+    execution,
+    code: { revision: "a".repeat(64), current: () => revision },
+  });
+  const request = { link_id: "link", revision };
+  try {
+    await f.bind("t1", true);
+    expect(await f.runner.handle("update", request)).toMatchObject({
+      ready: true,
+    });
+    expect(await f.runner.handle("update_commit", request)).toEqual({
+      updating: true,
+    });
+    expect(f.closes()).toBe(1);
+    expect(f.starts).toHaveLength(1);
+    expect(f.inputs).toHaveLength(0);
+  } finally {
+    f.runner.agent.close();
+  }
+});
+
+test("a model catalog initializes the chosen executable without sending input, saving a session or running integrations", async () => {
+  const inputs: SDKUserMessage[] = [];
+  let options!: Options;
+  let drained!: Promise<void>;
+  let closes = 0;
+  let disposed = 0;
+  const start: StartQuery = ({ prompt, options: given }) => {
+    options = given;
+    drained = (async () => {
+      for await (const input of prompt) inputs.push(input);
+    })();
+    return {
+      supportedModels: async () => [
+        {
+          value: "native-alias",
+          resolvedModel: "native-version",
+          displayName: "A model",
+          supportedEffortLevels: ["high"],
+        },
+      ],
+      close: () => {
+        closes++;
+      },
+      return: async () => {
+        disposed++;
+        return { done: true, value: undefined };
+      },
+    } as unknown as Query;
+  };
+  const models = await catalog(start, "/project", "/installed/claude");
+  await drained;
+  expect(options).toMatchObject({
+    cwd: "/project",
+    pathToClaudeCodeExecutable: "/installed/claude",
+    persistSession: false,
+    tools: [],
+    mcpServers: {},
+    strictMcpConfig: true,
+    settings: { disableAllHooks: true },
+  });
+  expect(options.resume).toBeUndefined();
+  expect(options.sessionId).toBeUndefined();
+  expect(inputs).toHaveLength(0);
+  expect(
+    models.map(({ value, resolved_model, efforts }) => ({
+      value,
+      resolved_model,
+      efforts,
+    })),
+  ).toEqual([
+    {
+      value: "native-alias",
+      resolved_model: "native-version",
+      efforts: ["high"],
+    },
+  ]);
+  expect(closes).toBe(1);
+  expect(disposed).toBe(1);
+});
+
+test("a failed or timed out catalog disposes its native query and closes the empty input", async () => {
+  for (const fail of [true, false]) {
+    let closed = 0;
+    let drained!: Promise<IteratorResult<SDKUserMessage>>;
+    const start: StartQuery = ({ prompt }) => {
+      drained = prompt[Symbol.asyncIterator]().next();
+      return {
+        supportedModels: () =>
+          fail
+            ? Promise.reject(new Error("Unavailable"))
+            : new Promise(() => {}),
+        close: () => {
+          closed++;
+        },
+        return: async () => ({ done: true, value: undefined }),
+      } as unknown as Query;
+    };
+    await expect(
+      catalog(start, "/project", "/installed/claude", 1),
+    ).rejects.toThrow();
+    expect((await drained).done).toBe(true);
+    expect(closed).toBe(1);
+  }
+});
+
+test("native revisions identify the actual installed file and change when it is replaced", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "zcl-native-")));
+  try {
+    const path = join(root, "claude");
+    await writeFile(path, "first executable");
+    const code = nativeCode(path)!;
+    expect(code.executable).toBe(path);
+    expect(JSON.parse(code.revision)).toHaveLength(3);
+    expect(code.current()).toBe(code.revision);
+    await writeFile(path, "second executable, replaced");
+    expect(code.current()).not.toBe(code.revision);
+    await writeFile(path, "");
+    expect(nativeCode(path)).toBeUndefined();
+    expect(() => code.current()).toThrow();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

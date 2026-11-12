@@ -1,4 +1,5 @@
 import { mkdir, realpath } from "node:fs/promises";
+import { realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, join } from "node:path";
 import {
@@ -27,7 +28,7 @@ import { ClaudeAgent, type StartQuery } from "./agent.ts";
 import { acquireSessionLock } from "@zerolux/bridge/session-lock";
 import { waitAndExec } from "@zerolux/bridge/exec-gate";
 import { ClaudeExecution } from "./execution.ts";
-import { PERMISSION_MODES } from "./settings.ts";
+import { modelOptions, PERMISSION_MODES } from "./settings.ts";
 
 export interface Subscriber {
   start(executable: string, base: string, token: string): Promise<void>;
@@ -42,6 +43,8 @@ export interface RunnerDeps {
   /** The same SDK child, guarded by this host's existing exclusive lease. */
   execution?: ClaudeExecution;
   code?: IntegrationCode;
+  /** The native executable this runner started, and the currently installed one. */
+  native?: IntegrationCode;
 }
 export interface RunnerConfig {
   nativeSessionId: string;
@@ -76,6 +79,7 @@ export class Runner {
   private started = false;
   private startupFailed = false;
   private updateTarget?: string;
+  private updateNativeTarget?: string;
   private updatePrepared?: NativeAgentSettings;
   private readonly initial: NativeSettingsPatch;
   private stopped = false;
@@ -125,6 +129,7 @@ export class Runner {
           : []),
       ],
       integration_revision: this.deps.code?.revision,
+      native_revision: this.deps.native?.revision,
       settings: this.agent.settings.values(),
       title: `Claude Code — ${basename(this.config.workspace)}`,
       busy: this.agent.busy,
@@ -270,6 +275,7 @@ export class Runner {
 
   private cancelUpdate() {
     this.updateTarget = undefined;
+    this.updateNativeTarget = undefined;
     this.updatePrepared = undefined;
     if (!this.stopRequested) this.agent.bridge.resumeInput();
   }
@@ -277,18 +283,29 @@ export class Runner {
   private async prepareUpdate(request: Record<string, unknown>) {
     const code = this.deps.code;
     const revision = request.revision;
+    const nativeRevision = request.native_revision;
     if (
       !this.config.managed ||
       !this.deps.execution ||
       !code ||
       typeof revision !== "string" ||
-      !/^[a-f0-9]{64}$/.test(revision)
+      !/^[a-f0-9]{64}$/.test(revision) ||
+      (nativeRevision !== undefined &&
+        (typeof nativeRevision !== "string" || !nativeRevision))
     )
       throw new Error("Unsupported integration update");
     if (this.stopRequested || !this.transport.bound)
       throw new Error("The session is not connected");
     try {
-      if (revision === code.revision || code.current() !== revision) {
+      const nativeChanged =
+        nativeRevision !== undefined &&
+        nativeRevision !== this.deps.native?.revision;
+      if (
+        (!nativeChanged && revision === code.revision) ||
+        code.current() !== revision ||
+        (nativeRevision !== undefined &&
+          this.deps.native?.current() !== nativeRevision)
+      ) {
         this.cancelUpdate();
         return { pending: false };
       }
@@ -302,6 +319,7 @@ export class Runner {
       )
         return { pending: true };
       this.updateTarget = revision;
+      this.updateNativeTarget = nativeRevision as string | undefined;
       this.updatePrepared = undefined;
       if (!(await this.agent.prepareUpdate())) return { pending: true };
       const { values } = await this.agent.settings.read();
@@ -314,7 +332,9 @@ export class Runner {
       if (
         this.stopRequested ||
         !this.agent.updateReady ||
-        code.current() !== revision
+        code.current() !== revision ||
+        (nativeRevision !== undefined &&
+          this.deps.native?.current() !== nativeRevision)
       )
         throw new Error("The integration update checkpoint changed");
       this.updatePrepared = { ...values };
@@ -332,6 +352,7 @@ export class Runner {
       !this.transport.bound ||
       !checkpoint ||
       request.revision !== this.updateTarget ||
+      request.native_revision !== this.updateNativeTarget ||
       !this.agent.updateReady
     )
       throw new Error("The integration update is not ready");
@@ -343,6 +364,8 @@ export class Runner {
         !this.transport.bound ||
         !this.agent.updateReady ||
         this.deps.code?.current() !== this.updateTarget ||
+        (this.updateNativeTarget !== undefined &&
+          this.deps.native?.current() !== this.updateNativeTarget) ||
         values.model !== checkpoint.model ||
         values.effort !== checkpoint.effort ||
         values.permission_mode !== checkpoint.permission_mode
@@ -680,6 +703,77 @@ export function resolveClaudeExecutable(
   );
 }
 
+/** The installed file's identity, shared with the kernel without executing Claude. */
+export function nativeCode(
+  executable: string,
+): (IntegrationCode & { executable: string }) | undefined {
+  const current = () => {
+    const path = realpathSync(executable);
+    const file = statSync(path, { bigint: true });
+    if (!file.isFile() || file.size === 0n)
+      throw new Error("The installed Claude executable is incomplete");
+    return JSON.stringify([
+      path,
+      file.size.toString(),
+      (file.mtimeNs / 1_000_000n).toString(),
+    ]);
+  };
+  try {
+    const revision = current();
+    return { revision, current, executable: JSON.parse(revision)[0] as string };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Initialize the installed harness for its catalog, without a prompt or saved session. */
+export async function catalog(
+  start: StartQuery,
+  workspace: string,
+  executable: string,
+  timeoutMs = 20_000,
+) {
+  const abortController = new AbortController();
+  let finish!: () => void;
+  const stopped = new Promise<void>((resolve) => (finish = resolve));
+  const prompt = {
+    async *[Symbol.asyncIterator]() {
+      await stopped;
+    },
+  };
+  const native = start({
+    prompt,
+    options: {
+      cwd: workspace,
+      pathToClaudeCodeExecutable: executable,
+      abortController,
+      persistSession: false,
+      tools: [],
+      mcpServers: {},
+      strictMcpConfig: true,
+      settings: { disableAllHooks: true },
+    },
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const models = await Promise.race([
+      native.supportedModels(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          abortController.abort();
+          reject(new Error("Claude's model catalog timed out"));
+        }, timeoutMs);
+      }),
+    ]);
+    return modelOptions(models);
+  } finally {
+    clearTimeout(timer);
+    finish();
+    native.close();
+    await native.return(undefined);
+  }
+}
+
 function isMusl(): boolean {
   if (process.platform !== "linux") return false;
   const report = (
@@ -705,7 +799,15 @@ export async function fork(session: string, folder: string, upTo?: string) {
 }
 
 if (import.meta.main && process.argv[2] === "exec") waitAndExec("Claude Code");
-else if (import.meta.main && process.argv[2] === "fork") {
+else if (import.meta.main && process.argv[2] === "catalog") {
+  catalog(query, process.cwd(), resolveClaudeExecutable()).then(
+    (models) => console.log(JSON.stringify(models)),
+    (error: unknown) => {
+      console.error(error instanceof Error ? error.message : "Catalog failed");
+      process.exitCode = 1;
+    },
+  );
+} else if (import.meta.main && process.argv[2] === "fork") {
   const [session, upTo] = process.argv.slice(3);
   fork(session!, process.cwd(), upTo || undefined).then(
     (id) => console.log(JSON.stringify({ session_id: id })),
@@ -717,9 +819,11 @@ else if (import.meta.main && process.argv[2] === "fork") {
 } else if (import.meta.main) {
   const managed = process.env.ZEROLUX_CLAUDE_MANAGED === "1";
   // Resolve the installed executable once for this managed host.
-  let pinned: string | undefined;
+  const native = managed ? nativeCode(resolveClaudeExecutable()) : undefined;
+  let pinned: string | undefined = native?.executable;
   const executable = () => (pinned ??= resolveClaudeExecutable());
   launch({
+    native,
     start: (parameters) =>
       query({
         ...parameters,
