@@ -3,6 +3,7 @@ import type {
   SDKMessage,
   PermissionMode,
   EffortLevel,
+  ModelInfo,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   checkModelChoice,
@@ -21,6 +22,23 @@ export const PERMISSION_MODES: PermissionMode[] = [
 
 /** getSettings is implemented by the pinned SDK but omitted from its public declaration. */
 type SettingsQuery = Query & { getSettings?: () => Promise<unknown> };
+
+export function modelOptions(models: ModelInfo[]) {
+  return models.map((model) => ({
+    value: model.value,
+    label: model.displayName,
+    ...(model.resolvedModel ? { resolved_model: model.resolvedModel } : {}),
+    efforts: model.supportedEffortLevels ?? [],
+  }));
+}
+
+/** A native model ID can be valid before it appears in the discovery catalog. */
+function checkChoice(
+  snapshot: NativeSettingsSnapshot,
+  patch: ReturnType<typeof settingsPatch>,
+) {
+  if (patch.effort !== undefined) checkModelChoice(snapshot, patch);
+}
 
 export class ClaudeSettings {
   private current: NativeAgentSettings = {
@@ -76,12 +94,7 @@ export class ClaudeSettings {
     this.current.effort = applied.effort;
     return {
       values: this.values(),
-      models: models.map((model) => ({
-        value: model.value,
-        label: model.displayName,
-        ...(model.resolvedModel ? { resolved_model: model.resolvedModel } : {}),
-        efforts: model.supportedEffortLevels ?? [],
-      })),
+      models: modelOptions(models),
       editable: ["model", "effort", "permission_mode"],
     };
   }
@@ -89,7 +102,6 @@ export class ClaudeSettings {
   async verifyStart(input: unknown) {
     const snapshot = await this.read();
     const patch = settingsPatch(input, ["model", "effort"]);
-    checkModelChoice(snapshot, patch);
     confirmSettings(snapshot, patch);
     return snapshot;
   }
@@ -97,7 +109,7 @@ export class ClaudeSettings {
   async apply(input: unknown, check = false) {
     const before = await this.read();
     const patch = settingsPatch(input, before.editable);
-    checkModelChoice(before, patch);
+    checkChoice(before, patch);
     if (
       patch.permission_mode !== undefined &&
       !PERMISSION_MODES.includes(patch.permission_mode as PermissionMode)
@@ -106,12 +118,10 @@ export class ClaudeSettings {
     if (check) return before;
     const query = this.query();
     if (!query) throw new Error("The native Claude session ended");
-    if (patch.model !== undefined || patch.effort !== undefined)
+    if (patch.model !== undefined) await query.setModel(patch.model);
+    if (patch.effort !== undefined)
       await query.applyFlagSettings({
-        ...(patch.model !== undefined ? { model: patch.model } : {}),
-        ...(patch.effort !== undefined
-          ? { effortLevel: patch.effort as EffortLevel }
-          : {}),
+        effortLevel: patch.effort as EffortLevel,
       });
     if (patch.permission_mode !== undefined) {
       await query.setPermissionMode(patch.permission_mode as PermissionMode);
