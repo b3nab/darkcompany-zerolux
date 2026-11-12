@@ -46,11 +46,14 @@ impl Control {
 }
 
 fn integration_needs_update(actual: &Value, revision: &str, native: Option<&str>) -> bool {
-    (actual["integration_revision"].as_str() != Some(revision)
-        || native.is_some_and(|revision| actual["native_revision"].as_str() != Some(revision)))
-        && actual["capabilities"]
-            .as_array()
-            .is_some_and(|items| items.iter().any(|item| item == "integration-update-v1"))
+    actual["integration_revision"].as_str() != Some(revision)
+        || native.is_some_and(|revision| actual["native_revision"].as_str() != Some(revision))
+}
+
+fn supports_integration_target(actual: &Value) -> bool {
+    actual["capabilities"]
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item == "integration-target-v1"))
 }
 
 fn update_was_cancelled(actual: &Value, instance: &str) -> bool {
@@ -85,11 +88,20 @@ impl ChatRuntime {
             }
             Control::Claude(link) => link.describe().await?,
         };
-        let Some(revision) = self
-            .integration_revisions
-            .get(session.harness.as_str())
-            .map(String::as_str)
-            .or_else(|| actual["integration_revision"].as_str())
+        let target = if session.harness == "claude-code" {
+            Some(self.claude_target(session).await?)
+        } else {
+            None
+        };
+        let Some(revision) = target
+            .as_ref()
+            .and_then(|target| target["revision"].as_str())
+            .or_else(|| {
+                self.integration_revisions
+                    .get(session.harness.as_str())
+                    .map(String::as_str)
+                    .or_else(|| actual["integration_revision"].as_str())
+            })
         else {
             return Ok(false);
         };
@@ -101,8 +113,21 @@ impl ChatRuntime {
         if !integration_needs_update(&actual, revision, native.as_deref()) {
             return Ok(false);
         }
+        if matches!(control, Control::Claude(_)) {
+            if !supports_integration_target(&actual) {
+                return Ok(false);
+            }
+        } else if !actual["capabilities"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item == "integration-update-v1"))
+        {
+            return Ok(false);
+        }
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
         let mut request = json!({"method":"update","link_id":session.id,"revision":revision});
+        if let Some(target) = &target {
+            request["entry"] = target["entry"].clone();
+        }
         if let Some(native) = &native {
             request["native_revision"] = json!(native);
         }
@@ -117,7 +142,8 @@ impl ChatRuntime {
                     .as_str()
                     .context("Missing helper identity")?;
                 let saved = self.store.chat_session_locator(who, &session.id).await?;
-                let checkpoint = serde_json::to_string(&(revision, &native))?;
+                let entry = target.as_ref().and_then(|target| target["entry"].as_str());
+                let checkpoint = serde_json::to_string(&(revision, &native, entry))?;
                 if saved["integration_update"]
                     == json!({"instance_id":instance,"revision":checkpoint})
                 {
@@ -170,6 +196,9 @@ impl ChatRuntime {
                     );
                     let mut commit =
                         json!({"method":"update_commit","link_id":session.id,"revision":revision});
+                    if let Some(entry) = entry {
+                        commit["entry"] = json!(entry);
+                    }
                     if let Some(native) = &native {
                         commit["native_revision"] = json!(native);
                     }
@@ -196,6 +225,13 @@ impl ChatRuntime {
                 self.hosts.call(&host, "claude.revision", json!({})).await?,
             )?),
             None => self.runners.native_revision(),
+        }
+    }
+
+    async fn claude_target(&self, session: &ChatSession) -> Result<Value> {
+        match self.remote_host(session) {
+            Some(host) => self.hosts.call(&host, "claude.target", json!({})).await,
+            None => self.runners.target(),
         }
     }
 
@@ -518,12 +554,10 @@ impl ChatRuntime {
             };
             if let Ok(actual) = link.describe().await {
                 let native = self.claude_revision(&current).await?;
-                let revision = self
-                    .integration_revisions
-                    .get("claude-code")
-                    .map(String::as_str)
-                    .or_else(|| actual["integration_revision"].as_str())
-                    .unwrap_or_default();
+                let target = self.claude_target(&current).await?;
+                let revision = target["revision"]
+                    .as_str()
+                    .context("Missing installed integration revision")?;
                 if !integration_needs_update(&actual, revision, native.as_deref()) {
                     let pending_host = match self.remote_host(&current) {
                         Some(host) if committed => {
@@ -549,6 +583,10 @@ impl ChatRuntime {
                     }
                 }
                 if !committed {
+                    ensure!(
+                        supports_integration_target(&actual),
+                        "This session was started by an earlier app version. Use Stop, then Resume on this same session to update it before changing its model. Its history will be kept"
+                    );
                     committed = self.update_integration(who, &current, &control).await?;
                 }
             } else if committed {
@@ -743,7 +781,7 @@ mod tests {
         assert!(!integration_needs_update(&actual, "helper", None));
         assert!(integration_needs_update(&actual, "updated-helper", None));
         actual["capabilities"] = json!([]);
-        assert!(!integration_needs_update(
+        assert!(integration_needs_update(
             &actual,
             "updated-helper",
             Some("new")
