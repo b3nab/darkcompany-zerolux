@@ -1,4 +1,5 @@
 import { FolderInput } from "./folder-input";
+import { ModelSelect } from "@/components/model-select";
 import { useEffect, useState } from "react";
 import type { ReactNode, SubmitEvent } from "react";
 import { Link } from "react-router";
@@ -316,7 +317,12 @@ export function StartSession({
   // Codex: unset means Codex's own settings, never a choice made for the owner.
   const [policy, setPolicy] = useState<CodexApprovalPolicy | "">("");
   const [sandbox, setSandbox] = useState<CodexSandbox | "">("");
-  const catalog = useSessionCatalog(harness);
+  const catalog = useSessionCatalog(
+    harness,
+    undefined,
+    where || undefined,
+    workspace,
+  );
   const launchFields = agentSettingFields(
     harness,
     catalog.data?.models ?? [],
@@ -521,33 +527,48 @@ export function StartSession({
         )}
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
-        {launchFields.map(({ key, label, options }) => (
+        {launchFields.map(({ key, label, options, custom }) => (
           <div key={key} className="flex flex-col gap-2">
             <Label htmlFor={`start-${key}`}>{label} · optional</Label>
-            <NativeSelect
-              id={`start-${key}`}
-              value={key === "model" ? model : effort}
-              disabled={
-                busy || catalog.loading || Object.keys(options).length === 0
-              }
-              onChange={(event) => {
-                if (key === "model") {
-                  setModel(event.target.value);
+            {key === "model" ? (
+              <ModelSelect
+                id="start-model"
+                value={model}
+                models={catalog.data?.models ?? []}
+                custom={custom}
+                disabled={busy || (catalog.loading && !catalog.data)}
+                none={
+                  pick === NO_AGENT
+                    ? "Harness choice"
+                    : "Agent or harness choice"
+                }
+                onOpen={catalog.refresh}
+                onChange={(value) => {
+                  setModel(value);
                   setEffort("");
-                } else setEffort(event.target.value);
-              }}
-            >
-              <NativeSelectOption value="">
-                {pick === NO_AGENT
-                  ? "Harness choice"
-                  : "Agent or harness choice"}
-              </NativeSelectOption>
-              {Object.entries(options).map(([value, label]) => (
-                <NativeSelectOption key={value} value={value}>
-                  {label}
+                }}
+              />
+            ) : (
+              <NativeSelect
+                id={`start-${key}`}
+                value={effort}
+                disabled={
+                  busy || catalog.loading || Object.keys(options).length === 0
+                }
+                onChange={(event) => setEffort(event.target.value)}
+              >
+                <NativeSelectOption value="">
+                  {pick === NO_AGENT
+                    ? "Harness choice"
+                    : "Agent or harness choice"}
                 </NativeSelectOption>
-              ))}
-            </NativeSelect>
+                {Object.entries(options).map(([value, label]) => (
+                  <NativeSelectOption key={value} value={value}>
+                    {label}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            )}
           </div>
         ))}
       </div>
@@ -986,7 +1007,8 @@ export function AgentSettingsForm({
   const models = native.data?.models ?? [];
   const [changes, setChanges] = useState<AgentSettings>({});
   const model = changes.model ?? current.model;
-  const locked = busy || native.loading || Boolean(native.error);
+  const locked =
+    busy || (native.loading && !native.data) || Boolean(native.error);
   const fields = agentSettingFields(agent.harness, models, model);
   const applicable = canApplyAgentSettings(
     changes,
@@ -1015,7 +1037,7 @@ export function AgentSettingsForm({
           Reading native settings…
         </p>
       )}
-      {fields.map(({ key, label, options }) => {
+      {fields.map(({ key, label, options, custom }) => {
         let value = changes[key] ?? current[key] ?? "";
         if (
           key === "effort" &&
@@ -1023,50 +1045,59 @@ export function AgentSettingsForm({
           !Object.hasOwn(options, value)
         )
           value = "";
+        const change = (value: string) =>
+          setChanges((previous) => {
+            const next = { ...previous, [key]: value };
+            if (
+              key === "model" &&
+              next.effort &&
+              !agentModelOption(models, value)?.efforts.includes(next.effort)
+            )
+              delete next.effort;
+            return next;
+          });
         return (
           <div key={key} className="flex flex-col gap-2">
             <Label htmlFor={`agent-setting-${key}`}>{label}</Label>
-            <NativeSelect
-              id={`agent-setting-${key}`}
-              className="w-full"
-              value={value}
-              disabled={
-                locked ||
-                !native.data?.editable.includes(key) ||
-                Object.keys(options).length === 0
-              }
-              onChange={(event) => {
-                const value = event.target.value;
-                setChanges((previous) => {
-                  const next = { ...previous, [key]: value };
-                  if (
-                    key === "model" &&
-                    next.effort &&
-                    !agentModelOption(models, value)?.efforts.includes(
-                      next.effort,
-                    )
-                  )
-                    delete next.effort;
-                  return next;
-                });
-              }}
-            >
-              <NativeSelectOption value="" disabled>
-                {changes.model && key === "effort"
-                  ? "Native choice"
-                  : "Harness default"}
-              </NativeSelectOption>
-              {value && !Object.hasOwn(options, value) && (
-                <NativeSelectOption value={value} disabled>
-                  {value}
+            {key === "model" ? (
+              <ModelSelect
+                id="agent-setting-model"
+                value={value}
+                models={models}
+                custom={custom}
+                disabled={locked || !native.data?.editable.includes(key)}
+                onOpen={native.refresh}
+                onChange={change}
+              />
+            ) : (
+              <NativeSelect
+                id={`agent-setting-${key}`}
+                className="w-full"
+                value={value}
+                disabled={
+                  locked ||
+                  !native.data?.editable.includes(key) ||
+                  Object.keys(options).length === 0
+                }
+                onChange={(event) => change(event.target.value)}
+              >
+                <NativeSelectOption value="" disabled>
+                  {changes.model && key === "effort"
+                    ? "Native choice"
+                    : "Harness default"}
                 </NativeSelectOption>
-              )}
-              {Object.entries(options).map(([value, label]) => (
-                <NativeSelectOption key={value} value={value}>
-                  {label}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
+                {value && !Object.hasOwn(options, value) && (
+                  <NativeSelectOption value={value} disabled>
+                    {value}
+                  </NativeSelectOption>
+                )}
+                {Object.entries(options).map(([value, label]) => (
+                  <NativeSelectOption key={value} value={value}>
+                    {label}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            )}
           </div>
         );
       })}
