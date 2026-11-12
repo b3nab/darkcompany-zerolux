@@ -180,8 +180,23 @@ jobs:
           tauriScript: bun x --bun tauri
           tagName: ${{ needs.draft.outputs.tag }}
           releaseDraft: true
-          args: --config ${{ runner.temp }}/zerolux-tauri.json --target ${{ matrix.target }} --verbose
+          args: --config ${{ runner.temp }}/zerolux-tauri.json --target ${{ matrix.target }} --verbose ${{ runner.os == 'Linux' && '--bundles appimage,deb' || '' }}
           updaterJsonPreferNsis: true
+      # RPM separates the numeric version and the prerelease. Package the same executable;
+      # the app and signed update feed keep their full release version.
+      - name: Bundle and upload the RPM
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.draft.outputs.tag }}
+        run: |
+          bun ../../scripts/release-ci.ts rpm-config "$RUNNER_TEMP/zerolux-rpm.json"
+          bun x --bun tauri bundle --config "$RUNNER_TEMP/zerolux-rpm.json" --target ${{ matrix.target }} --bundles rpm
+          for file in "$CARGO_TARGET_DIR/${{ matrix.target }}/release/bundle/rpm/"*.rpm; do
+            bun x --bun tauri signer sign --app-version "$ZEROLUX_BUILD_VERSION" "$file"
+            gh release upload "$TAG" "$file" "$file.sig" --clobber
+          done
       # One file: the kernel with its web app, sign-in, runners, Bun and LiveKit server inside.
       # Both packages resolve their dependencies as the app's build did, and on macOS for the
       # same oldest system, so only the kernel's own program is compiled.
@@ -336,7 +351,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          gh release download "$TAG" --pattern build.json --pattern latest.json --pattern 'zerolux-*.sig' --dir "$RUNNER_TEMP/feed"
+          gh release download "$TAG" --pattern build.json --pattern latest.json --pattern 'zerolux-*.sig' --pattern '*.rpm.sig' --dir "$RUNNER_TEMP/feed"
           gh release view "$TAG" --json body --jq .body > "$RUNNER_TEMP/feed/notes.md"
           bun scripts/release-ci.ts feed "$RUNNER_TEMP/feed"
           cd apps/desktop

@@ -50,9 +50,11 @@ certificates and the Android keystore.
 The workflow runs the full CI checks beside the builds, and publishes only once they pass. Each
 system's job builds the desktop installers and then, from the same compiled dependencies, the
 kernel; the Intel Mac builds are made on Apple silicon, carrying Intel's Bun, uv and LiveKit
-server. Android builds beside them. Windows MSI keeps a separate numeric version; the update
-feed compares the full release version. Kernel binaries and desktop update bundles are signed
-with their release version.
+server. Android builds beside them. Windows MSI keeps a separate numeric version. Linux RPM
+uses the numeric version and a separate release field (`0.alpha.DATE.N`, `0.beta.N`, `0.rc.N`,
+then `1` for stable), packaging the same compiled executable. Its signed RPM has a dedicated
+update target. The app and update feed keep the full release version. Kernel binaries and
+desktop update bundles are signed with that full version.
 
 Release builds use `target/desktop/<target>/release`, separately from the CLI's
 `target/release` in a checkout. Tauri packages the desktop's main executable as `zerolux` and
