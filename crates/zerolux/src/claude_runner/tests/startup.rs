@@ -54,6 +54,7 @@ setTimeout(() => process.exit(0), 20000); // Only this disposable fake host; no 
         let program = RunnerProgram {
             bun: wrapper,
             entry,
+            sdk_executable: None,
             ..RunnerProgram::default()
         };
         let registry = Registry::new(root.path().join("links"), program);
