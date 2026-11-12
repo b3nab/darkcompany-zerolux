@@ -203,15 +203,21 @@ export class Runner {
         throw new Error(
           "The integration is updating; refresh before changing settings",
         );
-      return {
-        settings:
-          request.values === undefined
-            ? await this.agent.settings.read()
-            : await this.agent.settings.apply(
-                request.values,
-                request.check === true,
-              ),
-      };
+      const refresh = request.check !== true;
+      if (refresh) this.agent.invalidateUsage();
+      try {
+        return {
+          settings:
+            request.values === undefined
+              ? await this.agent.settings.read()
+              : await this.agent.settings.apply(
+                  request.values,
+                  request.check === true,
+                ),
+        };
+      } finally {
+        if (refresh) await this.agent.reportUsage();
+      }
     }
     if (method === "input") {
       if (this.stopRequested || !this.transport.bound)
@@ -523,6 +529,7 @@ export class Runner {
     // Rebinding after a kernel restart invalidates its earlier update preparation.
     // Reopen admission only now that the new token and native startup are confirmed.
     if (this.updateTarget) this.cancelUpdate();
+    void this.agent.reportUsage();
     void this.agent.refresh();
     return { link_id: this.identity.id };
   }

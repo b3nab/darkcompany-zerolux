@@ -224,6 +224,7 @@ export class ClaudeAgent {
   }
 
   close() {
+    this.invalidateUsage();
     this.input.close();
     this.query?.close();
     for (const resolve of this.waiting.values())
@@ -346,14 +347,29 @@ export class ClaudeAgent {
 
   /** What the session has cost so far, as its last result said. */
   private cost?: number;
+  private usageRevision = 0;
+
+  /** A settings change makes any context measurement already in flight obsolete. */
+  invalidateUsage() {
+    this.usageRevision++;
+  }
 
   /** How full the context is now, and the cost so far. */
-  private async reportUsage() {
-    // Reading Claude Code's counts never gets in the way of the turn's end.
-    const usage = await Promise.resolve()
-      .then(() => this.query?.getContextUsage({ detail: "summary" }))
-      .catch(() => undefined);
-    if (!usage && this.cost === undefined) return;
+  async reportUsage() {
+    const revision = ++this.usageRevision;
+    const query = this.query;
+    if (!query) return;
+    // Summary is local; an unavailable counter must not stall confirmed settings.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const usage = await Promise.race([
+      Promise.resolve()
+        .then(() => query.getContextUsage({ detail: "summary" }))
+        .catch(() => undefined),
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), 5000);
+      }),
+    ]).finally(() => clearTimeout(timer));
+    if (revision !== this.usageRevision || query !== this.query) return;
     this.bridge.live({
       type: "usage",
       context_tokens: usage?.totalTokens ?? null,
