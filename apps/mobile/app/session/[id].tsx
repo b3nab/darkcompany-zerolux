@@ -40,6 +40,7 @@ import {
   MAX_INPUT_IMAGES,
   saveDraft,
   agentSettingFields,
+  agentModelValue,
   blockRuns,
   commandsFor,
   densityLabels,
@@ -1129,7 +1130,8 @@ function SettingsPill({
   const fields = agentSettingFields(harness, models, values.model);
   const plan = planMode(harness, values, editable);
   const named = (key: "model" | "effort") => {
-    const value = values[key];
+    const value =
+      key === "model" ? agentModelValue(models, values.model) : values[key];
     return value
       ? (fields.find((field) => field.key === key)?.options[value] ?? value)
       : undefined;
@@ -1199,6 +1201,10 @@ function SessionSheet({
   );
   const plan = planMode(harness, values, editable);
   const share = contextShare(usage);
+  const refresh = settings.refresh;
+  useEffect(() => {
+    if (visible) refresh();
+  }, [visible, refresh]);
   const apply = (change: AgentSettings) => {
     setError("");
     settings.apply(change).catch((e: unknown) => setError(errorMessage(e)));
@@ -1234,14 +1240,21 @@ function SessionSheet({
           </Pressable>
         </View>
         {editable.length
-          ? fields.map(({ key, label, options }) => (
+          ? fields.map(({ key, label, options, custom }) => (
               <SettingSelect
                 key={key}
                 label={label}
-                value={values[key] ?? ""}
+                value={
+                  key === "model"
+                    ? agentModelValue(settings.data?.models ?? [], values.model)
+                    : (values[key] ?? "")
+                }
                 options={options}
+                custom={custom}
+                onOpen={refresh}
                 disabled={
-                  !editable.includes(key) || Object.keys(options).length === 0
+                  !editable.includes(key) ||
+                  (!custom && Object.keys(options).length === 0)
                 }
                 onChange={(value) => apply({ [key]: value })}
               />

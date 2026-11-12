@@ -8,6 +8,7 @@ import {
   agentSettingFields,
   canApplyAgentSettings,
   agentModelOption,
+  agentModelValue,
   useAgentSettings,
   creationDateLabel,
   errorMessage,
@@ -414,7 +415,8 @@ function AgentSettingsForm({ agent }: { agent: Actor }) {
     native.data?.editable ?? [],
   );
   async function save() {
-    if (busy || native.loading || native.error || !applicable) return;
+    if (busy || (native.loading && !native.data) || native.error || !applicable)
+      return;
     setBusy(true);
     setError("");
     try {
@@ -436,8 +438,9 @@ function AgentSettingsForm({ agent }: { agent: Actor }) {
           Reading native settings…
         </Text>
       )}
-      {fields.map(({ key, label, options }) => {
+      {fields.map(({ key, label, options, custom }) => {
         let value = changes[key] ?? current[key] ?? "";
+        if (key === "model") value = agentModelValue(models, value);
         if (
           key === "effort" &&
           changes.model !== undefined &&
@@ -450,12 +453,14 @@ function AgentSettingsForm({ agent }: { agent: Actor }) {
             label={label}
             value={value}
             options={options}
+            custom={custom}
+            onOpen={native.refresh}
             disabled={
               busy ||
-              native.loading ||
+              (native.loading && !native.data) ||
               Boolean(native.error) ||
               !native.data?.editable.includes(key) ||
-              Object.keys(options).length === 0
+              (!custom && Object.keys(options).length === 0)
             }
             placeholder={
               changes.model && key === "effort" ? "Native choice" : undefined
