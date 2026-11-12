@@ -42,6 +42,10 @@ function fixture(
     subscriberStart?: (executable: string) => void;
     code?: IntegrationCode;
     native?: IntegrationCode;
+    context?: (
+      model: string,
+    ) => Promise<{ totalTokens: number; maxTokens: number }>;
+    rejectEffort?: boolean;
   } = {},
 ) {
   const session = {
@@ -124,12 +128,17 @@ function fixture(
 
   const starts: Options[] = [];
   const inputs: SDKUserMessage[] = [];
+  const contextReads: { detail?: string }[] = [];
   let emit!: (m: SDKMessage) => void;
   let interrupts = 0,
     closes = 0;
   const reportedModel = options.appliedModel;
+  const context = options.context;
+  const rejectEffort = options.rejectEffort;
   const start: StartQuery = ({ prompt, options }) => {
     starts.push(options);
+    let model = options.model ?? "native-model";
+    let effort: string = options.effort ?? "high";
     void (async () => {
       for await (const input of prompt) inputs.push(input);
     })();
@@ -160,10 +169,26 @@ function fixture(
         })),
       getSettings: async () => ({
         applied: {
-          model: reportedModel ?? options.model ?? "native-model",
-          effort: options.effort ?? "high",
+          model: reportedModel ?? model,
+          effort,
         },
       }),
+      setModel: async (value: string) => {
+        model = value;
+      },
+      applyFlagSettings: async (values: { effortLevel?: string }) => {
+        if (rejectEffort) throw new Error("native refusal");
+        if (values.effortLevel) effort = values.effortLevel;
+      },
+      getContextUsage: async (options: { detail?: string }) => {
+        contextReads.push(options);
+        return context
+          ? context(model)
+          : {
+              totalTokens: 42_000,
+              maxTokens: model === "other-model" ? 1_000_000 : 200_000,
+            };
+      },
       interrupt: async () => {
         interrupts++;
         return undefined;
@@ -234,6 +259,7 @@ function fixture(
     bind,
     starts,
     inputs,
+    contextReads,
     subscribers,
     interrupts: () => interrupts,
     closes: () => closes,
@@ -299,6 +325,110 @@ test("unconfirmed startup settings cannot dispatch queued input or silently star
     expect(f.calls.filter((call) => call.path.endsWith("/dispatch"))).toEqual(
       [],
     );
+  } finally {
+    f.runner.agent.close();
+  }
+});
+
+test("binding and settings reads refresh native context without a turn or a new query", async () => {
+  let window = 200_000;
+  let fail = false;
+  const f = fixture(false, {
+    context: async (model) => {
+      if (fail) throw new Error("context unavailable");
+      return {
+        totalTokens: 42_000,
+        maxTokens: model === "other-model" ? 1_000_000 : window,
+      };
+    },
+  });
+  const usage = () =>
+    f.calls
+      .flatMap((c) => c.body?.changes ?? [])
+      .filter((change: { type: string }) => change.type === "usage")
+      .at(-1);
+  try {
+    const { link_id } = await f.bind("t1");
+    await tick();
+    expect(usage()).toMatchObject({ context_window: 200_000 });
+    window = 500_000;
+    await f.runner.handle("settings", { link_id });
+    await tick();
+    expect(usage()).toMatchObject({ context_window: 500_000 });
+    await f.runner.handle("settings", {
+      link_id,
+      values: { model: "other-model" },
+    });
+    await tick();
+    expect(usage()).toMatchObject({ context_window: 1_000_000 });
+    const reads = f.contextReads.length;
+    await f.runner.handle("settings", {
+      link_id,
+      values: { model: "native-model" },
+      check: true,
+    });
+    expect(f.contextReads).toHaveLength(reads);
+    expect(f.runner.agent.settings.values().model).toBe("other-model");
+    fail = true;
+    await f.runner.handle("settings", {
+      link_id,
+      values: { model: "native-model" },
+    });
+    await tick();
+    expect(f.runner.agent.settings.values().model).toBe("native-model");
+    expect(usage()).toMatchObject({
+      context_window: null,
+      context_tokens: null,
+    });
+    expect(f.contextReads.every((read) => read.detail === "summary")).toBe(
+      true,
+    );
+    expect(f.inputs).toEqual([]);
+    expect(f.starts).toHaveLength(1);
+  } finally {
+    f.runner.agent.close();
+  }
+});
+
+test("context refresh preserves a setter failure after the model changed", async () => {
+  const f = fixture(false, { rejectEffort: true });
+  try {
+    const { link_id } = await f.bind("t1");
+    await tick();
+    await expect(
+      f.runner.handle("settings", {
+        link_id,
+        values: { model: "other-model", effort: "low" },
+      }),
+    ).rejects.toThrow();
+    await tick();
+    expect((await f.runner.agent.settings.read()).values.model).toBe(
+      "other-model",
+    );
+    const usage = f.calls
+      .flatMap((c) => c.body?.changes ?? [])
+      .filter((change: { type: string }) => change.type === "usage");
+    expect(usage.at(-1)).toMatchObject({ context_window: 1_000_000 });
+    expect(f.inputs).toEqual([]);
+    expect(f.starts).toHaveLength(1);
+  } finally {
+    f.runner.agent.close();
+  }
+});
+
+test("binding does not wait for an unavailable context counter", async () => {
+  let resolve!: (usage: { totalTokens: number; maxTokens: number }) => void;
+  const f = fixture(false, {
+    context: () => new Promise((done) => (resolve = done)),
+  });
+  try {
+    const { link_id } = await f.bind("t1");
+    expect(link_id).toBe("link");
+    expect(f.runner.describe().bound).toBe(true);
+    await tick();
+    resolve({ totalTokens: 42_000, maxTokens: 1_000_000 });
+    await tick();
+    expect(f.inputs).toEqual([]);
   } finally {
     f.runner.agent.close();
   }

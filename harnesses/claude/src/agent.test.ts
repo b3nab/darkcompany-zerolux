@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, jest, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +14,9 @@ import { ClaudeAgent, type StartQuery } from "./agent.ts";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function fixture() {
+function fixture(
+  context = async () => ({ totalTokens: 42_000, maxTokens: 200_000 }),
+) {
   const member = (actor_id: string, name: string, kind: string) => ({
     actor_id,
     name,
@@ -101,6 +103,7 @@ function fixture() {
 
   // The SDK's side: what the runner wrote, and the stream it reads.
   const inputs: SDKUserMessage[] = [];
+  const contextReads: { detail?: string }[] = [];
   let options!: Options;
   let emit!: (message: SDKMessage) => void;
   let interrupts = 0;
@@ -130,10 +133,10 @@ function fixture() {
         filesChanged: [`${id}.txt`],
         insertions: options.dryRun ? 0 : 3,
       }),
-      getContextUsage: async () => ({
-        totalTokens: 42_000,
-        maxTokens: 200_000,
-      }),
+      getContextUsage: async (options: { detail?: string }) => {
+        contextReads.push(options);
+        return context();
+      },
       accountInfo: async () => ({
         email: "ines@example.com",
         subscriptionType: "max",
@@ -200,6 +203,7 @@ function fixture() {
     calls,
     message,
     inputs,
+    contextReads,
     agent,
     state,
     consumed,
@@ -930,6 +934,104 @@ test("how full the context is, and the cost so far, reach ZeroLux when a turn en
     context_window: 200_000,
     cost_usd: 0.25,
   });
+});
+
+test.each([false, true])(
+  "a measurement from before a settings change is discarded (finishes after refresh=%s)",
+  async (after) => {
+    let resolve!: (usage: { totalTokens: number; maxTokens: number }) => void;
+    const pending = new Promise<{ totalTokens: number; maxTokens: number }>(
+      (done) => (resolve = done),
+    );
+    let reads = 0;
+    const f = fixture(async () =>
+      ++reads === 1 ? pending : { totalTokens: 42_000, maxTokens: 1_000_000 },
+    );
+    try {
+      await f.start();
+      const old = f.agent.reportUsage();
+      await tick();
+      f.agent.invalidateUsage();
+      const usage = () =>
+        f.calls
+          .flatMap((c) => c.body?.changes ?? [])
+          .filter((change: { type: string }) => change.type === "usage");
+      if (!after) {
+        resolve({ totalTokens: 40_000, maxTokens: 200_000 });
+        await old;
+        expect(usage()).toEqual([]);
+      }
+      await f.agent.reportUsage();
+      if (after) {
+        resolve({ totalTokens: 40_000, maxTokens: 200_000 });
+        await old;
+      }
+      await tick();
+      expect(usage()).toEqual([
+        {
+          type: "usage",
+          context_tokens: 42_000,
+          context_window: 1_000_000,
+          cost_usd: null,
+        },
+      ]);
+      expect(f.contextReads).toEqual([
+        { detail: "summary" },
+        { detail: "summary" },
+      ]);
+      expect(f.inputs).toEqual([]);
+    } finally {
+      f.agent.close();
+    }
+  },
+);
+
+test("closing a query discards its pending context measurement", async () => {
+  let resolve!: (usage: { totalTokens: number; maxTokens: number }) => void;
+  const f = fixture(() => new Promise((done) => (resolve = done)));
+  await f.start();
+  const pending = f.agent.reportUsage();
+  await tick();
+  f.agent.close();
+  resolve({ totalTokens: 42_000, maxTokens: 200_000 });
+  await pending;
+  expect(
+    f.calls
+      .flatMap((c) => c.body?.changes ?? [])
+      .filter((change: { type: string }) => change.type === "usage"),
+  ).toEqual([]);
+});
+
+test("a context read has a deadline and its late answer cannot replace unknown usage", async () => {
+  let resolve!: (usage: { totalTokens: number; maxTokens: number }) => void;
+  const f = fixture(() => new Promise((done) => (resolve = done)));
+  await f.start();
+  jest.useFakeTimers();
+  try {
+    const pending = f.agent.reportUsage();
+    await Promise.resolve();
+    jest.advanceTimersByTime(5000);
+    await pending;
+    resolve({ totalTokens: 42_000, maxTokens: 200_000 });
+    jest.useRealTimers();
+    await tick();
+    const usage = f.calls
+      .flatMap((c) => c.body?.changes ?? [])
+      .filter((change: { type: string }) => change.type === "usage");
+    expect(usage).toEqual([
+      {
+        type: "usage",
+        context_tokens: null,
+        context_window: null,
+        cost_usd: null,
+      },
+    ]);
+    expect(f.contextReads).toEqual([{ detail: "summary" }]);
+    expect(f.inputs).toEqual([]);
+  } finally {
+    f.agent.close();
+    jest.useRealTimers();
+  }
 });
 
 test("a compaction is reported while it runs, inside a turn or between turns", async () => {
