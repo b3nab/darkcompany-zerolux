@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Installed integration code, not native configuration, credentials or session files. */
@@ -36,7 +36,11 @@ export function integrationCode(url: string) {
   try {
     return {
       revision: integrationRevision(entry),
-      current: () => integrationRevision(entry),
+      current: (target = entry) => {
+        if (!isAbsolute(target))
+          throw new Error("An integration entry must be absolute");
+        return integrationRevision(target);
+      },
     };
   } catch {
     // An unverifiable installation is not permission to close native execution.

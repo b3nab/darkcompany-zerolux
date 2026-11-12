@@ -1,7 +1,7 @@
 import { mkdir, realpath } from "node:fs/promises";
 import { realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import {
   forkSession,
   getSessionInfo,
@@ -80,6 +80,7 @@ export class Runner {
   private startupFailed = false;
   private updateTarget?: string;
   private updateNativeTarget?: string;
+  private updateEntry?: string;
   private updatePrepared?: NativeAgentSettings;
   private readonly initial: NativeSettingsPatch;
   private stopped = false;
@@ -125,7 +126,7 @@ export class Runner {
         "images-v1",
         "rewind-files-v1",
         ...(this.config.managed && this.deps.code && this.deps.execution
-          ? ["integration-update-v1"]
+          ? ["integration-update-v1", "integration-target-v1"]
           : []),
       ],
       integration_revision: this.deps.code?.revision,
@@ -276,6 +277,7 @@ export class Runner {
   private cancelUpdate() {
     this.updateTarget = undefined;
     this.updateNativeTarget = undefined;
+    this.updateEntry = undefined;
     this.updatePrepared = undefined;
     if (!this.stopRequested) this.agent.bridge.resumeInput();
   }
@@ -284,12 +286,15 @@ export class Runner {
     const code = this.deps.code;
     const revision = request.revision;
     const nativeRevision = request.native_revision;
+    const entry = request.entry;
     if (
       !this.config.managed ||
       !this.deps.execution ||
       !code ||
       typeof revision !== "string" ||
       !/^[a-f0-9]{64}$/.test(revision) ||
+      (entry !== undefined &&
+        (typeof entry !== "string" || !isAbsolute(entry))) ||
       (nativeRevision !== undefined &&
         (typeof nativeRevision !== "string" || !nativeRevision))
     )
@@ -302,7 +307,7 @@ export class Runner {
         nativeRevision !== this.deps.native?.revision;
       if (
         (!nativeChanged && revision === code.revision) ||
-        code.current() !== revision ||
+        code.current(entry as string | undefined) !== revision ||
         (nativeRevision !== undefined &&
           this.deps.native?.current() !== nativeRevision)
       ) {
@@ -320,6 +325,7 @@ export class Runner {
         return { pending: true };
       this.updateTarget = revision;
       this.updateNativeTarget = nativeRevision as string | undefined;
+      this.updateEntry = entry as string | undefined;
       this.updatePrepared = undefined;
       if (!(await this.agent.prepareUpdate())) return { pending: true };
       const { values } = await this.agent.settings.read();
@@ -332,7 +338,7 @@ export class Runner {
       if (
         this.stopRequested ||
         !this.agent.updateReady ||
-        code.current() !== revision ||
+        code.current(this.updateEntry) !== revision ||
         (nativeRevision !== undefined &&
           this.deps.native?.current() !== nativeRevision)
       )
@@ -353,6 +359,7 @@ export class Runner {
       !checkpoint ||
       request.revision !== this.updateTarget ||
       request.native_revision !== this.updateNativeTarget ||
+      request.entry !== this.updateEntry ||
       !this.agent.updateReady
     )
       throw new Error("The integration update is not ready");
@@ -363,7 +370,7 @@ export class Runner {
         this.stopRequested ||
         !this.transport.bound ||
         !this.agent.updateReady ||
-        this.deps.code?.current() !== this.updateTarget ||
+        this.deps.code?.current(this.updateEntry) !== this.updateTarget ||
         (this.updateNativeTarget !== undefined &&
           this.deps.native?.current() !== this.updateNativeTarget) ||
         values.model !== checkpoint.model ||
