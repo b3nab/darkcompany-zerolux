@@ -51,6 +51,10 @@ impl NativeSettings {
 
     /// Check every field before any native mutation. Efforts are model-specific, never guessed.
     pub fn validate(&self, patch: &AgentSettings) -> Result<(), Error> {
+        self.validate_for("", patch)
+    }
+
+    pub fn validate_for(&self, harness: &str, patch: &AgentSettings) -> Result<(), Error> {
         for (field, value) in patch.fields() {
             let Some(value) = value else { continue };
             if !self.editable.iter().any(|name| name == field) {
@@ -62,15 +66,19 @@ impl NativeSettings {
         }
         if patch.model.is_some() || patch.effort.is_some() {
             let value = patch.model.as_ref().or(self.values.model.as_ref());
-            let model = self
-                .models
-                .iter()
-                .find(|model| {
-                    value.is_some_and(|value| {
-                        model.value == *value || model.resolved_model.as_ref() == Some(value)
-                    })
+            let model = self.models.iter().find(|model| {
+                value.is_some_and(|value| {
+                    model.value == *value || model.resolved_model.as_ref() == Some(value)
                 })
-                .ok_or_else(|| Error::Invalid("The harness does not offer this model".into()))?;
+            });
+            let Some(model) = model else {
+                if harness == "claude-code" && patch.model.is_some() && patch.effort.is_none() {
+                    return Ok(());
+                }
+                return Err(Error::Invalid(
+                    "The harness does not offer this model".into(),
+                ));
+            };
             if let Some(effort) = &patch.effort
                 && !model.efforts.contains(effort)
             {
@@ -191,6 +199,31 @@ mod tests {
                 .as_deref(),
             Some("native-effort")
         );
+    }
+
+    #[test]
+    fn claude_accepts_an_explicit_native_model_without_inventing_its_efforts() {
+        let mut snapshot = NativeSettings {
+            values: AgentSettings::default(),
+            models: vec![],
+            editable: vec!["model".into(), "effort".into()],
+        };
+        let choice = patch(json!({"model":"future-native-id"})).unwrap();
+        snapshot.validate_for("claude-code", &choice).unwrap();
+        for harness in ["pi", "codex"] {
+            assert!(snapshot.validate_for(harness, &choice).is_err());
+        }
+        assert!(
+            snapshot
+                .validate_for(
+                    "claude-code",
+                    &patch(json!({"model":"future-native-id","effort":"high"})).unwrap()
+                )
+                .is_err()
+        );
+        assert!(snapshot.confirm(&choice).is_err());
+        snapshot.values.model = choice.model.clone();
+        snapshot.confirm(&choice).unwrap();
     }
 
     #[test]

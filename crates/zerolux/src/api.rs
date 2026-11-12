@@ -3015,6 +3015,8 @@ async fn read_agent_settings(
 #[derive(Deserialize)]
 struct CatalogQuery {
     harness: crate::harness::Harness,
+    host: Option<String>,
+    workspace: Option<String>,
 }
 
 async fn settings_catalog(
@@ -3026,7 +3028,7 @@ async fn settings_catalog(
         return Err(Error::Forbidden.into());
     }
     Ok(Json(
-        json!({ "models": runtime(&state)?.settings_catalog(&who, input.harness.id()).await.map_err(runtime_error)? }),
+        json!({ "models": runtime(&state)?.settings_catalog_at(&who, input.harness.id(), input.host.as_deref(), input.workspace.as_deref()).await.map_err(runtime_error)? }),
     ))
 }
 
