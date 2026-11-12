@@ -4,6 +4,21 @@ use serde_json::Value;
 
 use crate::{model::AgentSettings, store::Error};
 
+/// An uncertain settings outcome, safe to describe without exposing native diagnostics.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SettingsFailure {
+    #[error("Claude has not confirmed this settings change.")]
+    Unconfirmed,
+}
+
+impl SettingsFailure {
+    pub(crate) fn code(&self) -> &'static str {
+        match self {
+            Self::Unconfirmed => "session_settings_unconfirmed",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ModelOption {
     pub value: String,

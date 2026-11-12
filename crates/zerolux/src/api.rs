@@ -1201,6 +1201,15 @@ fn said(error: anyhow::Error) -> ApiFailure {
 }
 
 fn runtime_error(error: anyhow::Error) -> ApiFailure {
+    if let Some(failure) = error.downcast_ref::<crate::agent_settings::SettingsFailure>() {
+        return ApiFailure(Box::new(
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(json!({ "error": failure.to_string(), "code": failure.code() })),
+            )
+                .into_response(),
+        ));
+    }
     ApiFailure(Box::new(match error.downcast::<Error>() {
         Ok(error) => error.into_response(),
         Err(error) => {
@@ -4484,4 +4493,47 @@ fn invitation_gone() -> ApiFailure {
         StatusCode::GONE,
         "This invitation was used, withdrawn or has expired; ask for a new one",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_settings::SettingsFailure;
+
+    #[tokio::test]
+    async fn unconfirmed_settings_have_a_code_without_exposing_error_context() {
+        let private = "fixture-private-token-and-native-stack";
+        let error = anyhow::Error::new(SettingsFailure::Unconfirmed).context(private);
+        let response = runtime_error(error).into_response();
+        assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["code"], "session_settings_unconfirmed");
+        assert!(
+            body["error"]
+                .as_str()
+                .is_some_and(|message| !message.is_empty())
+        );
+        assert!(!body.to_string().contains(private));
+    }
+
+    #[tokio::test]
+    async fn unexpected_runtime_errors_keep_native_diagnostics_private() {
+        let private = "fixture-private-token-and-native-stack";
+        let response = runtime_error(anyhow::anyhow!(private)).into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(body["code"].is_null());
+        assert!(
+            body["error"]
+                .as_str()
+                .is_some_and(|message| !message.is_empty())
+        );
+        assert!(!body.to_string().contains(private));
+    }
 }
