@@ -250,6 +250,12 @@ pub fn carried() -> Option<&'static Path> {
 /// A program: the one a release carries, or else the one the PATH finds (with the extensions
 /// of `PATHEXT` on Windows); its name alone when there is neither.
 pub fn executable(name: &str) -> PathBuf {
+    let path = executable_path(name);
+    path.canonical().unwrap_or(path)
+}
+
+/// Keep an installer's symlink so a long-running host sees its next installed version.
+pub(crate) fn executable_path(name: &str) -> PathBuf {
     let names: Vec<String> = if cfg!(windows) && Path::new(name).extension().is_none() {
         std::env::var("PATHEXT")
             .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
@@ -273,7 +279,6 @@ pub fn executable(name: &str) -> PathBuf {
         )
         .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
         .find(|path| path.is_file())
-        .and_then(|path| path.canonical().ok())
         .unwrap_or_else(|| PathBuf::from(name))
 }
 

@@ -5,7 +5,7 @@ use std::{
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
     process::Stdio,
-    time::Duration,
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, ensure};
@@ -53,11 +53,11 @@ impl RunnerProgram {
             entry: Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../harnesses/claude/src/runner.ts"),
             kernel_executable: None,
-            claude_cli: executable("claude"),
+            claude_cli: platform::executable_path("claude"),
             pi_entry: Some(
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("../../harnesses/pi/src/runner.ts"),
             ),
-            sdk_executable: None,
+            sdk_executable: Some(platform::executable_path("claude")),
         }
     }
 }
@@ -69,7 +69,7 @@ impl RunnerProgram {
         Self {
             entry: resources.join("claude/runner.js"),
             pi_entry: Some(resources.join("pi/runner.js")),
-            sdk_executable: Some(executable("claude")),
+            sdk_executable: Some(platform::executable_path("claude")),
             ..Self::checkout()
         }
     }
@@ -78,6 +78,15 @@ impl RunnerProgram {
 pub(crate) struct Registry {
     path: PathBuf,
     program: RunnerProgram,
+    catalogs: tokio::sync::Mutex<Vec<Catalog>>,
+}
+
+struct Catalog {
+    workspace: String,
+    home: Option<PathBuf>,
+    revision: Option<String>,
+    at: Instant,
+    models: Vec<crate::agent_settings::ModelOption>,
 }
 
 // No Debug/Serialize: the descriptor includes a private control credential.
@@ -141,7 +150,77 @@ fn leased(registry: &Path, native_id: &str) -> Result<bool> {
 
 impl Registry {
     pub(crate) fn new(path: PathBuf, program: RunnerProgram) -> Self {
-        Self { path, program }
+        Self {
+            path,
+            program,
+            catalogs: tokio::sync::Mutex::default(),
+        }
+    }
+
+    /// The installed native executable, independently of the helper's code revision.
+    pub(crate) fn native_revision(&self) -> Result<Option<String>> {
+        let Some(executable) = &self.program.sdk_executable else {
+            return Ok(None);
+        };
+        let path = executable
+            .canonical()
+            .context("Claude Code is not installed")?;
+        let metadata = std::fs::metadata(&path)?;
+        ensure!(
+            metadata.is_file() && metadata.len() > 0,
+            "Claude Code is not installed"
+        );
+        Ok(Some(serde_json::to_string(&[
+            path.to_string_lossy().into_owned(),
+            metadata.len().to_string(),
+            metadata
+                .modified()?
+                .duration_since(UNIX_EPOCH)?
+                .as_millis()
+                .to_string(),
+        ])?))
+    }
+
+    /// Initialization metadata from the installed harness; no session or model turn.
+    pub(crate) async fn catalog(
+        &self,
+        workspace: &str,
+        homes: &crate::homes::Homes,
+    ) -> Result<Vec<crate::agent_settings::ModelOption>> {
+        let workspace = crate::chat_runtime::workspace_dir(workspace)?;
+        let revision = self.native_revision()?;
+        let home = homes.root().map(Path::to_path_buf);
+        let mut catalogs = self.catalogs.lock().await;
+        catalogs.retain(|entry| entry.at.elapsed() < Duration::from_secs(30));
+        if let Some(entry) = catalogs.iter().find(|entry| {
+            entry.workspace == workspace && entry.home == home && entry.revision == revision
+        }) {
+            return Ok(entry.models.clone());
+        }
+        let mut command = platform::command(&self.program.bun);
+        homes
+            .apply(&mut command)
+            .arg(&self.program.entry)
+            .arg("catalog")
+            .env_remove("ZEROLUX_CLAUDE_EXECUTABLE")
+            .current_dir(&workspace)
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        if let Some(executable) = &self.program.sdk_executable {
+            command.env("ZEROLUX_CLAUDE_EXECUTABLE", executable);
+        }
+        let models = catalog_output(command, &workspace).await?;
+        if catalogs.len() == 16 {
+            catalogs.remove(0);
+        }
+        catalogs.push(Catalog {
+            workspace,
+            home,
+            revision,
+            at: Instant::now(),
+            models: models.clone(),
+        });
+        Ok(models)
     }
     fn prepare_directory(&self) -> Result<()> {
         platform::private_dir(&self.path).context("Runner registry must be a private directory")
@@ -152,6 +231,15 @@ impl Registry {
         native_id: &str,
         workspace: &str,
         mode: PermissionMode,
+    ) -> Result<Option<RunnerLink>> {
+        self.find_with_mode(native_id, workspace, Some(mode)).await
+    }
+
+    pub(crate) async fn find_with_mode(
+        &self,
+        native_id: &str,
+        workspace: &str,
+        mode: Option<PermissionMode>,
     ) -> Result<Option<RunnerLink>> {
         Uuid::parse_str(native_id).context("Invalid owned native session ID")?;
         self.prepare_directory()?;
@@ -205,7 +293,8 @@ impl Registry {
                 .await
                 .context("The running Claude runner could not be verified")?;
             ensure!(
-                link.record.workspace == workspace && link.record.permission_mode == mode,
+                link.record.workspace == workspace
+                    && mode.is_none_or(|mode| link.record.permission_mode == mode),
                 "The owned session's workspace or permission mode changed"
             );
             ensure!(
@@ -570,6 +659,50 @@ impl RunnerLink {
             execution::Purpose::Stop(Some(&self.record.instance_id)),
         )
     }
+}
+
+/// Metadata from an isolated native catalog command, bounded by size and duration.
+pub(crate) async fn catalog_output(
+    mut command: tokio::process::Command,
+    workspace: &str,
+) -> Result<Vec<crate::agent_settings::ModelOption>> {
+    use tokio::io::AsyncReadExt;
+    let workspace = crate::chat_runtime::workspace_dir(workspace)?;
+    let mut child = command
+        .current_dir(workspace)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+    tokio::time::timeout(Duration::from_secs(45), async {
+        let mut output = Vec::new();
+        child
+            .stdout
+            .take()
+            .context("Missing catalog output")?
+            .take(2 * 1024 * 1024 + 1)
+            .read_to_end(&mut output)
+            .await?;
+        ensure!(
+            output.len() <= 2 * 1024 * 1024,
+            "The native model catalog is too large"
+        );
+        ensure!(
+            child.wait().await?.success(),
+            "The harness could not load its model catalog"
+        );
+        let text = std::str::from_utf8(&output)?;
+        let line = text
+            .lines()
+            .rev()
+            .find_map(|line| line.strip_prefix("ZEROLUX_MODEL_CATALOG="))
+            .or_else(|| text.lines().last())
+            .unwrap_or_default();
+        serde_json::from_str(line).context("The harness returned an invalid model catalog")
+    })
+    .await
+    .context("The harness did not return its model catalog in time")?
 }
 
 /// A runner's `fork` in a session's folder, bounded: what it printed, or why it failed.
