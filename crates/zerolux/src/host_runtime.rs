@@ -2,7 +2,7 @@
 //! records; this computer starts the harnesses, runs their adapters against the kernel with
 //! the session's token, and does what the kernel asks of them.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
@@ -106,6 +106,36 @@ impl HostRuntime {
 
     pub async fn answer(self: &Arc<Self>, op: &str, params: Value) -> Result<Value> {
         match op {
+            "claude.catalog" => {
+                let folder = params["workspace"]
+                    .as_str()
+                    .filter(|folder| !folder.trim().is_empty())
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or(std::env::current_dir()?);
+                Ok(json!(
+                    self.claude
+                        .catalog(&folder.to_string_lossy(), &crate::homes::Homes::own())
+                        .await?
+                ))
+            }
+            "codex.catalog" => {
+                let endpoint = self.codex_endpoint().await?;
+                let rpc = crate::codex::CodexRpc::connect(&endpoint).await?;
+                Ok(json!(crate::codex_settings::models(&rpc).await?))
+            }
+            "claude.revision" => Ok(json!(self.claude.native_revision()?)),
+            "pi.catalog" => {
+                let folder = params["workspace"]
+                    .as_str()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(PathBuf::from)
+                    .unwrap_or(std::env::current_dir()?);
+                Ok(json!(
+                    self.pi
+                        .catalog(&folder.to_string_lossy(), &crate::homes::Homes::own())
+                        .await?
+                ))
+            }
             "codex.start" => self.codex_start(params).await,
             "codex.resume" => self.codex_resume(params).await,
             "codex.bind" => self.codex_bind(params).await,
@@ -201,6 +231,35 @@ impl HostRuntime {
                 Ok(json!({"stopped": true}))
             }
             "claude.launch" => self.claude_launch(params).await,
+            "claude.restore" => {
+                let native = params["native"].as_str().context("Name the session")?;
+                let workspace = params["workspace"].as_str().context("Choose a folder")?;
+                if let Some(link) = self.claude.find_with_mode(native, workspace, None).await? {
+                    let actual = link.describe().await?;
+                    // A lost launch reply can leave our replacement waiting, with no
+                    // native child. Reuse that host; never launch another one.
+                    let waiting = actual["native_phase"] == "waiting"
+                        && actual["bound"] == false
+                        && actual["native_pid"].is_null()
+                        && actual["permission_mode"] == params["mode"];
+                    // A replacement may have bound even though its reply was lost.
+                    // Pause that same native query before the kernel renews its token.
+                    let rebind = actual["instance_id"] != params["previous_instance"]
+                        && actual["native_phase"] == "running"
+                        && actual["permission_mode"] == params["mode"];
+                    if rebind {
+                        link.prepare(params["session_id"].as_str().context("Name the session")?)
+                            .await?;
+                    }
+                    return Ok(json!({"ready":waiting || rebind, "rebind":rebind}));
+                }
+                if self.claude.is_leased(native)? {
+                    return Ok(json!({"ready":false}));
+                }
+                self.claude.check_native_stopped(native, workspace).await?;
+                self.claude_launch(params).await?;
+                Ok(json!({"ready":true}))
+            }
             "claude.bind" => {
                 let link = self.claude_link(&params).await?;
                 let executable = self.claude.executable()?;

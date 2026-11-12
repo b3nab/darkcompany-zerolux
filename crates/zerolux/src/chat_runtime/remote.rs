@@ -269,6 +269,97 @@ impl ChatRuntime {
             .filter(|host| Some(host.as_str()) != self.store.host())
     }
 
+    /// Cold recovery after an acknowledged idle update on this session's own computer.
+    /// The host proves the previous native process is gone before launching the same ID.
+    pub(super) async fn restore_claude_on(
+        &self,
+        who: &ChatIdentity,
+        session: &ChatSession,
+        host: &str,
+    ) -> Result<bool> {
+        let mut locator = self.store.chat_session_locator(who, &session.id).await?;
+        let previous = self
+            .owned_mode(who, &session.id)
+            .await?
+            .context("The session is not owned")?;
+        let mode = super::owned::restored_mode(&mut locator, previous)?;
+        let checkpoint = locator["integration_update"].clone();
+        let previous_instance = checkpoint["instance_id"]
+            .as_str()
+            .context("Missing update checkpoint")?;
+        let revision = checkpoint["revision"]
+            .as_str()
+            .context("Missing update revision")?;
+        let ready = self
+            .hosts
+            .call(
+                host,
+                "claude.restore",
+                json!({
+                    "native":session.native_session_id, "workspace":session.workspace,
+                    "previous_instance":previous_instance, "session_id":session.id, "mode":mode,
+                    "system_prompt":locator["system_prompt"], "settings":locator["settings"],
+                }),
+            )
+            .await?;
+        if ready["ready"] != true {
+            return Ok(false);
+        }
+        let issued = if ready["rebind"] == true {
+            // Prepare acknowledged: retain this native query and every delivery state.
+            self.store
+                .renew_owned_chat_session(who, &session.id)
+                .await?
+        } else {
+            self.store
+                .hire_chat_session(
+                    who,
+                    HireChatSession {
+                        name: String::new(),
+                        actor_id: session.actor_id.clone(),
+                        harness: Harness::ClaudeCode,
+                        native_session_id: session.native_session_id.clone(),
+                        title: session.title.clone(),
+                        workspace: session.workspace.clone(),
+                        native_locator: locator,
+                        resume: true,
+                    },
+                )
+                .await?
+        };
+        self.store.place_session(&issued.session.id, host).await?;
+        let result = self
+            .hosts
+            .call(
+                host,
+                "claude.bind",
+                json!({
+                    "native":session.native_session_id, "workspace":session.workspace, "mode":mode,
+                    "session_id":issued.session.id, "token":issued.token, "resume":true,
+                }),
+            )
+            .await;
+        if let Err(error) = result {
+            // The response is ambiguous: this token may already run the native query.
+            // Keep it valid until a verified prepare allows a normal warm rebind.
+            self.owned_attention(who, &issued.session.id, &error).await;
+            return Err(error);
+        }
+        self.store
+            .clear_integration_update(
+                &session.id,
+                &session.native_session_id,
+                previous_instance,
+                revision,
+                session.host_id.as_deref(),
+            )
+            .await?;
+        let current = self.store.chat_session(who, &session.id).await?;
+        let _ = self.observe_session_settings(who, &current).await;
+        self.changed();
+        Ok(true)
+    }
+
     /// A new Codex session on one of `who`'s joined computers: the computer starts the thread,
     /// the kernel issues its token, and the computer runs its adapter with it.
     pub async fn create_codex_on(
