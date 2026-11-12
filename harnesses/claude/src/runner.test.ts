@@ -1,6 +1,14 @@
 import { expect, test } from "bun:test";
 import { basename, join } from "node:path";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import type {
   Options,
@@ -11,6 +19,8 @@ import type {
 import {
   ChatHttpError,
   Transport,
+  integrationCode,
+  integrationRevision,
   type ChatRequest,
   type Inbox,
   type IntegrationCode,
@@ -930,6 +940,58 @@ test("native updates wait for existing work and refuse a changed executable chec
     expect(f.inputs).toHaveLength(0);
   } finally {
     f.runner.agent.close();
+  }
+});
+
+test("an update verifies the target in another immutable release directory without replacing the old entry", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "zcl-release-")));
+  const oldEntry = join(root, "old", "runner.js");
+  const entry = join(root, "new", "runner.js");
+  await mkdir(join(root, "old"));
+  await mkdir(join(root, "new"));
+  await writeFile(oldEntry, "old release");
+  await writeFile(entry, "new release");
+  const code = integrationCode(pathToFileURL(oldEntry).href)!;
+  const revision = integrationRevision(entry);
+  const execution = {
+    requestStop() {},
+    describe: () => ({ native_pid: 1, native_phase: "running" }),
+    waitForExit: async () => {},
+  } as unknown as ClaudeExecution;
+  const f = fixture(true, { managed: true, execution, code });
+  try {
+    await f.bind("t1", true);
+    expect(f.runner.describe().capabilities).toContain("integration-target-v1");
+    // The old protocol cannot authorize another immutable directory.
+    expect(
+      await f.runner.handle("update", { link_id: "link", revision }),
+    ).toEqual({ pending: false });
+    const request = { link_id: "link", revision, entry };
+    expect(await f.runner.handle("update", request)).toMatchObject({
+      ready: true,
+    });
+    await expect(
+      f.runner.handle("update_commit", { ...request, entry: oldEntry }),
+    ).rejects.toThrow();
+    expect(f.closes()).toBe(0);
+    await writeFile(entry, "changed target");
+    await expect(f.runner.handle("update_commit", request)).rejects.toThrow();
+    expect(f.closes()).toBe(0);
+    expect(f.inputs).toHaveLength(0);
+    await writeFile(entry, "new release");
+    expect(await f.runner.handle("update", request)).toMatchObject({
+      ready: true,
+    });
+    expect(await f.runner.handle("update_commit", request)).toEqual({
+      updating: true,
+    });
+    expect(f.starts).toHaveLength(1);
+    expect(f.inputs).toHaveLength(0);
+    expect(await readFile(oldEntry, "utf8")).toBe("old release");
+    expect(code.current()).toBe(code.revision);
+  } finally {
+    f.runner.agent.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
