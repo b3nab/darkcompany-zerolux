@@ -182,7 +182,10 @@ export class ClaudeAgent {
   /** Working on a turn, or input still waiting for one. */
   get busy() {
     return (
-      this.state !== "idle" || !this.input.empty || this.written.length > 0
+      this.state !== "idle" ||
+      !this.input.empty ||
+      this.written.length > 0 ||
+      this.ownerQueue.length > 0
     );
   }
 
@@ -437,9 +440,14 @@ export class ClaudeAgent {
       return;
     }
     const consumed =
-      "user_message_uuids" in message ? message.user_message_uuids : undefined;
+      ("user_message_uuids" in message
+        ? message.user_message_uuids
+        : undefined) ??
+      ("user_message_uuid" in message && message.user_message_uuid
+        ? [message.user_message_uuid]
+        : []);
     const taken = this.ownerQueue.filter((queued) =>
-      consumed?.includes(queued.id),
+      consumed.includes(queued.id),
     );
     if (taken.length) {
       this.ownerQueue = this.ownerQueue.filter(
@@ -447,7 +455,7 @@ export class ClaudeAgent {
       );
       this.reportQueue();
     }
-    for (const id of consumed ?? []) {
+    for (const id of consumed) {
       // The echo lists at most 64 IDs: everything written before one was consumed too.
       const at = this.written.findIndex((w) => w.id === id);
       for (const w of at < 0 ? [] : this.written.splice(0, at + 1))

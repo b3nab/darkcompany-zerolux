@@ -821,6 +821,43 @@ test("the owner's inputs show as waiting until the session takes them", async ()
   expect(queues().at(-1)).toEqual({ type: "queue", items: [] });
 });
 
+test("a native update waits for owner input already accepted by the SDK but not consumed", async () => {
+  const f = fixture();
+  await f.start();
+  try {
+    expect(f.agent.busy).toBe(false);
+    await f.agent.say("pending work", "queue");
+    await tick();
+    expect(f.inputs).toHaveLength(1);
+    expect(f.agent.busy).toBe(true);
+    expect(f.agent.updateReady).toBe(false);
+    f.consumed(f.inputs[0]!.uuid as string);
+    await tick();
+    expect(f.agent.busy).toBe(false);
+  } finally {
+    f.agent.close();
+  }
+});
+
+test("a legacy native receipt releases only the input it confirms", async () => {
+  const f = fixture();
+  await f.start();
+  try {
+    await f.agent.say("first", "queue");
+    await f.agent.say("second", "queue");
+    await tick();
+    expect(f.agent.busy).toBe(true);
+    f.emitRaw({ type: "assistant", user_message_uuid: f.inputs.at(-1)!.uuid });
+    await tick();
+    expect(f.agent.busy).toBe(true);
+    f.consumed(f.inputs[0]!.uuid as string);
+    await tick();
+    expect(f.agent.busy).toBe(false);
+  } finally {
+    f.agent.close();
+  }
+});
+
 test("a permission is allowed as far as Claude Code suggests, or denied with the owner's reason", async () => {
   const f = fixture();
   await f.start();
