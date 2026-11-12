@@ -29,6 +29,35 @@ impl Registry {
     pub(crate) fn new(path: PathBuf, program: RunnerProgram) -> Self {
         Self { path, program }
     }
+    pub(crate) async fn catalog(
+        &self,
+        workspace: &str,
+        homes: &crate::homes::Homes,
+    ) -> Result<Vec<crate::agent_settings::ModelOption>> {
+        let entry = self
+            .program
+            .pi_entry
+            .as_ref()
+            .context("The pi runner is not installed on this execution host")?;
+        let catalog = entry.with_file_name(
+            if entry.extension().is_some_and(|extension| extension == "ts") {
+                "catalog.ts"
+            } else {
+                "catalog.js"
+            },
+        );
+        ensure!(
+            catalog.is_file(),
+            "The pi model catalog helper is not installed"
+        );
+        let mut command = platform::command(platform::executable_path("pi"));
+        homes
+            .apply(&mut command)
+            .args(["--no-extensions", "--extension"])
+            .arg(catalog)
+            .arg("--list-models");
+        crate::claude_runner::catalog_output(command, workspace).await
+    }
     fn directory(&self) -> Result<()> {
         platform::private_dir(&self.path).context("Pi runner registry must be private")
     }
