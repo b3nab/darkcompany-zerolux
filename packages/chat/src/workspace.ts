@@ -75,9 +75,38 @@ export function agentModelOption(
   models: AgentModelOption[],
   value: string | null | undefined,
 ) {
-  return models.find(
-    (model) => model.value === value || model.resolved_model === value,
+  return (
+    models.find((model) => model.value === value) ??
+    models.find((model) => model.resolved_model === value)
   );
+}
+
+/** The catalog's selectable alias for a model the harness reports by its resolved ID. */
+export const agentModelValue = (
+  models: AgentModelOption[],
+  value: string | null | undefined,
+) => agentModelOption(models, value)?.value ?? value ?? "";
+
+/** Native choices matching a search, with an explicit custom ID only where supported. */
+export function settingChoices(
+  options: Record<string, string>,
+  search: string,
+  custom = false,
+) {
+  const query = search.trim();
+  const choices = Object.entries(options)
+    .filter(([value, label]) =>
+      `${value}\n${label}`.toLowerCase().includes(query.toLowerCase()),
+    )
+    .map(([value, label]) => ({ value, label }));
+  if (
+    custom &&
+    query &&
+    !Object.hasOwn(options, query) &&
+    !choices.some(({ label }) => label.toLowerCase() === query.toLowerCase())
+  )
+    choices.push({ value: query, label: query });
+  return choices;
 }
 
 /** What the selectors set: plan mode is a switch of its own, for a session only. */
@@ -85,6 +114,7 @@ export interface AgentSettingField {
   key: Exclude<keyof AgentSettings, "collaboration_mode">;
   label: string;
   options: Record<string, string>;
+  custom?: boolean;
 }
 
 /** Both clients show only settings belonging to this agent's harness. */
@@ -100,6 +130,7 @@ export function agentSettingFields(
       options: Object.fromEntries(
         models.map((model) => [model.value, model.label]),
       ),
+      custom: harness === "claude-code",
     },
     {
       key: "effort",
@@ -176,7 +207,8 @@ export function canApplyAgentSettings(
           field.key === key &&
           editable.includes(field.key) &&
           typeof value === "string" &&
-          Object.hasOwn(field.options, value),
+          (Object.hasOwn(field.options, value) ||
+            (field.custom === true && value.trim().length > 0)),
       ),
     )
   );

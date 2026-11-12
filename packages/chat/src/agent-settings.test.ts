@@ -3,10 +3,12 @@ import { ApiError, setKernelUrl } from "./client";
 import type { Actor } from "./client";
 import {
   agentLaunchSettings,
+  agentModelValue,
   agentSettingFields,
   canApplyAgentSettings,
   planMode,
   setAgentSettings,
+  settingChoices,
 } from "./workspace";
 
 const actor: Actor = {
@@ -159,6 +161,73 @@ test("retained drafts cannot be applied when native capabilities or choices chan
     canApplyAgentSettings({ model: "removed-model" }, fields, ["model"]),
   ).toBe(false);
   expect(canApplyAgentSettings({}, fields, ["model", "effort"])).toBe(false);
+});
+
+test("Claude accepts an explicit model ID without inventing effort choices", () => {
+  const fields = agentSettingFields("claude-code", [], "native-new-model");
+  expect(
+    canApplyAgentSettings({ model: "native-new-model" }, fields, [
+      "model",
+      "effort",
+    ]),
+  ).toBe(true);
+  expect(canApplyAgentSettings({ model: "   " }, fields, ["model"])).toBe(
+    false,
+  );
+  expect(
+    canApplyAgentSettings(
+      { model: "native-new-model", effort: "high" },
+      fields,
+      ["model", "effort"],
+    ),
+  ).toBe(false);
+  expect(
+    canApplyAgentSettings({ model: "native-new-model" }, fields, ["effort"]),
+  ).toBe(false);
+  for (const harness of ["pi", "codex"] as const) {
+    expect(
+      canApplyAgentSettings(
+        { model: "native-new-model" },
+        agentSettingFields(harness),
+        ["model"],
+      ),
+    ).toBe(false);
+  }
+});
+
+test("model choices admit a custom ID only when supported and keep native matches", () => {
+  const options = { "native-one": "Fixture one", "native-two": "Fixture two" };
+  expect(settingChoices(options, "native-new", false)).toEqual([]);
+  expect(
+    settingChoices(options, " native-new ", true).map((choice) => choice.value),
+  ).toEqual(["native-new"]);
+  expect(
+    settingChoices(options, "native-one", true).map((choice) => choice.value),
+  ).toEqual(["native-one"]);
+  expect(
+    settingChoices(options, "", true).map((choice) => choice.value),
+  ).toEqual(Object.keys(options));
+  expect(
+    settingChoices(options, "native", true).map((choice) => choice.value),
+  ).toEqual(["native-one", "native-two", "native"]);
+});
+
+test("resolved model IDs select their alias without replacing an older version by a newer one", () => {
+  const alias = {
+    value: "native-alias",
+    resolved_model: "native-v2",
+    label: "Fixture",
+    efforts: [],
+  };
+  expect(agentModelValue([alias], "native-v2")).toBe("native-alias");
+  expect(agentModelValue([alias], "native-v1")).toBe("native-v1");
+  expect(agentModelValue([alias], null)).toBe("");
+  const explicit = {
+    value: "native-v2",
+    label: "Fixture version",
+    efforts: [],
+  };
+  expect(agentModelValue([alias, explicit], "native-v2")).toBe("native-v2");
 });
 
 test("blank launch fields omit overrides rather than clearing the agent's saved settings", () => {
