@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Pressable, ScrollView, Switch, View } from "react-native";
 import {
   agentLaunchSettings,
+  agentModelValue,
   agentSettingFields,
   claudeModes,
   codexApprovalPolicies,
@@ -91,7 +92,7 @@ export default function NewSessionScreen() {
     (a) => a.kind === "agent" && !a.archived && a.harness === harness,
   );
   const existing = agents.find((a) => a.id === agent);
-  const catalog = useSessionCatalog(harness, url);
+  const catalog = useSessionCatalog(harness, url, elsewhere?.id, workspace);
   const launchFields = agentSettingFields(
     harness,
     catalog.data?.models ?? [],
@@ -283,15 +284,23 @@ export default function NewSessionScreen() {
             />
           ) : null}
         </View>
-        {launchFields.map(({ key, label, options }) => (
+        {launchFields.map(({ key, label, options, custom }) => (
           <SettingSelect
             key={key}
             label={label}
-            value={key === "model" ? model : effort}
+            value={
+              key === "model"
+                ? agentModelValue(catalog.data?.models ?? [], model)
+                : effort
+            }
             options={options}
+            custom={custom}
+            onOpen={catalog.refresh}
             none={existing ? "The agent's choice" : "The harness's own default"}
             disabled={
-              busy || catalog.loading || Object.keys(options).length === 0
+              busy ||
+              (catalog.loading && !catalog.data) ||
+              (!custom && Object.keys(options).length === 0)
             }
             onChange={(value) => {
               if (key === "model") {

@@ -4,9 +4,11 @@ import { LegendList } from "@legendapp/list/react-native";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
+import { settingChoices } from "@zerolux/chat";
+import { Input } from "@/components/ui/input";
 
 /**
- * Native choices, virtualized for a harness catalog; never a free-form model input. Compact,
+ * Native choices, virtualized for a harness catalog, with model IDs where supported. Compact,
  * it is a pill named by its value, as under a session's box.
  */
 export function SettingSelect({
@@ -18,6 +20,8 @@ export function SettingSelect({
   none,
   placeholder = "The harness's own default",
   compact = false,
+  custom = false,
+  onOpen,
 }: {
   label: string;
   value: string;
@@ -27,15 +31,22 @@ export function SettingSelect({
   none?: string;
   placeholder?: string;
   compact?: boolean;
+  custom?: boolean;
+  onOpen?(): void;
 }) {
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
   const choices = [
-    ...(none ? [{ value: "", label: none }] : []),
-    ...Object.entries(options).map(([value, label]) => ({ value, label })),
+    ...(none && !search ? [{ value: "", label: none }] : []),
+    ...settingChoices(options, search, custom),
   ];
   const selected =
-    choices.find((choice) => choice.value === value)?.label ??
-    (value || placeholder);
+    options[value] ?? (!value ? none : undefined) ?? (value || placeholder);
+  const choose = (next: string) => {
+    if (disabled) return;
+    onChange(next);
+    setOpen(false);
+  };
   return (
     <View className={compact ? "max-w-[48%]" : "gap-2"}>
       {compact ? null : <Text className="text-sm font-medium">{label}</Text>}
@@ -45,7 +56,11 @@ export function SettingSelect({
         accessibilityValue={{ text: selected }}
         accessibilityState={{ disabled, expanded: open }}
         disabled={disabled}
-        onPress={() => setOpen(true)}
+        onPress={() => {
+          setSearch("");
+          onOpen?.();
+          setOpen(true);
+        }}
         className={cn(
           compact
             ? "rounded-full border border-border px-2.5 py-1 active:bg-accent"
@@ -74,6 +89,21 @@ export function SettingSelect({
             <Text accessibilityRole="header" className="text-lg font-medium">
               {label}
             </Text>
+            {custom ? (
+              <Input
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search or enter a model ID"
+                accessibilityLabel={label}
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="done"
+                onSubmitEditing={() => {
+                  if (!disabled && search.trim() && choices[0])
+                    choose(choices[0].value);
+                }}
+              />
+            ) : null}
             <LegendList
               style={{ flex: 1 }}
               data={choices}
@@ -87,10 +117,7 @@ export function SettingSelect({
                     disabled,
                   }}
                   disabled={disabled}
-                  onPress={() => {
-                    onChange(item.value);
-                    setOpen(false);
-                  }}
+                  onPress={() => choose(item.value)}
                   className={cn(
                     "min-h-11 rounded-md px-3 py-3",
                     value === item.value && "bg-accent",
