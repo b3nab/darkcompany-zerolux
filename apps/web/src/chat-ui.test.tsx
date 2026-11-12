@@ -1014,36 +1014,9 @@ test("starting an agent asks for a harness, an agent, a folder and how it asks p
   expect(html).toContain('value="pi">pi</option>');
   // Each recent folder offered once, chosen with a press.
   expect(html.match(/title="\/home\/owner\/app"/g)).toHaveLength(1);
-  for (const id of ["start-model", "start-effort"]) {
-    expect(html).toMatch(new RegExp(`<select[^>]*id="${id}"`));
-    expect(html).not.toMatch(
-      new RegExp(`<input(?=[^>]*id="${id}")[^>]*required=""`),
-    );
-  }
   // Nothing starts without a folder.
   expect(html).toMatch(/<button type="submit"[^>]*disabled=""[^>]*>/);
   noUuids(html);
-});
-
-test("agent profiles retain last reported values while native settings load", () => {
-  const configured = {
-    ...actors[1]!,
-    model: "fixture-model",
-    effort: "high",
-    permission_mode: "plan",
-  };
-  const html = renderToStaticMarkup(
-    <AgentProfile
-      agent={configured}
-      workspace={workspace}
-      chat={fakeChat()}
-      busy={false}
-      perform={perform}
-    />,
-  );
-  expect(html).toContain('value="fixture-model"');
-  expect(html).toContain('value="high"');
-  expect(html).toMatch(/<option[^>]*value="plan"[^>]*selected=""/);
 });
 
 test("settings forms use selectors for native fields and only the agent's harness controls", () => {
@@ -1080,21 +1053,6 @@ test("settings forms use selectors for native fields and only the agent's harnes
       );
     }
   }
-});
-
-test("saving agent settings disables all controls and never disguises an unknown saved value", () => {
-  const html = renderToStaticMarkup(
-    <AgentSettingsForm
-      agent={{ ...actors[1]!, permission_mode: "future-mode" }}
-      busy
-      save={async () => undefined}
-    />,
-  );
-  expect(html).toMatch(/<select[^>]*id="agent-setting-model"[^>]*disabled=""/);
-  expect(html).toMatch(/<select[^>]*id="agent-setting-effort"[^>]*disabled=""/);
-  expect(html).toMatch(/<select[^>]*disabled=""/);
-  expect(html).toMatch(/<option[^>]*value="future-mode"[^>]*selected=""/);
-  expect(html).toMatch(/<button[^>]*disabled=""[^>]*>/);
 });
 
 test("managed Claude and terminal pi offer Resume; other attached sessions do not", () => {

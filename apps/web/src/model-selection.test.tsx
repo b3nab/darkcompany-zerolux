@@ -1,6 +1,13 @@
 import { afterAll, afterEach, expect, test } from "bun:test";
 import { act, type ReactNode } from "react";
 import { Window } from "happy-dom";
+import type {
+  Actor,
+  AgentSettings,
+  Chat,
+  ChatSession,
+  NewSession,
+} from "@zerolux/chat";
 
 // `bun run test` uses --parallel: every file has its own globals and module registry.
 // Bun 1.4.2 has no DOM environment flag. Install one before loading React DOM or Base UI.
@@ -50,6 +57,7 @@ const { createRoot } = await import("react-dom/client");
 const { lookWith, setKernelFetch, useSessionSettings } =
   await import("@zerolux/chat");
 const { ModelSelect } = await import("./components/model-select");
+const { AgentSettingsForm, StartSession } = await import("./Team");
 type Settings = ReturnType<typeof useSessionSettings>;
 let root: ReturnType<typeof createRoot> | undefined;
 let settings: Settings;
@@ -111,9 +119,9 @@ async function render(node: ReactNode) {
   await act(async () => root!.render(node));
 }
 
-async function openPicker() {
+async function openPicker(selector = "button") {
   await act(async () =>
-    document.querySelector<HTMLButtonElement>("button")!.click(),
+    document.querySelector<HTMLButtonElement>(selector)!.click(),
   );
   const input = document.querySelector<HTMLInputElement>(
     'input[role="combobox"]',
@@ -194,6 +202,160 @@ test("disabling an open model picker prevents both keyboard and pointer changes"
   });
   expect(changes).toHaveLength(0);
   expect(settings.data?.values.model).toBe("native-known");
+});
+
+test("new sessions can keep native defaults or submit a confirmed custom model", async () => {
+  const started: NewSession[] = [];
+  setKernelFetch(async () => Response.json(snapshot("native-known")));
+  const chat = {
+    createSession: async (input: NewSession) => {
+      started.push(input);
+      return { actor: null, session: { id: "new" } as ChatSession };
+    },
+  } as Chat;
+  await render(
+    <StartSession
+      chat={chat}
+      actors={[]}
+      folders={[]}
+      busy={false}
+      perform={async (action) => {
+        await action();
+        return true;
+      }}
+      agent="none"
+      heading="Fixture"
+      ready={() => true}
+    />,
+  );
+  const folder = document.querySelector<HTMLInputElement>("#start-folder")!;
+  const form = document.querySelector("form")!;
+  await type(folder, "/fixture/project");
+  await act(async () => form.requestSubmit());
+  expect(started).toHaveLength(1);
+  expect(started[0]).toMatchObject({
+    workspace: "/fixture/project",
+    harness: "claude-code",
+  });
+  expect(started[0]).not.toHaveProperty("model");
+  expect(started[0]).not.toHaveProperty("effort");
+
+  await type(folder, "/fixture/project");
+  const input = await openPicker("#start-model");
+  await type(input, "native-new");
+  expect(started).toHaveLength(1);
+  await key(input, "Enter");
+  expect(started).toHaveLength(1);
+  await act(async () => form.requestSubmit());
+  expect(started).toHaveLength(2);
+  expect(started[1]).toMatchObject({
+    workspace: "/fixture/project",
+    model: "native-new",
+  });
+  expect(started[1]).not.toHaveProperty("effort");
+});
+
+const configuredAgent: Actor = {
+  id: "fixture-agent",
+  name: "Fixture",
+  kind: "agent",
+  owner_id: "fixture-owner",
+  invited_by: null,
+  harness: "claude-code",
+  model: "fixture-model",
+  effort: "high",
+  permission_mode: "plan",
+  approval_policy: null,
+  sandbox: null,
+  created_at: 0,
+  archived: false,
+};
+const agentSnapshot = (actor: Actor) => ({
+  actor,
+  models: snapshot("native-known").models,
+  editable: ["model", "effort", "permission_mode"],
+});
+
+test("agent settings retain reported values while loading and save only a confirmed model", async () => {
+  let actor = configuredAgent;
+  let loaded = false;
+  let finish!: (response: Response) => void;
+  const changes: AgentSettings[] = [];
+  setKernelFetch(async () =>
+    loaded
+      ? Response.json(agentSnapshot(actor))
+      : new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+  );
+  await render(
+    <AgentSettingsForm
+      agent={configuredAgent}
+      busy={false}
+      save={async (change) => {
+        changes.push(change);
+        actor = { ...actor, ...change };
+        return actor;
+      }}
+    />,
+  );
+  const model = document.querySelector<HTMLButtonElement>(
+    "#agent-setting-model",
+  )!;
+  expect(model.textContent).toBe(configuredAgent.model);
+  expect(model.disabled).toBe(true);
+  expect(
+    document.querySelector<HTMLSelectElement>("#agent-setting-effort")!.value,
+  ).toBe("high");
+  expect(
+    document.querySelector<HTMLSelectElement>("#agent-setting-permission_mode")!
+      .value,
+  ).toBe("plan");
+  await act(async () => {
+    loaded = true;
+    finish(Response.json(agentSnapshot(actor)));
+  });
+  expect(model.disabled).toBe(false);
+  expect(model.textContent).toBe(configuredAgent.model);
+  const input = await openPicker("#agent-setting-model");
+  await type(input, "native-new");
+  expect(changes).toHaveLength(0);
+  await key(input, "Enter");
+  expect(changes).toHaveLength(0);
+  await act(async () => document.querySelector("form")!.requestSubmit());
+  expect(changes).toEqual([{ model: "native-new" }]);
+  expect(model.textContent).toBe("native-new");
+});
+
+test("busy agent settings preserve unknown values and prevent editing or submitting", async () => {
+  const actor = { ...configuredAgent, permission_mode: "future-mode" };
+  const changes: AgentSettings[] = [];
+  setKernelFetch(async () => Response.json(agentSnapshot(actor)));
+  await render(
+    <AgentSettingsForm
+      agent={actor}
+      busy
+      save={async (change) => {
+        changes.push(change);
+        return actor;
+      }}
+    />,
+  );
+  const form = document.querySelector("form")!;
+  for (const control of form.querySelectorAll<
+    HTMLButtonElement | HTMLSelectElement
+  >("button, select"))
+    expect(control.disabled).toBe(true);
+  expect(
+    document.querySelector<HTMLSelectElement>("#agent-setting-permission_mode")!
+      .value,
+  ).toBe("future-mode");
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>("#agent-setting-model")!.click(),
+  );
+  expect(document.querySelector('input[role="combobox"]')).toBeNull();
+  await act(async () => form.requestSubmit());
+  expect(changes).toHaveLength(0);
 });
 
 function pendingKernel() {
