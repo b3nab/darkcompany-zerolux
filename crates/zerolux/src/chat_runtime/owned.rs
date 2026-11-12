@@ -17,7 +17,7 @@ fn connection_reason(error: &anyhow::Error) -> String {
 
 // A surviving runner keeps its launch fingerprint; a cold replacement must instead
 // preserve its last confirmed effective permissions, including owner changes made live.
-fn restored_mode(
+pub(super) fn restored_mode(
     locator: &mut Value,
     launch: ClaudePermissionMode,
 ) -> Result<ClaudePermissionMode> {
@@ -266,7 +266,9 @@ impl ChatRuntime {
             self.owned_attention(who, &current.id, &error).await;
             return Err(error);
         }
-        let _ = self.session_settings(who, &current.id).await;
+        // Recovery can be awaited by a settings operation which already owns its gate.
+        // Observe only here: do not reacquire that gate or start another catalog probe.
+        let _ = self.observe_session_settings(who, &current).await;
         self.changed();
         Ok((issued.actor, current))
     }

@@ -45,11 +45,19 @@ impl Control {
     }
 }
 
-fn integration_needs_update(actual: &Value, revision: &str) -> bool {
-    actual["integration_revision"].as_str() != Some(revision)
+fn integration_needs_update(actual: &Value, revision: &str, native: Option<&str>) -> bool {
+    (actual["integration_revision"].as_str() != Some(revision)
+        || native.is_some_and(|revision| actual["native_revision"].as_str() != Some(revision)))
         && actual["capabilities"]
             .as_array()
             .is_some_and(|items| items.iter().any(|item| item == "integration-update-v1"))
+}
+
+fn update_was_cancelled(actual: &Value, instance: &str) -> bool {
+    actual["instance_id"] == instance
+        && actual["bound"] == true
+        && actual["native_phase"] == "running"
+        && actual["native_pid"].as_u64().is_some_and(|pid| pid > 0)
 }
 
 impl ChatRuntime {
@@ -60,12 +68,9 @@ impl ChatRuntime {
         who: &ChatIdentity,
         session: &ChatSession,
         control: &Control,
-    ) -> Result<()> {
-        let Some(revision) = self.integration_revisions.get(session.harness.as_str()) else {
-            return Ok(());
-        };
+    ) -> Result<bool> {
         let actual = match control {
-            Control::Codex(_) => return Ok(()),
+            Control::Codex(_) => return Ok(false),
             Control::Pi(record) => {
                 let actual = record.control(json!({"method":"describe"})).await?;
                 ensure!(
@@ -80,11 +85,27 @@ impl ChatRuntime {
             }
             Control::Claude(link) => link.describe().await?,
         };
-        if !integration_needs_update(&actual, revision) {
-            return Ok(());
+        let Some(revision) = self
+            .integration_revisions
+            .get(session.harness.as_str())
+            .map(String::as_str)
+            .or_else(|| actual["integration_revision"].as_str())
+        else {
+            return Ok(false);
+        };
+        let native = if session.harness == "claude-code" {
+            self.claude_revision(session).await?
+        } else {
+            None
+        };
+        if !integration_needs_update(&actual, revision, native.as_deref()) {
+            return Ok(false);
         }
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
-        let request = json!({"method":"update","link_id":session.id,"revision":revision});
+        let mut request = json!({"method":"update","link_id":session.id,"revision":revision});
+        if let Some(native) = &native {
+            request["native_revision"] = json!(native);
+        }
         match control {
             Control::Codex(_) => {}
             Control::Pi(record) => {
@@ -96,19 +117,37 @@ impl ChatRuntime {
                     .as_str()
                     .context("Missing helper identity")?;
                 let saved = self.store.chat_session_locator(who, &session.id).await?;
+                let checkpoint = serde_json::to_string(&(revision, &native))?;
                 if saved["integration_update"]
-                    == json!({"instance_id":instance,"revision":revision})
+                    == json!({"instance_id":instance,"revision":checkpoint})
                 {
                     // After a kernel crash, release admission if commit never arrived.
                     // Cancellation cannot revive a helper whose shutdown already began.
-                    let _ = link
+                    let cancelled = link
                         .request(json!({"method":"update_cancel","link_id":session.id}))
-                        .await;
-                    return Ok(()); // Never repeat the uncertain shutdown request.
+                        .await
+                        .is_ok();
+                    if cancelled
+                        && let Ok(current) = link.describe().await
+                        && update_was_cancelled(&current, instance)
+                        && self
+                            .store
+                            .clear_integration_update(
+                                &session.id,
+                                &session.native_session_id,
+                                instance,
+                                &checkpoint,
+                                session.host_id.as_deref(),
+                            )
+                            .await?
+                    {
+                        return Ok(false);
+                    }
+                    return Ok(true); // Never repeat the uncertain shutdown request.
                 }
                 let ready = link.request(request).await?;
                 if ready["ready"] != true {
-                    return Ok(());
+                    return Ok(false);
                 }
                 let result = async {
                     let values: AgentSettings = serde_json::from_value(ready["settings"].clone())?;
@@ -123,15 +162,18 @@ impl ChatRuntime {
                                 &session.id,
                                 &session.native_session_id,
                                 instance,
-                                revision
+                                &checkpoint,
+                                session.host_id.as_deref(),
                             )
                             .await?,
                         "This helper update was already requested"
                     );
-                    link.request(
-                        json!({"method":"update_commit","link_id":session.id,"revision":revision}),
-                    )
-                    .await?;
+                    let mut commit =
+                        json!({"method":"update_commit","link_id":session.id,"revision":revision});
+                    if let Some(native) = &native {
+                        commit["native_revision"] = json!(native);
+                    }
+                    link.request(commit).await?;
                     Ok::<_, anyhow::Error>(())
                 }
                 .await;
@@ -145,7 +187,16 @@ impl ChatRuntime {
                 self.changed();
             }
         }
-        Ok(())
+        Ok(true)
+    }
+
+    async fn claude_revision(&self, session: &ChatSession) -> Result<Option<String>> {
+        match self.remote_host(session) {
+            Some(host) => Ok(serde_json::from_value(
+                self.hosts.call(&host, "claude.revision", json!({})).await?,
+            )?),
+            None => self.runners.native_revision(),
+        }
     }
 
     /// Explicit launch overrides win over this agent's last confirmed choices. No native
@@ -195,7 +246,7 @@ impl ChatRuntime {
         Ok(serde_json::from_value(choices)?)
     }
 
-    async fn settings_gate(&self, id: &str) -> Arc<Mutex<()>> {
+    pub(super) async fn settings_gate(&self, id: &str) -> Arc<Mutex<()>> {
         self.settings_gates
             .lock()
             .await
@@ -297,35 +348,69 @@ impl ChatRuntime {
         bail!("This native terminal does not expose this control")
     }
 
-    /// Choices from an installed, connected harness, not a kernel-maintained model list.
-    /// Without such a native catalog the client can still start with the harness's defaults.
+    /// Choices from the harness installed on the chosen computer, with its person's account.
     pub async fn settings_catalog(
         &self,
         who: &ChatIdentity,
         harness: &str,
     ) -> Result<Vec<ModelOption>> {
+        self.settings_catalog_at(who, harness, None, None).await
+    }
+
+    pub async fn settings_catalog_at(
+        &self,
+        who: &ChatIdentity,
+        harness: &str,
+        host: Option<&str>,
+        workspace: Option<&str>,
+    ) -> Result<Vec<ModelOption>> {
         if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
-        for session in self
-            .store
-            .sessions(who)
-            .await?
-            .into_iter()
-            .filter(|session| {
-                session.harness == harness
-                    && session.stopped_at.is_none()
-                    && session.status == "connected"
-                    && session.host_id.as_deref() == self.store.host()
-            })
-        {
-            if let Ok(control) = self.native_control(who, &session, SETTINGS).await
-                && let Ok(snapshot) = control.call(&session, None, false).await
-            {
-                return Ok(snapshot.models);
+        let remote = host.filter(|host| !host.is_empty() && Some(*host) != self.store.host());
+        if let Some(host) = remote {
+            ensure!(
+                self.store.host_person(host).await? == who.actor_id,
+                Error::Forbidden
+            );
+            if matches!(harness, "claude-code" | "codex" | "pi") {
+                let op = match harness {
+                    "claude-code" => "claude.catalog",
+                    "pi" => "pi.catalog",
+                    _ => "codex.catalog",
+                };
+                return Ok(serde_json::from_value(
+                    self.hosts
+                        .call(host, op, json!({"workspace": workspace}))
+                        .await?,
+                )?);
             }
+        } else if matches!(harness, "claude-code" | "codex" | "pi") {
+            let homes = self.store.homes(who).await?;
+            if harness == "codex" {
+                let endpoint = sessions::ensure_codex_daemon_in(&homes).await?;
+                let rpc = crate::codex::CodexRpc::connect(&endpoint).await?;
+                return crate::codex_settings::models(&rpc).await;
+            }
+            let folder = match workspace.filter(|folder| !folder.trim().is_empty()) {
+                Some(folder) => PathBuf::from(folder),
+                None => self
+                    .store
+                    .project_folder()
+                    .await?
+                    .unwrap_or(std::env::current_dir()?),
+            };
+            return if harness == "pi" {
+                self.pi_runners
+                    .catalog(&folder.to_string_lossy(), &homes)
+                    .await
+            } else {
+                self.runners
+                    .catalog(&folder.to_string_lossy(), &homes)
+                    .await
+            };
         }
-        Ok(Vec::new())
+        bail!("This harness does not expose a model catalog")
     }
 
     pub async fn agent_settings(&self, who: &ChatIdentity, id: &str) -> Result<AgentSettingsView> {
@@ -353,7 +438,7 @@ impl ChatRuntime {
             models: self.settings_catalog(who, harness).await?,
             editable: fields(harness),
         }
-        .validate(&patch)?;
+        .validate_for(harness, &patch)?;
         let actor = self.store.set_agent_settings(who, id, patch).await?;
         self.changed();
         Ok(actor)
@@ -364,12 +449,143 @@ impl ChatRuntime {
         let session = self.store.chat_session(who, id).await?;
         let gate = self.settings_gate(id).await;
         let _guard = gate.lock().await;
-        let control = self.native_control(who, &session, SETTINGS).await?;
-        let snapshot = control.call(&session, None, false).await?;
+        let mut snapshot = self.observe_session_settings(who, &session).await?;
+        if session.harness == "claude-code" {
+            snapshot.models = self.claude_catalog(who, &session).await?;
+        }
+        Ok(snapshot)
+    }
+
+    pub(super) async fn observe_session_settings(
+        &self,
+        who: &ChatIdentity,
+        session: &ChatSession,
+    ) -> Result<NativeSettings> {
+        let control = self.native_control(who, session, SETTINGS).await?;
+        let snapshot = control.call(session, None, false).await?;
         self.store
             .observe_native_settings(&session.id, &session.native_session_id, &snapshot.values)
             .await?;
         Ok(snapshot)
+    }
+
+    async fn claude_catalog(
+        &self,
+        who: &ChatIdentity,
+        session: &ChatSession,
+    ) -> Result<Vec<ModelOption>> {
+        if let Some(host) = self.remote_host(session) {
+            return Ok(serde_json::from_value(
+                self.hosts
+                    .call(
+                        &host,
+                        "claude.catalog",
+                        json!({"workspace": session.workspace}),
+                    )
+                    .await?,
+            )?);
+        }
+        let homes = crate::homes::Homes::of_locator(
+            &self.store.chat_session_locator(who, &session.id).await?,
+        );
+        self.runners.catalog(&session.workspace, &homes).await
+    }
+
+    /// An installed harness update also applies to existing sessions. Its own idle
+    /// checkpoint precedes recovery; the native identity and delivery states stay intact.
+    async fn current_settings_control(
+        &self,
+        who: &ChatIdentity,
+        session: &ChatSession,
+    ) -> Result<Control> {
+        let mut control = self.native_control(who, session, SETTINGS).await?;
+        if session.harness != "claude-code" {
+            return Ok(control);
+        }
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(50);
+        let mut committed = false;
+        loop {
+            ensure!(!*self.stop.borrow(), "The kernel is stopping");
+            let current = self.store.chat_session(who, &session.id).await?;
+            ensure!(current.stopped_at.is_none(), Error::StoppedByOwner);
+            if committed
+                && let Ok(current_control) = self.native_control(who, &current, SETTINGS).await
+            {
+                control = current_control;
+            }
+            let Control::Claude(link) = &control else {
+                unreachable!()
+            };
+            if let Ok(actual) = link.describe().await {
+                let native = self.claude_revision(&current).await?;
+                let revision = self
+                    .integration_revisions
+                    .get("claude-code")
+                    .map(String::as_str)
+                    .or_else(|| actual["integration_revision"].as_str())
+                    .unwrap_or_default();
+                if !integration_needs_update(&actual, revision, native.as_deref()) {
+                    let pending_host = match self.remote_host(&current) {
+                        Some(host) if committed => {
+                            let locator = self.store.chat_session_locator(who, &current.id).await?;
+                            locator["integration_update"].is_object().then_some(host)
+                        }
+                        _ => None,
+                    };
+                    if let Some(host) = pending_host {
+                        // Seeing the replacement alone does not acknowledge its bind.
+                        // A lost reply needs the same prepare/renew/bind as a warm relink.
+                        if self
+                            .restore_claude_on(who, &current, &host)
+                            .await
+                            .unwrap_or(false)
+                        {
+                            let current = self.store.chat_session(who, &session.id).await?;
+                            control = self.native_control(who, &current, SETTINGS).await?;
+                            committed = false;
+                        }
+                    } else {
+                        return Ok(control);
+                    }
+                }
+                if !committed {
+                    committed = self.update_integration(who, &current, &control).await?;
+                }
+            } else if committed {
+                let restored = if let Some(host) = self.remote_host(&current) {
+                    self.restore_claude_on(who, &current, &host)
+                        .await
+                        .unwrap_or(false)
+                } else {
+                    let mode = self
+                        .owned_mode(who, &current.id)
+                        .await?
+                        .context("The session is not owned")?;
+                    if matches!(
+                        self.runners
+                            .find(&current.native_session_id, &current.workspace, mode)
+                            .await,
+                        Ok(None)
+                    ) && !self.runners.is_leased(&current.native_session_id)?
+                    {
+                        self.reconnect_owned(who, &current, mode).await?;
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if restored {
+                    let current = self.store.chat_session(who, &session.id).await?;
+                    control = self.native_control(who, &current, SETTINGS).await?;
+                    committed = false;
+                }
+            }
+            ensure!(
+                tokio::time::Instant::now() < deadline,
+                "The harness update is waiting for its current work to finish; no settings were changed"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
     }
 
     /// Changes a running session's settings through its harness; nothing else changes.
@@ -382,10 +598,31 @@ impl ChatRuntime {
         let session = self.store.chat_session(who, id).await?;
         let gate = self.settings_gate(id).await;
         let _guard = gate.lock().await;
-        let patch: AgentSettings = serde_json::from_value(input.patch_json())?;
-        let control = self.native_control(who, &session, SETTINGS).await?;
+        let mut patch: AgentSettings = serde_json::from_value(input.patch_json())?;
+        let control = self.current_settings_control(who, &session).await?;
+        let models = if session.harness == "claude-code" {
+            let mut before = control.call(&session, None, false).await?;
+            before.models = self.claude_catalog(who, &session).await?;
+            before.validate_for(&session.harness, &patch)?;
+            if let Some(model) = &patch.model
+                && let Some(resolved) = before
+                    .models
+                    .iter()
+                    .find(|entry| entry.value == *model)
+                    .and_then(|entry| entry.resolved_model.clone())
+            {
+                patch.model = Some(resolved);
+            }
+            Some(before.models)
+        } else {
+            None
+        };
         control.call(&session, Some(&patch), true).await?;
-        let snapshot = control.call(&session, Some(&patch), false).await?;
+        let mut snapshot = control.call(&session, Some(&patch), false).await?;
+        if let Some(models) = models {
+            snapshot.models = models;
+        }
+        snapshot.confirm(&patch)?;
         self.store
             .observe_native_settings(&session.id, &session.native_session_id, &snapshot.values)
             .await?;
@@ -402,8 +639,7 @@ impl ChatRuntime {
             .into_iter()
             .filter(|session| {
                 session.stopped_at.is_none()
-                    && session.status == "connected"
-                    && session.host_id.as_deref() == self.store.host()
+                    && matches!(session.status.as_str(), "connected" | "attention")
             })
         {
             let who = ChatIdentity::person(&session.owner_id);
@@ -411,6 +647,21 @@ impl ChatRuntime {
             let Ok(_guard) = gate.try_lock() else {
                 continue;
             };
+            if let Some(host) = self.remote_host(&session) {
+                // A committed remote update must finish even if the request's client
+                // disconnected. Its checkpoint authorizes recovery, never a new input.
+                if session.harness == "claude-code"
+                    && self.hosts.online(&host).await
+                    && let Ok(locator) = self.store.chat_session_locator(&who, &session.id).await
+                    && locator["integration_update"].is_object()
+                {
+                    let _ = self.restore_claude_on(&who, &session, &host).await;
+                }
+                continue;
+            }
+            if session.status != "connected" {
+                continue;
+            }
             let Ok(control) = self.native_control(&who, &session, SETTINGS).await else {
                 continue;
             };
@@ -454,4 +705,48 @@ fn fields(harness: &str) -> Vec<String> {
         _ => {}
     }
     fields
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_same_running_bound_helper_can_cancel_a_shutdown_checkpoint() {
+        let actual = json!({"instance_id":"helper", "bound":true,
+            "native_phase":"running", "native_pid":123});
+        assert!(update_was_cancelled(&actual, "helper"));
+        assert!(!update_was_cancelled(&actual, "another"));
+        for patch in [
+            json!({"bound":false}),
+            json!({"native_phase":"closing"}),
+            json!({"native_phase":"exited"}),
+            json!({"native_pid":null}),
+        ] {
+            let mut changed = actual.clone();
+            changed
+                .as_object_mut()
+                .unwrap()
+                .extend(patch.as_object().unwrap().clone());
+            assert!(!update_was_cancelled(&changed, "helper"));
+        }
+    }
+
+    #[test]
+    fn installed_native_changes_require_an_update_even_when_helper_code_is_current() {
+        let mut actual = json!({"integration_revision":"helper", "native_revision":"old",
+            "capabilities":["integration-update-v1"]});
+        assert!(integration_needs_update(&actual, "helper", Some("new")));
+        assert!(!integration_needs_update(&actual, "helper", Some("old")));
+        actual.as_object_mut().unwrap().remove("native_revision");
+        assert!(integration_needs_update(&actual, "helper", Some("new")));
+        assert!(!integration_needs_update(&actual, "helper", None));
+        assert!(integration_needs_update(&actual, "updated-helper", None));
+        actual["capabilities"] = json!([]);
+        assert!(!integration_needs_update(
+            &actual,
+            "updated-helper",
+            Some("new")
+        ));
+    }
 }
