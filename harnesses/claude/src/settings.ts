@@ -6,7 +6,6 @@ import type {
   ModelInfo,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
-  checkModelChoice,
   confirmSettings,
   settingsPatch,
   type NativeAgentSettings,
@@ -30,14 +29,6 @@ export function modelOptions(models: ModelInfo[]) {
     ...(model.resolvedModel ? { resolved_model: model.resolvedModel } : {}),
     efforts: model.supportedEffortLevels ?? [],
   }));
-}
-
-/** A native model ID can be valid before it appears in the discovery catalog. */
-function checkChoice(
-  snapshot: NativeSettingsSnapshot,
-  patch: ReturnType<typeof settingsPatch>,
-) {
-  if (patch.effort !== undefined) checkModelChoice(snapshot, patch);
 }
 
 export class ClaudeSettings {
@@ -109,7 +100,8 @@ export class ClaudeSettings {
   async apply(input: unknown, check = false) {
     const before = await this.read();
     const patch = settingsPatch(input, before.editable);
-    checkChoice(before, patch);
+    // The kernel validates choices against the installed harness's fresh catalog.
+    // This query's startup catalog cannot reject a newer model or its effort levels.
     if (
       patch.permission_mode !== undefined &&
       !PERMISSION_MODES.includes(patch.permission_mode as PermissionMode)

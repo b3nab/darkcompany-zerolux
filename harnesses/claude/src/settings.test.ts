@@ -106,11 +106,11 @@ test("Claude applies session-local flags and permission mode without prompts or 
   });
 });
 
-test("Claude checks every field against native choices before mutation", async () => {
+test("Claude checks field shape and permission mode before mutation", async () => {
   const f = fixture();
   for (const patch of [
-    { effort: "invented" },
-    { model: "new-native-model", effort: "invented" },
+    { effort: "" },
+    { model: "new-native-model", effort: 1 },
     { model: "native-alias", permission_mode: "invented" },
     { sandbox: "read-only" },
   ])
@@ -152,6 +152,20 @@ test("Claude accepts a native model ID missing from its initial catalog and conf
   expect(f.calls).toHaveLength(1);
 });
 
+test("Claude changes effort after choosing a model absent from its startup catalog", async () => {
+  const f = fixture();
+  await f.settings.apply({ model: "new-native-model" });
+  await f.settings.apply({ effort: "new-native-effort" }, true);
+  expect(f.calls).toEqual([["model", "new-native-model"]]);
+  const confirmed = await f.settings.apply({ effort: "new-native-effort" });
+  expect(confirmed.values.model).toBe("new-native-model");
+  expect(confirmed.values.effort).toBe("new-native-effort");
+  expect(f.calls).toEqual([
+    ["model", "new-native-model"],
+    ["flags", { effortLevel: "new-native-effort" }],
+  ]);
+});
+
 test("a refused or unconfirmed custom model is never reported as applied or retried", async () => {
   const refused = fixture();
   refused.reject();
@@ -174,10 +188,27 @@ test("a refused or unconfirmed custom model is never reported as applied or retr
   );
 });
 
-test("Claude never invents an effort catalog or a successful capability when native data is absent", async () => {
+test("Claude never invents a catalog or reports an unconfirmed effort change as applied", async () => {
   const f = fixture();
   f.query.supportedModels = async () => [];
   expect((await f.settings.read()).models).toEqual([]);
-  await expect(f.settings.apply({ effort: "native-effort" })).rejects.toThrow();
+  let attempts = 0;
+  f.query.applyFlagSettings = async () => {
+    attempts++;
+  };
+  await expect(
+    f.settings.apply({ effort: "new-native-effort" }),
+  ).rejects.toThrow();
+  expect(attempts).toBe(1);
+  expect((await f.settings.read()).values.effort).toBe("native-effort");
+  f.query.applyFlagSettings = async () => {
+    attempts++;
+    throw new Error("Native refusal");
+  };
+  await expect(
+    f.settings.apply({ effort: "new-native-effort" }),
+  ).rejects.toThrow();
+  expect(attempts).toBe(2);
+  expect((await f.settings.read()).values.effort).toBe("native-effort");
   await expect(new ClaudeSettings(() => undefined).read()).rejects.toThrow();
 });
