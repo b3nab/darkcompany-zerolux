@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ApiError,
   errorMessage,
   harnessLabels,
   kernelUrl,
@@ -72,6 +73,11 @@ function useSettingsResource<T>(
     loading: state.key !== key || state.loading,
     error: state.key === key ? state.error : "",
     refresh,
+    replace: (data: T) => {
+      if (readingKey.current !== key) return;
+      epoch.current++;
+      setState({ key, data, loading: false, error: "" });
+    },
     update: (update: (data: T) => T) => {
       if (readingKey.current !== key) return;
       epoch.current++;
@@ -131,6 +137,15 @@ export function useSessionCatalog(
   );
 }
 
+type SessionOperation = {
+  result: Promise<SessionSettingsView>;
+  observed: { value?: SessionSettingsView };
+};
+// A session can be left and reopened while its native change is still being confirmed.
+const settingsOperations = new Map<string, SessionOperation>();
+const uncertainSettings = (error: unknown) =>
+  !(error instanceof ApiError) || error.status >= 500;
+
 /**
  * A session's own model, effort and permissions, read from its harness; `apply` changes them
  * through it and shows what the harness confirmed.
@@ -146,19 +161,92 @@ export function useSessionSettings(
     kernel,
     revision,
   );
-  return {
-    ...resource,
-    async apply(change: AgentSettings) {
-      const confirmed = await request<SessionSettingsView>(
+  const key = `${kernel}\n${sessionId}`;
+  const [mutation, setMutation] = useState<{
+    key: string;
+    pending: boolean;
+    error?: string;
+  }>({ key, pending: false });
+  const current = mutation.key === key ? mutation : undefined;
+  function follow(operation: SessionOperation) {
+    setMutation({ key, pending: true });
+    return operation.result.then(
+      (confirmed) => {
+        resource.replace(confirmed);
+        setMutation((state) =>
+          state.key === key ? { key, pending: false } : state,
+        );
+        return confirmed;
+      },
+      (error: unknown) => {
+        if (operation.observed.value)
+          resource.replace(operation.observed.value);
+        setMutation((state) =>
+          state.key === key
+            ? {
+                key,
+                pending: false,
+                error: uncertainSettings(error)
+                  ? "Could not confirm the change"
+                  : errorMessage(error),
+              }
+            : state,
+        );
+        throw error;
+      },
+    );
+  }
+  useEffect(() => {
+    const operation = settingsOperations.get(key);
+    if (operation) void follow(operation).catch(() => {});
+  }, [key]);
+  function apply(change: AgentSettings) {
+    let operation = settingsOperations.get(key);
+    if (!operation) {
+      const observed: SessionOperation["observed"] = {};
+      const result = request<SessionSettingsView>(
         kernel,
         path,
         change,
         undefined,
         "PATCH",
-      );
-      resource.update(() => confirmed);
-      rereadShown(readModelLabels, kernel);
-      return confirmed;
+      )
+        .then((confirmed) => {
+          rereadShown(readModelLabels, kernel);
+          return confirmed;
+        })
+        .catch(async (error: unknown) => {
+          if (uncertainSettings(error)) {
+            // A lost reply may follow a successful setter. Observe once, never replay.
+            await request<SessionSettingsView>(kernel, path)
+              .then((snapshot) => {
+                observed.value = snapshot;
+              })
+              .catch(() => {});
+          }
+          throw error;
+        });
+      operation = { result, observed };
+      settingsOperations.set(key, operation);
+      void result
+        .finally(() => {
+          if (settingsOperations.get(key)?.result === result)
+            settingsOperations.delete(key);
+        })
+        .catch(() => {});
+    }
+    return follow(operation);
+  }
+  const pending = settingsOperations.has(key) || (current?.pending ?? false);
+  return {
+    ...resource,
+    pending,
+    error: pending ? "" : current?.error || resource.error,
+    apply,
+    recheck() {
+      if (pending) return;
+      setMutation({ key, pending: false });
+      resource.refresh();
     },
   };
 }
