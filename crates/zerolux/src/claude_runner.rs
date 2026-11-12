@@ -563,6 +563,9 @@ impl RunnerLink {
             Some("bind" | "prepare" | "update_commit")
         ) {
             60
+        } else if request["method"] == "settings" {
+            // setModel may validate a new ID against the provider before confirming it.
+            45
         } else {
             5
         };
