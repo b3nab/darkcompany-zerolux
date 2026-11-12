@@ -75,9 +75,16 @@ export function agentModelOption(
   models: AgentModelOption[],
   value: string | null | undefined,
 ) {
+  if (!value) return undefined;
   return (
     models.find((model) => model.value === value) ??
-    models.find((model) => model.resolved_model === value)
+    // Reset and hybrid choices are not aliases for the model they resolve to now.
+    models.find(
+      (model) =>
+        model.value !== "default" &&
+        model.value !== "opusplan" &&
+        model.resolved_model === value,
+    )
   );
 }
 

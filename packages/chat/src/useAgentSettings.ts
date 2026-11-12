@@ -7,11 +7,12 @@ import {
   request,
   type Actor,
 } from "./client";
-import type {
-  AgentModelOption,
-  AgentSettings,
-  AgentSettingsView,
-  SessionSettingsView,
+import {
+  agentModelOption,
+  type AgentModelOption,
+  type AgentSettings,
+  type AgentSettingsView,
+  type SessionSettingsView,
 } from "./workspace";
 import { isLooking, whenLooking } from "./reading";
 import { rereadShown, sharedRead, useSharedRead } from "./shared-read";
@@ -262,7 +263,10 @@ async function readModelLabels(kernel: string) {
       return models.flatMap((model) =>
         [model.value, model.resolved_model]
           .filter((value): value is string => value !== undefined)
-          .map((value) => [`${harness}\n${value}`, model.label]),
+          .map((value) => [
+            `${harness}\n${value}`,
+            agentModelOption(models, value)?.label ?? value,
+          ]),
       );
     }),
   );
