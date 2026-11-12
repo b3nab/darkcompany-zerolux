@@ -3,6 +3,7 @@ import { ApiError, setKernelUrl } from "./client";
 import type { Actor } from "./client";
 import {
   agentLaunchSettings,
+  agentModelOption,
   agentModelValue,
   agentSettingFields,
   canApplyAgentSettings,
@@ -228,6 +229,42 @@ test("resolved model IDs select their alias without replacing an older version b
     efforts: [],
   };
   expect(agentModelValue([alias, explicit], "native-v2")).toBe("native-v2");
+});
+
+test("resolved model choices never select a reset or hybrid choice implicitly", () => {
+  const alias = {
+    value: "native-alias",
+    resolved_model: "native-v2",
+    label: "Fixture model",
+    efforts: ["native-effort"],
+  };
+  const reset = { ...alias, value: "default", efforts: ["reset-effort"] };
+  const hybrid = { ...alias, value: "opusplan", efforts: ["hybrid-effort"] };
+  for (const models of [
+    [reset, hybrid, alias],
+    [alias, hybrid, reset],
+  ]) {
+    expect(agentModelValue(models, "native-v2")).toBe("native-alias");
+    expect(agentModelValue(models, "native-alias")).toBe("native-alias");
+    expect(agentModelValue(models, "default")).toBe("default");
+    expect(agentModelValue(models, "opusplan")).toBe("opusplan");
+    expect(agentModelValue(models, "native-v1")).toBe("native-v1");
+    expect(
+      Object.keys(
+        agentSettingFields("claude-code", models, "native-v2")[1]!.options,
+      ),
+    ).toEqual(["native-effort"]);
+  }
+  expect(agentModelValue([reset, hybrid], "native-v2")).toBe("native-v2");
+  expect(agentModelOption([reset, hybrid], "native-v2")).toBeUndefined();
+});
+
+test("an absent model cannot select a catalog entry without a resolved ID", () => {
+  const models = [{ value: "native-model", label: "Fixture", efforts: [] }];
+  for (const value of [undefined, null, ""]) {
+    expect(agentModelOption(models, value)).toBeUndefined();
+    expect(agentModelValue(models, value)).toBe("");
+  }
 });
 
 test("blank launch fields omit overrides rather than clearing the agent's saved settings", () => {

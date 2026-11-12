@@ -191,6 +191,62 @@ test("typing and cancelling keep the model; Enter and selecting submit one confi
   expect(settings.data?.values.model).toBe("native-known");
 });
 
+test("a concrete model stays selected when the default resolves to the same ID", async () => {
+  const models = [
+    {
+      value: "default",
+      label: "Fixture reset",
+      resolved_model: "native-version",
+      efforts: [],
+    },
+    {
+      value: "family",
+      label: "Fixture family",
+      resolved_model: "native-version",
+      efforts: [],
+    },
+    { value: "native-known", label: "Fixture previous", efforts: [] },
+  ];
+  let model = "native-known";
+  let reads = 0;
+  const changes: AgentSettings[] = [];
+  setKernelFetch(async (_url, init) => {
+    if (init?.method === "PATCH") {
+      const change = JSON.parse(String(init.body)) as AgentSettings;
+      changes.push(change);
+      model = "native-version";
+    } else reads++;
+    return Response.json({ ...snapshot(model), models });
+  });
+  const selected = () =>
+    [...document.querySelectorAll('[role="option"][data-checked="true"]')].map(
+      (option) => option.getAttribute("data-value"),
+    );
+  const picker = <Probe id="resolved-model-choice" picker />;
+  await render(picker);
+  await openPicker();
+  expect(selected()).toEqual(["native-known"]);
+  await act(async () => {
+    document
+      .querySelector<HTMLElement>('[role="option"][data-value="family"]')!
+      .click();
+  });
+  expect(changes).toEqual([{ model: "family" }]);
+  expect(settings.data?.values.model).toBe("native-version");
+  await openPicker();
+  expect(selected()).toEqual(["family"]);
+  const before = reads;
+  await act(async () => settings.refresh());
+  expect(reads).toBeGreaterThan(before);
+  expect(selected()).toEqual(["family"]);
+  await render(null);
+  await render(picker);
+  await openPicker();
+  expect(selected()).toEqual(["family"]);
+  expect(settings.data?.values.model).toBe("native-version");
+  expect(changes).toEqual([{ model: "family" }]);
+});
+
 test("a confirmed model's usage updates the context meter without a new turn", async () => {
   const id = "context-change";
   const usage = {
