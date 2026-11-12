@@ -282,6 +282,7 @@ launch(
     runner = created;
     const handle = created.handle.bind(created);
     created.handle = async (method, request) => {
+      if (method.startsWith("update")) trace("update_control", { method });
       const result = await handle(method, request);
       const lost = join(workspace, "lose-next-bind-reply");
       if (method === "bind" && existsSync(lost)) {
@@ -294,6 +295,10 @@ launch(
     const describe = created.describe.bind(created);
     created.describe = () => {
       const state = describe();
+      if (existsSync(join(workspace, "legacy-update")))
+        state.capabilities = state.capabilities.filter(
+          (capability) => capability !== "integration-target-v1",
+        );
       if (existsSync(join(workspace, "legacy-description")))
         for (const key of [
           "started",

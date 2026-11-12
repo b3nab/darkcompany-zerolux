@@ -66,6 +66,32 @@ impl Fixture {
             .filter_map(|line| serde_json::from_str(line).ok())
             .collect()
     }
+    pub(crate) fn release_entry(&self, release: &str) -> PathBuf {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap();
+        let fixture = root.join("harnesses/claude/src/fixtures/owned-harness.ts");
+        let source = std::fs::read_to_string(fixture)
+            .unwrap()
+            .replace(
+                "\"@zerolux/bridge\"",
+                &serde_json::to_string(&root.join("packages/bridge/src/index.ts")).unwrap(),
+            )
+            .replace(
+                "\"../runner.ts\"",
+                &serde_json::to_string(&root.join("harnesses/claude/src/runner.ts")).unwrap(),
+            );
+        let directory = self.dir.path().join("runtime").join(release);
+        std::fs::create_dir_all(&directory).unwrap();
+        let entry = directory.join("runner.ts");
+        std::fs::write(
+            &entry,
+            format!("{source}\n// Immutable release {release}\n"),
+        )
+        .unwrap();
+        entry
+    }
     pub(crate) async fn control(&self, native: &str, mut request: Value) -> Value {
         let record = std::fs::read_dir(self.dir.path().join("links/claude"))
             .unwrap()
