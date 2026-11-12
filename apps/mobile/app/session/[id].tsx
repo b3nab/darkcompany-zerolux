@@ -1190,7 +1190,6 @@ function SessionSheet({
   compact?: () => void;
 }) {
   const insets = useSafeAreaInsets();
-  const [error, setError] = useState("");
   const harness = session.harness as Actor["harness"];
   const values = settings.data?.values ?? {};
   const editable = settings.data?.editable ?? [];
@@ -1206,9 +1205,9 @@ function SessionSheet({
     if (visible) refresh();
   }, [visible, refresh]);
   const apply = (change: AgentSettings) => {
-    setError("");
-    settings.apply(change).catch((e: unknown) => setError(errorMessage(e)));
+    void settings.apply(change).catch(() => {});
   };
+  const disabled = settings.pending || session.status !== "connected";
   return (
     <Modal
       visible={visible}
@@ -1253,6 +1252,7 @@ function SessionSheet({
                 custom={custom}
                 onOpen={refresh}
                 disabled={
+                  disabled ||
                   !editable.includes(key) ||
                   (!custom && Object.keys(options).length === 0)
                 }
@@ -1265,6 +1265,7 @@ function SessionSheet({
             <Text className="text-sm font-medium">Plan</Text>
             <Switch
               value={plan.on}
+              disabled={disabled}
               onValueChange={(on) => apply(plan.change(on))}
               accessibilityLabel="Plan"
             />
@@ -1294,11 +1295,25 @@ function SessionSheet({
             </View>
           </View>
         ) : null}
-        {error || settings.error ? (
-          <Text className="text-sm text-attention">
-            {error || settings.error}
+        {settings.pending && (
+          <Text className="text-sm text-muted-foreground">
+            Applying settings…
           </Text>
-        ) : null}
+        )}
+        {settings.error && (
+          <Text accessibilityRole="alert" className="text-sm text-attention">
+            {settings.error}
+          </Text>
+        )}
+        {settings.error && (
+          <Button
+            variant="outline"
+            disabled={settings.pending || settings.loading}
+            onPress={settings.recheck}
+          >
+            <Text>Refresh</Text>
+          </Button>
+        )}
       </Animated.View>
     </Modal>
   );
