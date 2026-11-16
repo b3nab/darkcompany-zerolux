@@ -224,7 +224,6 @@ export class PiRunner {
         this.phase !== "starting" ||
         request.native_pid !== this.child?.pid ||
         request.session_file !== this.config.file ||
-        request.cli_version !== this.profile?.cliVersion ||
         request.auth_configured !== true ||
         !validPiState(state) ||
         (!this.config.creation &&
@@ -339,9 +338,8 @@ export class PiRunner {
     let touchedProfile = false;
     let execSent = false;
     try {
-      // --version exits before opening a session in native pi. Never silently switch the
-      // runtime version entrusted by the terminal; no package update is run here.
-      await this.checkVersion(executable, profile.cliVersion);
+      // The pi installed now opens the session, whichever version saved it: pi migrates
+      // saved sessions to its own format when it loads them.
       this.cancelled.signal.throwIfAborted();
       await this.checkSnapshot(snapshot);
       this.cancelled.signal.throwIfAborted();
@@ -483,35 +481,6 @@ export class PiRunner {
       )
         throw new Error("New pi history changed before native startup");
     } else await checkSavedPi(snapshot as SavedPiSession);
-  }
-
-  private async checkVersion(executable: string, expected: string) {
-    const child = Bun.spawn([executable, "--version"], {
-      cwd: this.config.workspace,
-      env: this.deps.environment(),
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    const timer = setTimeout(() => child.kill(), 10_000);
-    try {
-      const reader = child.stdout.getReader();
-      let text = "";
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        text += new TextDecoder().decode(value);
-        if (text.length > 4096) throw new Error("Invalid pi version metadata");
-      }
-      if ((await child.exited) !== 0 || text.trim() !== expected)
-        throw new Error(
-          "The installed pi version changed or could not be verified; no native context was opened",
-        );
-    } finally {
-      clearTimeout(timer);
-      if (child.exitCode === null) child.kill();
-      await child.exited;
-    }
   }
 
   private readState(

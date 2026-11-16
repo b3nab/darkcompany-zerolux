@@ -25,7 +25,7 @@ import { PiRunner } from "./runner.ts";
 
 async function fixture(
   fault = "",
-  options: { extensionControl?: boolean } = {},
+  options: { extensionControl?: boolean; installed?: string } = {},
 ) {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "zerolux-pi-runner-")),
@@ -39,6 +39,7 @@ async function fixture(
     FAKE_PI_ROOT: root,
     FAKE_PI_FAULT: fault,
     ...(options.extensionControl ? { FAKE_PI_EXTENSION_CONTROL: "1" } : {}),
+    FAKE_PI_VERSION: options.installed ?? "0.87.1",
   };
   // A real, certainly exited fixture PID, never a personal harness.
   const old = Bun.spawn([process.execPath, "-e", ""], {
@@ -75,7 +76,7 @@ async function fixture(
     `#!${process.execPath}
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-if (process.argv.includes("--version")) { console.log("0.87.1"); process.exit(0); }
+if (process.argv.includes("--version")) { console.log(process.env.FAKE_PI_VERSION); process.exit(0); }
 const root = process.env.FAKE_PI_ROOT;
 appendFileSync(join(root, "starts"), (process.env.ZEROLUX_NATIVE_PID ?? process.pid) + "\\n");
 const option = name => { const i = process.argv.indexOf(name); return i < 0 ? undefined : process.argv[i + 1]; };
@@ -88,7 +89,7 @@ if (process.env.FAKE_PI_FAULT === "create") {
 }
 const { readControlDescriptor, controlRequest } = await import(${JSON.stringify(fileURLToPath(new URL("../../../packages/bridge/src/control-client.ts", import.meta.url)))});
 const descriptor = await readControlDescriptor(process.env.ZEROLUX_PI_RUNNER);
-if (process.env.FAKE_PI_FAULT !== "unguarded") await controlRequest(descriptor, "verify", { native_pid:Number(process.env.ZEROLUX_NATIVE_PID ?? process.pid), session_file:file, cli_version:"0.87.1", model:{provider:option("--provider") ?? "fixture",id:option("--model") ?? "native-model"}, thinking:option("--thinking") ?? "high", auth_configured:true });
+if (process.env.FAKE_PI_FAULT !== "unguarded") await controlRequest(descriptor, "verify", { native_pid:Number(process.env.ZEROLUX_NATIVE_PID ?? process.pid), session_file:file, cli_version:process.env.FAKE_PI_VERSION, model:{provider:option("--provider") ?? "fixture",id:option("--model") ?? "native-model"}, thinking:option("--thinking") ?? "high", auth_configured:true });
 // The native extension's own control, as stock pi's chat extension runs it: asked whose
 // turn it is, it answers what the test left in "turn" (a JSON value), or refuses.
 if (process.env.FAKE_PI_EXTENSION_CONTROL) {
@@ -370,6 +371,18 @@ test("native startup is gated, prompt-free and keeps the exact saved identity/pr
     expect(await readFile(join(f.root, "starts"), "utf8")).toBe(`${pid}\n`);
     await f.runner.handle("stop", { link_id: "next-link" });
     expect(processExists(pid)).toBe(false);
+  } finally {
+    await f.close();
+  }
+}, 15_000);
+
+test("a session saved by an older pi opens with the pi installed now", async () => {
+  const f = await fixture("", { installed: "1.5.0" });
+  try {
+    const result = await f.bind();
+    expect(processExists(result.native_pid as number)).toBe(true);
+    expect(f.runner.describe().phase).toBe("running");
+    await f.runner.handle("stop", { link_id: "link" });
   } finally {
     await f.close();
   }

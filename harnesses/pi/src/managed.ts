@@ -66,7 +66,6 @@ export async function verifyManaged(
     actual.native_session_id !== native ||
     actual.workspace !== workspace ||
     actual.session_file !== file ||
-    actual.cli_version !== VERSION ||
     (actual.creating !== true &&
       (model?.provider !== ctx.model?.provider ||
         model?.id !== ctx.model?.id ||
