@@ -609,8 +609,11 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     },
     /** Resumes a session ZeroLux runs: the same session, in the same permission mode. */
     async resume(sessionId: string) {
-      await api(`/sessions/${sessionId}/resume`, {});
-      await listSessions();
+      try {
+        await api(`/sessions/${sessionId}/resume`, {});
+      } finally {
+        await listSessions().catch(() => {});
+      }
     },
     /**
      * Stops the turn a session is working on, not the session. True when the harness stopped
@@ -709,11 +712,16 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       });
     },
     async stop(sessionId: string) {
-      await order.run(
-        "sessions",
-        () => api<{ session: ChatSession }>(`/sessions/${sessionId}/stop`, {}),
-        ({ session }) => setSessions((ss) => replace(ss, session)),
-      );
+      try {
+        await order.run(
+          "sessions",
+          () =>
+            api<{ session: ChatSession }>(`/sessions/${sessionId}/stop`, {}),
+          ({ session }) => setSessions((ss) => replace(ss, session)),
+        );
+      } finally {
+        await listSessions().catch(() => {});
+      }
     },
     /** Allows a permission as far as `scope` says, or denies it with the owner's `reason`. */
     async decide(

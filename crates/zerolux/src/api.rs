@@ -1201,6 +1201,19 @@ fn said(error: anyhow::Error) -> ApiFailure {
 }
 
 fn runtime_error(error: anyhow::Error) -> ApiFailure {
+    if let Some(failure) = error.downcast_ref::<crate::pi_runner::PiFailure>() {
+        let status = match failure {
+            crate::pi_runner::PiFailure::ProfileUnavailable => StatusCode::CONFLICT,
+            _ => StatusCode::SERVICE_UNAVAILABLE,
+        };
+        return ApiFailure(Box::new(
+            (
+                status,
+                Json(json!({ "error": failure.to_string(), "code": failure.code() })),
+            )
+                .into_response(),
+        ));
+    }
     if let Some(failure) = error.downcast_ref::<crate::agent_settings::SettingsFailure>() {
         return ApiFailure(Box::new(
             (
@@ -1886,14 +1899,18 @@ async fn stop_session(
         match runtime.stop_session(&id).await {
             Ok(note) => note,
             Err(error) => {
-                state
-                    .store
-                    .note_chat_stop(
-                        &who,
-                        &id,
-                        "Stopped. Its harness did not confirm it stopped working.",
-                    )
-                    .await?;
+                let error = if session.harness == "pi" {
+                    crate::pi_runner::PiFailure::StopUnconfirmed.context(error)
+                } else {
+                    error
+                };
+                let note = error
+                    .downcast_ref::<crate::pi_runner::PiFailure>()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| {
+                        "Stopped. Its harness did not confirm it stopped working.".into()
+                    });
+                state.store.note_chat_stop(&who, &id, &note).await?;
                 runtime.changed();
                 return Err(runtime_error(error));
             }
@@ -4499,6 +4516,51 @@ fn invitation_gone() -> ApiFailure {
 mod tests {
     use super::*;
     use crate::agent_settings::SettingsFailure;
+
+    #[tokio::test]
+    async fn pi_lifecycle_failures_have_codes_without_exposing_private_diagnostics() {
+        use crate::pi_runner::PiFailure;
+        for (failure, status, code) in [
+            (
+                PiFailure::RuntimeUnavailable,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "pi_runtime_unavailable",
+            ),
+            (
+                PiFailure::ProfileUnavailable,
+                StatusCode::CONFLICT,
+                "pi_resume_profile_unavailable",
+            ),
+            (
+                PiFailure::StartUnconfirmed,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "pi_start_unconfirmed",
+            ),
+            (
+                PiFailure::StopUnconfirmed,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "pi_stop_unconfirmed",
+            ),
+        ] {
+            let private = "fixture-private-token-and-native-stack";
+            let error = failure.context(anyhow::anyhow!(private));
+            let response =
+                runtime_error(error.context("fixture-private-host-context")).into_response();
+            assert_eq!(response.status(), status);
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["code"], code);
+            assert!(
+                body["error"]
+                    .as_str()
+                    .is_some_and(|message| !message.is_empty())
+            );
+            assert!(!body.to_string().contains(private));
+            assert!(!body.to_string().contains("fixture-private-host-context"));
+        }
+    }
 
     #[tokio::test]
     async fn unconfirmed_settings_have_a_code_without_exposing_error_context() {

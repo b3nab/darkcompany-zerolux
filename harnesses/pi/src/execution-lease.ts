@@ -137,6 +137,16 @@ export class PiExecutionLease {
     return this.previous?.released === true && this.previous.nativePid === pid;
   }
 
+  /** A failed startup may be tried again only after its identified native child ended. */
+  previousStartupEnded(): boolean {
+    const previous = this.previous;
+    return Boolean(
+      previous &&
+      previous.nativePid !== null &&
+      (previous.released || !this.alive(previous.nativePid)),
+    );
+  }
+
   /** Save the gated child's PID BEFORE it receives permission to exec native pi. */
   setNativeProcess(pid: number) {
     if (
@@ -163,6 +173,10 @@ export class PiExecutionLease {
         this.alive(this.owner.nativePid)
       )
         throw new Error("Native pi has not confirmed its exit");
+      // A failed preflight launched no child. Preserve the previous completed startup's
+      // proof so another attempt can still recover its durable pending marker.
+      if (this.owner.nativePid === null && this.previousStartupEnded())
+        this.owner.nativePid = this.previous!.nativePid;
       this.owner.released = true;
       this.lock.write(JSON.stringify(this.owner));
     }

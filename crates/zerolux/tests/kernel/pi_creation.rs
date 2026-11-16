@@ -370,6 +370,66 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     ready(&client, &base).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(starts(&root).len(), 2, "owner Stop was undone by recovery");
+    // A previous release could leave this checkpoint after exec failed. Recovery keeps it
+    // until the execution host confirms the same saved session, even if preflight fails.
+    let profile_path = fs::read_dir(root.join("home/.pi/agent/zerolux-profiles"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.extension().is_some_and(|extension| extension == "json")
+                && serde_json::from_slice::<Value>(&fs::read(path).unwrap()).unwrap()["nativeSessionId"] == native
+        })
+        .unwrap();
+    let mut profile: Value = serde_json::from_slice(&fs::read(&profile_path).unwrap()).unwrap();
+    profile["unavailable"] = json!(
+        "Native pi startup has not confirmed the saved identity/profile; inspect it in native pi before recovery"
+    );
+    let checkpoint = serde_json::to_vec(&profile).unwrap();
+    fs::write(&profile_path, &checkpoint).unwrap();
+    let launcher = fs::read(root.join("bin/pi")).unwrap();
+    script(&root.join("bin/pi"), "#!/bin/sh\nexit 127\n");
+    let failed = client
+        .post(format!(
+            "{base}/api/sessions/{}/resume",
+            restored["id"].as_str().unwrap()
+        ))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(failed.status(), 503);
+    let failure: Value = failed.json().await.unwrap();
+    assert_eq!(failure["code"], "pi_runtime_unavailable");
+    let listed = api(&client, &base, "/sessions", None).await;
+    let failed_session = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|candidate| candidate["id"] == restored["id"])
+        .unwrap();
+    assert_eq!(failed_session["native_session_id"], native);
+    assert_eq!(failed_session["status"], "attention");
+    assert!(
+        failed_session["attention_reason"]
+            .as_str()
+            .is_some_and(|reason| !reason.is_empty())
+    );
+    assert_eq!(starts(&root).len(), 2);
+    assert_eq!(fs::read(&profile_path).unwrap(), checkpoint);
+    assert_eq!(
+        fs::read(root.join("home/native-inputs.jsonl")).unwrap(),
+        inputs
+    );
+    let stopped = api(
+        &client,
+        &base,
+        &format!("/sessions/{}/stop", restored["id"].as_str().unwrap()),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(stopped["session"]["status"], "stopped");
+    fs::write(root.join("bin/pi"), launcher).unwrap();
     let resumed = api(
         &client,
         &base,
@@ -385,6 +445,13 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
         created["actor"]["created_at"]
     );
     assert_eq!(starts(&root).len(), 3);
+    assert_eq!(starts(&root)[2]["native"], native);
+    assert_eq!(starts(&root)[2]["file"], original[0]["file"]);
+    assert_eq!(starts(&root)[2]["model"], "fixture/native-alternate");
+    assert_eq!(starts(&root)[2]["effort"], "low");
+    let recovered_profile: Value =
+        serde_json::from_slice(&fs::read(&profile_path).unwrap()).unwrap();
+    assert!(recovered_profile["unavailable"].is_null());
     assert_eq!(
         fs::read(root.join("home/native-inputs.jsonl")).unwrap(),
         inputs

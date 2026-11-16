@@ -16,6 +16,7 @@ import {
 import { PiExecutionLease, processExists } from "./execution-lease.ts";
 import {
   loadPiProfile,
+  PI_STARTUP_UNCONFIRMED,
   savePiProfile,
   type PiExecutionProfile,
 } from "./execution-profile.ts";
@@ -60,6 +61,14 @@ const defaults: PiRunnerDeps = {
 };
 
 type Child = Bun.Subprocess<"pipe", "pipe", "inherit">;
+
+const runtimeUnavailable = () =>
+  Object.assign(
+    new Error(
+      "The installed pi runtime could not start; its session was not opened",
+    ),
+    { code: "pi_runtime_unavailable" },
+  );
 
 /** Detached host for ONE stock native pi RPC process. No prompts, no automatic replay/retry. */
 /**
@@ -153,6 +162,7 @@ export class PiRunner {
       this.profile = await loadPiProfile(
         this.config.profile,
         this.lease.identity,
+        this.lease.previousStartupEnded(),
       );
       if (
         !this.config.creation &&
@@ -330,16 +340,11 @@ export class PiRunner {
     const profile = this.profile;
     const snapshot = this.snapshot;
     const executable = Bun.which(this.config.pi);
-    if (!executable)
-      throw new Error(
-        "Install pi on this execution host before restoring its sessions",
-      );
+    if (!executable) throw runtimeUnavailable();
     this.phase = "starting";
     let touchedProfile = false;
     let execSent = false;
     try {
-      // The pi installed now opens the session, whichever version saved it: pi migrates
-      // saved sessions to its own format when it loads them.
       this.cancelled.signal.throwIfAborted();
       await this.checkSnapshot(snapshot);
       this.cancelled.signal.throwIfAborted();
@@ -353,6 +358,11 @@ export class PiRunner {
         env.PI_CODING_AGENT_SESSION_DIR = profile.sessionDir;
       if (profile.offline !== undefined) env.PI_OFFLINE = profile.offline;
       env.ZEROLUX_PI_RUNNER = this.controlPath;
+      // The installed launcher and its interpreter must work in this exact environment.
+      // --version opens no session. Its value is metadata, never an upgrade restriction.
+      const cliVersion = await this.installedVersion(executable, env);
+      this.cancelled.signal.throwIfAborted();
+      this.profile = { ...profile, cliVersion };
       const child = Bun.spawn([process.execPath, this.config.entry, "exec"], {
         cwd: snapshot.workspace,
         env,
@@ -380,8 +390,8 @@ export class PiRunner {
       touchedProfile = true;
       await this.deps.persistProfile({
         ...profile,
-        unavailable:
-          "Native pi startup has not confirmed the saved identity/profile; inspect it in native pi before recovery",
+        cliVersion,
+        unavailable: PI_STARTUP_UNCONFIRMED,
       });
       await this.wanted(request);
       this.cancelled.signal.throwIfAborted();
@@ -452,7 +462,9 @@ export class PiRunner {
       // extension profile capture must not clear it while this host is still starting.
       await this.deps.persistProfile({
         ...profile,
+        cliVersion,
         lastPid: child.pid,
+        unavailable: undefined,
       });
       this.cancelled.signal.throwIfAborted();
       this.phase = "running";
@@ -465,6 +477,48 @@ export class PiRunner {
       }
       await this.stopNative();
       throw error;
+    }
+  }
+
+  private async installedVersion(executable: string, env: NodeJS.ProcessEnv) {
+    let child: Bun.Subprocess<"ignore", "pipe", "ignore"> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      child = Bun.spawn([executable, "--version"], {
+        cwd: this.config.workspace,
+        env,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "ignore",
+      });
+      // This child only reads --version, never a session. End a stalled launcher even
+      // when it handles SIGTERM; native execution below retains its orderly shutdown.
+      const stop = () => child?.kill("SIGKILL");
+      this.cancelled.signal.addEventListener("abort", stop, { once: true });
+      timer = setTimeout(stop, 10_000);
+      try {
+        const reader = child.stdout.getReader();
+        let text = "";
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          text += new TextDecoder().decode(value);
+          if (text.length > 4096)
+            throw new Error("Invalid pi version metadata");
+        }
+        if ((await child.exited) !== 0 || !text.trim())
+          throw new Error("pi launcher could not start");
+        return text.trim();
+      } finally {
+        this.cancelled.signal.removeEventListener("abort", stop);
+      }
+    } catch {
+      this.cancelled.signal.throwIfAborted();
+      throw runtimeUnavailable();
+    } finally {
+      clearTimeout(timer);
+      if (child?.exitCode === null) child.kill("SIGKILL");
+      await child?.exited;
     }
   }
 

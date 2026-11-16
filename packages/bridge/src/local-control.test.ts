@@ -16,6 +16,44 @@ const rpc = (endpoint: string, body: unknown) =>
     socket.write(`${JSON.stringify(body)}\n`);
   });
 
+test("only an explicitly safe native failure code crosses the control protocol", async () => {
+  const root = await mkdtemp(join(tmpdir(), "zerolux-control-code-"));
+  const control = new LocalControl(
+    root,
+    {
+      describe: () => ({ native_session_id: "native", workspace: root }),
+      handle: async (method) => {
+        throw Object.assign(new Error("fixture"), {
+          code: method,
+          private: "secret",
+        });
+      },
+    },
+    "test",
+  );
+  try {
+    await control.start();
+    const name = (await readdir(root)).find((f) => f.endsWith(".json"))!;
+    const { endpoint, nonce } = JSON.parse(
+      await readFile(join(root, name), "utf8"),
+    );
+    for (const code of ["pi_runtime_unavailable", "unrecognized"]) {
+      const response = (await rpc(endpoint, { nonce, method: code })) as Record<
+        string,
+        unknown
+      >;
+      expect(response.ok).toBe(false);
+      expect(response.code).toBe(
+        code === "pi_runtime_unavailable" ? code : undefined,
+      );
+      expect(response.private).toBeUndefined();
+    }
+  } finally {
+    await control.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a request in progress is still answered when the control closes meanwhile", async () => {
   const root = await mkdtemp(join(tmpdir(), "zerolux-control-"));
   let closing: Promise<void> | undefined;

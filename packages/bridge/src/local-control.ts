@@ -128,6 +128,11 @@ export class LocalControl {
           // The real reason, for the kernel's diagnostics: a generic one hides the cause.
           (error: unknown) => ({
             ok: false,
+            ...(error instanceof Error &&
+            "code" in error &&
+            error.code === "pi_runtime_unavailable"
+              ? { code: error.code }
+              : {}),
             error: `The ${this.label} link request failed: ${
               error instanceof Error ? error.message : String(error)
             }`.slice(0, 1000),

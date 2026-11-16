@@ -56,9 +56,11 @@ for (const [key, value] of Object.entries(globals))
 
 const { createRoot } = await import("react-dom/client");
 const {
+  ApiError,
   liveNotice,
   lookWith,
   setKernelFetch,
+  useChat,
   useSessionSettings,
   useSessionUsage,
 } = await import("@zerolux/chat");
@@ -124,6 +126,51 @@ async function render(node: ReactNode) {
     root = createRoot(container);
   }
   await act(async () => root!.render(node));
+}
+
+for (const action of ["stop", "resume"] as const) {
+  test(`${action} failure refreshes authoritative session state without replaying the action`, async () => {
+    let chat!: Chat;
+    function ChatProbe() {
+      chat = useChat(false, "https://fixture.example.test");
+      return null;
+    }
+    const calls: string[] = [];
+    let readFails = false;
+    setKernelFetch(async (url, init) => {
+      const path = new URL(url).pathname;
+      calls.push(`${init?.method} ${path}`);
+      if (init?.method === "POST")
+        return Response.json({ error: "fixture action" }, { status: 503 });
+      return readFails
+        ? Response.json({ error: "fixture read" }, { status: 502 })
+        : Response.json({
+            sessions: [{ id: "native-a", status: "stopped", seen_at: 0 }],
+          });
+    });
+    await render(<ChatProbe />);
+    for (const failedRead of [false, true]) {
+      readFails = failedRead;
+      calls.length = 0;
+      let failure: unknown;
+      await act(async () => {
+        try {
+          await chat[action]("native-a");
+        } catch (error) {
+          failure = error;
+        }
+      });
+      expect(failure).toBeInstanceOf(ApiError);
+      expect(failure).toMatchObject({ status: 503 });
+      expect(calls).toEqual([
+        `POST /api/sessions/native-a/${action}`,
+        "GET /api/sessions",
+      ]);
+      expect(chat.sessions.map(({ id, status }) => ({ id, status }))).toEqual([
+        { id: "native-a", status: "stopped" },
+      ]);
+    }
+  });
 }
 
 async function openPicker(selector = "button") {

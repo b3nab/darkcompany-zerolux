@@ -124,13 +124,21 @@ test("pi rejects a native refusal without pretending the effort or model changed
   expect(f.calls).toHaveLength(1);
 });
 
-test("pi reads refreshed native choices and changes effort without rewriting the model", async () => {
+test("pi selects a refreshed native choice and changes effort without rewriting the model", async () => {
   const f = fixture();
   f.models.push({ ...f.models[0]!, id: "added-by-provider" });
   expect(f.settings.read().models.at(-1)!.value).toBe(
     "provider-one/added-by-provider",
   );
+  const selected = await f.settings.apply({
+    model: "provider-one/added-by-provider",
+  });
+  expect(selected.values.model).toBe("provider-one/added-by-provider");
+  expect(f.settings.values().model).toBe(selected.values.model);
   const effort = getSupportedThinkingLevels(f.models[0]!).at(-1)!;
   await f.settings.apply({ effort });
-  expect(f.calls).toEqual([["effort", effort]]);
+  expect(f.calls).toEqual([
+    ["model", f.models.at(-1)],
+    ["effort", effort],
+  ]);
 });

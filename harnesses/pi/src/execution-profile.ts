@@ -19,6 +19,10 @@ export interface PiExecutionProfile {
   unavailable?: string;
 }
 
+/** Written before exec by existing hosts; only a verified native startup clears it. */
+export const PI_STARTUP_UNCONFIRMED =
+  "Native pi startup has not confirmed the saved identity/profile; inspect it in native pi before recovery";
+
 const values = new Set([
   "--models",
   "--tools",
@@ -189,6 +193,7 @@ export async function savePiProfile(
 export async function loadPiProfile(
   path: string,
   expected: { nativeSessionId: string; workspace: string; file: string },
+  previousStartupEnded = false,
 ): Promise<PiExecutionProfile> {
   if (!isAbsolute(path)) throw new Error("Pi profile path must be absolute");
   const handle = await openNoFollow(path);
@@ -213,7 +218,11 @@ export async function loadPiProfile(
       throw new Error(
         "The saved pi execution profile does not match the entrusted session",
       );
-    if (profile.unavailable) throw new Error(profile.unavailable);
+    if (
+      profile.unavailable &&
+      !(previousStartupEnded && profile.unavailable === PI_STARTUP_UNCONFIRMED)
+    )
+      throw new Error(profile.unavailable);
     if (
       JSON.stringify(piResumeArgs(profile.args)) !==
       JSON.stringify(profile.args)

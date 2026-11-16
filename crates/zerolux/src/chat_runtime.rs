@@ -990,11 +990,20 @@ impl ChatRuntime {
                 .await
         };
         if let Err(error) = paired {
+            let error = if target.harness == Harness::Pi {
+                crate::pi_runner::PiFailure::StartUnconfirmed.context(error)
+            } else {
+                error
+            };
+            let note = error
+                .downcast_ref::<crate::pi_runner::PiFailure>()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| crate::chat::LINK_FAILED.into());
             // Pairing may have reached the external extension even if its ACK
             // was lost. Revoke the issued token; never retry native handoff.
             if self
                 .store
-                .fail_chat_link(who, &issued.session.id, crate::chat::LINK_FAILED)
+                .fail_chat_link(who, &issued.session.id, &note)
                 .await?
             {
                 // The owner pressed Stop while pairing was pending: their decision stands.
@@ -1226,7 +1235,24 @@ impl ChatRuntime {
             .check_hire(who, Harness::Pi, session.actor_id.as_deref(), "")
             .await?;
         let live = sessions::resolve_linked("pi", &session.native_session_id).await;
-        let target = self.pi_target(who, &session, live).await?;
+        let target = match self.pi_target(who, &session, live).await {
+            Ok(target) => target,
+            Err(error) => {
+                if let Some(failure) = error.downcast_ref::<crate::pi_runner::PiFailure>() {
+                    if session.stopped_at.is_some() {
+                        self.store
+                            .note_chat_stop(who, id, &failure.to_string())
+                            .await?;
+                    } else {
+                        self.store
+                            .fail_chat_link(who, id, &failure.to_string())
+                            .await?;
+                    }
+                    self.changed();
+                }
+                return Err(error);
+            }
+        };
         let reconnect = session.stopped_at.is_none();
         if let Some(previous) = self.agents.lock().await.remove(id) {
             previous.release().await;
@@ -1319,7 +1345,8 @@ impl ChatRuntime {
                 &session.workspace,
                 saved.clone(),
             )
-            .await?;
+            .await
+            .context(crate::pi_runner::PiFailure::ProfileUnavailable)?;
             sessions::NativeSessionTarget {
                 harness: Harness::Pi,
                 native_session_id: session.native_session_id.clone(),

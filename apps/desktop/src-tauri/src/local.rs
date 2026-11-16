@@ -77,9 +77,130 @@ impl LocalWorkspace {
     }
 }
 
-/// Preserve explicitly configured PATH precedence, then add the conventional install locations
-/// a GUI launch may lack, on each system. No shell execution, shell startup files, or runtime
-/// mutation by the kernel.
+/// Unix GUI launches lack version managers initialized by the user's login shell.
+/// Resolve only PATH once, before threads start; Windows inherits its system environment.
+pub fn runtime_path(path: Option<OsString>, home: Option<OsString>) -> Option<OsString> {
+    let path = desktop_path(path, home.clone());
+    #[cfg(unix)]
+    let path = home
+        .as_deref()
+        .and_then(|home| {
+            let shell = std::env::var_os("SHELL")
+                .filter(|shell| !shell.is_empty())
+                .unwrap_or_else(|| {
+                    if cfg!(target_os = "macos") {
+                        "/bin/zsh"
+                    } else {
+                        "/bin/sh"
+                    }
+                    .into()
+                });
+            shell_path(
+                &shell,
+                std::path::Path::new(home),
+                path.as_deref(),
+                std::time::Duration::from_secs(10),
+            )
+            .ok()
+        })
+        .or(path);
+    desktop_path(path, home)
+}
+
+#[cfg(unix)]
+fn shell_path(
+    shell: &std::ffi::OsStr,
+    home: &std::path::Path,
+    path: Option<&std::ffi::OsStr>,
+    timeout: std::time::Duration,
+) -> std::io::Result<OsString> {
+    use std::{
+        io::{Read, Seek},
+        os::unix::ffi::OsStringExt,
+        process::{Command, Stdio},
+        time::Instant,
+    };
+
+    // Only PATH is requested, between markers; banners never enter the resulting value.
+    let marker = format!("zerolux-{}", uuid::Uuid::new_v4());
+    let script = format!(
+        "/usr/bin/printf '\\0{marker}\\0'; /usr/bin/printenv PATH; /usr/bin/printf '\\0{marker}\\0'"
+    );
+    // A file avoids waiting on a pipe kept open by a shell startup's background child.
+    let mut output = tempfile::tempfile()?;
+    let mut command = Command::new(shell);
+    if matches!(
+        std::path::Path::new(shell)
+            .file_name()
+            .and_then(|name| name.to_str()),
+        Some("csh" | "tcsh")
+    ) {
+        command.arg("-ic");
+    } else {
+        command.args(["-i", "-l", "-c"]);
+    }
+    command
+        .arg(script)
+        .current_dir(home)
+        .env("HOME", home)
+        .env("DISABLE_AUTO_UPDATE", "true")
+        .stdin(Stdio::null())
+        .stdout(output.try_clone()?)
+        .stderr(Stdio::null());
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    let mut child = command.spawn()?;
+    let until = Instant::now() + timeout;
+    const LIMIT: u64 = 1024 * 1024;
+    let result = (|| {
+        loop {
+            if output.metadata()?.len() > LIMIT {
+                return Err(std::io::Error::other("Shell PATH output is too large"));
+            }
+            if let Some(status) = child.try_wait()? {
+                if !status.success() {
+                    return Err(std::io::Error::other("Shell PATH resolution failed"));
+                }
+                break;
+            }
+            if Instant::now() >= until {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Shell PATH resolution timed out",
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        output.rewind()?;
+        let mut bytes = Vec::new();
+        output.take(LIMIT).read_to_end(&mut bytes)?;
+        let marker = format!("\0{marker}\0").into_bytes();
+        let invalid = || std::io::Error::other("Shell did not return a PATH");
+        let start = bytes
+            .windows(marker.len())
+            .position(|part| part == marker)
+            .ok_or_else(invalid)?
+            + marker.len();
+        let bytes = &bytes[start..];
+        let end = bytes
+            .windows(marker.len())
+            .position(|part| part == marker)
+            .ok_or_else(invalid)?;
+        let path = bytes[..end].strip_suffix(b"\n").unwrap_or(&bytes[..end]);
+        if path.is_empty() || path.contains(&0) {
+            return Err(invalid());
+        }
+        Ok(OsString::from_vec(path.to_vec()))
+    })();
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    result
+}
+
+/// Preserve PATH precedence, then add conventional install locations a GUI launch may lack.
 pub fn desktop_path(path: Option<OsString>, home: Option<OsString>) -> Option<OsString> {
     let mut entries: Vec<PathBuf> = path
         .as_deref()
@@ -291,5 +412,98 @@ mod tests {
         let bun = home.join(".bun/bin");
         assert_eq!(entries.iter().filter(|p| **p == bun).count(), 1);
         assert!(entries.contains(&home.join(".pi/agent/bin")));
+    }
+
+    #[cfg(unix)]
+    fn executable(path: &std::path::Path, script: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(path, script).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shell_path_runs_a_launcher_using_its_version_manager_runtime() {
+        use std::{process::Command, time::Duration};
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("runtime with spaces/bin");
+        let empty = home.path().join("empty");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir(&empty).unwrap();
+        executable(&bin.join("node"), "#!/bin/sh\nprintf '%s\\n' \"$1\"\n");
+        let launcher = home.path().join("pi");
+        executable(&launcher, "#!/usr/bin/env node\n");
+        assert!(
+            !Command::new(&launcher)
+                .env_clear()
+                .env("PATH", &empty)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+
+        let shell = home.path().join("shell");
+        executable(
+            &shell,
+            "#!/bin/sh\n[ \"$1\" = -i ] && [ \"$2\" = -l ] && [ \"$3\" = -c ] || exit 8\n[ . -ef \"$HOME\" ] || exit 9\nexport PATH=\"$HOME/runtime with spaces/bin:/usr/bin:/bin\"\nprintf 'startup banner\\n'\n/bin/sh -c \"$4\"\nprintf 'logout banner\\n'\n",
+        );
+        let path = shell_path(
+            shell.as_os_str(),
+            home.path(),
+            Some(empty.as_os_str()),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(std::env::split_paths(&path).next(), Some(bin));
+        let result = Command::new(&launcher)
+            .env_clear()
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        assert!(result.status.success());
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap().trim(),
+            launcher.to_str().unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shell_path_rejects_failure_and_bounds_a_stuck_startup() {
+        use std::time::Duration;
+        let home = tempfile::tempdir().unwrap();
+        let empty = home.path().join("empty");
+        fs::create_dir(&empty).unwrap();
+        let shell = home.path().join("shell");
+        executable(&shell, "#!/bin/sh\nexit 7\n");
+        assert!(
+            shell_path(
+                shell.as_os_str(),
+                home.path(),
+                Some(empty.as_os_str()),
+                Duration::from_secs(1)
+            )
+            .is_err()
+        );
+        executable(&shell, "#!/bin/sh\nwhile :; do :; done\n");
+        let error = shell_path(
+            shell.as_os_str(),
+            home.path(),
+            Some(empty.as_os_str()),
+            Duration::from_millis(50),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        executable(&shell, "#!/bin/sh\nprintf 'unframed output'\n");
+        assert!(
+            shell_path(
+                shell.as_os_str(),
+                home.path(),
+                Some(empty.as_os_str()),
+                Duration::from_secs(1)
+            )
+            .is_err()
+        );
     }
 }

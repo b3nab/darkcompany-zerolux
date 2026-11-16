@@ -15,6 +15,41 @@ use std::{
     time::Duration,
 };
 
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+pub(crate) enum PiFailure {
+    #[error("pi could not start with the available runtime.")]
+    RuntimeUnavailable,
+    #[error("pi could not verify this session's saved identity and launch settings.")]
+    ProfileUnavailable,
+    #[error("pi did not confirm that this session started.")]
+    StartUnconfirmed,
+    #[error("pi did not confirm it stopped; the session remains stopped in ZeroLux.")]
+    StopUnconfirmed,
+}
+
+impl PiFailure {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::RuntimeUnavailable => "pi_runtime_unavailable",
+            Self::ProfileUnavailable => "pi_resume_profile_unavailable",
+            Self::StartUnconfirmed => "pi_start_unconfirmed",
+            Self::StopUnconfirmed => "pi_stop_unconfirmed",
+        }
+    }
+
+    pub(crate) fn context(self, error: anyhow::Error) -> anyhow::Error {
+        if error.downcast_ref::<Self>().is_some() {
+            error
+        } else {
+            error.context(self)
+        }
+    }
+}
+
+// Older hosts persisted this checkpoint before exec. Only the execution host may clear it,
+// after acquiring its lease and verifying the same saved session and previous process exit.
+const STARTUP_UNCONFIRMED: &str = "Native pi startup has not confirmed the saved identity/profile; inspect it in native pi before recovery";
+
 pub(crate) struct Registry {
     path: PathBuf,
     program: RunnerProgram,
@@ -401,8 +436,9 @@ async fn profile_locator(path: &Path, native: &str, workspace: &str) -> Result<V
         value["version"] == 1
             && value["nativeSessionId"] == native
             && value["workspace"] == workspace
-            && value["unavailable"].is_null(),
-        "pi's saved launch settings cannot be verified"
+            && (value["unavailable"].is_null()
+                || value["unavailable"].as_str() == Some(STARTUP_UNCONFIRMED)),
+        PiFailure::ProfileUnavailable
     );
     let file = value["file"].as_str().context("Missing native pi file")?;
     let agent_dir = value["agentDir"]
@@ -415,4 +451,56 @@ async fn profile_locator(path: &Path, native: &str, workspace: &str) -> Result<V
     Ok(
         json!({"session_file":file,"profile":path,"agent_dir":agent_dir,"pid":value["lastPid"],"cold":true}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[tokio::test]
+    async fn startup_checkpoint_keeps_the_same_locator_without_clearing_the_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = root.path().join("profile.json");
+        let workspace = root.path().to_str().unwrap();
+        let file = root.path().join("native.jsonl");
+        let value = json!({"version":1,"nativeSessionId":"native-id","workspace":workspace,
+            "file":file,"agentDir":root.path(),"lastPid":1234,"unavailable":STARTUP_UNCONFIRMED});
+        let bytes = serde_json::to_vec(&value).unwrap();
+        platform::private(OpenOptions::new().create_new(true).write(true))
+            .open(&profile)
+            .unwrap()
+            .write_all(&bytes)
+            .unwrap();
+        let saved = json!({"session_file":file,"profile":profile});
+        let locator = recovery_locator("native-id", workspace, saved.clone())
+            .await
+            .unwrap();
+        assert_eq!(locator["session_file"], saved["session_file"]);
+        assert_eq!(locator["profile"], saved["profile"]);
+        assert_eq!(locator["cold"], true);
+        assert_eq!(tokio::fs::read(&profile).await.unwrap(), bytes);
+        assert!(
+            recovery_locator("another-id", workspace, saved.clone())
+                .await
+                .is_err()
+        );
+        assert!(
+            recovery_locator("native-id", "another-workspace", saved.clone())
+                .await
+                .is_err()
+        );
+        let mut unavailable = value;
+        unavailable["unavailable"] = json!("fixture-unverified-context");
+        tokio::fs::write(&profile, serde_json::to_vec(&unavailable).unwrap())
+            .await
+            .unwrap();
+        let error = recovery_locator("native-id", workspace, saved)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<PiFailure>(),
+            Some(PiFailure::ProfileUnavailable)
+        ));
+    }
 }

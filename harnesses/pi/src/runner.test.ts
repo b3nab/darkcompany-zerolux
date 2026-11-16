@@ -7,6 +7,7 @@ import {
   readFile,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -19,27 +20,34 @@ import {
   type ChatRequest,
   type Inbox,
 } from "@zerolux/bridge";
-import { savePiProfile } from "./execution-profile.ts";
+import { PI_STARTUP_UNCONFIRMED, savePiProfile } from "./execution-profile.ts";
 import { PiExecutionLease, processExists } from "./execution-lease.ts";
-import { PiRunner } from "./runner.ts";
+import { PiRunner, type PiRunnerConfig, type PiRunnerDeps } from "./runner.ts";
 
 async function fixture(
   fault = "",
-  options: { extensionControl?: boolean; installed?: string } = {},
+  options: {
+    extensionControl?: boolean;
+    envNode?: boolean;
+    unconfirmed?: boolean;
+  } = {},
 ) {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "zerolux-pi-runner-")),
   );
   const agent = join(root, "agent");
   await mkdir(agent);
+  const bin = join(root, "bin");
+  await mkdir(bin);
   const env = {
     HOME: root,
-    PATH: [dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter),
+    PATH: options.envNode
+      ? bin
+      : [dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter),
     TMPDIR: root,
     FAKE_PI_ROOT: root,
     FAKE_PI_FAULT: fault,
     ...(options.extensionControl ? { FAKE_PI_EXTENSION_CONTROL: "1" } : {}),
-    FAKE_PI_VERSION: options.installed ?? "0.87.1",
   };
   // A real, certainly exited fixture PID, never a personal harness.
   const old = Bun.spawn([process.execPath, "-e", ""], {
@@ -69,14 +77,15 @@ async function fixture(
     cliVersion: "0.87.1",
     lastPid: old.pid,
     args: [],
+    ...(options.unconfirmed ? { unavailable: PI_STARTUP_UNCONFIRMED } : {}),
   });
   const script = join(root, "pi-fixture");
   await writeFile(
     script,
-    `#!${process.execPath}
+    `#!${options.envNode ? "/usr/bin/env node" : process.execPath}
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-if (process.argv.includes("--version")) { console.log(process.env.FAKE_PI_VERSION); process.exit(0); }
+if (process.argv.includes("--version")) { console.log("1.5.0"); process.exit(0); }
 const root = process.env.FAKE_PI_ROOT;
 appendFileSync(join(root, "starts"), (process.env.ZEROLUX_NATIVE_PID ?? process.pid) + "\\n");
 const option = name => { const i = process.argv.indexOf(name); return i < 0 ? undefined : process.argv[i + 1]; };
@@ -89,7 +98,7 @@ if (process.env.FAKE_PI_FAULT === "create") {
 }
 const { readControlDescriptor, controlRequest } = await import(${JSON.stringify(fileURLToPath(new URL("../../../packages/bridge/src/control-client.ts", import.meta.url)))});
 const descriptor = await readControlDescriptor(process.env.ZEROLUX_PI_RUNNER);
-if (process.env.FAKE_PI_FAULT !== "unguarded") await controlRequest(descriptor, "verify", { native_pid:Number(process.env.ZEROLUX_NATIVE_PID ?? process.pid), session_file:file, cli_version:process.env.FAKE_PI_VERSION, model:{provider:option("--provider") ?? "fixture",id:option("--model") ?? "native-model"}, thinking:option("--thinking") ?? "high", auth_configured:true });
+if (process.env.FAKE_PI_FAULT !== "unguarded") await controlRequest(descriptor, "verify", { native_pid:Number(process.env.ZEROLUX_NATIVE_PID ?? process.pid), session_file:file, cli_version:"1.5.0", model:{provider:option("--provider") ?? "fixture",id:option("--model") ?? "native-model"}, thinking:option("--thinking") ?? "high", auth_configured:true });
 // The native extension's own control, as stock pi's chat extension runs it: asked whose
 // turn it is, it answers what the test left in "turn" (a JSON value), or refuses.
 if (process.env.FAKE_PI_EXTENSION_CONTROL) {
@@ -163,61 +172,65 @@ setInterval(() => {
   const approvals: Record<string, unknown>[] = [];
   const kernelCalls: { path: string; body?: unknown }[] = [];
   let validToken = "fixture";
-  const runner = new PiRunner(
-    {
-      nativeSessionId: manager.getSessionId(),
-      workspace: root,
-      file,
-      profile,
-      pi,
-      entry: join(import.meta.dir, "runner.ts"),
-      creation: fault.startsWith("create"),
-    },
-    {
-      alive: processExists,
-      environment: () => env,
-      persistProfile: (profile) =>
-        fault === "persistence"
-          ? Promise.reject(new Error("Fixture profile storage is unavailable"))
-          : savePiProfile(profile),
-      connect: (_base, token) =>
-        (async (path: string, body?: unknown) => {
-          // A token the kernel revoked (a rebind issued another) is refused everywhere.
-          if (token !== validToken) throw new ChatHttpError(401);
-          if (path !== "/chat/inbox") {
-            // The kernel's approvals, as the host uses them for pi's questions.
-            kernelCalls.push({ path, body });
-            const found = (id: string) => approvals.find((a) => a.id === id);
-            if (path === "/chat/approvals") {
-              const input = body as Record<string, unknown>;
-              if (![null, "turn-delivery"].includes(input.delivery_id as never))
-                throw new Error("Unknown delivery");
-              approvals.push({ ...input, status: "pending", decision: null });
-              return {};
-            }
-            const match = path.match(
-              /^\/chat\/approvals\/([^/]+)\/(dispatch|receipt)$/,
-            );
-            if (match) {
-              const approval = found(match[1]!)!;
-              if (match[2] === "dispatch") {
-                if (approval.status !== "decided") throw new Error("Conflict");
-                approval.status = "uncertain";
-              } else approval.status = (body as { status: string }).status;
-              return {};
-            }
+  const config: PiRunnerConfig = {
+    nativeSessionId: manager.getSessionId(),
+    workspace: root,
+    file,
+    profile,
+    pi,
+    entry: join(import.meta.dir, "runner.ts"),
+    creation: fault.startsWith("create"),
+  };
+  if (options.unconfirmed) {
+    const previous = await PiExecutionLease.acquire(config);
+    previous.setNativeProcess(old.pid);
+    previous.close("exited");
+  }
+  const deps: PiRunnerDeps = {
+    alive: processExists,
+    environment: () => env,
+    persistProfile: (profile) =>
+      fault === "persistence"
+        ? Promise.reject(new Error("Fixture profile storage is unavailable"))
+        : savePiProfile(profile),
+    connect: (_base, token) =>
+      (async (path: string, body?: unknown) => {
+        // A token the kernel revoked (a rebind issued another) is refused everywhere.
+        if (token !== validToken) throw new ChatHttpError(401);
+        if (path !== "/chat/inbox") {
+          // The kernel's approvals, as the host uses them for pi's questions.
+          kernelCalls.push({ path, body });
+          const found = (id: string) => approvals.find((a) => a.id === id);
+          if (path === "/chat/approvals") {
+            const input = body as Record<string, unknown>;
+            if (![null, "turn-delivery"].includes(input.delivery_id as never))
+              throw new Error("Unknown delivery");
+            approvals.push({ ...input, status: "pending", decision: null });
             return {};
           }
-          await beforeRead(++calls);
-          if (inbox.session.status === "stopped")
-            throw new Error("Owner stopped this link");
-          return {
-            ...structuredClone(inbox),
-            approvals: structuredClone(approvals),
-          };
-        }) as ChatRequest,
-    },
-  );
+          const match = path.match(
+            /^\/chat\/approvals\/([^/]+)\/(dispatch|receipt)$/,
+          );
+          if (match) {
+            const approval = found(match[1]!)!;
+            if (match[2] === "dispatch") {
+              if (approval.status !== "decided") throw new Error("Conflict");
+              approval.status = "uncertain";
+            } else approval.status = (body as { status: string }).status;
+            return {};
+          }
+          return {};
+        }
+        await beforeRead(++calls);
+        if (inbox.session.status === "stopped")
+          throw new Error("Owner stopped this link");
+        return {
+          ...structuredClone(inbox),
+          approvals: structuredClone(approvals),
+        };
+      }) as ChatRequest,
+  };
+  let runner = new PiRunner(config, deps);
   await runner.prepare();
   const control = new LocalControl(
     join(root, "control"),
@@ -235,7 +248,16 @@ setInterval(() => {
     bytes,
     profile,
     inbox,
-    runner,
+    get runner() {
+      return runner;
+    },
+    installRuntime: () => symlink(process.execPath, join(bin, "node")),
+    async restart() {
+      await runner.stop();
+      runner = new PiRunner(config, deps);
+      await runner.prepare();
+      runner.setControl(join(root, "control", `${control.instanceId}.json`));
+    },
     approvals,
     kernelCalls,
     /** Once the native has said where its extension answers, and a moment for the rest. */
@@ -376,17 +398,46 @@ test("native startup is gated, prompt-free and keeps the exact saved identity/pr
   }
 }, 15_000);
 
-test("a session saved by an older pi opens with the pi installed now", async () => {
-  const f = await fixture("", { installed: "1.5.0" });
-  try {
-    const result = await f.bind();
-    expect(processExists(result.native_pid as number)).toBe(true);
-    expect(f.runner.describe().phase).toBe("running");
-    await f.runner.handle("stop", { link_id: "link" });
-  } finally {
-    await f.close();
-  }
-}, 15_000);
+for (const unconfirmed of [false, true]) {
+  test.skipIf(process.platform === "win32")(
+    `a launcher without its interpreter can resume after recovery (pending startup: ${unconfirmed})`,
+    async () => {
+      const f = await fixture("", { envNode: true, unconfirmed });
+      try {
+        const before = JSON.parse(await readFile(f.profile, "utf8"));
+        await expect(f.bind()).rejects.toMatchObject({
+          code: "pi_runtime_unavailable",
+        });
+        expect(JSON.parse(await readFile(f.profile, "utf8"))).toEqual(before);
+        expect(await Bun.file(join(f.root, "starts")).exists()).toBe(false);
+        expect(await Bun.file(join(f.root, "commands")).exists()).toBe(false);
+        expect(await readFile(f.file, "utf8")).toBe(f.bytes);
+        await f.installRuntime();
+        await f.restart();
+        const result = await f.bind();
+        expect(processExists(result.native_pid as number)).toBe(true);
+        expect(f.runner.describe()).toMatchObject({
+          phase: "running",
+          native_session_id: f.inbox.session.native_session_id,
+          session_file: f.file,
+        });
+        expect(
+          JSON.parse(await readFile(f.profile, "utf8")).unavailable,
+        ).toBeUndefined();
+        expect(await readFile(f.file, "utf8")).toBe(f.bytes);
+        expect(
+          (await readFile(join(f.root, "starts"), "utf8")).trim().split("\n"),
+        ).toHaveLength(1);
+        expect(
+          (await readFile(join(f.root, "commands"), "utf8")).trim().split("\n"),
+        ).toEqual(["get_state"]);
+      } finally {
+        await f.close();
+      }
+    },
+    15_000,
+  );
+}
 
 test("observable owner Stop during final intent validation prevents native exec", async () => {
   const f = await fixture();

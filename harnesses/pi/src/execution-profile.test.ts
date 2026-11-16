@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   loadPiProfile,
+  PI_STARTUP_UNCONFIRMED,
   piResumeArgs,
   savePiProfile,
   type PiExecutionProfile,
@@ -94,9 +95,14 @@ test("private host profile persists atomically, validates identity and refuses s
       ...profile,
       unavailable: "Original options cannot be restored",
     });
-    await expect(loadPiProfile(path, profile)).rejects.toThrow(
-      "cannot be restored",
-    );
+    await expect(loadPiProfile(path, profile)).rejects.toThrow();
+    await expect(loadPiProfile(path, profile, true)).rejects.toThrow();
+    await savePiProfile({ ...profile, unavailable: PI_STARTUP_UNCONFIRMED });
+    await expect(loadPiProfile(path, profile)).rejects.toThrow();
+    expect(await loadPiProfile(path, profile, true)).toEqual({
+      ...profile,
+      unavailable: PI_STARTUP_UNCONFIRMED,
+    });
     await savePiProfile(profile);
     if (process.platform !== "win32") {
       await chmod(path, 0o644);

@@ -225,6 +225,9 @@ pub(crate) async fn control(record: &PiDescriptor, mut request: Value) -> Result
         ensure!(bytes.len() <= limit, "Pi control response too large");
         let response: Value =
             serde_json::from_slice(&bytes).context("Invalid pi control response")?;
+        if response["ok"] != true && response["code"] == "pi_runtime_unavailable" {
+            return Err(crate::pi_runner::PiFailure::RuntimeUnavailable.into());
+        }
         ensure!(
             response["ok"] == true,
             "{}",
