@@ -1253,8 +1253,8 @@ impl Host {
             WebviewWindowBuilder::new(&self.app, label, WebviewUrl::App("index.html".into()))
                 .title(&profile.name)
                 .visible(false)
-                // A window out of sight keeps working: its connection stays live, and what
-                // arrives meanwhile still notifies.
+                // WebKit suspends a web view out of sight by default. This one is meant to
+                // stay connected and to notify: it asks not to be.
                 .background_throttling(BackgroundThrottlingPolicy::Disabled)
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(800.0, 560.0)

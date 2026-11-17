@@ -507,7 +507,8 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         .title("ZeroLux")
         .inner_size(WIDTH, 480.0)
         .visible(false)
-        // Closed, the panel still follows every workspace: it opens on what is true now.
+        // Closed, the panel is meant to follow every workspace still: it asks WebKit not to
+        // suspend it, as it does by default with a web view out of sight.
         .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
         .decorations(false)
         .transparent(true)
