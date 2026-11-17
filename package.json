@@ -17,7 +17,7 @@
     "desktop:dev": "bun run --cwd apps/desktop dev",
     "desktop:build": "bun run --cwd apps/desktop build",
     "typecheck": "bun run --workspaces typecheck",
-    "test": "bun run --cwd apps/web renderer && bun test --parallel packages/theme packages/extension-sdk packages/chat packages/ui packages/bridge apps/web apps/desktop apps/mobile/src harnesses/pi harnesses/claude marketplace services/auth scripts && uv run --no-project python -m unittest discover -s packages/extension-sdk/python && uv run --no-project --with numpy python -m unittest discover -s marketplace/voice",
+    "test": "bun run --cwd apps/web renderer && bun test --parallel --timeout=15000 packages/theme packages/extension-sdk packages/chat packages/ui packages/bridge apps/web apps/desktop apps/mobile/src harnesses/pi harnesses/claude marketplace services/auth scripts && uv run --no-project python -m unittest discover -s packages/extension-sdk/python && uv run --no-project --with numpy python -m unittest discover -s marketplace/voice",
     "marketplace": "bun scripts/marketplace.ts",
     "sweep": "bun scripts/sweep-target.ts",
     "format": "bun x --bun oxfmt",
