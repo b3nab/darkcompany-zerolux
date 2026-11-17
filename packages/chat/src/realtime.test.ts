@@ -2,6 +2,8 @@ import { afterEach, beforeEach, expect, jest, mock, test } from "bun:test";
 
 type Handler = (...args: unknown[]) => void;
 const rooms: FakeRoom[] = [];
+// Whether a join never ends: neither joined nor failed.
+let stuck = false;
 class FakeRoom {
   handlers = new Map<string, Handler>();
   connected: string[] = [];
@@ -22,6 +24,7 @@ class FakeRoom {
   async connect(url: string, token: string, options?: unknown) {
     this.connected.push(`${url} ${token}`);
     this.connectOptions = options;
+    if (stuck) await new Promise(() => {});
   }
   async disconnect() {
     this.disconnected = true;
@@ -32,6 +35,7 @@ mock.module("livekit-client", () => ({
   Room: FakeRoom,
   RoomEvent: {
     DataReceived: "dataReceived",
+    SignalReconnecting: "signalReconnecting",
     Reconnecting: "reconnecting",
     Reconnected: "reconnected",
     Disconnected: "disconnected",
@@ -44,6 +48,7 @@ const realFetch = globalThis.fetch;
 beforeEach(() => {
   rooms.length = 0;
   tokens = 0;
+  stuck = false;
   globalThis.fetch = (async (input: string) => {
     expect(input).toBe("/api/livekit/token");
     tokens++;
@@ -141,6 +146,61 @@ test("resyncs after a resumed connection and rejoins with a fresh token after a 
   jest.advanceTimersByTime(60_000);
   await flush();
   expect(rooms).toHaveLength(2);
+  stop();
+});
+
+test("a join that never ends is left, and a new room joins with a fresh token", async () => {
+  jest.useFakeTimers();
+  stuck = true;
+  const { log, stop } = start();
+  await flush();
+  expect(rooms[0]!.connected).toEqual(["ws://127.0.0.1:7880 t1"]);
+  expect(log).toEqual([]);
+  stuck = false;
+  jest.advanceTimersByTime(50_000);
+  await flush();
+  expect(rooms[0]!.disconnected).toBe(true);
+  expect(rooms).toHaveLength(2);
+  expect(rooms[1]!.connected).toEqual(["ws://127.0.0.1:7880 t2"]);
+  expect(log).toEqual(["status offline", "status live", "sync"]);
+  stop();
+});
+
+for (const event of ["reconnecting", "signalReconnecting"])
+  test(`a room stuck ${event} is left, and a new room joins with a fresh token`, async () => {
+    jest.useFakeTimers();
+    const { log, stop } = start();
+    await flush();
+    rooms[0]!.emit(event);
+    jest.advanceTimersByTime(50_000);
+    await flush();
+    expect(rooms[0]!.disconnected).toBe(true);
+    expect(rooms).toHaveLength(2);
+    expect(rooms[1]!.connected).toEqual(["ws://127.0.0.1:7880 t2"]);
+    expect(log.slice(-3)).toEqual(["status offline", "status live", "sync"]);
+    // The room left behind no longer speaks for the connection.
+    rooms[0]!.emit("reconnecting");
+    rooms[0]!.emit("reconnected");
+    rooms[0]!.emit("disconnected");
+    jest.advanceTimersByTime(120_000);
+    await flush();
+    expect(rooms).toHaveLength(2);
+    expect(log.slice(-3)).toEqual(["status offline", "status live", "sync"]);
+    stop();
+  });
+
+test("a room that reconnects in time is kept", async () => {
+  jest.useFakeTimers();
+  const { stop } = start();
+  await flush();
+  rooms[0]!.emit("signalReconnecting");
+  rooms[0]!.emit("reconnecting");
+  jest.advanceTimersByTime(5_000);
+  rooms[0]!.emit("reconnected");
+  jest.advanceTimersByTime(600_000);
+  await flush();
+  expect(rooms).toHaveLength(1);
+  expect(rooms[0]!.disconnected).toBe(false);
   stop();
 });
 

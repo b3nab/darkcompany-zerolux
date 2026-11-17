@@ -21,6 +21,12 @@ const SILENT = {
 } as unknown as AudioContext;
 
 /**
+ * How long a room may take to join, or to reconnect in place. LiveKit gives up by itself well
+ * within it; a room still on its way past it is stuck, and is left for a new one.
+ */
+const PATIENCE = 45_000;
+
+/**
  * Joins the kernel's LiveKit room and reports chat events. `sync` runs after
  * every (re)connection so callers refetch what packets cannot replay.
  * Returns a function that disconnects for good.
@@ -35,14 +41,26 @@ export function connectRealtime(handlers: {
   const seen = new Set<string>();
   let room: Room | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
+  let patience: ReturnType<typeof setTimeout> | undefined;
   let attempt = 0;
   let stopped = false;
 
   function reconnect() {
+    clearTimeout(patience);
     room = undefined;
     if (stopped) return;
     handlers.status("offline");
     retry = setTimeout(start, Math.min(10_000, 1000 * 2 ** attempt++));
+  }
+  // The connection never rests on a room's word alone: one that neither gets live in time
+  // nor says it failed is left, and a new one joins with a fresh token.
+  function expect(current: Room) {
+    clearTimeout(patience);
+    patience = setTimeout(() => {
+      if (room !== current) return;
+      reconnect();
+      void current.disconnect().catch(() => {});
+    }, PATIENCE);
   }
   async function start() {
     // Resume in place only briefly: after a kernel restart the old URL and
@@ -52,6 +70,7 @@ export function connectRealtime(handlers: {
       webAudioMix: { audioContext: SILENT },
     });
     room = current;
+    expect(current);
     current.on(RoomEvent.DataReceived, (payload, participant, _, topic) => {
       // Only the kernel publishes chat events; participants cannot.
       if (topic !== "chat" || participant) return;
@@ -61,8 +80,18 @@ export function connectRealtime(handlers: {
       if (seen.size > 1000) seen.delete(seen.values().next().value!);
       handlers.event(event);
     });
-    current.on(RoomEvent.Reconnecting, () => handlers.status("connecting"));
+    // A room already left no longer speaks for the connection.
+    current.on(RoomEvent.SignalReconnecting, () => {
+      if (room === current) expect(current);
+    });
+    current.on(RoomEvent.Reconnecting, () => {
+      if (room !== current) return;
+      handlers.status("connecting");
+      expect(current);
+    });
     current.on(RoomEvent.Reconnected, () => {
+      if (room !== current) return;
+      clearTimeout(patience);
       handlers.status("live");
       handlers.sync();
     });
@@ -75,9 +104,10 @@ export function connectRealtime(handlers: {
         handlers.kernel ?? "",
         "/livekit/token",
       );
-      if (stopped) return;
+      if (room !== current) return;
       await current.connect(url, token, { autoSubscribe: false });
-      if (stopped) return void current.disconnect();
+      if (room !== current) return void current.disconnect().catch(() => {});
+      clearTimeout(patience);
       attempt = 0;
       handlers.status("live");
       handlers.sync();
@@ -89,6 +119,7 @@ export function connectRealtime(handlers: {
   return () => {
     stopped = true;
     clearTimeout(retry);
+    clearTimeout(patience);
     const current = room;
     room = undefined;
     void current?.disconnect();

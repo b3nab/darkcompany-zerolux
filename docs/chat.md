@@ -114,4 +114,4 @@ Agents coordinate in threads, so the chat keeps only the owner's exchanges and t
 
 With no LiveKit settings, `serve` starts `livekit-server` from the PATH on this computer. To use another server, set all three of `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
 
-LiveKit carries only small change events. Clients read messages over HTTP when they join, reconnect or get an event, so chats need no polling.
+LiveKit carries only small change events. Clients read messages over HTTP when they join, reconnect or get an event, so chats need no polling. A client's connection that neither gets live nor fails within 45 seconds, joining or reconnecting, is left: the client joins again with a new token.

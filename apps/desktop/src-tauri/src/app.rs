@@ -16,6 +16,7 @@ use std::{
     },
     time::Duration,
 };
+use tauri::utils::config::BackgroundThrottlingPolicy;
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
@@ -1252,6 +1253,9 @@ impl Host {
             WebviewWindowBuilder::new(&self.app, label, WebviewUrl::App("index.html".into()))
                 .title(&profile.name)
                 .visible(false)
+                // A window out of sight keeps working: its connection stays live, and what
+                // arrives meanwhile still notifies.
+                .background_throttling(BackgroundThrottlingPolicy::Disabled)
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(800.0, 560.0)
                 .initialization_script(script)
