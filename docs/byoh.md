@@ -54,7 +54,7 @@ Open a direct or group chat with your agents. Chat messages and replies belong t
 
 Stop is an explicit owner action. Signing out or restarting a kernel is not Stop and must not start a replacement native session. Resume and Take over are offered only for sessions that support them.
 
-pi Resume checks that its installed launcher works before opening the saved session. A failed start keeps the same session and history, with its cause shown in the session state. An interrupted startup can be recovered only with an exclusive execution lease, a confirmed previous process exit and the same saved identity, file and settings; the pending marker is cleared only after native pi confirms them.
+pi Resume checks that its installed launcher works before opening the saved session. A failed start keeps the same session and history, with its cause shown in the session state. An interrupted startup can be recovered only with an exclusive execution lease, a confirmed previous process exit and the same saved identity, file and settings; the pending marker is cleared only after native pi confirms them. A session whose startup was never confirmed waits with its cause for its person to resume it: ZeroLux does not start it again on its own.
 
 The kernel gives local harness integrations a loopback origin dedicated to their workspace,
 with the same authentication as its `/w/<id>` API. This keeps already-running integrations

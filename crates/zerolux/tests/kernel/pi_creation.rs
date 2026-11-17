@@ -605,7 +605,7 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     assert_eq!(failure["native_session_id"], failed_starts[6]["native"]);
     assert!(failure["native_session_id"].is_string());
     tokio::time::sleep(Duration::from_secs(2)).await;
-    assert_eq!(starts(&root).len(), 7);
+    assert_eq!(starts(&root).len(), 7, "{:#?}", starts(&root));
     assert_eq!(
         fs::read(root.join("home/native-inputs.jsonl")).unwrap(),
         inputs

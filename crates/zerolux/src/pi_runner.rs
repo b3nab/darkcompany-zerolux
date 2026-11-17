@@ -385,18 +385,35 @@ impl RunnerLink {
 
 /// Host-only durable metadata. Nothing from this profile's private CLI args leaves the host.
 pub(crate) async fn recovery_locator(native: &str, workspace: &str, saved: Value) -> Result<Value> {
+    let path = saved_profile(native, workspace, &saved).await?;
+    let locator = profile_locator(&path, native, workspace).await?;
     if saved["session_file"].is_string() && saved["profile"].is_string() {
-        let locator = profile_locator(
-            Path::new(saved["profile"].as_str().unwrap()),
-            native,
-            workspace,
-        )
-        .await?;
         ensure!(
             locator["session_file"] == saved["session_file"],
             "pi's session file changed"
         );
-        return Ok(locator);
+    }
+    Ok(locator)
+}
+
+/// Whether the session's last native startup was never confirmed: its profile still holds
+/// the checkpoint written before exec. Its person starts it again by resuming it; the
+/// relinker never does, so a pi that cannot start is not started over and over.
+pub(crate) async fn startup_unconfirmed(native: &str, workspace: &str, saved: &Value) -> bool {
+    let Ok(path) = saved_profile(native, workspace, saved).await else {
+        return false;
+    };
+    private_profile(&path)
+        .await
+        .is_ok_and(|profile| profile["unavailable"].as_str() == Some(STARTUP_UNCONFIRMED))
+}
+
+/// The session's saved profile: the one its locator names, else the one that claims it.
+async fn saved_profile(native: &str, workspace: &str, saved: &Value) -> Result<PathBuf> {
+    if saved["session_file"].is_string()
+        && let Some(profile) = saved["profile"].as_str()
+    {
+        return Ok(PathBuf::from(profile));
     }
     let root = sessions::agent_dir()?.join("zerolux-profiles");
     let mut entries = tokio::fs::read_dir(root)
@@ -414,7 +431,7 @@ pub(crate) async fn recovery_locator(native: &str, workspace: &str, saved: Value
                 found.is_none(),
                 "Several native profiles claim this pi session"
             );
-            found = Some(profile_locator(&path, native, workspace).await?);
+            found = Some(path);
         }
     }
     found.context("pi's saved launch settings are missing")
@@ -490,17 +507,26 @@ mod tests {
                 .await
                 .is_err()
         );
+        // Only that checkpoint says the startup was never confirmed.
+        assert!(startup_unconfirmed("native-id", workspace, &saved).await);
         let mut unavailable = value;
         unavailable["unavailable"] = json!("fixture-unverified-context");
         tokio::fs::write(&profile, serde_json::to_vec(&unavailable).unwrap())
             .await
             .unwrap();
-        let error = recovery_locator("native-id", workspace, saved)
+        let error = recovery_locator("native-id", workspace, saved.clone())
             .await
             .unwrap_err();
         assert!(matches!(
             error.downcast_ref::<PiFailure>(),
             Some(PiFailure::ProfileUnavailable)
         ));
+        assert!(!startup_unconfirmed("native-id", workspace, &saved).await);
+        let mut confirmed = unavailable;
+        confirmed["unavailable"] = Value::Null;
+        tokio::fs::write(&profile, serde_json::to_vec(&confirmed).unwrap())
+            .await
+            .unwrap();
+        assert!(!startup_unconfirmed("native-id", workspace, &saved).await);
     }
 }

@@ -1452,6 +1452,21 @@ impl ChatRuntime {
             .await
             {
                 target if session.harness == "pi" => {
+                    // A native startup nobody confirmed is not started again here, over and
+                    // over: the session waits with its reason for its person to resume it.
+                    if target.is_none()
+                        && let Ok(saved) =
+                            self.store.chat_session_locator(&owner, &session.id).await
+                        && crate::pi_runner::startup_unconfirmed(
+                            &session.native_session_id,
+                            &session.workspace,
+                            &saved,
+                        )
+                        .await
+                    {
+                        self.retried(&session.id, false);
+                        continue;
+                    }
                     match self.pi_target(&owner, &session, target).await {
                         Ok(target) => target,
                         Err(error) => {
