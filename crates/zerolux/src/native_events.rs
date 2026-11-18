@@ -735,12 +735,23 @@ fn codex(record: &Value) -> Vec<Event> {
             ),
             error: false,
         }],
-        // An image it made: what it was asked for, never the image's own bytes.
-        (Some("response_item"), Some("image_generation_call")) => vec![Event::ToolCall {
-            id: payload["id"].as_str().unwrap_or_default().to_owned(),
-            name: "image_generation".into(),
-            input: json!({ "prompt": payload["revised_prompt"] }),
-        }],
+        // An image it made: what it was asked for, never the image's own bytes. The record
+        // holds it once made, so it is done as soon as it is read.
+        (Some("response_item"), Some("image_generation_call")) => {
+            let id = payload["id"].as_str().unwrap_or_default().to_owned();
+            vec![
+                Event::ToolCall {
+                    id: id.clone(),
+                    name: "image_generation".into(),
+                    input: json!({ "prompt": payload["revised_prompt"] }),
+                },
+                Event::ToolResult {
+                    id,
+                    output: Value::String(String::new()),
+                    error: payload["status"] == "failed",
+                },
+            ]
+        }
         (Some("event_msg"), Some("task_started")) => vec![Event::TurnStarted],
         (Some("event_msg"), Some("task_complete")) => vec![Event::TurnEnded {
             status: "completed".into(),
@@ -1203,11 +1214,16 @@ mod tests {
                     output: json!("calendar_list\ncalendar_add"),
                     error: false,
                 },
-                // The image's bytes are not part of the record read.
+                // The image's bytes are not part of the record read; made, it is done.
                 Event::ToolCall {
                     id: "img1".into(),
                     name: "image_generation".into(),
                     input: json!({"prompt":"a red kite"}),
+                },
+                Event::ToolResult {
+                    id: "img1".into(),
+                    output: json!(""),
+                    error: false,
                 },
             ]
         );

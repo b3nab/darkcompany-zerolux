@@ -104,7 +104,9 @@ export function ApprovalCard({
         <h3 className="min-w-0 flex-1 text-sm font-semibold">
           {shown
             ? `${agent} ${shown.wants}`
-            : `${agent} asks: ${approval.summary}`}
+            : approval.kind === "question"
+              ? `${agent} asks you`
+              : `${agent} asks: ${approval.summary}`}
         </h3>
         <time
           dateTime={new Date(approval.created_at).toISOString()}

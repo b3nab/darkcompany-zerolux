@@ -62,7 +62,9 @@ export function ApprovalCard({
         <Text className="flex-1 text-sm font-semibold">
           {shown
             ? `${agent} ${shown.wants}`
-            : `${agent} asks: ${approval.summary}`}
+            : approval.kind === "question"
+              ? `${agent} asks you`
+              : `${agent} asks: ${approval.summary}`}
         </Text>
       </View>
       {shown && (shown.command || shown.files?.length || shown.text) ? (

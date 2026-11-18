@@ -74,7 +74,7 @@ test("a permission reads as what it would do, for each harness", () => {
     permissionShown(
       asking({ method: "confirm", title: "Deploy", message: "Now?" }),
     ),
-  ).toMatchObject({ text: "Deploy: Now?" });
+  ).toMatchObject({ text: "Deploy\n\nNow?" });
   expect(permissionShown(asking({ other: true })).text).toBe("An agent asks");
 });
 

@@ -256,7 +256,7 @@ export function permissionShown(approval: Approval): PermissionShown {
         text:
           [said(details.title), said(details.message)]
             .filter(Boolean)
-            .join(": ") || undefined,
+            .join("\n\n") || undefined,
       };
   }
   return { wants: "asks your permission", text: approval.summary };
@@ -270,5 +270,6 @@ export function requestLine(approval: Approval): string {
     shown.command?.split("\n")[0] ??
     shown.files?.[0]?.path ??
     shown.text?.split("\n")[0];
-  return what ? `${shown.wants}: ${what}` : shown.wants;
+  const line = what ? `${shown.wants}: ${what}` : shown.wants;
+  return line[0]!.toUpperCase() + line.slice(1);
 }
