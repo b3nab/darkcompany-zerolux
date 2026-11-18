@@ -25,6 +25,7 @@ import {
   GlobeIcon,
   ListChecksIcon,
   LoaderIcon,
+  MessageCircleQuestionMarkIcon,
   MessageSquareIcon,
   PlugIcon,
   SearchIcon,
@@ -47,6 +48,7 @@ import {
   useWholeOutput,
 } from "@zerolux/chat";
 import type {
+  AskedQuestion,
   PlanStep,
   RecordOf,
   ToolBlock,
@@ -436,6 +438,7 @@ function KindIcon({ view, className }: { view: ToolView; className: string }) {
     web: GlobeIcon,
     agent: BotIcon,
     plan: ListChecksIcon,
+    ask: MessageCircleQuestionMarkIcon,
     zerolux: MessageSquareIcon,
     mcp: PlugIcon,
     other: WrenchIcon,
@@ -509,6 +512,13 @@ function summary(
       return {
         ...line,
         meta: `${view.steps.filter((s) => s.status === "done").length}/${view.steps.length}`,
+      };
+    case "ask":
+      return {
+        ...line,
+        meta: view.questions.length > 1 && (
+          <span>+{view.questions.length - 1}</span>
+        ),
       };
     case "mcp":
       return {
@@ -675,6 +685,14 @@ function Body({
     }
     case "plan":
       return <PlanSteps steps={view.steps} />;
+    case "ask":
+      return (
+        <>
+          <AskedQuestions questions={view.questions} />
+          {/* Codex only notes that it asked: the answer comes later, as the person's input. */}
+          {outcome?.text.replace(/\s/g, "") !== '{"accepted":true}' && plain}
+        </>
+      );
     case "zerolux":
       return (
         <>
@@ -705,6 +723,41 @@ function Body({
   }
   // Reads, searches and the web: what came back is the point.
   return plain ?? null;
+}
+
+/** What a harness asked the person: each question whole, with the answers it suggested. */
+function AskedQuestions({ questions }: { questions: AskedQuestion[] }) {
+  return (
+    <ul className="flex flex-col gap-3">
+      {questions.map((asked, i) => (
+        <li key={i} className="flex flex-col gap-1.5">
+          {asked.header && (
+            <span className="w-fit rounded-xs border px-1.5 font-mono text-[11px] text-muted-foreground">
+              {asked.header}
+            </span>
+          )}
+          <MessageText text={asked.text} />
+          {!!asked.options.length && (
+            <ul className="flex flex-col gap-1">
+              {asked.options.map((option, j) => (
+                <li
+                  key={j}
+                  className="flex flex-col rounded-md border px-2.5 py-1.5 text-[13px]"
+                >
+                  <span>{option.label}</span>
+                  {option.description && (
+                    <span className="text-[12px] text-muted-foreground">
+                      {option.description}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 /** A plan as a checklist: done steps struck through, the current one lit. */

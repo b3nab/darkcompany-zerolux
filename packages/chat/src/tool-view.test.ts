@@ -428,6 +428,60 @@ test("agents' calls on each other name whom they act on, and a sealed message ne
   );
 });
 
+test("a harness's own tool to ask the person is its questions, with the answers it suggests", () => {
+  // Claude Code: a header, described options, one or several answers.
+  expect(
+    toolView("AskUserQuestion", {
+      questions: [
+        {
+          question: "Which library?",
+          header: "Library",
+          multiSelect: true,
+          options: [
+            { label: "date-fns", description: "Small" },
+            { label: "luxon" },
+          ],
+        },
+      ],
+    }),
+  ).toEqual({
+    kind: "ask",
+    questions: [
+      {
+        text: "Which library?",
+        header: "Library",
+        multiple: true,
+        options: [
+          { label: "date-fns", description: "Small" },
+          { label: "luxon", description: undefined },
+        ],
+      },
+    ],
+  });
+  // Codex, asking and going on: a title, plain labels or none.
+  for (const name of ["request_user_input_async", "request_user_input"])
+    expect(
+      toolView(name, {
+        questions: [
+          { title: "Which branch?", options: ["main", "next"] },
+          { title: "Why?" },
+          { title: "" },
+        ],
+      }),
+    ).toEqual({
+      kind: "ask",
+      questions: [
+        {
+          text: "Which branch?",
+          header: undefined,
+          multiple: false,
+          options: [{ label: "main" }, { label: "next" }],
+        },
+        { text: "Why?", header: undefined, multiple: false, options: [] },
+      ],
+    });
+});
+
 test("the tools agents call most read in words, never as their raw name, arguments or sealed text", () => {
   const frequent: [string, unknown][] = [
     [

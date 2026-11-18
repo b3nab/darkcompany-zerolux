@@ -515,6 +515,9 @@ pub struct CodexDriver {
     turn_chats: HashSet<String>,
     turn_private: bool,
     approvals: HashMap<String, Approval>,
+    /// The questions Codex left with the owner and went on, each by the item that asked: the
+    /// request waiting for the answer.
+    left: HashMap<String, String>,
     /// Streamed output not yet reported, and when it is due.
     live: Vec<crate::live::Change>,
     live_due: Option<tokio::time::Instant>,
@@ -819,6 +822,7 @@ impl CodexDriver {
             turn_chats: HashSet::new(),
             turn_private: false,
             approvals: HashMap::new(),
+            left: HashMap::new(),
             live: Vec::new(),
             live_due: None,
         })
@@ -1371,6 +1375,15 @@ impl CodexDriver {
                     .entry(turn_id.clone())
                     .or_default()
                     .add(params["item"].clone());
+                if event["method"] == "item/completed" {
+                    match params["item"]["type"].as_str() {
+                        Some("agentMessage") => {
+                            self.left(kernel, &turn_id, &params["item"]).await?
+                        }
+                        Some("userMessage") => self.replied(kernel, &params["item"]).await?,
+                        _ => {}
+                    }
+                }
                 if params["item"]["type"] == "userMessage" {
                     let ours = params["item"]["clientId"]
                         .as_str()
@@ -1589,8 +1602,109 @@ impl CodexDriver {
         Ok(())
     }
 
+    /// Codex's `request_user_input_async`: questions it leaves with the owner while it goes on
+    /// working. They wait as a request of the session; nothing in Codex waits for them.
+    async fn left(&mut self, kernel: &Kernel, turn_id: &str, item: &Value) -> Result<()> {
+        let questions = left_questions(item);
+        let Some(item_id) = item["id"].as_str().filter(|_| !questions.is_empty()) else {
+            return Ok(());
+        };
+        let delivery = self
+            .turns
+            .get(turn_id)
+            .and_then(|state| state.delivery(&self.deliveries))
+            .map(|d| d.id.clone());
+        let summary: String = match questions.as_slice() {
+            [one] => one["question"].as_str().unwrap_or_default(),
+            _ => "Codex asks you",
+        }
+        .chars()
+        .take(1000)
+        .collect();
+        // Asked again, as when the thread is read anew, it is the same request. One the kernel
+        // does not take stays in the session's record, and the session goes on.
+        match kernel.post("/chat/approvals", json!({"id":Uuid::new_v4().to_string(),"delivery_id":delivery,"native_request_id":format!("{LEFT_QUESTION}{item_id}"),"kind":"question","summary":summary,"details":{"method":"request_user_input_async","questions":questions}})).await {
+            Ok(asked) => {
+                let asked = &asked["approval"];
+                if asked["status"] == "pending"
+                    && let Some(id) = asked["id"].as_str()
+                {
+                    self.left.insert(item_id.to_owned(), id.to_owned());
+                }
+            }
+            Err(error) => tracing::warn!(
+                error = format!("{error:#}"),
+                "Codex's questions did not reach the owner"
+            ),
+        }
+        Ok(())
+    }
+
+    /// An answer to questions Codex left, written in Codex itself: they wait no longer.
+    async fn replied(&mut self, kernel: &Kernel, item: &Value) -> Result<()> {
+        let said = item["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|part| part["type"] == "text")
+            .and_then(|part| part["text"].as_str());
+        for (item_id, _, _) in said.and_then(left_replies).unwrap_or_default() {
+            if let Some(id) = self.left.remove(&item_id) {
+                kernel.approval_receipt(&id, "resolved").await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The owner's answer to questions Codex left reaches it as their own input, in the reply
+    /// Codex's apps write; declined, nothing is said.
+    async fn answer_left(
+        &mut self,
+        kernel: &Kernel,
+        decision: &Value,
+        item_id: &str,
+    ) -> Result<()> {
+        let id = string(decision, "id")?;
+        match decision["status"].as_str() {
+            Some("pending") => {
+                self.left.insert(item_id.to_owned(), id.to_owned());
+                return Ok(());
+            }
+            Some("decided") => {}
+            // Sent, without knowing whether it arrived: never said twice.
+            Some("uncertain") => {
+                self.left.remove(item_id);
+                return kernel.approval_receipt(id, "resolved").await;
+            }
+            _ => return Ok(()),
+        }
+        if kernel
+            .post_conflict(&format!("/chat/approvals/{id}/dispatch"), json!({}))
+            .await?
+            .is_none()
+        {
+            return Ok(());
+        }
+        self.left.remove(item_id);
+        if let Some(reply) = left_reply(item_id, &decision["details"], &decision["answer"])
+            && let Err(error) = self
+                .native_settings
+                .input(&reply, crate::model::InputMode::Steer, &[])
+                .await
+        {
+            tracing::warn!(
+                error = format!("{error:#}"),
+                "The answer to Codex's questions did not reach it"
+            );
+        }
+        kernel.approval_receipt(id, "resolved").await
+    }
+
     async fn decision(&mut self, kernel: &Kernel, decision: &Value) -> Result<()> {
         let native_id = string(decision, "native_request_id")?;
+        if let Some(item_id) = native_id.strip_prefix(LEFT_QUESTION) {
+            return self.answer_left(kernel, decision, item_id).await;
+        }
         let Some(approval) = self.approvals.get_mut(native_id) else {
             if !native_id.starts_with(&format!("{}:", self.rpc.connection_id))
                 && matches!(
@@ -1832,6 +1946,107 @@ fn codex_form(params: &Value) -> Option<Value> {
         }
         _ => None,
     }
+}
+
+/// The native ID of a request for questions Codex left with the owner: the item that asked.
+const LEFT_QUESTION: &str = "question:";
+/// How Codex's apps mark an input that answers questions it left.
+const REPLY: (&str, &str) = (
+    "<send_user_message_question_reply>",
+    "</send_user_message_question_reply>",
+);
+
+/// The questions of Codex's `request_user_input_async` in ZeroLux's shape: each its whole
+/// text, with the answers it suggests if any. The owner may always write their own.
+fn left_questions(item: &Value) -> Vec<Value> {
+    item["questions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(16)
+        .enumerate()
+        .filter_map(|(at, question)| {
+            let title = question["title"]
+                .as_str()
+                .filter(|t| !t.trim().is_empty())?;
+            let options: Vec<Value> = question["options"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .take(64)
+                .map(|label| json!({ "label": label }))
+                .collect();
+            Some(json!({
+                "id": at.to_string(),
+                "header": null,
+                "question": title,
+                "options": options,
+                "multiple": false,
+                "other": true,
+            }))
+        })
+        .collect()
+}
+
+/// The owner's answers as Codex takes them for questions it left: the reply its own apps
+/// write, naming the item that asked, each question in one line of at most 512 bytes.
+fn left_reply(item_id: &str, details: &Value, answer: &Value) -> Option<String> {
+    let answers = answer["answers"].as_object()?;
+    let replies: Vec<Value> = details["questions"]
+        .as_array()?
+        .iter()
+        .filter_map(|question| {
+            let said: Vec<&str> = answers
+                .get(question["id"].as_str()?)?
+                .as_array()?
+                .iter()
+                .filter_map(Value::as_str)
+                .collect();
+            let mut asked = String::new();
+            for letter in question["question"].as_str()?.chars() {
+                let letter = if matches!(letter, '\n' | '\r') {
+                    ' '
+                } else {
+                    letter
+                };
+                if asked.len() + letter.len_utf8() > 512 {
+                    break;
+                }
+                asked.push(letter);
+            }
+            Some(json!({"answer": said.join(", "), "question": asked, "questionItemId": item_id}))
+        })
+        .collect();
+    (!replies.is_empty()).then(|| format!("{}\n{}\n{}", REPLY.0, Value::Array(replies), REPLY.1))
+}
+
+/// The answers in an input that replies to questions Codex left, as its apps write it, alone
+/// or after an editor's context: each the item that asked, the question and the answer.
+pub(crate) fn left_replies(text: &str) -> Option<Vec<(String, String, String)>> {
+    let text = text.trim();
+    let text = if text.starts_with("# Context from my IDE setup:\n") {
+        text.rsplit_once("\n## My request for Codex:\n")?.1.trim()
+    } else {
+        text
+    };
+    let body = text.strip_prefix(REPLY.0)?.strip_suffix(REPLY.1)?;
+    let replies = match serde_json::from_str(body.trim()).ok()? {
+        Value::Array(replies) => replies,
+        one @ Value::Object(_) => vec![one],
+        _ => return None,
+    };
+    let replies: Vec<_> = replies
+        .iter()
+        .map(|reply| {
+            Some((
+                reply["questionItemId"].as_str()?.to_owned(),
+                reply["question"].as_str()?.to_owned(),
+                reply["answer"].as_str()?.to_owned(),
+            ))
+        })
+        .collect::<Option<_>>()?;
+    (!replies.is_empty()).then_some(replies)
 }
 
 /// The owner's answers as Codex expects them; declined, no answers.

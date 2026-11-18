@@ -20,6 +20,7 @@ import {
   FileTextIcon,
   GlobeIcon,
   ListChecksIcon,
+  MessageCircleQuestionMarkIcon,
   MessageSquareIcon,
   PlugIcon,
   SearchIcon,
@@ -43,6 +44,7 @@ import {
   toolView,
 } from "@zerolux/chat";
 import type {
+  AskedQuestion,
   PlanStep,
   RecordOf,
   ToolBlock,
@@ -316,6 +318,39 @@ export function SubagentCard({
   );
 }
 
+/** What a harness asked the person: each question whole, with the answers it suggested. */
+function AskedQuestions({ questions }: { questions: AskedQuestion[] }) {
+  return (
+    <View className="gap-3">
+      {questions.map((asked, i) => (
+        <View key={i} className="gap-1.5">
+          {asked.header ? (
+            <Text className="self-start rounded-xs border border-border px-1.5 font-mono text-[11px] text-muted-foreground">
+              {asked.header}
+            </Text>
+          ) : null}
+          <MessageBody text={asked.text} />
+          {asked.options.map((option, j) => (
+            <View
+              key={j}
+              className="rounded-md border border-border px-2.5 py-1.5"
+            >
+              <Text selectable className="text-[13px]">
+                {option.label}
+              </Text>
+              {option.description ? (
+                <Text selectable className="text-xs text-muted-foreground">
+                  {option.description}
+                </Text>
+              ) : null}
+            </View>
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
+
 /** A plan's steps as a checklist: done ones struck through, the one in hand in the agent's colour. */
 export function PlanSteps({ steps }: { steps: PlanStep[] }) {
   return (
@@ -381,6 +416,7 @@ const kindIcons = {
   web: GlobeIcon,
   agent: BotIcon,
   plan: ListChecksIcon,
+  ask: MessageCircleQuestionMarkIcon,
   zerolux: MessageSquareIcon,
   mcp: PlugIcon,
   other: WrenchIcon,
@@ -516,6 +552,14 @@ function summary(
             {view.steps.length}
           </Meta>
         ),
+      };
+    case "ask":
+      return {
+        ...line,
+        meta:
+          view.questions.length > 1 ? (
+            <Meta>+{view.questions.length - 1}</Meta>
+          ) : null,
       };
     case "mcp":
       return {
@@ -696,6 +740,16 @@ function Body({
       );
     case "plan":
       return <PlanSteps steps={view.steps} />;
+    case "ask":
+      return (
+        <>
+          <AskedQuestions questions={view.questions} />
+          {/* Codex only notes that it asked: the answer comes later, as the person's input. */}
+          {outcome?.text.replace(/\s/g, "") !== '{"accepted":true}'
+            ? plain
+            : null}
+        </>
+      );
     case "zerolux":
       return (
         <>

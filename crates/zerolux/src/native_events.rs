@@ -564,7 +564,18 @@ fn codex_user(content: &Value) -> Vec<Event> {
             .filter_map(|text| subagent_notice(text))
             .collect();
     }
-    vec![input(text_of(content, &["input_text"]))]
+    let said = text_of(content, &["input_text"]);
+    // An answer to questions Codex left reads as its own app shows it: each question quoted,
+    // its answer below.
+    let said = match crate::codex::left_replies(&said) {
+        Some(replies) => replies
+            .iter()
+            .map(|(_, question, answer)| format!("> {question}\n\n{answer}"))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        None => said,
+    };
+    vec![input(said)]
 }
 
 /// A message between Codex's agents: `Message Type: …\nTask name: …\nSender: …\nPayload:\n…`,
@@ -1116,6 +1127,22 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn an_answer_to_questions_codex_left_reads_as_question_and_answer() {
+        let said = "<send_user_message_question_reply>\n[{\"answer\":\"main\",\"question\":\"Which branch?\",\"questionItemId\":\"call-1\"}]\n</send_user_message_question_reply>";
+        let read = events(
+            "codex",
+            vec![
+                json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":said}]}}),
+            ],
+        );
+        let [Event::Input { text, .. }] = read.as_slice() else {
+            panic!("an answer is the owner's input");
+        };
+        assert!(text.contains("Which branch?") && text.contains("main"));
+        assert!(!text.contains("questionItemId") && !text.contains("send_user_message"));
     }
 
     #[test]

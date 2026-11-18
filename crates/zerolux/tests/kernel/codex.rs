@@ -2081,6 +2081,124 @@ async fn questions_and_mcp_forms_reach_the_owner_and_come_back_as_codex_expects(
     finish(stop, task).await;
 }
 
+/// The replies in the input Codex was given for questions it left: each `(item, answer)`.
+fn replies(request: &Value) -> Option<Vec<(String, String)>> {
+    let said = request["params"]["input"][0]["text"].as_str()?;
+    let body = said
+        .trim()
+        .strip_prefix("<send_user_message_question_reply>")?
+        .strip_suffix("</send_user_message_question_reply>")?;
+    let replies: Vec<Value> = serde_json::from_str(body.trim()).ok()?;
+    replies
+        .iter()
+        .map(|reply| {
+            Some((
+                reply["questionItemId"].as_str()?.to_owned(),
+                reply["answer"].as_str()?.to_owned(),
+            ))
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn questions_codex_leaves_wait_for_the_owner_and_the_answer_reaches_it_as_their_input() {
+    let runtime = Runtime::new().await;
+    let kernel = KernelFixture::new("stored").await;
+    let (changed, stop, task) = run(&runtime, &kernel).await;
+    runtime.wait(|s| s.queue.len() == 1).await;
+    runtime.emit(item("ours", user("input", Some(DELIVERY))));
+    // `request_user_input_async`: Codex asks and goes on; the questions come on its message.
+    let asks = |id: &str, questions: Value| {
+        item(
+            "ours",
+            json!({"type":"agentMessage","id":id,"text":"fallback","delivery":"async","questions":questions}),
+        )
+    };
+    runtime.emit(asks(
+        "call-one",
+        json!([{"title":"Which library?","options":["date-fns","luxon"]},{"title":"Project name?"}]),
+    ));
+    // A message that asks nothing is no request.
+    runtime.emit(item("ours", assistant("plain", "Working", "commentary")));
+    kernel.wait(|s| s.approvals.len() == 1).await;
+    {
+        let state = kernel.state.lock().unwrap();
+        let asked = &state.approvals[0];
+        assert_eq!(asked["kind"], "question");
+        assert_eq!(asked["delivery_id"], DELIVERY);
+        let questions = asked["details"]["questions"].as_array().unwrap();
+        assert_eq!(questions.len(), 2);
+        assert_eq!(questions[0]["options"][1]["label"], "luxon");
+        assert_eq!(questions[0]["multiple"], false);
+        // The owner may always write their own answer.
+        assert_eq!(questions[0]["other"], true);
+        assert_eq!(questions[1]["options"], json!([]));
+        assert_eq!(questions[1]["other"], true);
+        assert_ne!(questions[0]["id"], questions[1]["id"]);
+    }
+    let before = runtime.state.lock().unwrap().requests.len();
+    {
+        let mut state = kernel.state.lock().unwrap();
+        let ids: Vec<String> = state.approvals[0]["details"]["questions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|q| q["id"].as_str().unwrap().to_owned())
+            .collect();
+        state.approvals[0]["status"] = json!("decided");
+        state.approvals[0]["answer"] =
+            json!({"answers":{ids[0].clone():["luxon"],ids[1].clone():["ZeroLux"]}});
+    }
+    changed.send(()).await.unwrap();
+    // The answer is the owner's own input, in the reply Codex's apps write, once.
+    kernel
+        .wait(|s| s.approvals[0]["status"] == "resolved")
+        .await;
+    {
+        let state = runtime.state.lock().unwrap();
+        let said: Vec<_> = state.requests[before..]
+            .iter()
+            .filter_map(replies)
+            .collect();
+        assert_eq!(
+            said,
+            vec![vec![
+                ("call-one".to_owned(), "luxon".to_owned()),
+                ("call-one".to_owned(), "ZeroLux".to_owned())
+            ]]
+        );
+    }
+    // Declined, nothing is said to Codex.
+    runtime.emit(asks("call-two", json!([{"title":"Deploy now?"}])));
+    kernel.wait(|s| s.approvals.len() == 2).await;
+    let before = runtime.state.lock().unwrap().requests.len();
+    {
+        let mut state = kernel.state.lock().unwrap();
+        state.approvals[1]["status"] = json!("decided");
+        state.approvals[1]["answer"] = json!({"declined":true});
+    }
+    changed.send(()).await.unwrap();
+    kernel
+        .wait(|s| s.approvals[1]["status"] == "resolved")
+        .await;
+    assert!(
+        runtime.state.lock().unwrap().requests[before..]
+            .iter()
+            .all(|request| replies(request).is_none())
+    );
+    // Answered in Codex itself, the request waits no longer.
+    runtime.emit(asks("call-three", json!([{"title":"Which branch?"}])));
+    kernel.wait(|s| s.approvals.len() == 3).await;
+    runtime.emit(item(
+        "ours",
+        json!({"type":"userMessage","id":"answer","clientId":null,"content":[{"type":"text","text":"<send_user_message_question_reply>\n[{\"answer\":\"main\",\"question\":\"Which branch?\",\"questionItemId\":\"call-three\"}]\n</send_user_message_question_reply>"}]}),
+    ));
+    kernel
+        .wait(|s| s.approvals[2]["status"] == "resolved")
+        .await;
+    finish(stop, task).await;
+}
+
 #[tokio::test]
 async fn streamed_output_reaches_the_kernel_while_the_turn_runs() {
     let runtime = Runtime::new().await;

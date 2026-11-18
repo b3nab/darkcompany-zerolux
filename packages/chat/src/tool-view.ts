@@ -32,6 +32,8 @@ export type ToolView =
       encrypted?: boolean;
     }
   | { kind: "plan"; steps: PlanStep[] }
+  /** What the harness asks the person, with its own tool for it. */
+  | { kind: "ask"; questions: AskedQuestion[] }
   | {
       kind: "zerolux";
       action: (typeof ZEROLUX)[keyof typeof ZEROLUX];
@@ -71,6 +73,15 @@ export interface TextChange {
 export interface PlanStep {
   text: string;
   status: "pending" | "active" | "done";
+}
+/** A question a harness asks the person: its words, and the answers it suggests. */
+export interface AskedQuestion {
+  text: string;
+  /** A word or two that names it, when the harness gives one. */
+  header?: string;
+  options: { label: string; description?: string }[];
+  /** Several answers may be chosen. */
+  multiple: boolean;
 }
 
 /** A message its provider sealed (Codex's agents' own): it has no words to show here. */
@@ -290,6 +301,35 @@ export function toolView(name: string, input: unknown): ToolView {
       return agentCall("list", args, undefined, args.path_prefix);
     case "SubagentHandback":
       return agentCall("handback", args, args.message);
+    // Claude Code's and Codex's own tools to ask the person: Codex's suggestions are plain
+    // labels, Claude Code's carry a description.
+    case "AskUserQuestion":
+    case "request_user_input":
+    case "request_user_input_async":
+      return {
+        kind: "ask",
+        questions: (Array.isArray(args.questions) ? args.questions : [])
+          .map((item): AskedQuestion => {
+            const asked = fields(item);
+            return {
+              text: text(asked.question) || text(asked.title),
+              header: text(asked.header) || undefined,
+              options: (Array.isArray(asked.options) ? asked.options : [])
+                .map((option) =>
+                  typeof option === "string"
+                    ? { label: option }
+                    : {
+                        label: text(fields(option).label),
+                        description:
+                          text(fields(option).description) || undefined,
+                      },
+                )
+                .filter((option) => option.label),
+              multiple: asked.multiSelect === true,
+            };
+          })
+          .filter((asked) => asked.text),
+      };
     case "TodoWrite":
     case "update_plan": {
       const items = (Array.isArray(args.todos) ? args.todos : args.plan) ?? [];
@@ -499,11 +539,6 @@ const host = (url: string) => {
 };
 
 const firstLine = (value: unknown) => text(value).split("\n")[0]?.trim();
-const question = (value: unknown) => {
-  const first = fields(Array.isArray(value) ? value[0] : undefined);
-  return text(first.question ?? first.title) || undefined;
-};
-
 /**
  * Tools without a kind of their own, by name, in words: what they do now and once done, and
  * what they work on. The ones agents call most.
@@ -578,21 +613,6 @@ const WORDS: Record<
     "Running JavaScript",
     "Ran JavaScript",
     (args) => text(args.title) || firstLine(args.code),
-  ],
-  request_user_input: [
-    "Asking you",
-    "Asked you",
-    (args) => question(args.questions),
-  ],
-  request_user_input_async: [
-    "Asking you",
-    "Asked you",
-    (args) => question(args.questions),
-  ],
-  AskUserQuestion: [
-    "Asking you",
-    "Asked you",
-    (args) => question(args.questions),
   ],
   ToolSearch: [
     "Loading tools",
@@ -691,6 +711,11 @@ export function toolPhrase(
       return {
         verb: "Plan",
         subject: view.steps.find((step) => step.status === "active")?.text,
+      };
+    case "ask":
+      return {
+        verb: tense("Asking you", "Asked you"),
+        subject: view.questions[0] && plainLine(view.questions[0].text),
       };
     case "zerolux": {
       const place = (view.chat && chatTitle?.(view.chat)) || "a chat";
@@ -936,6 +961,7 @@ export function toolsPhrase(tools: ToolBlock[]): string {
     agents: 0,
     mcp: 0,
     plans: 0,
+    questions: 0,
     other: 0,
   };
   const edited = new Set<string>();
@@ -953,6 +979,7 @@ export function toolsPhrase(tools: ToolBlock[]): string {
     else if (view.kind === "agent") count.agents++;
     else if (view.kind === "mcp") count.mcp++;
     else if (view.kind === "plan") count.plans++;
+    else if (view.kind === "ask") count.questions += view.questions.length;
     else count.other++;
   }
   const part = (n: number, one: string, many: string) =>
@@ -971,6 +998,8 @@ export function toolsPhrase(tools: ToolBlock[]): string {
     part(count.mcp, "MCP tool", "MCP tools") &&
       `called ${part(count.mcp, "MCP tool", "MCP tools")}`,
     count.plans ? "updated the plan" : "",
+    part(count.questions, "question", "questions") &&
+      `asked ${part(count.questions, "question", "questions")}`,
     part(count.other, "tool", "tools") &&
       `used ${part(count.other, "tool", "tools")}`,
   ].filter(Boolean);
