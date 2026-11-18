@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { Approval } from "./chat";
-import { permissionShown } from "./requests";
+import { permissionShown, requestLine } from "./requests";
 
 const asking = (details: Record<string, unknown>): Approval => ({
   id: "a1",
@@ -24,6 +24,12 @@ test("a permission reads as what it would do, for each harness", () => {
   expect(
     permissionShown(asking({ tool: "Bash", input: { command: "bun test" } })),
   ).toMatchObject({ command: "bun test", text: undefined });
+  // A plan Claude Code proposes is read as the plan, not as the tool's arguments.
+  expect(
+    permissionShown(
+      asking({ tool: "ExitPlanMode", input: { plan: "1. Read\n2. Fix" } }),
+    ),
+  ).toMatchObject({ text: "1. Read\n2. Fix" });
   expect(
     permissionShown(
       asking({
@@ -70,4 +76,17 @@ test("a permission reads as what it would do, for each harness", () => {
     ),
   ).toMatchObject({ text: "Deploy: Now?" });
   expect(permissionShown(asking({ other: true })).text).toBe("An agent asks");
+});
+
+test("a request in one line names what a permission would do, not its tool", () => {
+  const line = requestLine(
+    asking({ tool: "Bash", input: { command: "bun test\nbun run build" } }),
+  );
+  expect(line).toContain("bun test");
+  expect(line).not.toContain("bun run build");
+  expect(line).not.toContain("An agent asks");
+  // A question stays as it was asked.
+  expect(requestLine({ ...asking({}), kind: "question" })).toBe(
+    "An agent asks",
+  );
 });

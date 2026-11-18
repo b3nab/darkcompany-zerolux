@@ -198,6 +198,14 @@ function toolShown(name: string, input: unknown): PermissionShown {
         wants: `wants to use ${view.server}: ${view.tool}`,
         text: JSON.stringify(view.args),
       };
+    case "note":
+      return {
+        wants:
+          view.name === "ExitPlanMode"
+            ? "proposes a plan"
+            : "wants to tell you",
+        text: view.text,
+      };
     default:
       return {
         wants: `wants to use ${name}`,
@@ -252,4 +260,15 @@ export function permissionShown(approval: Approval): PermissionShown {
       };
   }
   return { wants: "asks your permission", text: approval.summary };
+}
+
+/** A request in one line: a permission as what it would do, anything else as it was asked. */
+export function requestLine(approval: Approval): string {
+  if (approval.kind !== "permission") return approval.summary;
+  const shown = permissionShown(approval);
+  const what =
+    shown.command?.split("\n")[0] ??
+    shown.files?.[0]?.path ??
+    shown.text?.split("\n")[0];
+  return what ? `${shown.wants}: ${what}` : shown.wants;
 }

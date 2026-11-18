@@ -9,6 +9,8 @@ import { useState } from "react";
 import {
   answerSummary,
   approvalLabels,
+  permissionShown,
+  requestLine,
   scopeLabels,
   scopesOf,
   sessionAccess,
@@ -17,6 +19,7 @@ import type { Approval, Conversation } from "@zerolux/chat";
 import type { Chat, Perform } from "@zerolux/chat";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { MessageText } from "@/components/message-text";
 import { ActorMark, Eyebrow } from "@/components/presence";
 import { McpForm, QuestionForm } from "./RequestAnswer";
 import { useMe } from "./AuthGate";
@@ -91,12 +94,17 @@ export function ApprovalCard({
   const conversation = chat.conversations.find(
     (c) => c.id === approval.conversation_id,
   );
+  // A permission reads as what it would do: the command, the files, the plan.
+  const shown =
+    approval.kind === "permission" ? permissionShown(approval) : undefined;
   return (
     <article className="flex flex-col gap-3 rounded-md border border-human/40 bg-human/5 p-4">
       <div className="flex items-center gap-2.5">
         <ActorMark kind="agent" name={agent} className="size-6 text-[10px]" />
         <h3 className="min-w-0 flex-1 text-sm font-semibold">
-          {agent} asks: {approval.summary}
+          {shown
+            ? `${agent} ${shown.wants}`
+            : `${agent} asks: ${approval.summary}`}
         </h3>
         <time
           dateTime={new Date(approval.created_at).toISOString()}
@@ -117,10 +125,31 @@ export function ApprovalCard({
           Open «{conversation.title}»
         </Button>
       )}
-      {approval.kind === "permission" && (
-        <pre className="overflow-x-auto rounded-sm border bg-background p-3 font-mono text-xs">
-          {JSON.stringify(approval.details, null, 2)}
-        </pre>
+      {shown && (shown.command || shown.files?.length || shown.text) && (
+        <div className="flex flex-col gap-1.5 text-sm">
+          {shown.command && (
+            <pre className="rounded-sm border bg-background p-3 font-mono text-xs break-all whitespace-pre-wrap">
+              {shown.command}
+            </pre>
+          )}
+          {shown.cwd && (
+            <span className="font-mono text-xs text-muted-foreground">
+              in {shown.cwd}
+            </span>
+          )}
+          {shown.files?.map((file) => (
+            <span key={file.path} className="flex gap-2 font-mono text-xs">
+              <span className="min-w-0 flex-1 break-all">{file.path}</span>
+              {file.added !== undefined && (
+                <span className="text-success">+{file.added}</span>
+              )}
+              {file.removed !== undefined && (
+                <span className="text-destructive">−{file.removed}</span>
+              )}
+            </span>
+          ))}
+          {shown.text && <MessageText text={shown.text} />}
+        </div>
       )}
       {approval.status !== "pending" ? (
         <p className="text-sm text-muted-foreground">
@@ -228,7 +257,7 @@ export function ApprovalReceipt({ approval }: { approval: Approval }) {
     <p className="flex min-w-0 items-center gap-2 rounded-md border border-human/20 bg-human/5 px-3 py-1.5 text-[13px]">
       <Icon aria-hidden className="size-3.5 shrink-0 text-human" />
       <span className="min-w-0 flex-1 truncate text-muted-foreground">
-        {approval.summary}
+        {requestLine(approval)}
       </span>
       {answer && (
         <span className="max-w-[40%] shrink-0 truncate font-medium">

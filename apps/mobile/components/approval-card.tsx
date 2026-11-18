@@ -9,6 +9,8 @@ import { useCSSVariable } from "uniwind";
 import {
   answerSummary,
   approvalLabels,
+  permissionShown,
+  requestLine,
   scopeLabels,
   scopesOf,
 } from "@zerolux/chat";
@@ -19,6 +21,7 @@ import type {
   QuestionAnswer,
 } from "@zerolux/chat";
 import { ActorMark } from "@/components/member";
+import { MessageBody } from "@/components/message-body";
 import { McpForm, QuestionForm } from "@/components/request-answer";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
@@ -49,18 +52,53 @@ export function ApprovalCard({
   const [reason, setReason] = useState("");
   const faint = String(useCSSVariable("--color-faint"));
   const scopes = scopesOf(approval);
+  // A permission reads as what it would do: the command, the files, the plan.
+  const shown =
+    approval.kind === "permission" ? permissionShown(approval) : undefined;
   return (
     <View className="gap-3 rounded-md border border-human/40 bg-human/5 p-4">
       <View className="flex-row items-center gap-2.5">
         <ActorMark kind="agent" name={agent} size="sm" />
         <Text className="flex-1 text-sm font-semibold">
-          {agent} asks: {approval.summary}
+          {shown
+            ? `${agent} ${shown.wants}`
+            : `${agent} asks: ${approval.summary}`}
         </Text>
       </View>
-      {approval.kind === "permission" ? (
-        <Text className="rounded-sm border border-border bg-background p-3 font-mono text-xs">
-          {JSON.stringify(approval.details, null, 2)}
-        </Text>
+      {shown && (shown.command || shown.files?.length || shown.text) ? (
+        <View className="gap-1.5">
+          {shown.command ? (
+            <Text
+              selectable
+              className="rounded-sm border border-border bg-background p-3 font-mono text-xs"
+            >
+              {shown.command}
+            </Text>
+          ) : null}
+          {shown.cwd ? (
+            <Text className="font-mono text-xs text-muted-foreground">
+              in {shown.cwd}
+            </Text>
+          ) : null}
+          {shown.files?.map((file) => (
+            <View key={file.path} className="flex-row gap-2">
+              <Text selectable className="flex-1 font-mono text-xs">
+                {file.path}
+              </Text>
+              {file.added !== undefined ? (
+                <Text className="font-mono text-xs text-success">
+                  +{file.added}
+                </Text>
+              ) : null}
+              {file.removed !== undefined ? (
+                <Text className="font-mono text-xs text-destructive">
+                  −{file.removed}
+                </Text>
+              ) : null}
+            </View>
+          ))}
+          {shown.text ? <MessageBody text={shown.text} /> : null}
+        </View>
       ) : null}
       {approval.kind !== "permission" ? (
         approval.status === "pending" ? (
@@ -145,7 +183,7 @@ export function ApprovalReceipt({
         numberOfLines={1}
         className="min-w-0 flex-1 text-[13px] text-muted-foreground"
       >
-        {approval.summary}
+        {requestLine(approval)}
       </Text>
       {answer ? (
         <Text numberOfLines={1} className="max-w-[40%] text-[13px] font-medium">
