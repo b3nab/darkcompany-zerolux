@@ -1,7 +1,7 @@
 import { afterAll, expect, jest, mock, test } from "bun:test";
 import { act } from "react";
 import { Window } from "happy-dom";
-import type { Chat } from "@zerolux/chat";
+import type { Chat, ChatEvent } from "@zerolux/chat";
 
 // `bun run test` uses --parallel: every file has its own globals and module registry.
 const browser = new Window({ url: "https://fixture.example.test" });
@@ -23,25 +23,19 @@ for (const [key, value] of Object.entries(globals))
     writable: true,
     value,
   });
-// The room joins and stays joined; the test speaks for the kernel through it.
-const livekit = await import("livekit-client");
-let hear:
-  | ((
-      payload: Uint8Array,
-      from: undefined,
-      kind: number,
-      topic: string,
-    ) => void)
-  | undefined;
-mock.module("livekit-client", () => ({
-  ...livekit,
-  Room: class {
-    on(event: string, handler: typeof hear) {
-      if (event === livekit.RoomEvent.DataReceived) hear = handler;
-      return this;
-    }
-    async connect() {}
-    async disconnect() {}
+// The connection joins and stays live; the test speaks for the kernel through it.
+type Heard = {
+  event: (event: ChatEvent) => void;
+  sync: () => void;
+  status: (status: "connecting" | "live" | "offline") => void;
+};
+let heard: Heard | undefined;
+mock.module("../../../packages/chat/src/realtime", () => ({
+  connectRealtime: (handlers: Heard) => {
+    heard = handlers;
+    handlers.status("live");
+    handlers.sync();
+    return () => {};
   },
 }));
 
@@ -82,18 +76,11 @@ test("a read the kernel did not answer is tried again by itself, and its error g
   // The connection is live, and one read fails: nothing else would read again.
   down = true;
   await act(async () => {
-    hear!(
-      new TextEncoder().encode(
-        JSON.stringify({
-          event_id: "e1",
-          type: "approval.changed",
-          approval_id: "a",
-        }),
-      ),
-      undefined,
-      0,
-      "chat",
-    );
+    heard!.event({
+      event_id: "e1",
+      type: "approval.changed",
+      approval_id: "a",
+    } as ChatEvent);
   });
   expect(chat.error).not.toBe("");
   // Still unanswered, it stays; nobody has to act for the next try.
