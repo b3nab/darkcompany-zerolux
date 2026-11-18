@@ -6,7 +6,7 @@
 //! to no event.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::native_output::Record;
 
@@ -702,6 +702,45 @@ fn codex(record: &Value) -> Vec<Event> {
             name: "web_search".into(),
             input: payload["action"].clone(),
         }],
+        // The model's own shell: the command it ran, as any other command. Its output comes
+        // as a tool's, under the same call.
+        (Some("response_item"), Some("local_shell_call")) => vec![Event::ToolCall {
+            id: payload["call_id"]
+                .as_str()
+                .or(payload["id"].as_str())
+                .unwrap_or_default()
+                .to_owned(),
+            name: "shell".into(),
+            input: json!({
+                "command": payload["action"]["command"],
+                "workdir": payload["action"]["working_directory"],
+            }),
+        }],
+        // The tools it looked for, and the ones it found by name.
+        (Some("response_item"), Some("tool_search_call")) => vec![Event::ToolCall {
+            id: payload["call_id"].as_str().unwrap_or_default().to_owned(),
+            name: "tool_search".into(),
+            input: payload["arguments"].clone(),
+        }],
+        (Some("response_item"), Some("tool_search_output")) => vec![Event::ToolResult {
+            id: payload["call_id"].as_str().unwrap_or_default().to_owned(),
+            output: Value::String(
+                payload["tools"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|tool| tool["name"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            error: false,
+        }],
+        // An image it made: what it was asked for, never the image's own bytes.
+        (Some("response_item"), Some("image_generation_call")) => vec![Event::ToolCall {
+            id: payload["id"].as_str().unwrap_or_default().to_owned(),
+            name: "image_generation".into(),
+            input: json!({ "prompt": payload["revised_prompt"] }),
+        }],
         (Some("event_msg"), Some("task_started")) => vec![Event::TurnStarted],
         (Some("event_msg"), Some("task_complete")) => vec![Event::TurnEnded {
             status: "completed".into(),
@@ -1124,6 +1163,51 @@ mod tests {
                     to: "/root".into(),
                     kind: Some("final_answer".into()),
                     text: Some("All green".into()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_shell_tool_search_and_images_are_tools_like_any_other() {
+        let read = events(
+            "codex",
+            vec![
+                json!({"type":"response_item","payload":{"type":"local_shell_call","call_id":"sh1","status":"completed","action":{"type":"exec","command":["ls","-la"],"working_directory":"/w"}}}),
+                json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"sh1","output":"ok"}}),
+                json!({"type":"response_item","payload":{"type":"tool_search_call","call_id":"ts1","execution":"client","arguments":{"query":"calendar"}}}),
+                json!({"type":"response_item","payload":{"type":"tool_search_output","call_id":"ts1","execution":"client","status":"completed","tools":[{"name":"calendar_list"},{"name":"calendar_add"}]}}),
+                json!({"type":"response_item","payload":{"type":"image_generation_call","id":"img1","status":"completed","revised_prompt":"a red kite","result":"iVBORw0KGgo="}}),
+            ],
+        );
+        assert_eq!(
+            read,
+            vec![
+                Event::ToolCall {
+                    id: "sh1".into(),
+                    name: "shell".into(),
+                    input: json!({"command":["ls","-la"],"workdir":"/w"}),
+                },
+                Event::ToolResult {
+                    id: "sh1".into(),
+                    output: json!("ok"),
+                    error: false,
+                },
+                Event::ToolCall {
+                    id: "ts1".into(),
+                    name: "tool_search".into(),
+                    input: json!({"query":"calendar"}),
+                },
+                Event::ToolResult {
+                    id: "ts1".into(),
+                    output: json!("calendar_list\ncalendar_add"),
+                    error: false,
+                },
+                // The image's bytes are not part of the record read.
+                Event::ToolCall {
+                    id: "img1".into(),
+                    name: "image_generation".into(),
+                    input: json!({"prompt":"a red kite"}),
                 },
             ]
         );
