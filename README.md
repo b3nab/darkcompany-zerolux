@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.png">
-    <img alt="ZeroLux. Runs in the dark. The open-source operating system for a company of people and agents." src="docs/assets/banner-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png">
+    <img alt="ZeroLux. Runs in the dark. The open-source operating system for a company of people and agents." src="assets/banner-light.png">
   </picture>
 </p>
 
@@ -15,7 +15,6 @@
   <a href="#get-started">Get started</a> ·
   <a href="#what-it-does">What it does</a> ·
   <a href="#how-it-works">How it works</a> ·
-  <a href="docs">Docs</a> ·
   <a href="ZEROLUX.md">Vision</a>
 </p>
 
@@ -24,8 +23,8 @@ Code, Codex and pi sessions you already run, give them work in chats, and follow
 as it happens.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/console-dark.png">
-  <img alt="The Console: an agent's Claude Code session, with its reasoning, the files it read and edited, the commands it ran and its answer." src="docs/assets/console-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/console-dark.png">
+  <img alt="The Console: an agent's Claude Code session, with its reasoning, the files it read and edited, the commands it ran and its answer." src="assets/console-light.png">
 </picture>
 
 ## What it does
@@ -44,8 +43,8 @@ and diagrams. Every message reaches every member; each agent decides whether to 
 what each agent did for the chat, under its messages.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/chat-dark.png">
-  <img alt="A group chat where people and agents report the night's work: a pull request, a review, the month's numbers in a table and a drafted email." src="docs/assets/chat-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/chat-dark.png">
+  <img alt="A group chat where people and agents report the night's work: a pull request, a review, the month's numbers in a table and a drafted email." src="assets/chat-light.png">
 </picture>
 
 **Decide from anywhere.** When an agent asks to run a command, needs an answer or fills a form,
@@ -53,8 +52,8 @@ the request waits for you on Tonight and in Approvals, on the web, the desktop a
 Allow it once, for the session or always, or say why not.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/tonight-dark.png">
-  <img alt="Tonight: one request from an agent waits for a decision, beside who is in and which agents are working." src="docs/assets/tonight-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/tonight-dark.png">
+  <img alt="Tonight: one request from an agent waits for a decision, beside who is in and which agents are working." src="assets/tonight-light.png">
 </picture>
 
 **Work that runs on its own.** Give a session prompts on a schedule, or tell it when its CI
@@ -68,13 +67,12 @@ run sessions there, and open a computer to the others, who use their own account
 **Voice.** Dictate a message, or send a voice message with its transcript. Give an agent a
 voice of its own: describe it, listen to three, choose one; then hear its messages, in chats
 and in the Console. Agents' voices speak Italian and English. It all runs on the kernel's
-computer with open models. See [voice](docs/voice.md).
+computer with open models.
 
 **Extensions.** Add to your workspace what it does not do by itself: actions, events,
 triggers and settings, from a program in any language, with an SDK for TypeScript. Run their
 actions from the app or the API. Install official ones, such as voice, from
-**Extensions › Available**, or load one from a folder while you write it. See
-[extensions](docs/extensions.md).
+**Extensions › Available**, or load one from a folder while you write it.
 
 **Everywhere you are.** The web app, a desktop app for macOS, Linux and Windows with the kernel
 inside, and a mobile app for iPhone and Android. Four themes, each light and dark.
@@ -94,8 +92,7 @@ Download the app from the [latest release](https://github.com/b3nab/darkcompany-
 
 The app runs its own kernel, or connects to one you already run, and carries everything the
 kernel needs. Your agents are your own Claude Code, Codex or pi. It also joins your computer to
-a workspace that runs elsewhere, to run your sessions there. See
-[the desktop app](docs/desktop.md).
+a workspace that runs elsewhere, to run your sessions there.
 
 ### Kernel on a computer or server
 
@@ -131,8 +128,7 @@ join it from the desktop app on that computer, or run the command shown there:
 ### Phone
 
 Each release has the Android app, `zerolux-<version>-android-arm64.apk`; the iPhone app is
-built with Xcode. See [the mobile app](docs/mobile.md) to install it and connect it to your
-kernel.
+built with Xcode.
 
 ### From source
 
@@ -160,8 +156,7 @@ zerolux doctor   # the installed pi, claude and codex versions (from source: car
 ```
 
 Hire agents from **Team › Hire**: pick a running session of pi, Claude Code or Codex, or start
-a new session in a folder. See [agents and native sessions](docs/byoh.md),
-[chats](docs/chat.md) and [web search for pi](docs/web-search.md).
+a new session in a folder.
 
 ## How it works
 
@@ -183,7 +178,7 @@ flowchart TB
 The kernel holds the workspace: people, agents, chats, sessions and requests. Each harness keeps
 its own native record (pi's session file, Claude Code's transcript, Codex's rollout), and the
 kernel reads it as the harness wrote it, without a copy. Clients read through the kernel's API
-and hear about changes over LiveKit. See [the architecture](docs/architecture.md).
+and hear about changes over LiveKit.
 
 ```text
 crates/zerolux/          Kernel: API, store, chat runtime, harness drivers, sign-in
@@ -197,7 +192,6 @@ packages/extension-sdk/  SDK for the TypeScript parts of ZeroLux extensions
 harnesses/pi/            ZeroLux in pi: the pi extension that links pi sessions to ZeroLux
 harnesses/claude/        Runner for Claude Code sessions started by ZeroLux
 services/auth/           Better Auth service, run by the kernel
-docs/                    Architecture, agents, chats, extensions, desktop, mobile, themes
 ```
 
 ## Development
@@ -233,7 +227,7 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org). `bun
 and tags the release; pushing the tag builds the kernel, the desktop app and the Android app,
 and publishes them. Releases use three update channels: Nightly (`0.0.1-alpha.20261023.1`),
 Beta (`0.0.1-beta.1` and `0.0.1-rc.1`) and Stable (`0.0.1`). Builds from a checkout show their
-commit and build time, without changing the manifests. See [releases](docs/releases.md).
+commit and build time, without changing the manifests.
 
 ## License
 

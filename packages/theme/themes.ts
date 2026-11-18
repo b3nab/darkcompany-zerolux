@@ -3,7 +3,7 @@ import registry from "./themes.json";
 /**
  * The themes every client offers, from themes.json. Each has a light and a dark variant: the
  * default theme's are theme.css's plain `light` and `dark`, every other theme's are
- * `<id>-light` and `<id>-dark` in themes/<id>.css. See docs/themes.md.
+ * `<id>-light` and `<id>-dark` in themes/<id>.css.
  */
 export type ThemeInfo = { id: string; name: string; description: string };
 export type Light = "light" | "dark";

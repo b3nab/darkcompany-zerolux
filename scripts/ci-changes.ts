@@ -14,9 +14,9 @@ const rust =
   /^(crates|marketplace|harnesses|services\/auth|packages\/bridge|packages\/extension-sdk|\.cargo|\.config)\/|^(Cargo\.toml|Cargo\.lock|bun\.lock|package\.json)$/;
 /** What the desktop crate also builds from: its own folder, and the web app's icon. */
 const desktop = /^apps\/desktop\/|^apps\/web\/index\.html$/;
-/** What no JavaScript or Python test reads: Rust's own files and the docs. */
+/** What no JavaScript or Python test reads: Rust's own files and the README's images. */
 const notJs =
-  /\.rs$|^(crates|apps\/desktop\/src-tauri|\.cargo|\.config|docs)\/|^Cargo\.(toml|lock)$/;
+  /\.rs$|^(crates|apps\/desktop\/src-tauri|\.cargo|\.config|assets)\/|^Cargo\.(toml|lock)$/;
 /** CI itself: every job. */
 const ci = /^\.github\/|^scripts\/ci-changes\.ts$/;
 

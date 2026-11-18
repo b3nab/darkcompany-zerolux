@@ -612,7 +612,7 @@ pub fn run(app: &AppHandle, id: &str) {
                 window.open_devtools();
             }
         }
-        "help" => open(app, &format!("{REPOSITORY}/tree/main/docs")),
+        "help" => open(app, &format!("{REPOSITORY}#readme")),
         "whats-new" => open(app, &format!("{REPOSITORY}/releases")),
         "report-issue" => open(app, &format!("{REPOSITORY}/issues/new")),
         "data-folder" => match crate::app::data_root(app) {

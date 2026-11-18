@@ -29,8 +29,8 @@ test("a push runs the jobs that read what it changed", () => {
     js: false,
   });
   expect(needs(["apps/web/index.html"]).desktop).toBe(true);
-  // The docs need none: the format check runs on every push.
-  expect(needs(["docs/chat.md"])).toEqual({
+  // The README's images need none.
+  expect(needs(["assets/banner-dark.png"])).toEqual({
     rust: false,
     desktop: false,
     js: false,

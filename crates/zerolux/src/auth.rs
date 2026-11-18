@@ -1,8 +1,7 @@
 //! Human identity: the Better Auth service, a child of this kernel, one for the instance. It
 //! identifies an account and keeps its sessions; in each workspace the kernel finds the person
 //! bound to that account and authorizes every request itself. The service listens on loopback
-//! only and answers no one without the control token this process made for it. See
-//! `docs/foundations.md` for the contract.
+//! only and answers no one without the control token this process made for it.
 //!
 //! The kernel never reads the service's tables, and the service never reads the kernel's.
 //! An unavailable service never becomes owner access: the request fails.

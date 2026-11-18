@@ -1,6 +1,6 @@
 # Working on ZeroLux
 
-Read `ZEROLUX.md` first: it defines the product. Then `README.md` and `docs/`.
+Read `ZEROLUX.md` first: it defines the product. Then `README.md`.
 
 ## Stack
 
@@ -20,4 +20,4 @@ Read `ZEROLUX.md` first: it defines the product. Then `README.md` and `docs/`.
 
 ## Checks
 
-Run `bun run check` from the root. Format Rust with `cargo fmt --all` and everything else with `bun run format`. Update tests and docs when behavior changes.
+Run `bun run check` from the root. Format Rust with `cargo fmt --all` and everything else with `bun run format`. Update tests when behavior changes.
