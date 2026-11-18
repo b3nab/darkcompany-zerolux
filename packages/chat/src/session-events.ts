@@ -670,24 +670,36 @@ export function sessionReader(
       }
       show();
     }));
+  /** The page before what is read: the record's last one, when nothing is read yet. */
+  const back = async () => {
+    const read = await page(`before=${record.first ?? LATEST}`);
+    // A kernel that reads only forward has no `first`.
+    if (read.first === undefined) throw new Error(UPDATE);
+    if (record.first === undefined) record.next = read.next;
+    record.first = read.first;
+    if (read.events.length) record.events = [...read.events, ...record.events];
+  };
+  // The furthest end asked for, and a way back that failed before it got there: a read
+  // that failed goes there again.
+  let wanted = 0;
+  let owed: { since?: number } | undefined;
   const reader = {
     /** Earlier events: one page, or with `since` (ms) back to an event at or before it. */
     earlier: (since?: number) =>
       run(async () => {
+        owed = { since };
         do {
-          if (record.first === 0 || closed) return;
-          const read = await page(`before=${record.first ?? LATEST}`);
-          // A kernel that reads only forward has no `first`.
-          if (read.first === undefined) throw new Error(UPDATE);
-          if (record.first === undefined) record.next = read.next;
-          record.first = read.first;
-          if (read.events.length)
-            record.events = [...read.events, ...record.events];
+          if (record.first === 0 || closed) break;
+          await back();
         } while (since !== undefined && !reached(record.events, since));
+        owed = undefined;
       }),
     /** Later events, up to `end`: the record's size its latest notice gave. */
     grow: (end: number) =>
       run(async () => {
+        wanted = Math.max(wanted, end);
+        // The first page never came, as when the kernel did not answer: it is read first.
+        if (record.first === undefined && !closed) await back();
         while (record.first !== undefined && record.next < end && !closed) {
           const from = record.next;
           const read = await page(`after=${from}`);
@@ -698,6 +710,11 @@ export function sessionReader(
           if (read.next >= read.end || read.next === from) return;
         }
       }),
+    /** Reads again what the last read failed to: back as far as asked, and on to the end asked. */
+    again: async () => {
+      if (owed) await reader.earlier(owed.since);
+      await reader.grow(wanted);
+    },
     close: () => {
       closed = true;
       reading.delete(reader);
@@ -757,6 +774,13 @@ export function useSessionEvents(
     // No notice says where a subagent's record ends: it is read to its end.
     void reader.current?.grow(subagent ? Number.MAX_SAFE_INTEGER : grown);
   }, [sessionId, grown, subagent]);
+  useEffect(() => {
+    // A read the kernel did not answer is tried again by itself until it does. A kernel too
+    // old to read a record says so, and is not asked again.
+    if (!record.error || record.error === UPDATE) return;
+    const timer = setInterval(() => void reader.current?.again(), 3000);
+    return () => clearInterval(timer);
+  }, [record.error]);
   return {
     events: record.events,
     error: record.error,
@@ -810,6 +834,21 @@ export function useChatWork(
       if (end !== undefined) void reader.grow(end);
     });
   }, [chat, key, outputs]);
+  // A read the kernel did not answer is tried again by itself until it does.
+  const failed = sessionIds
+    .filter((id) => records[id]?.error && records[id]!.error !== UPDATE)
+    .join(" ");
+  useEffect(() => {
+    if (!failed) return;
+    const timer = setInterval(
+      () =>
+        failed
+          .split(" ")
+          .forEach((id) => void readers.current.get(id)?.again()),
+      3000,
+    );
+    return () => clearInterval(timer);
+  }, [failed]);
   return useMemo(
     () =>
       sessionIds.map((sessionId) => ({

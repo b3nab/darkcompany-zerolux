@@ -276,6 +276,53 @@ test("after a reconnection a record on screen is read to its end, though its not
   expect(urls.filter((url) => url.includes("s-missed"))).toEqual([]);
 });
 
+test("a record whose first read the kernel did not answer is read once it does, and goes on", async () => {
+  const events = [0, 1, 2].map((n) =>
+    at({ type: "text", text: `e${n}` }, n * 10),
+  );
+  globalThis.fetch = (async () => {
+    throw new TypeError("fixture: no answer");
+  }) as unknown as typeof fetch;
+  let shown: SessionRecord | undefined;
+  const reader = sessionReader("s-late", undefined, (r) => (shown = r));
+  await reader.earlier();
+  expect(shown?.error).not.toBe("");
+  expect(shown?.events).toEqual([]);
+  // The kernel answers again: the same read, tried again, shows the record and clears the error.
+  fakeRecord(events.slice(0, 2), 20);
+  await reader.again();
+  expect(shown?.error).toBe("");
+  expect(shown?.events.map((e) => e.at)).toEqual([0, 10]);
+  // A notice of more work is followed from there.
+  fakeRecord(events, 30);
+  await reader.grow(30);
+  expect(shown?.events.map((e) => e.at)).toEqual([0, 10, 20]);
+  // A way back that failed is gone again as far as it was asked.
+  globalThis.fetch = (async () => {
+    throw new TypeError("fixture: no answer");
+  }) as unknown as typeof fetch;
+  let behind: SessionRecord | undefined;
+  const late = sessionReader("s-behind", undefined, (r) => (behind = r));
+  await late.earlier(0);
+  expect(behind?.error).not.toBe("");
+  fakeRecord(events, 30);
+  await late.again();
+  expect(behind?.error).toBe("");
+  expect(behind?.events.map((e) => e.at)).toEqual([0, 10, 20]);
+  late.close();
+  // A read that fails on its way to an end goes there again.
+  globalThis.fetch = (async () => {
+    throw new TypeError("fixture: no answer");
+  }) as unknown as typeof fetch;
+  await reader.grow(40);
+  expect(shown?.error).not.toBe("");
+  fakeRecord([...events, at({ type: "text", text: "e3" }, 30)], 40);
+  await reader.again();
+  expect(shown?.error).toBe("");
+  expect(shown?.events.map((e) => e.at)).toEqual([0, 10, 20, 30]);
+  reader.close();
+});
+
 test("the reader's first read starts at the end, scoped to the chat", async () => {
   const urls = fakeRecord([at({ type: "text", text: "x" }, 0)], 10);
   const reader = sessionReader("s/1", "c group", () => {});
