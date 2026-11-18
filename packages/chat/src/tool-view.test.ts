@@ -482,6 +482,26 @@ test("a harness's own tool to ask the person is its questions, with the answers 
     });
 });
 
+test("the words a tool carries for the person are shown as words, and a notebook's cell as a file written", () => {
+  for (const [name, args] of [
+    ["ExitPlanMode", { plan: "1. Read\n2. Fix" }],
+    ["send_message_to_user_async", { message: "1. Read\n2. Fix" }],
+    ["PushNotification", { message: "1. Read\n2. Fix", status: "proactive" }],
+  ] as const)
+    expect(toolView(name, args)).toEqual({
+      kind: "note",
+      name,
+      text: "1. Read\n2. Fix",
+    });
+  expect(
+    toolView("NotebookEdit", {
+      notebook_path: "/w/a.ipynb",
+      cell_id: "c1",
+      new_source: "print(1)",
+    }),
+  ).toEqual({ kind: "write", path: "/w/a.ipynb", text: "print(1)" });
+});
+
 test("the tools agents call most read in words, never as their raw name, arguments or sealed text", () => {
   const frequent: [string, unknown][] = [
     [
@@ -505,6 +525,49 @@ test("the tools agents call most read in words, never as their raw name, argumen
     ["sleep", { duration_ms: 45000 }],
     ["js", { code: "1 + 1", title: "Add" }],
     ["request_user_input_async", { questions: [{ title: "Which?" }] }],
+    // Each harness's own tools, as it names them.
+    ...[
+      "BashOutput",
+      "TaskOutput",
+      "KillShell",
+      "ExitPlanMode",
+      "EnterPlanMode",
+      "ListMcpResources",
+      "ReadMcpResource",
+      "NotebookEdit",
+      "TaskCreate",
+      "TaskGet",
+      "TaskUpdate",
+      "TaskList",
+      "Workflow",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "ScheduleWakeup",
+      "EnterWorktree",
+      "ExitWorktree",
+      "SlashCommand",
+      "PushNotification",
+      "Artifact",
+      "ProposeGoal",
+      "ReportFindings",
+      "RemoteTrigger",
+      "ReadNotifications",
+      "write_stdin",
+      "view_image",
+      "send_message_to_user_async",
+      "tool_search",
+      "list_mcp_resources",
+      "read_mcp_resource",
+      "current_time",
+      "get_context_remaining",
+      "new_context",
+      "request_permissions",
+      "request_plugin_install",
+      "list_available_plugins_to_install",
+      "wait_for_environment",
+      "image_generation",
+    ].map((name): [string, unknown] => [name, {}]),
     ["zerolux_background_run", { command: "bun test" }],
     ["zerolux_background_read", { id: "b-1" }],
     ["mcp__zerolux__session_start", { harness: "pi", prompt: "Fix it" }],

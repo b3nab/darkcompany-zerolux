@@ -34,6 +34,8 @@ export type ToolView =
   | { kind: "plan"; steps: PlanStep[] }
   /** What the harness asks the person, with its own tool for it. */
   | { kind: "ask"; questions: AskedQuestion[] }
+  /** Words a tool carries for the person: a plan it proposes, a message, a notification. */
+  | { kind: "note"; name: string; text: string }
   | {
       kind: "zerolux";
       action: (typeof ZEROLUX)[keyof typeof ZEROLUX];
@@ -301,6 +303,22 @@ export function toolView(name: string, input: unknown): ToolView {
       return agentCall("list", args, undefined, args.path_prefix);
     case "SubagentHandback":
       return agentCall("handback", args, args.message);
+    case "ExitPlanMode":
+      if (text(args.plan)) return { kind: "note", name, text: text(args.plan) };
+      break;
+    case "send_message_to_user_async":
+    case "PushNotification":
+      if (text(args.message))
+        return { kind: "note", name, text: text(args.message) };
+      break;
+    case "NotebookEdit":
+      if (text(args.notebook_path) && typeof args.new_source === "string")
+        return {
+          kind: "write",
+          path: text(args.notebook_path),
+          text: args.new_source,
+        };
+      break;
     // Claude Code's and Codex's own tools to ask the person: Codex's suggestions are plain
     // labels, Claude Code's carry a description.
     case "AskUserQuestion":
@@ -620,6 +638,99 @@ const WORDS: Record<
     (args) => text(args.query).replace(/^select:/, ""),
   ],
   Skill: ["Using a skill", "Used a skill", (args) => args.skill],
+  // Claude Code's own.
+  BashOutput: ["Reading a command's output", "Read a command's output"],
+  TaskOutput: ["Reading a task's output", "Read a task's output"],
+  KillShell: ["Stopping a command", "Stopped a command"],
+  ExitPlanMode: ["Proposing a plan", "Proposed a plan"],
+  EnterPlanMode: ["Starting to plan", "Started to plan"],
+  ListMcpResources: [
+    "Listing MCP resources",
+    "Listed MCP resources",
+    (args) => args.server,
+  ],
+  ReadMcpResource: [
+    "Reading an MCP resource",
+    "Read an MCP resource",
+    (args) => args.uri,
+  ],
+  NotebookEdit: [
+    "Editing a notebook",
+    "Edited a notebook",
+    (args) => args.notebook_path,
+  ],
+  TaskCreate: ["Adding a task", "Added a task", (args) => args.subject],
+  TaskGet: ["Reading a task", "Read a task", (args) => args.taskId],
+  TaskUpdate: [
+    "Updating a task",
+    "Updated a task",
+    (args) => args.subject ?? args.status,
+  ],
+  TaskList: ["Listing tasks", "Listed tasks"],
+  Workflow: [
+    "Running a workflow",
+    "Ran a workflow",
+    (args) => args.title ?? args.name,
+  ],
+  CronCreate: ["Scheduling", "Scheduled", (args) => firstLine(args.prompt)],
+  CronDelete: ["Removing a schedule", "Removed a schedule"],
+  CronList: ["Listing schedules", "Listed schedules"],
+  ScheduleWakeup: ["Setting a wake-up", "Set a wake-up", (args) => args.reason],
+  EnterWorktree: [
+    "Entering a worktree",
+    "Entered a worktree",
+    (args) => args.name ?? args.path,
+  ],
+  ExitWorktree: ["Leaving the worktree", "Left the worktree"],
+  SlashCommand: ["Running a command", "Ran a command", (args) => args.command],
+  PushNotification: ["Notifying you", "Notified you"],
+  Artifact: [
+    "Working on an artifact",
+    "Worked on an artifact",
+    (args) => args.title ?? args.file_path,
+  ],
+  ProposeGoal: [
+    "Proposing a goal",
+    "Proposed a goal",
+    (args) => args.condition,
+  ],
+  ReportFindings: ["Reporting findings", "Reported findings"],
+  RemoteTrigger: ["Using a trigger", "Used a trigger", (args) => args.action],
+  ReadNotifications: ["Reading notifications", "Read notifications"],
+  // Codex's own.
+  write_stdin: [
+    "Typing into a command",
+    "Typed into a command",
+    (args) => firstLine(args.chars),
+  ],
+  view_image: ["Viewing an image", "Viewed an image", (args) => args.path],
+  send_message_to_user_async: ["Writing to you", "Wrote to you"],
+  tool_search: ["Loading tools", "Loaded tools", (args) => args.query],
+  list_mcp_resources: [
+    "Listing MCP resources",
+    "Listed MCP resources",
+    (args) => args.server,
+  ],
+  read_mcp_resource: [
+    "Reading an MCP resource",
+    "Read an MCP resource",
+    (args) => args.uri,
+  ],
+  current_time: ["Checking the time", "Checked the time"],
+  get_context_remaining: ["Checking its context", "Checked its context"],
+  new_context: ["Starting a new context", "Started a new context"],
+  request_permissions: ["Asking for permissions", "Asked for permissions"],
+  request_plugin_install: ["Proposing a plugin", "Proposed a plugin"],
+  list_available_plugins_to_install: ["Listing plugins", "Listed plugins"],
+  wait_for_environment: [
+    "Waiting for the environment",
+    "Waited for the environment",
+  ],
+  image_generation: [
+    "Generating an image",
+    "Generated an image",
+    (args) => firstLine(args.prompt),
+  ],
 };
 
 /**
@@ -716,6 +827,11 @@ export function toolPhrase(
       return {
         verb: tense("Asking you", "Asked you"),
         subject: view.questions[0] && plainLine(view.questions[0].text),
+      };
+    case "note":
+      return {
+        verb: named(view.name, {})?.verb ?? view.name,
+        subject: plainLine(view.text),
       };
     case "zerolux": {
       const place = (view.chat && chatTitle?.(view.chat)) || "a chat";

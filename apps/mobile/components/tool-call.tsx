@@ -417,6 +417,7 @@ const kindIcons = {
   agent: BotIcon,
   plan: ListChecksIcon,
   ask: MessageCircleQuestionMarkIcon,
+  note: MessageSquareIcon,
   zerolux: MessageSquareIcon,
   mcp: PlugIcon,
   other: WrenchIcon,
@@ -740,6 +741,15 @@ function Body({
       );
     case "plan":
       return <PlanSteps steps={view.steps} />;
+    case "note":
+      return (
+        <>
+          <View className="rounded-md border-l-2 border-agent/40 bg-agent/5 px-3 py-2">
+            <MessageBody text={view.text} />
+          </View>
+          {failed ? plain : null}
+        </>
+      );
     case "ask":
       return (
         <>

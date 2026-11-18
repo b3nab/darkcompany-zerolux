@@ -439,6 +439,7 @@ function KindIcon({ view, className }: { view: ToolView; className: string }) {
     agent: BotIcon,
     plan: ListChecksIcon,
     ask: MessageCircleQuestionMarkIcon,
+    note: MessageSquareIcon,
     zerolux: MessageSquareIcon,
     mcp: PlugIcon,
     other: WrenchIcon,
@@ -685,6 +686,15 @@ function Body({
     }
     case "plan":
       return <PlanSteps steps={view.steps} />;
+    case "note":
+      return (
+        <>
+          <div className="rounded-md border-l-2 border-agent/40 bg-agent/5 px-3 py-2">
+            <MessageText text={view.text} />
+          </div>
+          {failed && plain}
+        </>
+      );
     case "ask":
       return (
         <>
