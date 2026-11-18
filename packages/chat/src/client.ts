@@ -64,6 +64,14 @@ export function setKernelUrl(url: string) {
 }
 export const kernelUrl = () => base;
 
+/** The kernel gave no answer at all: it is restarting, or out of reach. */
+export class Unreachable extends Error {
+  constructor() {
+    super("The kernel did not answer.");
+    this.name = "Unreachable";
+  }
+}
+
 /** An unsuccessful HTTP response, with an optional machine-readable reason. */
 export class ApiError extends Error {
   constructor(
@@ -149,7 +157,16 @@ async function send(
       body: body === undefined ? undefined : file ? body : JSON.stringify(body),
       signal,
     },
-  );
+  ).catch((error: unknown) => {
+    // A call its caller gave up is theirs to tell; any other failure to get an answer reads
+    // the same in every browser and app.
+    if (
+      signal?.aborted ||
+      (error instanceof Error && error.name === "AbortError")
+    )
+      throw error;
+    throw new Unreachable();
+  });
   if (!response.ok) {
     if (response.status === 401 && credential)
       clearCredential(kernel, credential);

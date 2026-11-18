@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { ApiError, api, request, setKernelUrl } from "./client";
+import { ApiError, Unreachable, api, request, setKernelUrl } from "./client";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -30,6 +30,31 @@ test("an unsuccessful response carries its HTTP status and machine-readable reas
   expect((error as ApiError).status).toBe(504);
   expect((error as ApiError).code).toBe("session_settings_unconfirmed");
   expect((error as ApiError).message).toBe("Fixture unconfirmed");
+});
+
+test("a call with no answer fails the same way everywhere; one its caller gave up stays its own", async () => {
+  // Each browser and app words a failed fetch its own way.
+  for (const said of [
+    "Load failed",
+    "Failed to fetch",
+    "Network request failed",
+  ]) {
+    globalThis.fetch = (async () => {
+      throw new TypeError(said);
+    }) as unknown as typeof fetch;
+    const error = await api("/x").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Unreachable);
+    expect((error as Error).message).not.toBe(said);
+  }
+  const gaveUp = new AbortController();
+  gaveUp.abort();
+  const aborted = new DOMException("Aborted", "AbortError");
+  globalThis.fetch = (async () => {
+    throw aborted;
+  }) as unknown as typeof fetch;
+  expect(
+    await api("/x", undefined, gaveUp.signal).catch((e: unknown) => e),
+  ).toBe(aborted);
 });
 
 test("a call to a given kernel ignores the current one", async () => {
