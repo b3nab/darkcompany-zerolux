@@ -1,0 +1,111 @@
+import { afterAll, expect, jest, mock, test } from "bun:test";
+import { act } from "react";
+import { Window } from "happy-dom";
+import type { Chat } from "@zerolux/chat";
+
+// `bun run test` uses --parallel: every file has its own globals and module registry.
+const browser = new Window({ url: "https://fixture.example.test" });
+const globals = {
+  window: browser,
+  document: browser.document,
+  navigator: browser.navigator,
+  IS_REACT_ACT_ENVIRONMENT: true,
+};
+const previous = new Map(
+  Object.keys(globals).map((key) => [
+    key,
+    Object.getOwnPropertyDescriptor(globalThis, key),
+  ]),
+);
+for (const [key, value] of Object.entries(globals))
+  Object.defineProperty(globalThis, key, {
+    configurable: true,
+    writable: true,
+    value,
+  });
+// The room joins and stays joined; the test speaks for the kernel through it.
+const livekit = await import("livekit-client");
+let hear:
+  | ((
+      payload: Uint8Array,
+      from: undefined,
+      kind: number,
+      topic: string,
+    ) => void)
+  | undefined;
+mock.module("livekit-client", () => ({
+  ...livekit,
+  Room: class {
+    on(event: string, handler: typeof hear) {
+      if (event === livekit.RoomEvent.DataReceived) hear = handler;
+      return this;
+    }
+    async connect() {}
+    async disconnect() {}
+  },
+}));
+
+const { createRoot } = await import("react-dom/client");
+const { setKernelFetch, useChat } = await import("@zerolux/chat");
+
+afterAll(() => {
+  jest.useRealTimers();
+  setKernelFetch();
+  for (const [key, descriptor] of previous)
+    if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+    else delete (globalThis as Record<string, unknown>)[key];
+});
+
+test("a read the kernel did not answer is tried again by itself, and its error goes with the answer", async () => {
+  jest.useFakeTimers();
+  let down = false;
+  setKernelFetch(async (url) => {
+    if (down) throw new TypeError("fixture: no answer");
+    const path = new URL(url).pathname;
+    return Response.json(
+      path.endsWith("/livekit/token")
+        ? { url: "ws://fixture.example.test", token: "t", expires_at: 0 }
+        : { conversations: [], sessions: [], approvals: [] },
+    );
+  });
+  let chat!: Chat;
+  function Probe() {
+    chat = useChat(true, "https://fixture.example.test");
+    return null;
+  }
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<Probe />));
+  expect(chat.error).toBe("");
+  expect(chat.realtime).toBe("live");
+  // The connection is live, and one read fails: nothing else would read again.
+  down = true;
+  await act(async () => {
+    hear!(
+      new TextEncoder().encode(
+        JSON.stringify({
+          event_id: "e1",
+          type: "approval.changed",
+          approval_id: "a",
+        }),
+      ),
+      undefined,
+      0,
+      "chat",
+    );
+  });
+  expect(chat.error).not.toBe("");
+  // Still unanswered, it stays; nobody has to act for the next try.
+  await act(async () => {
+    jest.advanceTimersByTime(3000);
+  });
+  expect(chat.error).not.toBe("");
+  down = false;
+  await act(async () => {
+    jest.advanceTimersByTime(3000);
+  });
+  expect(chat.error).toBe("");
+  expect(chat.realtime).toBe("live");
+  await act(async () => root.unmount());
+});

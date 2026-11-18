@@ -399,6 +399,15 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     const timer = setInterval(() => void outgoing.flush(), 3000);
     return () => clearInterval(timer);
   }, [enabled, unsent.length, outgoing]);
+  useEffect(() => {
+    // A read that failed is tried again by itself until the kernel answers: the error it
+    // left goes with the first one that succeeds, and nobody has to act on it.
+    if (!enabled || !error) return;
+    const timer = setInterval(() => void background(sync()), 3000);
+    return () => clearInterval(timer);
+    // sync and background only use refs and state setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, error]);
 
   function select(conversation?: Conversation) {
     open.current = conversation?.id;
