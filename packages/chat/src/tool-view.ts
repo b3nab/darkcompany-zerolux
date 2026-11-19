@@ -165,6 +165,43 @@ function scriptWeb(script: string) {
   };
 }
 
+/**
+ * The one tool a Codex script calls, with what it gives it: `tools.write_stdin({…})` reads as
+ * that tool does. None for a script that calls several, or gives one more than a plain value.
+ */
+function scriptCall(script: string) {
+  const calls = [...script.matchAll(/\btools\.(\w+)\s*\(/g)];
+  if (calls.length !== 1) return;
+  const [call] = calls;
+  // Its argument as JSON: the keys a script leaves bare are quoted, its strings kept.
+  let json = "";
+  let depth = 0;
+  for (let at = call!.index + call![0].length; at < script.length;) {
+    const rest = script.slice(at);
+    const string = new RegExp(`^${LITERAL}`).exec(rest)?.[1];
+    const key = /^[A-Za-z_$][\w$]*(?=\s*:)/.exec(rest)?.[0];
+    if (string) {
+      json += JSON.stringify(literal(string));
+      at += string.length;
+    } else if (key && /[{,]\s*$/.test(json)) {
+      json += JSON.stringify(key);
+      at += key.length;
+    } else {
+      const char = script[at]!;
+      if ("{[".includes(char)) depth++;
+      if ("}]".includes(char)) depth--;
+      if (char === ")" && depth === 0) break;
+      json += char;
+      at++;
+    }
+  }
+  try {
+    return { name: call![1]!, input: JSON.parse(json) as unknown };
+  } catch {
+    return;
+  }
+}
+
 const ZEROLUX = {
   send: "send",
   reply: "reply",
@@ -243,12 +280,15 @@ export function toolView(name: string, input: unknown): ToolView {
       const commands = scriptCommands(script);
       if (commands.length) return { kind: "command", commands };
       const web = scriptWeb(script);
-      return web && (web.queries.length || web.urls.length)
-        ? {
-            kind: "web",
-            query: web.queries.join(" · ") || undefined,
-            url: web.urls[0],
-          }
+      if (web && (web.queries.length || web.urls.length))
+        return {
+          kind: "web",
+          query: web.queries.join(" · ") || undefined,
+          url: web.urls[0],
+        };
+      const call = scriptCall(script);
+      return call && call.name !== "exec"
+        ? toolView(call.name, call.input)
         : { kind: "command", commands: [], script };
     }
     case "Read":
@@ -841,6 +881,9 @@ export function toolPhrase(
 ): { verb: string; subject?: string } {
   const tense = (now: string, done: string) => (running ? now : done);
   const named = (name: string, args: unknown) => {
+    // Nothing typed into it is waiting for what the command prints.
+    if (name === "write_stdin" && !text(fields(args).chars))
+      return { verb: tense("Waiting for a command", "Waited for a command") };
     const words = WORDS[name];
     if (!words) return undefined;
     const on = words[2]?.(fields(args));

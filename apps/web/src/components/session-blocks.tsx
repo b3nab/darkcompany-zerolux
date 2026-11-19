@@ -6,14 +6,17 @@ import {
   ChevronRightIcon,
   CircleAlertIcon,
   MessagesSquareIcon,
+  SquareTerminalIcon,
 } from "lucide-react";
 import {
   agentMessagePurposes,
+  backgroundEnded,
   blockRuns,
   inputPreview,
   isSubagent,
   messageTime,
   plainLine,
+  spanLabel,
   thoughtLabel,
   toolItems,
   toolsPhrase,
@@ -378,14 +381,67 @@ function Block({
           {block.message}
         </p>
       );
-    case "notice":
-      return (
+    case "notice": {
+      // A background command that ended: the command, how it ended, and what it printed.
+      const ended = backgroundEnded(block.text);
+      if (ended)
+        return (
+          <Fold
+            className="self-stretch rounded-md border bg-card px-3 py-2 text-[12.5px] text-muted-foreground"
+            trigger={
+              <>
+                <SquareTerminalIcon
+                  aria-hidden
+                  className="size-3.5 shrink-0 self-center"
+                />
+                <span className="shrink-0">Background command</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-foreground/80">
+                  {ended.command.split("\n")[0]}
+                </span>
+                <span
+                  className={cn(
+                    "shrink-0 font-mono text-[11px]",
+                    ended.exit ? "text-destructive" : "text-faint",
+                  )}
+                >
+                  {ended.exit === null ? "ended" : `exit ${ended.exit}`} ·{" "}
+                  {spanLabel(ended.seconds * 1000)}
+                </span>
+                <Stamp time={block.time} />
+              </>
+            }
+          >
+            <pre className="mt-2 max-h-60 overflow-auto border-t pt-2 font-mono text-[12px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
+              {`$ ${ended.command}\n${ended.output}`.trimEnd()}
+            </pre>
+          </Fold>
+        );
+      // One with more to say opens to it.
+      const [first = "", ...rest] = block.text.split("\n");
+      const more = rest.join("\n").trim();
+      return more ? (
+        <Fold
+          className="self-stretch rounded-md border bg-card px-3 py-2 text-[12.5px] text-muted-foreground"
+          trigger={
+            <>
+              <BellIcon aria-hidden className="size-3.5 shrink-0 self-center" />
+              <span className="min-w-0 flex-1 truncate">{first}</span>
+              <Stamp time={block.time} />
+            </>
+          }
+        >
+          <div className="mt-2 border-t pt-2">
+            <MessageText text={more} />
+          </div>
+        </Fold>
+      ) : (
         <p className="flex items-start gap-2 self-start rounded-md border bg-card px-3 py-2 text-[12.5px] text-muted-foreground">
           <BellIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
           <span className="min-w-0 flex-1">{block.text}</span>
           <Stamp time={block.time} />
         </p>
       );
+    }
     case "agent_message":
       return <AgentMessage block={block} />;
     case "compacted":

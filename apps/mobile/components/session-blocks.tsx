@@ -11,11 +11,13 @@ import Animated, { FadeInDown } from "react-native-reanimated";
 import { useCSSVariable } from "uniwind";
 import {
   agentMessagePurposes,
+  backgroundEnded,
   blockRuns,
   inputPreview,
   isSubagent,
   messageTime,
   plainLine,
+  spanLabel,
   thoughtLabel,
   toolItems,
   toolsPhrase,
@@ -344,9 +346,66 @@ function Block({
           </Text>
         </View>
       );
-    case "notice":
-      // What the harness says by itself, as a background task's end: no one's message.
-      return (
+    case "notice": {
+      // What the harness or ZeroLux says by itself, as a background task's end: no one's
+      // message. A background command that ended: the command, how it ended, what it printed.
+      const ended = backgroundEnded(block.text);
+      if (ended)
+        return (
+          <Fold
+            summary={(open) => (
+              <View className="flex-row items-center gap-2">
+                <Chevron open={open} />
+                <Text
+                  numberOfLines={1}
+                  className="flex-1 font-mono text-xs text-faint"
+                >
+                  {ended.command.split("\n")[0]}
+                </Text>
+                <Text
+                  className={cn(
+                    "font-mono text-[11px]",
+                    ended.exit ? "text-destructive" : "text-faint",
+                  )}
+                >
+                  {ended.exit === null ? "ended" : `exit ${ended.exit}`} ·{" "}
+                  {spanLabel(ended.seconds * 1000)}
+                </Text>
+              </View>
+            )}
+          >
+            <View className="mt-1.5 ml-1.5 border-l border-border pl-3">
+              <Text
+                selectable
+                className="font-mono text-xs text-muted-foreground"
+              >
+                {`$ ${ended.command}\n${ended.output}`.trimEnd()}
+              </Text>
+            </View>
+          </Fold>
+        );
+      // One with more to say opens to it.
+      const [first = "", ...rest] = block.text.split("\n");
+      const more = rest.join("\n").trim();
+      return more ? (
+        <Fold
+          summary={(open) => (
+            <View className="flex-row items-center gap-2">
+              <Chevron open={open} />
+              <Text
+                numberOfLines={1}
+                className="flex-1 text-[12.5px] text-faint"
+              >
+                {first}
+              </Text>
+            </View>
+          )}
+        >
+          <View className="mt-1.5 ml-1.5 border-l border-border pl-3">
+            <MessageBody text={more} />
+          </View>
+        </Fold>
+      ) : (
         <View className="flex-row items-start gap-2">
           <View className="mt-0.5">
             <InfoIcon color={faint} size={14} />
@@ -356,6 +415,7 @@ function Block({
           </Text>
         </View>
       );
+    }
     case "compacted":
       return (
         <Fold

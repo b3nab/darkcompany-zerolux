@@ -37,11 +37,11 @@ test("a command reads the same from Claude Code, pi and a Codex script", () => {
     kind: "command",
     commands: ["pwd", 'rg "todo" src'],
   });
-  // A script without commands is shown as it is.
-  expect(toolView("exec", "await tools.wait(1)")).toEqual({
+  // A script that calls no tool is shown as it is.
+  expect(toolView("exec", "text(1 + 1)")).toEqual({
     kind: "command",
     commands: [],
-    script: "await tools.wait(1)",
+    script: "text(1 + 1)",
   });
 });
 
@@ -248,6 +248,24 @@ test("a Codex script that looks on the web reads as its search or the page it op
     query: undefined,
     url: "https://blog.example.test/post",
   });
+  // A script that calls one other tool reads as that tool does.
+  const waited = toolView(
+    "exec",
+    `const result = await tools.write_stdin({session_id:74160,chars:"","yield_time_ms":30000}); text(result);`,
+  );
+  expect(waited).toEqual(
+    toolView("write_stdin", {
+      session_id: 74160,
+      chars: "",
+      yield_time_ms: 30000,
+    }),
+  );
+  expect(toolPhrase(waited, false).verb).not.toBe(
+    toolPhrase(toolView("write_stdin", { chars: "y\n" }), false).verb,
+  );
+  expect(
+    toolView("exec", `text(await tools.view_image({path:'/tmp/a b.png'}));`),
+  ).toEqual(toolView("view_image", { path: "/tmp/a b.png" }));
   // With a command too, it reads as the command it runs.
   expect(
     toolView(

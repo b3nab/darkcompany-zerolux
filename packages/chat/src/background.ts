@@ -17,6 +17,25 @@ export interface BackgroundCommand {
   error: string | null;
 }
 
+/**
+ * How a background command ended, read back from what ZeroLux told its session: the command,
+ * its exit code when known, how long it ran, and the end of what it printed.
+ */
+export function backgroundEnded(notice: string) {
+  const found =
+    /^Background command \S+ ended: exit code (\d+|unknown), after (\d+) s\.\n\$ ([\s\S]*?)\n```\n([\s\S]*?)\n?```\s*$/.exec(
+      notice,
+    );
+  return found
+    ? {
+        command: found[3]!,
+        exit: found[1] === "unknown" ? null : Number(found[1]),
+        seconds: Number(found[2]),
+        output: found[4]!,
+      }
+    : undefined;
+}
+
 /** A piece of a background command's output from an offset, and where to read on. */
 export interface BackgroundOutput {
   start: number;

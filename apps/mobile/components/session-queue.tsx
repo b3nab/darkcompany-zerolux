@@ -4,6 +4,7 @@ import {
   Animated,
   PanResponder,
   Pressable,
+  ScrollView,
   TextInput,
   View,
 } from "react-native";
@@ -113,27 +114,35 @@ export function QueueStack({
           </Pressable>
         ) : null}
       </View>
-      {shown.map((item, index) => (
-        <QueueCard
-          key={item.id}
-          session={session}
-          item={item}
-          queued
-          changeable={write}
-          place={
-            write && shown.length > 1
-              ? {
-                  index,
-                  count: shown.length,
-                  move: (to) => move(item.id, to),
-                  drop: (dy) => drop(item.id, dy),
-                  layout: (y, height) =>
-                    places.current.set(item.id, { y, height }),
-                }
-              : undefined
-          }
-        />
-      ))}
+      {/* However long, it leaves the session's work in view: the rest is a scroll away. */}
+      <ScrollView
+        style={{ maxHeight: 190 }}
+        contentContainerClassName="gap-1.5"
+        nestedScrollEnabled
+        keyboardShouldPersistTaps="handled"
+      >
+        {shown.map((item, index) => (
+          <QueueCard
+            key={item.id}
+            session={session}
+            item={item}
+            queued
+            changeable={write}
+            place={
+              write && shown.length > 1
+                ? {
+                    index,
+                    count: shown.length,
+                    move: (to) => move(item.id, to),
+                    drop: (dy) => drop(item.id, dy),
+                    layout: (y, height) =>
+                      places.current.set(item.id, { y, height }),
+                  }
+                : undefined
+            }
+          />
+        ))}
+      </ScrollView>
       {error ? (
         <Text className="px-1.5 text-xs text-destructive">{error}</Text>
       ) : null}

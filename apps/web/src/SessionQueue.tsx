@@ -87,7 +87,11 @@ export function SessionQueue({
           )}
         </div>
       )}
-      <ol aria-label="Queue" className="flex flex-col gap-1.5">
+      {/* However long, it leaves the session's work in view: the rest is a scroll away. */}
+      <ol
+        aria-label="Queue"
+        className="flex max-h-[min(11rem,25dvh)] flex-col gap-1.5 overflow-y-auto"
+      >
         {queue.map((item, at) => (
           <li
             key={item.id}
@@ -227,7 +231,10 @@ export function SessionQueue({
         ))}
       </ol>
       {steering.length > 0 && (
-        <ul aria-label="Into this turn" className="flex flex-col gap-1.5">
+        <ul
+          aria-label="Into this turn"
+          className="flex max-h-[min(6rem,15dvh)] flex-col gap-1.5 overflow-y-auto"
+        >
           {steering.map((item) => (
             <li
               key={item.id}

@@ -132,6 +132,9 @@ export type SessionBlock = {
 );
 export type ToolBlock = Extract<SessionBlock, { kind: "tool" }>;
 
+/** How ZeroLux opens what it tells a session by itself; a chat's messages name their chat. */
+const TOLD = "[ZeroLux] ";
+
 /** What a message between agents is, by the harness's kind of it; another kind reads as named. */
 export const agentMessagePurposes: Record<string, string> = {
   new_task: "Task",
@@ -247,6 +250,17 @@ export function sessionBlocks(events: SessionEvent[]): SessionBlock[] {
     }
     switch (event.type) {
       case "input":
+        // What ZeroLux itself told the session, as how a background command ended: no
+        // one's message.
+        if (!event.chat && event.text.startsWith(TOLD)) {
+          blocks.push({
+            key,
+            time,
+            kind: "notice",
+            text: event.text.slice(TOLD.length),
+          });
+          break;
+        }
         blocks.push({
           key,
           time,

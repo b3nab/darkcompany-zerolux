@@ -1,7 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
 import { parseEvent } from "./chat";
 import { setKernelFetch } from "./client";
-import { plainOutput, readBackgroundOutput } from "./background";
+import {
+  backgroundEnded,
+  plainOutput,
+  readBackgroundOutput,
+} from "./background";
 import type { BackgroundOutput } from "./background";
 
 afterEach(() => setKernelFetch());
@@ -88,4 +92,22 @@ test("output reads as plain text: no escape codes, each line as a carriage retur
       "\x1b[32mok\x1b[0m\n\x1b]0;title\x07 10%\r 50%\r100%\ndone\r\n",
     ),
   ).toBe("ok\n100%\ndone\n");
+});
+
+test("how a background command ended is read back from what ZeroLux told its session", () => {
+  const notice =
+    "Background command 4b1ac3ce-5936 ended: exit code 3, after 117 s.\n$ cargo test\n  --all\n```\nrunning 2 tests\n```text\nfailed\n```";
+  const ended = backgroundEnded(notice)!;
+  expect(ended.command).toBe("cargo test\n  --all");
+  expect(ended.exit).toBe(3);
+  expect(ended.seconds).toBe(117);
+  expect(ended.output).toBe("running 2 tests\n```text\nfailed");
+  // One whose exit is not known, and with nothing printed.
+  expect(
+    backgroundEnded(
+      "Background command x ended: exit code unknown, after 0 s.\n$ true\n```\n\n```",
+    ),
+  ).toEqual({ command: "true", exit: null, seconds: 0, output: "" });
+  // Anything else ZeroLux says is not one.
+  expect(backgroundEnded("Agent /root/a completed")).toBeUndefined();
 });

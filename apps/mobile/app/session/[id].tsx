@@ -746,14 +746,22 @@ function Composer({
       {waiting.length ? (
         <QueueStack session={session} items={waiting} write={write} />
       ) : null}
-      {queue.map((item) => (
-        <QueueCard
-          key={item.id}
-          session={session}
-          item={item}
-          changeable={false}
-        />
-      ))}
+      {queue.length ? (
+        <ScrollView
+          style={{ maxHeight: 110 }}
+          contentContainerClassName="gap-1.5"
+          nestedScrollEnabled
+        >
+          {queue.map((item) => (
+            <QueueCard
+              key={item.id}
+              session={session}
+              item={item}
+              changeable={false}
+            />
+          ))}
+        </ScrollView>
+      ) : null}
       {mention && files.length ? (
         <View className="max-h-56 overflow-hidden rounded-lg border border-border bg-popover">
           <ScrollView keyboardShouldPersistTaps="always">

@@ -179,6 +179,53 @@ async fn a_session_runs_commands_in_the_background_and_reads_how_they_end() {
     assert_eq!(listed["background_commands"][0]["id"], first);
     assert!(listed["background_commands"][0]["error"].is_string());
 
+    // While the session works, how a command ended is told into its turn: it never waits in
+    // the person's queue, among their own inputs.
+    let working = client
+        .post(format!("{url}/api/chat/sessions/{session}/activity"))
+        .bearer_auth(&issued.token)
+        .json(&json!({ "activity": "working" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(working.status(), StatusCode::OK);
+    let (_, started) = call(
+        &client,
+        &url,
+        Method::POST,
+        &format!("/sessions/{session}/background-commands"),
+        Some(json!({ "command": "echo meanwhile" })),
+    )
+    .await;
+    let meanwhile = started["background_command"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for _ in 0..100 {
+        let (_, read) = call(
+            &client,
+            &url,
+            Method::GET,
+            &format!("/background-commands/{meanwhile}"),
+            None,
+        )
+        .await;
+        let command = &read["background_command"];
+        if command["told_at"].is_number() || command["error"].is_string() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let (_, waiting) = call(
+        &client,
+        &url,
+        Method::GET,
+        &format!("/sessions/{session}/queue"),
+        None,
+    )
+    .await;
+    assert_eq!(waiting["queue"], json!([]), "{waiting}");
+
     // A long command is stopped, with what it started.
     let long = if cfg!(windows) {
         "ping -n 60 127.0.0.1"

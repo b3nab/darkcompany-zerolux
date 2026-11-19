@@ -1,7 +1,8 @@
 //! Background commands: commands a session runs in the background, in its folder, on the
 //! computer it runs on. The session goes on, and when one ends it is told, with its exit code
-//! and the end of its output, as input that waits for its turn. A background command outlives
-//! a restart of the kernel, which watches it again.
+//! and the end of its output, into the turn it is working on, or as a turn of its own at
+//! rest: never through its person's queue. A background command outlives a restart of the
+//! kernel, which watches it again.
 
 use std::time::Duration;
 
@@ -299,8 +300,11 @@ impl ChatRuntime {
             "[ZeroLux] Background command {} ended: {ended}, after {seconds} s.\n$ {}\n```\n{tail}\n```",
             row.id, row.command
         );
+        // Into the turn in progress, where the agent that waits for it reads it while it
+        // works, or as a turn of its own at rest. Never in the person's queue: it is not
+        // their words.
         let sent = self
-            .input(&owner, &row.session_id, &text, InputMode::Queue, &[])
+            .input(&owner, &row.session_id, &text, InputMode::Steer, &[])
             .await;
         let (told, error) = match sent {
             Ok(_) => (Some(now_ms()), None),
