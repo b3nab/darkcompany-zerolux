@@ -2,6 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject, UIEvent } from "react";
 
 /**
+ * Whether the bottom is followed after a scroll the view did not make itself: at the bottom
+ * it is; away from it only the reader stops following, never a scroll that came from the view
+ * or what is in it changing size.
+ */
+export const leavesOrFollows = (
+  following: boolean,
+  below: number,
+  reader: boolean,
+) => (below < 4 ? true : reader ? false : following);
+
+/**
  * A reader's place in a scrolled list, kept as everything in it changes size: at the bottom it
  * follows what comes; anywhere else the first item in view stays where it is, whatever grows
  * or shrinks above or below it. The view keeps it itself, the same in every browser, so the
@@ -24,8 +35,13 @@ export function useReadingPlace<List extends HTMLElement = HTMLDivElement>(
   const [away, setAway] = useState(false);
   // The first item in view and how far below the top of the view it starts.
   const anchor = useRef<{ item: Element; top: number }>(undefined);
-  // Where the view last moved itself: a scroll to anywhere else is the reader's.
+  // Where the view last moved itself: a scroll to anywhere else is not its own.
   const placed = useRef<number>(undefined);
+  // When the reader last moved the view themselves, and whether they hold it still: a wheel,
+  // a touch, a key, the scrollbar. Only they leave the bottom: the view or what is in it
+  // changing size scrolls it too, and that is nobody's choice.
+  const acted = useRef(-Infinity);
+  const held = useRef(false);
 
   const mark = useCallback(() => {
     const view = scroller.current;
@@ -88,7 +104,42 @@ export function useReadingPlace<List extends HTMLElement = HTMLDivElement>(
           into.current = null;
         };
       };
-    return { scroller: kept(scroller), list: kept(list) };
+    const watched = kept(scroller);
+    return {
+      scroller: (element: HTMLDivElement | null) => {
+        const unwatch = watched(element);
+        if (!element) return;
+        const act = () => {
+          acted.current = performance.now();
+        };
+        const hold = () => {
+          held.current = true;
+          act();
+        };
+        // Wherever it is let go: only a hold of the view itself counts.
+        const release = () => {
+          if (!held.current) return;
+          held.current = false;
+          act();
+        };
+        const moves = ["wheel", "touchmove", "keydown"] as const;
+        const releases = ["pointerup", "pointercancel", "touchend"] as const;
+        for (const type of moves)
+          element.addEventListener(type, act, { passive: true });
+        element.addEventListener("pointerdown", hold, { passive: true });
+        element.addEventListener("touchstart", hold, { passive: true });
+        for (const type of releases) window.addEventListener(type, release);
+        return () => {
+          unwatch?.();
+          for (const type of moves) element.removeEventListener(type, act);
+          element.removeEventListener("pointerdown", hold);
+          element.removeEventListener("touchstart", hold);
+          for (const type of releases)
+            window.removeEventListener(type, release);
+        };
+      },
+      list: kept(list),
+    };
   }, [settle]);
 
   // A page before is read once the top is within a screen and a half, one page at a time,
@@ -147,7 +198,12 @@ export function useReadingPlace<List extends HTMLElement = HTMLDivElement>(
         Math.abs(view.scrollTop - placed.current) < 1;
       placed.current = undefined;
       const below = view.scrollHeight - view.scrollTop - view.clientHeight;
-      if (!own) follows.current = below < 4;
+      if (!own) {
+        const reader = held.current || performance.now() - acted.current < 1500;
+        follows.current = leavesOrFollows(follows.current, below, reader);
+        // Moved by what changed size while following: the bottom comes back into view.
+        if (follows.current && below >= 4) place(view, view.scrollHeight);
+      }
       setAway(below > view.clientHeight);
       mark();
     },
