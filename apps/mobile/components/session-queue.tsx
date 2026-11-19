@@ -35,6 +35,8 @@ interface Place {
   /** Puts it where it was dropped, `dy` from where it was. */
   drop: (dy: number) => void;
   layout: (y: number, height: number) => void;
+  /** It is being carried by its grip, or was put down: the list holds still meanwhile. */
+  carried: (on: boolean) => void;
 }
 
 /**
@@ -56,6 +58,7 @@ export function QueueStack({
   const [order, setOrder] = useState<string[]>();
   const [error, setError] = useState("");
   const places = useRef(new Map<string, { y: number; height: number }>());
+  const [carrying, setCarrying] = useState(false);
   const rank = (id: string) => {
     const at = order?.indexOf(id) ?? -1;
     return at < 0 ? Infinity : at;
@@ -118,6 +121,7 @@ export function QueueStack({
       <ScrollView
         style={{ maxHeight: 190 }}
         contentContainerClassName="gap-1.5"
+        scrollEnabled={!carrying}
         nestedScrollEnabled
         keyboardShouldPersistTaps="handled"
       >
@@ -137,6 +141,7 @@ export function QueueStack({
                     drop: (dy) => drop(item.id, dy),
                     layout: (y, height) =>
                       places.current.set(item.id, { y, height }),
+                    carried: setCarrying,
                   }
                 : undefined
             }
@@ -231,6 +236,7 @@ export function QueueCard({
         onPanResponderTerminationRequest: () => false,
         onPanResponderGrant: () => {
           setLifted(true);
+          latest.current?.carried(true);
           void Haptics.selectionAsync();
         },
         onPanResponderMove: Animated.event([null, { dy }], {
@@ -238,10 +244,12 @@ export function QueueCard({
         }),
         onPanResponderRelease: (_, gesture) => {
           latest.current?.drop(gesture.dy);
+          latest.current?.carried(false);
           dy.setValue(0);
           setLifted(false);
         },
         onPanResponderTerminate: () => {
+          latest.current?.carried(false);
           dy.setValue(0);
           setLifted(false);
         },
