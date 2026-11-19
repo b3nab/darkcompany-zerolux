@@ -303,6 +303,20 @@ export function inputImagesError(
   )
     return "Send PNG, JPEG, GIF or WebP images";
 }
+/**
+ * A long input shows its beginning first: what of it, and how many lines come after. Nothing
+ * for one short enough to show whole.
+ */
+export function inputPreview(
+  text: string,
+  lines = 12,
+  characters = 1200,
+): { shown: string; more: number } | undefined {
+  const all = text.split("\n");
+  if (all.length <= lines + 3 && text.length <= characters * 1.25) return;
+  const shown = all.slice(0, lines).join("\n").slice(0, characters);
+  return { shown, more: all.length - shown.split("\n").length };
+}
 /** A session's name: its agent's, or its own title when it has none. */
 export const sessionName = (session: ChatSession, actors: Actor[]) =>
   actors.find((a) => a.id === session.actor_id)?.name ??

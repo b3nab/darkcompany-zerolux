@@ -1,4 +1,4 @@
-import { memo, useContext, useId } from "react";
+import { memo, useContext, useId, useState } from "react";
 import type { ReactNode } from "react";
 import { cn } from "cn";
 import {
@@ -10,6 +10,7 @@ import {
 import {
   agentMessagePurposes,
   blockRuns,
+  inputPreview,
   isSubagent,
   messageTime,
   plainLine,
@@ -255,6 +256,9 @@ export function InputBubble({
   command?: boolean;
   children?: ReactNode;
 }) {
+  // A long one shows its beginning; all of it when asked.
+  const preview = inputPreview(text);
+  const [whole, setWhole] = useState(false);
   return (
     <div className="group/message flex flex-col items-end gap-1">
       <div className="max-w-[min(40rem,85%)] rounded-md rounded-br-xs border border-human/25 bg-human/10 px-3.5 py-2">
@@ -267,8 +271,22 @@ export function InputBubble({
             command && "font-mono text-[13px]",
           )}
         >
-          {text}
+          {preview && !whole ? `${preview.shown}…` : text}
         </p>
+        {preview && (
+          <button
+            type="button"
+            aria-expanded={whole}
+            onClick={() => setWhole(!whole)}
+            className="mt-1.5 font-mono text-[11px] text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline"
+          >
+            {whole
+              ? "Show less"
+              : preview.more
+                ? `Show all · ${preview.more.toLocaleString()} more lines`
+                : "Show all"}
+          </button>
+        )}
       </div>
       {children}
     </div>

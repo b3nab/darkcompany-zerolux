@@ -16,6 +16,7 @@ import {
   pageBefore,
   parseEvent,
   inputImagesError,
+  inputPreview,
   isThread,
   listedSessions,
   liveSessions,
@@ -699,6 +700,18 @@ test("a session's output notice is an event even without an ID, and repeats of i
   });
   expect(parseEvent(notice(120))?.event_id).toBe(first?.event_id);
   expect(parseEvent(notice(240))?.event_id).not.toBe(first?.event_id);
+});
+
+test("a long input shows its beginning and counts the lines after it; a short one shows whole", () => {
+  expect(inputPreview("one\ntwo\nthree")).toBe(undefined);
+  const many = Array.from({ length: 400 }, (_, i) => `line ${i + 1}`);
+  const folded = inputPreview(many.join("\n"))!;
+  expect(many.join("\n").startsWith(folded.shown)).toBe(true);
+  expect(folded.shown.split("\n").length + folded.more).toBe(400);
+  // One endless line is cut too, with no lines after it.
+  const line = inputPreview("x".repeat(50_000))!;
+  expect(line.shown.length).toBeLessThan(50_000);
+  expect(line.more).toBe(0);
 });
 
 test("images go with an input when the kernel would take them", () => {

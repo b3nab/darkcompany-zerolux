@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { ReactNode } from "react";
 import { Pressable, View } from "react-native";
 import {
@@ -11,6 +12,7 @@ import { useCSSVariable } from "uniwind";
 import {
   agentMessagePurposes,
   blockRuns,
+  inputPreview,
   isSubagent,
   messageTime,
   plainLine,
@@ -190,6 +192,41 @@ function ToolRun({
   );
 }
 
+/** An input's words: a long one shows its beginning, all of it when asked. */
+function InputText({
+  text,
+  selectable,
+}: {
+  text: string;
+  selectable: boolean;
+}) {
+  const preview = inputPreview(text);
+  const [whole, setWhole] = useState(false);
+  return (
+    <>
+      <Text selectable={selectable} className="text-[15px] leading-[21px]">
+        {preview && !whole ? `${preview.shown}…` : text}
+      </Text>
+      {preview ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: whole }}
+          onPress={() => setWhole(!whole)}
+          hitSlop={8}
+        >
+          <Text className="font-mono text-[11px] text-muted-foreground">
+            {whole
+              ? "Show less"
+              : preview.more
+                ? `Show all · ${preview.more.toLocaleString()} more lines`
+                : "Show all"}
+          </Text>
+        </Pressable>
+      ) : null}
+    </>
+  );
+}
+
 function Block({
   block,
   chatTitle,
@@ -220,9 +257,7 @@ function Block({
               From {chatTitle(block.chat) ?? "a chat"}
             </Text>
           ) : null}
-          <Text selectable={!inputMenu} className="text-[15px] leading-[21px]">
-            {block.text.trim()}
-          </Text>
+          <InputText text={block.text.trim()} selectable={!inputMenu} />
           <Stamp time={block.time} end />
         </Pressable>
       );
