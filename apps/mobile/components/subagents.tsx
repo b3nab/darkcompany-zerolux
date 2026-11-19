@@ -3,8 +3,8 @@ import { ChevronRightIcon } from "lucide-react-native";
 import { createContext, use } from "react";
 import { Pressable, View } from "react-native";
 import { useCSSVariable } from "uniwind";
-import { ago, subagentAt, subagentName } from "@zerolux/chat";
-import type { Subagent } from "@zerolux/chat";
+import { ago, subagentAt, subagentName, subagentStarted } from "@zerolux/chat";
+import type { Subagent, ToolBlock } from "@zerolux/chat";
 import { Text } from "@/components/ui/text";
 
 /** A subagent a call names: how it goes by, where it is among the agents, and its work. */
@@ -19,11 +19,11 @@ interface Named {
  * work; from whom a call names (a path or a name), that subagent. None when unknown.
  */
 export const SubagentLinks = createContext<{
-  started: (toolCallId: string) => (() => void) | undefined;
+  started: (tool: ToolBlock) => (() => void) | undefined;
   named: (target: string) => Named | undefined;
 }>({ started: () => undefined, named: () => undefined });
-export const useSubagentLink = (toolCallId: string) =>
-  use(SubagentLinks).started(toolCallId);
+export const useSubagentLink = (tool: ToolBlock) =>
+  use(SubagentLinks).started(tool);
 export const useNamedAgent = () => use(SubagentLinks).named;
 
 /** The links of a session's subagents to their own screens. */
@@ -35,8 +35,8 @@ export function useSubagentLinks(sessionId: string, subagents?: Subagent[]) {
       params: { id: sessionId, agent: subagent.id },
     });
   return {
-    started: (toolCallId: string) => {
-      const subagent = subagents?.find((s) => s.tool_call_id === toolCallId);
+    started: (tool: ToolBlock) => {
+      const subagent = subagents && subagentStarted(subagents, tool);
       return subagent && open(subagent);
     },
     named: (target: string) => {

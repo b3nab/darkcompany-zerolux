@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { errorMessage, kernelUrl, request } from "./client";
+import type { ToolBlock } from "./session-events";
+import { toolOutcome, toolView } from "./tool-view";
 
 /**
  * A subagent a session started: Claude Code's from its Task calls, Codex's threads born from
@@ -33,6 +35,34 @@ export const subagentName = (subagent: Subagent) =>
 export const subagentAt = (subagents: Subagent[], target: string) =>
   subagents.find((s) => s.path === target || s.id === target) ??
   subagents.find((s) => s.path?.endsWith(`/${target}`) || s.name === target);
+
+/**
+ * The subagent a call started: by the call itself where the harness records it (Claude Code),
+ * else by the name the call gave it (Codex: its path once the call answered, the name it
+ * asked for until then).
+ */
+export function subagentStarted(subagents: Subagent[], tool: ToolBlock) {
+  const recorded = subagents.find((s) => s.tool_call_id === tool.id);
+  if (recorded) return recorded;
+  const view = toolView(tool.name, tool.input);
+  if (view.kind !== "agent" || view.action !== "start") return;
+  const named = (value: unknown) =>
+    value && typeof value === "object" && "task_name" in value
+      ? String(value.task_name)
+      : "";
+  let path = "";
+  try {
+    path = named(JSON.parse(toolOutcome(tool.result?.output).text));
+  } catch {
+    // It has not answered, or not with its path.
+  }
+  const asked = named(tool.input);
+  return path
+    ? subagents.find((s) => s.path === path)
+    : asked
+      ? subagentAt(subagents, asked)
+      : undefined;
+}
 
 /** Whom calls name, by the session's subagents: their names, for `toolPhrase`. */
 export const agentNames =

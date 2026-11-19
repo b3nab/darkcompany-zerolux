@@ -97,6 +97,7 @@ import {
   useSessionSubagents,
   agentNames,
   subagentAt,
+  subagentStarted,
   useSessionUsage,
   useUiPieces,
   useVoice,
@@ -1542,10 +1543,8 @@ export function SessionView({
                     chat.approvals.filter((a) => a.session_id === session.id),
                   )}
                   chatTitle={chatTitle}
-                  openSubagent={(toolCallId) => {
-                    const started = subagents.find(
-                      (s) => s.tool_call_id === toolCallId,
-                    );
+                  openSubagent={(tool) => {
+                    const started = subagentStarted(subagents, tool);
                     return started && (() => openSubagent(started.id));
                   }}
                   textActions={(text) => (

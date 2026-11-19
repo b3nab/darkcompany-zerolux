@@ -137,6 +137,34 @@ function scriptCommands(script: string) {
   return commands;
 }
 
+/** A string a Codex script writes, as its JavaScript literal: `"…"` or `'…'`. */
+const LITERAL = String.raw`("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')`;
+const literal = (written: string) => {
+  try {
+    return written.startsWith('"')
+      ? (JSON.parse(written) as string)
+      : written.slice(1, -1).replace(/\\(.)/g, "$1");
+  } catch {
+    return "";
+  }
+};
+
+/**
+ * What a Codex script looks up on the web through `web.run`: what it searches for and the
+ * pages it opens. None for a script that does not use the web.
+ */
+function scriptWeb(script: string) {
+  if (!/\bweb__run\s*\(/.test(script)) return;
+  const all = (key: string) =>
+    [...script.matchAll(new RegExp(String.raw`\b${key}\s*:\s*${LITERAL}`, "g"))]
+      .map((match) => literal(match[1]!))
+      .filter(Boolean);
+  return {
+    queries: all("q"),
+    urls: all("ref_id").filter((ref) => /^https?:\/\//.test(ref)),
+  };
+}
+
 const ZEROLUX = {
   send: "send",
   reply: "reply",
@@ -213,8 +241,14 @@ export function toolView(name: string, input: unknown): ToolView {
     case "exec": {
       const script = typeof input === "string" ? input : text(args.input);
       const commands = scriptCommands(script);
-      return commands.length
-        ? { kind: "command", commands }
+      if (commands.length) return { kind: "command", commands };
+      const web = scriptWeb(script);
+      return web && (web.queries.length || web.urls.length)
+        ? {
+            kind: "web",
+            query: web.queries.join(" · ") || undefined,
+            url: web.urls[0],
+          }
         : { kind: "command", commands: [], script };
     }
     case "Read":
@@ -382,6 +416,57 @@ export interface ToolOutcome {
 const DENIED =
   /^(?:The user doesn't want to proceed with this tool use|Permission (?:for this (?:action|command)|to use .+?) (?:was|has been) denied)/;
 
+/** A Codex agent's status, in words: `running`, or how it ended with what it last said. */
+function agentStatus(status: unknown): string {
+  if (typeof status === "string") return status.replaceAll("_", " ");
+  const [[state, said] = []] = Object.entries(fields(status));
+  if (!state) return "";
+  const words = state.replaceAll("_", " ");
+  return text(said) ? `${words}: ${text(said)}` : words;
+}
+
+/**
+ * What an agent call answered, in words. Codex's agent tools answer the model in JSON: the
+ * name of the agent started, how a wait ended, each agent's status. A started agent's name
+ * and a message's receipt say nothing more than the call does; anything else is as it came.
+ */
+export function agentReply(output: string): string {
+  let answer: Record<string, unknown>;
+  try {
+    answer = fields(JSON.parse(output));
+  } catch {
+    return output;
+  }
+  const keys = Object.keys(answer);
+  const only = (...known: string[]) =>
+    keys.length > 0 && keys.every((key) => known.includes(key));
+  if (
+    only("task_name", "nickname") ||
+    only("agent_id", "nickname") ||
+    only("submission_id")
+  )
+    return "";
+  if (only("message", "timed_out") && typeof answer.message === "string")
+    return answer.message;
+  if (only("status", "timed_out") && typeof answer.status === "object")
+    return (
+      Object.entries(fields(answer.status))
+        .map(([agent, status]) => `${agent}: ${agentStatus(status)}`)
+        .join("\n") || (answer.timed_out ? "timed out" : "")
+    );
+  if (only("previous_status")) return agentStatus(answer.previous_status);
+  if (only("status")) return agentStatus(answer.status);
+  if (only("agents") && Array.isArray(answer.agents))
+    return answer.agents
+      .map(fields)
+      .map(
+        (agent) =>
+          `${text(agent.agent_name)}: ${agentStatus(agent.agent_status)}`,
+      )
+      .join("\n");
+  return output;
+}
+
 /** What a tool gave back: plain text, content blocks, Codex command chunks, or a value as JSON. */
 export function toolOutcome(output: unknown): ToolOutcome {
   const blocks =
@@ -538,7 +623,17 @@ export function diffLines(before: string, after: string): DiffLine[] {
 /** A message's first line as plain words, for a one-line preview: no Markdown marks. */
 export function plainLine(text: string) {
   const line = text.split("\n").find((row) => row.trim()) ?? "";
-  return line
+  // A table's row reads as its cells.
+  const row = /^\s*\|(.*?)\|?\s*$/.exec(line)?.[1];
+  return (
+    row === undefined
+      ? line
+      : row
+          .split("|")
+          .map((cell) => cell.trim())
+          .filter(Boolean)
+          .join(" · ")
+  )
     .replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+\.\s+)/, "")
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/(\*\*|__)(.+?)\1/g, "$2")

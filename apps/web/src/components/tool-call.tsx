@@ -41,6 +41,7 @@ import {
   fileSize,
   plainLine,
   spanLabel,
+  agentReply,
   toolOutcome,
   toolPhrase,
   toolState,
@@ -127,11 +128,12 @@ function WholeState({
 /** What a subagent brought back, whole once opened. */
 function SubagentReply({ tool }: { tool: ToolBlock }) {
   const opened = useOpened(tool);
+  const reply = agentReply(opened.outcome?.text ?? "");
   return (
     <>
-      {opened.outcome?.text && (
+      {reply && (
         <div className="border-t border-agent/15 pt-2">
-          <MessageText text={opened.outcome.text} />
+          <MessageText text={reply} />
         </div>
       )}
       <WholeState whole={opened.whole} size={tool.result?.truncated} />
@@ -656,6 +658,7 @@ function Body({
       );
     case "agent": {
       const work = view.target ? agents?.open(view.target) : undefined;
+      const reply = agentReply(outcome?.text ?? "");
       return (
         <>
           {view.prompt && (
@@ -667,9 +670,9 @@ function Body({
           {view.encrypted && (
             <p className="font-mono text-[11px] text-faint">Encrypted</p>
           )}
-          {outcome?.text && (
+          {reply && (
             <div className="border-t pt-2">
-              <MessageText text={outcome.text} />
+              <MessageText text={reply} />
             </div>
           )}
           {work && (

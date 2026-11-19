@@ -38,6 +38,7 @@ import {
   exploredPhrase,
   plainLine,
   spanLabel,
+  agentReply,
   toolOutcome,
   toolPhrase,
   toolState,
@@ -245,7 +246,7 @@ export function SubagentCard({
   const state = toolState(tool, view, outcome);
   const faint = String(useCSSVariable("--color-faint"));
   // Its own work, where the harness keeps it apart: Claude Code's and Codex's.
-  const openWork = useSubagentLink(tool.id);
+  const openWork = useSubagentLink(tool);
   if (view.kind !== "agent" || view.action !== "start")
     return <ToolCall tool={tool} chatTitle={chatTitle} />;
   const running = state === "running";
@@ -293,9 +294,9 @@ export function SubagentCard({
           ) : view.encrypted ? (
             <Text className="text-[13px] text-faint">Encrypted</Text>
           ) : null}
-          {outcome?.text ? (
+          {agentReply(outcome?.text ?? "") ? (
             <View className="border-t border-agent/15 pt-2">
-              <MessageBody text={outcome.text} />
+              <MessageBody text={agentReply(outcome?.text ?? "")} />
             </View>
           ) : running ? (
             <Text className="text-[12.5px] text-faint">Working on it…</Text>
@@ -732,9 +733,9 @@ function Body({
           ) : view.encrypted ? (
             <Text className="text-[13px] text-faint">Encrypted</Text>
           ) : null}
-          {outcome?.text ? (
+          {agentReply(outcome?.text ?? "") ? (
             <View className="border-t border-border pt-2">
-              <MessageBody text={outcome.text} />
+              <MessageBody text={agentReply(outcome?.text ?? "")} />
             </View>
           ) : null}
         </>

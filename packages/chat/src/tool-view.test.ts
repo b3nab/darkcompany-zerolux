@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { ToolBlock } from "./session-events";
 import {
+  agentReply,
   changeCount,
   diffLines,
   exploration,
@@ -226,6 +227,36 @@ test("a change reads line by line: what stayed, what went, what came", () => {
   expect(diffLines("", "new")).toEqual([{ kind: "added", text: "new" }]);
 });
 
+test("a Codex script that looks on the web reads as its search or the page it opens", () => {
+  expect(
+    toolView(
+      "exec",
+      `text(await tools.web__run({search_query:[{q:"rust stable \\"1.100\\""},{q:'release notes'}],response_length:"long"}));`,
+    ),
+  ).toEqual({
+    kind: "web",
+    query: 'rust stable "1.100" · release notes',
+    url: undefined,
+  });
+  expect(
+    toolView(
+      "exec",
+      `text(await tools.web__run({open:[{ref_id:"https://blog.example.test/post"}]}));`,
+    ),
+  ).toEqual({
+    kind: "web",
+    query: undefined,
+    url: "https://blog.example.test/post",
+  });
+  // With a command too, it reads as the command it runs.
+  expect(
+    toolView(
+      "exec",
+      `await Promise.all([tools.web__run({open:[{ref_id:"turn0search1"}]}), tools.exec_command({cmd:"ls"})]);`,
+    ),
+  ).toEqual({ kind: "command", commands: ["ls"] });
+});
+
 test("a preview line drops Markdown marks and keeps the words", () => {
   expect(
     plainLine(
@@ -235,6 +266,35 @@ test("a preview line drops Markdown marks and keeps the words", () => {
   expect(plainLine("- *one* item with snake_case_name")).toBe(
     "one item with snake_case_name",
   );
+  expect(plainLine("| Edited `a.txt` | Ran **ls** |\n|---|---|")).toBe(
+    "Edited a.txt · Ran ls",
+  );
+});
+
+test("what Codex's agent tools answer reads in words, and what says nothing is not shown", () => {
+  // A started agent's name and a message's receipt are what the call already says.
+  expect(agentReply('{"task_name":"/root/reviewer"}')).toBe("");
+  expect(agentReply('{"agent_id":"a1","nickname":"Averroes"}')).toBe("");
+  expect(agentReply('{"submission_id":"s1"}')).toBe("");
+  // How a wait ended, as Codex says it.
+  expect(agentReply('{"message":"Wait timed out.","timed_out":true}')).toBe(
+    "Wait timed out.",
+  );
+  // Each agent's status, with what it last said.
+  expect(
+    agentReply(
+      '{"status":{"a1":{"completed":"All done"},"a2":"pending_init"},"timed_out":false}',
+    ),
+  ).toBe("a1: completed: All done\na2: pending init");
+  expect(agentReply('{"previous_status":"running"}')).toBe("running");
+  expect(
+    agentReply(
+      '{"agents":[{"agent_name":"/root/a","agent_status":{"errored":"no network"}}]}',
+    ),
+  ).toBe("/root/a: errored: no network");
+  // An agent's own words, and any other answer, stay as they came.
+  expect(agentReply("Found **two** bugs.")).toBe("Found **two** bugs.");
+  expect(agentReply('{"found":2}')).toBe('{"found":2}');
 });
 
 const call = (name: string, input: unknown, more: object = {}) =>

@@ -26,6 +26,7 @@ import type {
   LiveItem,
   RecordOf,
   SessionBlock,
+  ToolBlock,
   ToolsRun,
 } from "@zerolux/chat";
 import { MessageText } from "@/components/message-text";
@@ -72,7 +73,7 @@ export function SessionBlocks({
   /** What can be done with the agent's words, under them: hearing them in its voice. */
   textActions?: (text: TextBlock) => ReactNode;
   /** Opens the work of the subagent a tool call started, where there is one to open. */
-  openSubagent?: (toolCallId: string) => (() => void) | undefined;
+  openSubagent?: (tool: ToolBlock) => (() => void) | undefined;
 }) {
   const fresh = useArrivals(blocks);
   const density = useDensity();
@@ -304,7 +305,7 @@ function Block({
   chatTitle?: ChatTitle;
   inputActions?: (input: InputBlock) => ReactNode;
   textActions?: (text: TextBlock) => ReactNode;
-  openSubagent?: (toolCallId: string) => (() => void) | undefined;
+  openSubagent?: (tool: ToolBlock) => (() => void) | undefined;
 }) {
   switch (block.kind) {
     case "input":
@@ -359,7 +360,7 @@ function Block({
         <SubagentCard
           tool={block}
           chatTitle={chatTitle}
-          openWork={openSubagent?.(block.id)}
+          openWork={openSubagent?.(block)}
         />
       ) : (
         <ToolCall tool={block} chatTitle={chatTitle} />
