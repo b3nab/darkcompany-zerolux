@@ -17,7 +17,7 @@ import {
   XIcon,
 } from "lucide-react-native";
 import { useCSSVariable } from "uniwind";
-import { errorMessage } from "@zerolux/chat";
+import { errorMessage, toldByZeroLux, toldLine } from "@zerolux/chat";
 import type { ChatSession, QueueItem, QueuedInput } from "@zerolux/chat";
 import type { MenuEntry } from "@zerolux/ui";
 import { RowMenu } from "@/components/action-menu";
@@ -294,9 +294,19 @@ export function QueueCard({
                 </View>
                 {editing === undefined ? (
                   <View className="flex-1 gap-1">
-                    <Text numberOfLines={3} className="text-sm">
-                      {item.text}
-                    </Text>
+                    {/* What ZeroLux itself told the session is a line, not anyone's words. */}
+                    {toldByZeroLux(item.text) === undefined ? (
+                      <Text numberOfLines={3} className="text-sm">
+                        {item.text}
+                      </Text>
+                    ) : (
+                      <Text
+                        numberOfLines={1}
+                        className="font-mono text-xs text-muted-foreground"
+                      >
+                        {toldLine(toldByZeroLux(item.text)!)}
+                      </Text>
+                    )}
                     {images ? (
                       <View className="flex-row items-center gap-1">
                         <ImageIcon color={faint} size={12} strokeWidth={1.75} />

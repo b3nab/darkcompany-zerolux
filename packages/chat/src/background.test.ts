@@ -3,6 +3,7 @@ import { parseEvent } from "./chat";
 import { setKernelFetch } from "./client";
 import {
   backgroundEnded,
+  toldLine,
   plainOutput,
   readBackgroundOutput,
 } from "./background";
@@ -110,4 +111,9 @@ test("how a background command ended is read back from what ZeroLux told its ses
   ).toEqual({ command: "true", exit: null, seconds: 0, output: "" });
   // Anything else ZeroLux says is not one.
   expect(backgroundEnded("Agent /root/a completed")).toBeUndefined();
+  // In a line: the command and how it ended; anything else, its first line.
+  expect(toldLine(notice)).toBe("cargo test · exit 3");
+  expect(toldLine("CI passed for commit abc on main:\n- CI: success")).toBe(
+    "CI passed for commit abc on main:",
+  );
 });

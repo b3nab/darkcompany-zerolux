@@ -119,6 +119,19 @@ test("a harness's own notice is a line of its own, not the owner's input, and st
   expect(blocks[2]).toMatchObject({ kind: "turn", since: "t1" });
 });
 
+test("what ZeroLux itself tells a session is a notice, not the owner's input; a chat's message stays an input", () => {
+  const told =
+    "[ZeroLux] Background command 4b1a ended: exit code 0, after 2 s.\n$ true\n```\n\n```";
+  const delivered =
+    '[ZeroLux] "Kernel"\nChat: chat-1; delivery: d-1\n"Owner" [message m]:\n> go';
+  const blocks = sessionBlocks([
+    at({ type: "input", text: told, chat: null, delivery: null }, 0),
+    at({ type: "input", text: delivered, chat: "chat-1", delivery: "d-1" }, 1),
+  ]);
+  expect(blocks.map((block) => block.kind)).toEqual(["notice", "input"]);
+  expect(blocks[0]).toMatchObject({ text: told.slice("[ZeroLux] ".length) });
+});
+
 test("a message between agents is a line of its own, from whom to whom, its words only when readable", () => {
   const blocks = sessionBlocks([
     at(

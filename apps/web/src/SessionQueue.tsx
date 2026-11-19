@@ -7,6 +7,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { cn } from "cn";
+import { toldByZeroLux, toldLine } from "@zerolux/chat";
 import type { InputMode, QueueItem, QueuedInput } from "@zerolux/chat";
 import { Button } from "@/components/ui/button";
 
@@ -235,19 +236,29 @@ export function SessionQueue({
           aria-label="Into this turn"
           className="flex max-h-[min(6rem,15dvh)] flex-col gap-1.5 overflow-y-auto"
         >
-          {steering.map((item) => (
-            <li
-              key={item.id}
-              className="flex items-start gap-2 rounded-md border border-dashed px-3 py-1.5 text-sm text-muted-foreground"
-            >
-              <span className="mt-0.5 shrink-0 font-mono text-[11px] text-faint">
-                Into this turn
-              </span>
-              <p className="line-clamp-2 min-w-0 flex-1 whitespace-pre-wrap">
-                {item.text}
-              </p>
-            </li>
-          ))}
+          {steering.map((item) => {
+            // What ZeroLux itself told the session is a line, not anyone's words.
+            const told = toldByZeroLux(item.text);
+            return (
+              <li
+                key={item.id}
+                className="flex items-start gap-2 rounded-md border border-dashed px-3 py-1.5 text-sm text-muted-foreground"
+              >
+                <span className="mt-0.5 shrink-0 font-mono text-[11px] text-faint">
+                  Into this turn
+                </span>
+                {told === undefined ? (
+                  <p className="line-clamp-2 min-w-0 flex-1 whitespace-pre-wrap">
+                    {item.text}
+                  </p>
+                ) : (
+                  <p className="min-w-0 flex-1 truncate font-mono text-[12px]">
+                    {toldLine(told)}
+                  </p>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

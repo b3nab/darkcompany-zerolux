@@ -36,6 +36,17 @@ export function backgroundEnded(notice: string) {
     : undefined;
 }
 
+/**
+ * What ZeroLux told a session, in a line: a background command by its command and how it
+ * ended, anything else by its first line.
+ */
+export function toldLine(told: string) {
+  const ended = backgroundEnded(told);
+  return ended
+    ? `${ended.command.split("\n")[0]} · ${ended.exit === null ? "ended" : `exit ${ended.exit}`}`
+    : (told.split("\n")[0] ?? "");
+}
+
 /** A piece of a background command's output from an offset, and where to read on. */
 export interface BackgroundOutput {
   start: number;
