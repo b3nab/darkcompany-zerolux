@@ -3130,16 +3130,12 @@ async fn send_message(
 async fn livekit_token(
     State(state): State<AppState>,
     Extension(who): Extension<ChatIdentity>,
-    session: Option<Extension<HumanSession>>,
     request: Request,
 ) -> Result<Json<Value>, ApiFailure> {
     let runtime = runtime(&state)?;
-    // A person's token ends with their sign-in; an agent's lasts its working day.
-    let mut ticket = match session {
-        Some(Extension(session)) => runtime.human_token(who.addressee(), session.expires_at),
-        None => runtime.client_token(who.addressee()),
-    }
-    .map_err(runtime_error)?;
+    let mut ticket = runtime
+        .client_token(who.addressee())
+        .map_err(runtime_error)?;
     let host = request.headers().get("host").and_then(|h| h.to_str().ok());
     if let Some(public) = state.public.as_ref().filter(|p| p.serves(host)) {
         // Behind the proxy, the kernel's own LiveKit is reachable only where the operator

@@ -767,17 +767,6 @@ async fn run_workspace(
             }
         }
     });
-    // People whose sign-in ended while connected to the notice room are disconnected.
-    let sweep = runtime.clone();
-    let sweeper = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        loop {
-            interval.tick().await;
-            if let Err(error) = sweep.sweep_expired().await {
-                tracing::error!(error = format!("{error:#}"), "Realtime sweep failed");
-            }
-        }
-    });
     let served = tokio::select! {
         result = &mut http => Some(result),
         _ = stopped.wait_for(|stop| *stop) => None,
@@ -785,7 +774,6 @@ async fn run_workspace(
     for task in [
         queuer,
         relinker,
-        sweeper,
         scheduler,
         watcher,
         extension_schedules,

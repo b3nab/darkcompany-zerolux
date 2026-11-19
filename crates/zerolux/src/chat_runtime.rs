@@ -760,20 +760,9 @@ impl ChatRuntime {
         self.livekit.client_token(actor_id)
     }
 
-    /// A person's token, tied to their sign-in.
-    pub fn human_token(&self, actor_id: &str, session_expires_at: i64) -> Result<ClientToken> {
-        ensure!(!*self.stop.borrow(), "The kernel is stopping");
-        self.livekit.human_token(actor_id, session_expires_at)
-    }
-
     /// After a sign-out or a revocation: the person's devices reconnect only if still signed in.
     pub async fn disconnect_clients(&self, actor_id: &str) -> Result<()> {
         self.livekit.disconnect_clients(actor_id).await
-    }
-
-    /// People whose sign-in ended while connected are disconnected.
-    pub async fn sweep_expired(&self) -> Result<()> {
-        self.livekit.sweep_expired().await
     }
 
     pub async fn discover(&self) -> Result<Value> {

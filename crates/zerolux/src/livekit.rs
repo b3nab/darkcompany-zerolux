@@ -47,11 +47,6 @@ pub fn workspace_room(workspace_id: &str) -> String {
 pub const TOPIC: &str = "chat";
 
 const TOKEN_TTL: Duration = Duration::from_secs(6 * 60 * 60);
-/// A person's token and the connection it opens last a minute: the device asks for a new one
-/// every time, so a token kept after a sign-out is worth at most that minute, plus the
-/// minute of leeway the server grants an expired token; notices stop at the minute's end
-/// regardless, by the identity's own expiry.
-const HUMAN_TOKEN_TTL: Duration = Duration::from_secs(60);
 const MANAGED_KEY: &str = "zerolux";
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 // The server drains for longer than eight seconds on SIGTERM; bound the wait, then force.
@@ -183,23 +178,6 @@ impl LiveKit {
         self.token(&format!("{actor_id}:{}", Uuid::new_v4()), TOKEN_TTL)
     }
 
-    /// A person's token: short-lived, and its identity carries when it stops being good,
-    /// the end of their sign-in or of the token itself, whichever is first. A connection
-    /// that outlives it is disconnected by `sweep_expired` without the device's cooperation,
-    /// so a token kept after a sign-out is worth at most its own minute: the device then
-    /// needs a new one, which only a live sign-in gets.
-    pub fn human_token(
-        &self,
-        actor_id: &str,
-        session_expires_at: i64,
-    ) -> anyhow::Result<ClientToken> {
-        let until = session_expires_at.min(now_ms() + HUMAN_TOKEN_TTL.as_millis() as i64);
-        self.token(
-            &format!("{actor_id}:h{until}:{}", Uuid::new_v4()),
-            HUMAN_TOKEN_TTL,
-        )
-    }
-
     fn token(&self, identity: &str, ttl: Duration) -> anyhow::Result<ClientToken> {
         let token = AccessToken::with_api_key(&self.api_key, &self.api_secret)
             .with_identity(identity)
@@ -220,28 +198,6 @@ impl LiveKit {
             expires_at: now_ms() + ttl.as_millis() as i64,
             managed: self.managed(),
         })
-    }
-
-    /// Disconnects the people whose sign-in has ended, by the identity their token carried.
-    pub async fn sweep_expired(&self) -> anyhow::Result<()> {
-        let participants = match self.rooms.list_participants(&self.room).await {
-            Ok(participants) => participants,
-            Err(error) if room_missing(&error) => return Ok(()),
-            Err(error) => return Err(error).context("List LiveKit participants"),
-        };
-        let now = now_ms();
-        for identity in participants
-            .into_iter()
-            .map(|p| p.identity)
-            .filter(|identity| session_expiry(identity).is_some_and(|at| at <= now))
-        {
-            match self.rooms.remove_participant(&self.room, &identity).await {
-                Ok(()) => {}
-                Err(error) if room_missing(&error) => {}
-                Err(error) => return Err(error).context("Disconnect a LiveKit participant"),
-            }
-        }
-        Ok(())
     }
 
     /// Disconnects every client of `actor_id`. Each reconnects by asking the kernel for a
@@ -281,16 +237,8 @@ impl LiveKit {
             Err(error) if room_missing(&error) => return Ok(()),
             Err(error) => return Err(error).context("List LiveKit participants"),
         };
-        // A person's connection past its token's life hears nothing more, whether or not the
-        // sweep has reached it yet.
-        let now = now_ms();
-        let destination_identities = recipients(
-            participants
-                .into_iter()
-                .map(|p| p.identity)
-                .filter(|identity| session_expiry(identity).is_none_or(|at| at > now)),
-            actor_ids,
-        );
+        let destination_identities =
+            recipients(participants.into_iter().map(|p| p.identity), actor_ids);
         // LiveKit treats an empty destination list as a broadcast to the whole room.
         if destination_identities.is_empty() {
             return Ok(());
@@ -377,13 +325,6 @@ async fn publish_pending(
             return Err(error);
         }
     }
-}
-
-/// When a person's identity (`<actor>:h<until>:<connection>`) stops being good.
-fn session_expiry(identity: &str) -> Option<i64> {
-    let mut parts = identity.split(':');
-    let _actor = parts.next()?;
-    parts.next()?.strip_prefix('h')?.parse().ok()
 }
 
 /// Connected identities (`<actor>:<connection>`) that belong to one of `actor_ids`.
