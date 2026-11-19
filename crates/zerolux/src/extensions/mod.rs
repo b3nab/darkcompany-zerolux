@@ -1357,7 +1357,7 @@ impl Extensions {
                     .options
                     .iter()
                     .any(|option| Some(option.value.as_str()) == value.as_str()),
-                (_, value) => value.as_str().is_some_and(|text| text.len() <= 64 * 1024),
+                (_, value) => value.is_string(),
             };
             ensure!(fits, Error::Invalid(format!("`{key}` is {}", setting.kind)));
         }
@@ -1678,10 +1678,6 @@ impl process::Kernel for Extensions {
                     Error::Invalid("A value's key is 1 to 512 bytes".into())
                 );
                 let value = params.get("value").filter(|value| !value.is_null());
-                ensure!(
-                    value.is_none_or(|value| value.to_string().len() <= 1024 * 1024),
-                    Error::Invalid("A value is up to 1 MiB".into())
-                );
                 self.put_value(&extension, "value", &key, value).await?;
                 Ok(json!({}))
             }
@@ -1694,10 +1690,6 @@ impl process::Kernel for Extensions {
             "secrets.set" => {
                 let key = kept(&text("name"))?;
                 let value = params.get("value").filter(|value| !value.is_null());
-                ensure!(
-                    value.is_none_or(|value| value.to_string().len() <= 64 * 1024),
-                    Error::Invalid("A secret is up to 64 KiB".into())
-                );
                 self.put_value(&extension, "secret", &key, value).await?;
                 Ok(json!({}))
             }
@@ -1797,8 +1789,8 @@ impl process::Kernel for Extensions {
                     .context("The kernel is stopping")?;
                 let (actor, told) = (text("actor_id"), text("text"));
                 ensure!(
-                    !told.trim().is_empty() && told.len() <= 64 * 1024,
-                    Error::Invalid("Tell an agent 1 byte to 64 KiB".into())
+                    !told.trim().is_empty(),
+                    Error::Invalid("Tell an agent something".into())
                 );
                 let session = runtime
                     .tell_agent(&actor, &format!("[{extension}] {told}"))

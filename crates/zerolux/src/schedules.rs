@@ -12,7 +12,7 @@ use crate::{
     chat::Access,
     entity::schedules,
     model::ChatIdentity,
-    store::{Error, Result, Store, now_ms, text},
+    store::{Error, Result, Store, now_ms},
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,7 +73,11 @@ pub fn next_run(cron: &str, after: i64) -> Result<i64> {
 }
 
 fn prompt(value: &str) -> Result<String> {
-    text(value, "Prompt", 64 * 1024, true)
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(Error::Invalid("Write the prompt".into()));
+    }
+    Ok(value.to_owned())
 }
 
 impl Store {

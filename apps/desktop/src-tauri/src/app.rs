@@ -1179,7 +1179,7 @@ impl Host {
             ensure!(window.url()? == url.join("api/health")?, "The previous draft origin did not load");
             let (send, receive) = oneshot::channel();
             let send = Mutex::new(Some(send));
-            window.eval_with_callback("(() => { try { const drafts=localStorage.getItem('zerolux-drafts'); if (drafts!==null && drafts.length>4194304) return {status:'too-large'}; return {status:'ok',drafts}; } catch { return {status:'unavailable'}; } })()", move |value| {
+            window.eval_with_callback("(() => { try { const drafts=localStorage.getItem('zerolux-drafts'); return {status:'ok',drafts}; } catch { return {status:'unavailable'}; } })()", move |value| {
                 if let Some(send) = send.lock().expect("draft import lock").take() {
                     let _ = send.send(value);
                 }
@@ -1187,10 +1187,6 @@ impl Host {
             let json = tokio::time::timeout(Duration::from_secs(5), receive)
                 .await
                 .context("The previous draft store did not answer")??;
-            ensure!(
-                json.len() <= 4 * 1024 * 1024,
-                "Previous drafts are too large to import"
-            );
             let envelope: serde_json::Value = serde_json::from_str(&json)?;
             ensure!(envelope["status"] == "ok", "The previous drafts could not be read");
             let saved: Option<String> = serde_json::from_value(envelope.get("drafts").context("Missing previous draft snapshot")?.clone())?;
@@ -1367,10 +1363,6 @@ impl Host {
         let json = tokio::time::timeout(Duration::from_secs(5), receive)
             .await
             .context("The workspace did not answer")??;
-        ensure!(
-            json.len() <= 4 * 1024 * 1024,
-            "The draft snapshot is too large"
-        );
         let saved: SavedView =
             serde_json::from_str(&json).context("Read the workspace's navigation state")?;
         ensure!(

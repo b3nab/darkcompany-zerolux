@@ -11,7 +11,7 @@ use crate::{
     chat::Access,
     entity::triggers,
     model::ChatIdentity,
-    store::{Error, Result, Store, now_ms, text},
+    store::{Error, Result, Store, now_ms},
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -66,7 +66,7 @@ pub struct TriggerChange {
 }
 
 fn prompt(value: &str) -> Result<String> {
-    text(value, "Prompt", 64 * 1024, false)
+    Ok(value.trim().to_owned())
 }
 
 /// How the CI runs of a commit ended: what a session is told, once they all have.

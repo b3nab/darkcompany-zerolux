@@ -366,7 +366,7 @@ export default function ChatScreen() {
     setPicking(true);
     setError("");
     try {
-      const picked = await pickPhotos(from, 10);
+      const picked = await pickPhotos(from);
       setChips((now) => [
         ...now,
         ...picked.map((photo, i) => ({

@@ -88,7 +88,6 @@ import { ActorMark, Eyebrow } from "@/components/presence";
 import { SidePanel } from "@/components/side-panel";
 import { XL, useMedia } from "./media";
 
-const MAX_TEXT = 64 * 1024;
 // Messages from one author a few minutes apart read as one turn.
 const TURN = 5 * 60 * 1000;
 
@@ -965,7 +964,6 @@ function ChatComposer({
   }, [conversation.id, text]);
   // What you type anywhere in the chat lands in its box.
   useTypeInto(box, conversation.id);
-  const tooLong = new TextEncoder().encode(text).length > MAX_TEXT;
   const write = (next: string) => {
     setText(next);
     draft.current = newId();
@@ -989,7 +987,7 @@ function ChatComposer({
     );
 
   async function submit() {
-    if ((!text.trim() && !picked.length) || tooLong || !agents.length) return;
+    if ((!text.trim() && !picked.length) || !agents.length) return;
     sent();
     const id = draft.current;
     const going = picked;
@@ -1041,7 +1039,7 @@ function ChatComposer({
         extra={picked.length > 0}
         open
         busy={busy}
-        blocked={tooLong || !agents.length}
+        blocked={!agents.length}
         box={box}
         textarea={{
           onKeyDown: (event) => {
@@ -1084,13 +1082,7 @@ function ChatComposer({
               ]
             : undefined
         }
-        error={
-          tooLong
-            ? "This message is too long (64 KB maximum)."
-            : !agents.length
-              ? "No agents in this chat."
-              : storage.error
-        }
+        error={!agents.length ? "No agents in this chat." : storage.error}
         send={() => void submit()}
         voice={{
           transcription,

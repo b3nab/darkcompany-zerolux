@@ -254,14 +254,12 @@ async fn stop_outcome_survives_reopen_and_repeated_stop_without_releasing_work()
         .unwrap();
     assert!(!was_already_stopped);
     f.clear_outbox().await;
-    for invalid in [String::new(), "x".repeat(2_001)] {
-        assert!(matches!(
-            f.store
-                .note_chat_stop(&f.owner, &aspen.session.id, &invalid)
-                .await,
-            Err(Error::Invalid(_))
-        ));
-    }
+    assert!(matches!(
+        f.store
+            .note_chat_stop(&f.owner, &aspen.session.id, "")
+            .await,
+        Err(Error::Invalid(_))
+    ));
     f.store
         .note_chat_stop(&f.owner, &aspen.session.id, reason)
         .await
@@ -1048,16 +1046,6 @@ async fn concurrent_sends_are_idempotent_and_cursor_sequence_has_no_validation_g
         f.store.send_chat_message(&f.owner, &room.id, changed).await,
         Err(Error::Conflict)
     ));
-    assert!(matches!(
-        f.store
-            .send_chat_message(
-                &f.owner,
-                &room.id,
-                message(&format!("{}x", " ".repeat(64 * 1024)))
-            )
-            .await,
-        Err(Error::Invalid(_))
-    ));
     let second = f
         .store
         .send_chat_message(&aspen_id, &room.id, message("receipt only"))
@@ -1406,7 +1394,8 @@ async fn publication_recovers_same_small_event_and_never_dispatches_inference() 
     let (aspen, _) = f.hire("aspen", None).await;
     let room = f.room(&[&aspen]).await;
     f.clear_outbox().await;
-    let large = "x".repeat(32 * 1024);
+    // A message is as long as it is.
+    let large = "x".repeat(512 * 1024);
     let sent = f
         .store
         .send_chat_message(&f.owner, &room.id, message(&large))
@@ -1598,6 +1587,30 @@ async fn explicit_reply_and_final_fallback_share_one_message_and_only_the_recipi
 }
 
 /// Work no chat message started still asks the owner: the request belongs to the session.
+#[tokio::test]
+async fn a_request_is_recorded_whole_however_long_it_is() {
+    let f = Fixture::new().await;
+    let (_aspen, aspen_id) = f.hire("aspen", None).await;
+    let (summary, command) = ("è".repeat(4_000), "x".repeat(600 * 1024));
+    let approval = f
+        .store
+        .create_chat_approval(
+            &aspen_id,
+            CreateChatApproval {
+                id: Uuid::new_v4().to_string(),
+                delivery_id: None,
+                native_request_id: "native-long".into(),
+                kind: "permission".into(),
+                summary: summary.clone(),
+                details: json!({ "command": command }),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(approval.summary, summary);
+    assert_eq!(approval.details["command"], command);
+}
+
 #[tokio::test]
 async fn a_session_asks_the_owner_without_a_chat() {
     let f = Fixture::new().await;

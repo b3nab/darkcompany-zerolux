@@ -223,9 +223,6 @@ impl Terminals {
 
     /// What the owner types, as the terminal receives it.
     pub fn write(&self, id: &str, data: &str) -> Result<()> {
-        if data.len() > 64 * 1024 {
-            return Err(Error::Invalid("Type up to 64 KiB at a time".into()).into());
-        }
         let terminal = self.get(id)?;
         if terminal.info.lock().expect("info").ended {
             return Err(Error::Invalid("The terminal has ended".into()).into());

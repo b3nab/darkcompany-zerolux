@@ -9,7 +9,6 @@ use serde_json::{Map, Value};
 use crate::store::{Error, Result};
 
 pub const KINDS: [&str; 3] = ["permission", "question", "form"];
-const MAX_TEXT: usize = 64 * 1024;
 
 fn invalid(message: &str) -> Error {
     Error::Invalid(message.into())
@@ -18,7 +17,7 @@ fn invalid(message: &str) -> Error {
 fn string<'a>(value: &'a Value, key: &str, required: bool) -> Result<Option<&'a str>> {
     match value.get(key) {
         None | Some(Value::Null) if !required => Ok(None),
-        Some(Value::String(text)) if text.len() <= MAX_TEXT => Ok(Some(text)),
+        Some(Value::String(text)) => Ok(Some(text)),
         _ => Err(invalid(&format!("Invalid request field {key}"))),
     }
 }
@@ -36,12 +35,12 @@ fn flag(value: &Value, key: &str) -> Result<bool> {
 fn check_question(details: &Value) -> Result<()> {
     let questions = details["questions"]
         .as_array()
-        .filter(|items| (1..=16).contains(&items.len()))
-        .ok_or_else(|| invalid("A question request has 1 to 16 questions"))?;
+        .filter(|items| !items.is_empty())
+        .ok_or_else(|| invalid("A question request has questions"))?;
     let mut ids = std::collections::HashSet::new();
     for question in questions {
         let id = string(question, "id", true)?.unwrap_or_default();
-        if id.is_empty() || id.len() > 1000 || !ids.insert(id) {
+        if id.is_empty() || !ids.insert(id) {
             return Err(invalid("Each question needs its own ID"));
         }
         string(question, "question", true)?;
@@ -53,7 +52,6 @@ fn check_question(details: &Value) -> Result<()> {
         }
         let options = question["options"]
             .as_array()
-            .filter(|items| items.len() <= 64)
             .ok_or_else(|| invalid("Invalid question options"))?;
         for option in options {
             string(option, "label", true)?;
@@ -86,10 +84,8 @@ fn check_form(details: &Value) -> Result<()> {
 
 /// The request a session records, checked for its kind.
 pub fn check_request(kind: &str, details: &Value) -> Result<()> {
-    if !details.is_object() || details.to_string().len() > 256 * 1024 {
-        return Err(invalid(
-            "Request details must be a JSON object of at most 256 KiB",
-        ));
+    if !details.is_object() {
+        return Err(invalid("Request details must be a JSON object"));
     }
     match kind {
         "permission" => Ok(()),
@@ -137,7 +133,7 @@ fn check_answers(details: &Value, answer: &Value) -> Result<()> {
         for value in values {
             let text = value
                 .as_str()
-                .filter(|text| !text.is_empty() && text.len() <= MAX_TEXT)
+                .filter(|text| !text.is_empty())
                 .ok_or_else(|| invalid("Answers are non-empty text"))?;
             if question["other"] != true && !labels.contains(&text) {
                 return Err(invalid("Choose one of the offered answers"));
@@ -242,9 +238,6 @@ fn check_form_answer(details: &Value, answer: &Value) -> Result<()> {
 
 /// The owner's answer to a question or a form, checked against what was asked.
 pub fn check_answer(kind: &str, details: &Value, answer: &Value) -> Result<()> {
-    if answer.to_string().len() > 256 * 1024 {
-        return Err(invalid("The answer is too large"));
-    }
     match kind {
         "question" => check_answers(details, answer),
         "form" => check_form_answer(details, answer),

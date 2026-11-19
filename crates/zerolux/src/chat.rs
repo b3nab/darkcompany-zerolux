@@ -21,8 +21,8 @@ use crate::{
     harness::Harness,
     model::*,
     store::{
-        Error, Result, Store, execute, fetch_all, fetch_one, now_ms, random_token, scalar, sql,
-        text, token_hash,
+        Error, Result, Store, execute, fetch_all, fetch_one, now_ms, random_token, said, scalar,
+        sql, text, token_hash,
     },
 };
 
@@ -36,7 +36,7 @@ fn uuid(value: &str) -> Result<()> {
 }
 
 fn reason(value: Option<String>) -> Result<Option<String>> {
-    value.map(|v| text(&v, "Reason", 2_000, true)).transpose()
+    value.map(|v| said(&v, "Reason")).transpose()
 }
 
 /// A session with the number of messages that are stored for it and not yet attempted.
@@ -803,8 +803,8 @@ impl Store {
     ) -> Result<IssuedChatSession> {
         self.require_onboarding().await?;
         let native_id = text(&input.native_session_id, "Native session ID", 500, true)?;
-        let title = text(&input.title, "Session title", 500, true)?;
-        let workspace = text(&input.workspace, "Workspace", 4096, true)?;
+        let title = said(&input.title, "Session title")?;
+        let workspace = said(&input.workspace, "Workspace")?;
         if !input.native_locator.is_object() || input.native_locator.to_string().len() > 16_384 {
             return Err(Error::Invalid("Invalid native session locator".into()));
         }
@@ -1180,7 +1180,7 @@ impl Store {
     /// attention with `reason`, so the runtime tries again. Returns true when the owner had
     /// stopped it: then nothing changes and nothing is retried.
     pub async fn fail_chat_link(&self, who: &ChatIdentity, id: &str, reason: &str) -> Result<bool> {
-        let reason = text(reason, "Attention reason", 2_000, true)?;
+        let reason = said(reason, "Attention reason")?;
         let tx = self.write().await?;
         self.own_in(&tx, who, id).await?;
         if self.session_in(&tx, id).await?.stopped_at.is_some() {
@@ -1317,7 +1317,7 @@ impl Store {
     ) -> Result<ChatSession> {
         let title = input
             .title
-            .map(|title| text(&title, "Session title", 500, true))
+            .map(|title| said(&title, "Session title"))
             .transpose()?;
         if title.is_none()
             && input.pinned.is_none()
@@ -1387,7 +1387,7 @@ impl Store {
         id: &str,
         reason: &str,
     ) -> Result<ChatSession> {
-        let reason = text(reason, "Stop reason", 2_000, true)?;
+        let reason = said(reason, "Stop reason")?;
         let tx = self.write().await?;
         self.own_in(&tx, who, id).await?;
         let existing = self.session_in(&tx, id).await?;
@@ -2113,11 +2113,8 @@ impl Store {
     ) -> Result<SavedChatMessage> {
         self.require_onboarding().await?;
         uuid(&input.id)?;
-        // Preserve intentional whitespace, but count every stored UTF-8 byte toward the limit.
-        if input.text.trim().is_empty() || input.text.len() > 64 * 1024 {
-            return Err(Error::Invalid(
-                "Message must contain text and fit within 64 KiB".into(),
-            ));
+        if input.text.trim().is_empty() {
+            return Err(Error::Invalid("A message has text".into()));
         }
         let tx = self.write().await?;
         self.access_in(&tx, who, id).await?;
@@ -2460,7 +2457,7 @@ impl Store {
     ) -> Result<ChatApproval> {
         uuid(&input.id)?;
         let native_id = text(&input.native_request_id, "Native request ID", 500, true)?;
-        let summary = text(&input.summary, "Approval summary", 1_000, true)?;
+        let summary = said(&input.summary, "Approval summary")?;
         crate::requests::check_request(&input.kind, &input.details)?;
         let tx = self.write().await?;
         self.identity_in(&tx, who).await?;
@@ -2561,9 +2558,7 @@ impl Store {
             }
         };
         let reason = match (decision, input.reason.map(|given| given.trim().to_owned())) {
-            ("deny", Some(given)) if !given.is_empty() => {
-                Some(text(&given, "Reason", 2_000, true)?)
-            }
+            ("deny", Some(given)) if !given.is_empty() => Some(said(&given, "Reason")?),
             ("allow", Some(given)) if !given.is_empty() => {
                 return Err(Error::Invalid("Only a denial has a reason".into()));
             }

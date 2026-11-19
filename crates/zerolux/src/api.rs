@@ -230,7 +230,8 @@ pub(crate) fn instance_router(
         // Matched by hand: the workspace's own routes must not see this router's parameters.
         .fallback(workspace_or_web)
         .layer(middleware::from_fn(web_cache))
-        .layer(DefaultBodyLimit::max(1024 * 1024))
+        // What a person or an agent sends is as large as it is.
+        .layer(DefaultBodyLimit::disable())
         .layer(middleware::from_fn_with_state(state.clone(), access))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -699,11 +700,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
             get(subagent_events),
         )
         .route("/sessions/{id}/interrupt", post(interrupt_session))
-        .route(
-            "/sessions/{id}/input",
-            // With images: 15 MiB of them, in base64.
-            post(session_input).layer(DefaultBodyLimit::max(21 * 1024 * 1024)),
-        )
+        .route("/sessions/{id}/input", post(session_input))
         .route("/sessions/{id}/commands", get(session_commands))
         .route(
             "/sessions/{id}/queue",
@@ -826,14 +823,9 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .route("/actions", get(list_actions))
         .route(
             "/ext/{extension}/{action}",
-            post(run_action)
-                .get(read_action)
-                .layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+            post(run_action).get(read_action),
         )
-        .route(
-            "/ext/{extension}/{action}/file",
-            post(run_action_on_file).layer(DefaultBodyLimit::disable()),
-        )
+        .route("/ext/{extension}/{action}/file", post(run_action_on_file))
         .route("/invites", get(list_invites).post(create_invite))
         .route("/invites/{id}", axum::routing::delete(revoke_invite))
         .route("/chat/approvals", get(approvals).post(create_approval))
@@ -870,7 +862,8 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
         .nest("/api", api)
         .fallback_service(web_files(&web_dir))
         .layer(middleware::from_fn(web_cache))
-        .layer(DefaultBodyLimit::max(1024 * 1024))
+        // What a person or an agent sends is as large as it is.
+        .layer(DefaultBodyLimit::disable())
         .layer(middleware::from_fn_with_state(state.clone(), access))
         .layer(TraceLayer::new_for_http())
         .with_state(state)

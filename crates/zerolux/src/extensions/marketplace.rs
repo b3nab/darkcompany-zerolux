@@ -11,7 +11,6 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 /// The largest package a kernel downloads.
-const LARGEST: usize = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Index {
@@ -181,7 +180,6 @@ pub async fn download(index: &str, package: &Package) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await? {
         bytes.extend_from_slice(&chunk);
-        ensure!(bytes.len() <= LARGEST, "The package is too large");
     }
     ensure!(
         super::package::sha256(&bytes) == package.sha256.to_lowercase(),

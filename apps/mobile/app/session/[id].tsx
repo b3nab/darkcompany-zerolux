@@ -37,7 +37,6 @@ import {
   harnessLabels,
   inputImagesError,
   isLooking,
-  MAX_INPUT_IMAGES,
   saveDraft,
   agentSettingFields,
   agentModelValue,
@@ -631,9 +630,7 @@ function Composer({
       ? sent.length
         ? "Send the photos without a command"
         : undefined
-      : inputImagesError(
-          sent.map((photo) => ({ type: photo.media_type, size: photo.size })),
-        );
+      : inputImagesError(sent.map((photo) => ({ type: photo.media_type })));
     if (refused) return setError(refused);
     setError("");
     // What was typed or picked meanwhile stays.
@@ -661,14 +658,11 @@ function Composer({
     session.harness === "claude-code" && session.origin !== "owned"
   );
   const filled = Boolean(draft.trim() || photos.length);
-  const room = MAX_INPUT_IMAGES - photos.length;
   const pick = (from: "library" | "camera") => {
     setPicking(true);
     setError("");
-    pickPhotos(from, room)
-      .then((picked) =>
-        setPhotos((now) => [...now, ...picked].slice(0, MAX_INPUT_IMAGES)),
-      )
+    pickPhotos(from)
+      .then((picked) => setPhotos((now) => [...now, ...picked]))
       .catch((e: unknown) => setError(errorMessage(e)))
       .finally(() => setPicking(false));
   };
@@ -862,7 +856,7 @@ function Composer({
         }}
         add={
           choosable
-            ? { onPress: attach, busy: picking, disabled: !open || room <= 0 }
+            ? { onPress: attach, busy: picking, disabled: !open }
             : undefined
         }
         middle={

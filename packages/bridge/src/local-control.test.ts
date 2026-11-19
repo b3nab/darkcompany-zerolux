@@ -54,6 +54,35 @@ test("only an explicitly safe native failure code crosses the control protocol",
   }
 });
 
+test("a request is taken whole, however long it is", async () => {
+  const root = await mkdtemp(join(tmpdir(), "zerolux-control-long-"));
+  const control = new LocalControl(
+    root,
+    {
+      describe: () => ({ native_session_id: "native", workspace: root }),
+      handle: async (_method, request) => ({
+        length: String(request.text).length,
+      }),
+    },
+    "test",
+  );
+  try {
+    await control.start();
+    const name = (await readdir(root)).find((f) => f.endsWith(".json"))!;
+    const { endpoint, nonce } = JSON.parse(
+      await readFile(join(root, name), "utf8"),
+    );
+    const text = "è".repeat(600_000);
+    expect(await rpc(endpoint, { nonce, method: "input", text })).toEqual({
+      ok: true,
+      length: text.length,
+    });
+  } finally {
+    await control.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a request in progress is still answered when the control closes meanwhile", async () => {
   const root = await mkdtemp(join(tmpdir(), "zerolux-control-"));
   let closing: Promise<void> | undefined;

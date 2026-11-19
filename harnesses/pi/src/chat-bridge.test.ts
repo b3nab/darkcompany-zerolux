@@ -1327,13 +1327,15 @@ describe("permanent pi chat", () => {
     expect(bridge.connected).toBe(false);
     expect(f.sent).toHaveLength(0);
   });
-  test("no silently truncated output and no message before pairing", async () => {
+  test("no message before pairing or without text, and a long one goes whole", async () => {
     const f = fixture();
     await expect(f.bridge.post("room", "outside")).rejects.toThrow();
     await f.run();
-    await expect(f.bridge.post("room", "é".repeat(40_000))).rejects.toThrow();
     await expect(f.bridge.post("room", "  ")).rejects.toThrow();
     expect(f.posts()).toHaveLength(0);
+    const long = "é".repeat(400_000);
+    await f.bridge.post("room", long);
+    expect(f.posts().map((post) => post.body.text)).toEqual([long]);
   });
   test("private bearer stays in the header, redirects and remote base URLs are refused", async () => {
     expect(() => chatRequest("https://example.com", "secret")).toThrow();

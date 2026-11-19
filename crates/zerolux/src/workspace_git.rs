@@ -282,8 +282,8 @@ pub async fn discard(folder: &Path, names: &[String]) -> Result<()> {
 /// Commits what is staged, with the owner's message; the new commit's ID.
 pub async fn commit(folder: &Path, message: &str) -> Result<String> {
     let message = message.trim();
-    if message.is_empty() || message.len() > 64 * 1024 {
-        return Err(Error::Invalid("Write a commit message up to 64 KiB".into()).into());
+    if message.is_empty() {
+        return Err(Error::Invalid("Write a commit message".into()).into());
     }
     git(folder, &["commit", "-q", "-m", message]).await?;
     let id = git(folder, &["rev-parse", "HEAD"]).await?;
@@ -349,10 +349,8 @@ pub async fn open_pull_request(
     draft: bool,
 ) -> Result<String> {
     let title = title.trim();
-    if title.is_empty() || title.len() > 1_000 || body.len() > 64 * 1024 {
-        return Err(
-            Error::Invalid("A title up to 1,000 bytes and a body up to 64 KiB".into()).into(),
-        );
+    if title.is_empty() {
+        return Err(Error::Invalid("Write a title".into()).into());
     }
     let mut args = vec!["pr", "create", "--title", title, "--body", body];
     if draft {

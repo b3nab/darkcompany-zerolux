@@ -234,7 +234,6 @@ function PermissionChoice({
           aria-label="Reason"
           placeholder="Reason (optional)"
           value={reason}
-          maxLength={2000}
           onChange={(event) => setReason(event.target.value)}
           className="min-w-0 flex-1"
         />

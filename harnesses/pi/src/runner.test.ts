@@ -569,6 +569,26 @@ const until = async (check: () => Promise<boolean> | boolean, ms = 5000) => {
   throw new Error("condition not met in time");
 };
 
+test("what pi says is read whole, however long its line is", async () => {
+  const f = await fixture("", { extensionControl: true });
+  try {
+    await f.bind();
+    await f.turn(null);
+    const message = "è".repeat(1_500_000);
+    await f.ask({
+      type: "extension_ui_request",
+      id: "long",
+      method: "confirm",
+      title: "Apply?",
+      message,
+    });
+    await until(() => f.approvals.length === 1);
+    expect(f.approvals[0]).toMatchObject({ details: { message } });
+  } finally {
+    await f.close();
+  }
+});
+
 test("pi's yes/no question in one chat's turn reaches the owner as that delivery's approval and comes back as pi's answer", async () => {
   const f = await fixture("", { extensionControl: true });
   try {

@@ -25,8 +25,6 @@ use tokio::{
 const ANSWER: Duration = Duration::from_secs(60);
 /// How long a stopping extension has before it is ended.
 const GRACE: Duration = Duration::from_secs(3);
-/// The largest message either side may send.
-const LINE: usize = 16 * 1024 * 1024;
 
 type Pending = Arc<std::sync::Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
 
@@ -238,9 +236,6 @@ fn dispatch<K: Kernel>(
     extension: &str,
     pending: &Pending,
 ) {
-    if line.len() > LINE {
-        return;
-    }
     let Ok(message) = serde_json::from_str::<Value>(line) else {
         return;
     };

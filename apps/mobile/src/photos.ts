@@ -5,11 +5,9 @@ import type { InputImage } from "@zerolux/chat";
 /** A photo ready to go with an input: JPEG, as large as a model reads well, with its preview. */
 export interface Photo extends InputImage {
   uri: string;
-  /** Its bytes, as the kernel counts them. */
-  size: number;
 }
 
-/** The longest side kept: enough to read a screenshot, well within what one input carries. */
+/** The longest side kept: enough to read a screenshot. */
 const SIDE = 2048;
 
 /**
@@ -31,18 +29,14 @@ async function prepare(uri: string): Promise<Photo> {
     media_type: "image/jpeg",
     data,
     uri: saved.uri,
-    size: Math.floor((data.length * 3) / 4),
   };
 }
 
 /**
- * Photos from the library, up to `room` of them, or one from the camera; none when the owner
- * cancels. The system's refusal of the camera says where to allow it.
+ * Photos from the library, or one from the camera; none when the owner cancels. The system's
+ * refusal of the camera says where to allow it.
  */
-export async function pickPhotos(
-  from: "library" | "camera",
-  room: number,
-): Promise<Photo[]> {
+export async function pickPhotos(from: "library" | "camera"): Promise<Photo[]> {
   if (from === "camera") {
     const allowed = await ImagePicker.requestCameraPermissionsAsync();
     if (!allowed.granted)
@@ -60,7 +54,6 @@ export async function pickPhotos(
       : await ImagePicker.launchImageLibraryAsync({
           ...options,
           allowsMultipleSelection: true,
-          selectionLimit: room,
         });
   if (result.canceled) return [];
   return Promise.all(result.assets.map((asset) => prepare(asset.uri)));

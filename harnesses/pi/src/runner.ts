@@ -81,7 +81,7 @@ function piRequest(event: Record<string, any>) {
     typeof event[key] === "string" ? (event[key] as string) : null;
   const question = (fields: Record<string, unknown>) => ({
     kind: "question",
-    summary: (title || "pi asks you").slice(0, 1000),
+    summary: title || "pi asks you",
     details: {
       method: event.method,
       questions: [
@@ -552,7 +552,6 @@ export class PiRunner {
     // message content, and never leave a full stdout pipe blocking its execution.
     void (async () => {
       let buffer = "",
-        discarding = false,
         confirmed = false;
       const decoder = new TextDecoder();
       try {
@@ -565,10 +564,6 @@ export class PiRunner {
           while ((end = buffer.indexOf("\n")) >= 0) {
             const line = buffer.slice(0, end);
             buffer = buffer.slice(end + 1);
-            if (discarding) {
-              discarding = false;
-              continue;
-            }
             let event: Record<string, any>;
             try {
               event = JSON.parse(line);
@@ -633,10 +628,6 @@ export class PiRunner {
             }
             confirmed = true;
             resolve(confirmedState);
-          }
-          if (buffer.length > 1024 * 1024) {
-            buffer = "";
-            discarding = true;
           }
         }
         if (!confirmed)

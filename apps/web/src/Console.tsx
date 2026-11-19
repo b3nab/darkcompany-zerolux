@@ -191,8 +191,6 @@ import { ClaudeSignedOut } from "./ClaudeSignIn";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { XL, useMedia } from "./media";
 
-const MAX_TEXT = 64 * 1024;
-
 /** A picked image as the kernel takes it: its type and base64 bytes. */
 const imageOf = (file: File) =>
   new Promise<InputImage>((resolve, reject) => {
@@ -1951,7 +1949,6 @@ function SessionInput({
   const open = owner && session.status === "connected";
   // What you type anywhere in the session lands in its box, as in a chat.
   useTypeInto(box, session.id, open);
-  const tooLong = new TextEncoder().encode(text).length > MAX_TEXT;
   // Images going with the next input, shown by object URLs freed once they go.
   const [picked, setPicked] = useState<{ file: File; url: string }[]>([]);
   const shown = useRef(picked);
@@ -2033,7 +2030,7 @@ function SessionInput({
   // Sent while it works, an input waits in ZeroLux's queue, all of which goes as the next turn;
   // at rest with nothing queued it starts one. ⌘/Ctrl Enter puts it into the turn in progress instead.
   async function submit(mode: InputMode = "queue") {
-    if (!open || empty || tooLong || imagesError) return;
+    if (!open || empty || imagesError) return;
     const sent = text;
     const run = sessionCommand(sent);
     const going = run ? [] : picked;
@@ -2071,7 +2068,7 @@ function SessionInput({
       open={open}
       busy={busy}
       working={owner && working}
-      blocked={tooLong || !!imagesError}
+      blocked={!!imagesError}
       box={box}
       textarea={{
         onSelect: (event) => setCursor(event.currentTarget.selectionStart),
@@ -2213,7 +2210,7 @@ function SessionInput({
           }
         />
       }
-      error={tooLong ? "Too long: up to 64 KB." : imagesError}
+      error={imagesError}
       send={() => void submit("queue")}
       later={
         modes

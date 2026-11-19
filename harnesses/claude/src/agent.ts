@@ -34,8 +34,6 @@ export type StartQuery = (input: {
   options: Options;
 }) => Query;
 
-/** Wakes the agent for other agents' messages: fixed text, never theirs. */
-const MAX_DETAILS = 16 * 1024;
 /** The chat tools ZeroLux gives an agent's session. */
 const CHAT_TOOLS = [
   "mcp__zerolux__session_start",
@@ -703,17 +701,13 @@ export class ClaudeAgent {
     // Claude Code suggests the rules that would let this through again: for the session,
     // or kept in its settings.
     const rules = suggestions ?? [];
-    const details = JSON.stringify(input);
     const decided = await this.ask(
       "permission",
       toolUseID,
       `Claude Code wants to use ${toolName}`,
       {
         tool: toolName,
-        input:
-          details.length > MAX_DETAILS
-            ? `${details.slice(0, MAX_DETAILS)}…`
-            : input,
+        input,
         ...(decisionReason ? { reason: decisionReason } : {}),
         scopes: rules.length ? ["once", "session", "always"] : ["once"],
       },
@@ -753,10 +747,7 @@ export class ClaudeAgent {
     const decided = await this.ask(
       "question",
       toolUseID,
-      (asked.length === 1 ? asked[0]!.question : "Claude Code asks you").slice(
-        0,
-        1000,
-      ),
+      asked.length === 1 ? asked[0]!.question : "Claude Code asks you",
       {
         questions: asked.map((q) => ({
           id: q.question,
@@ -799,7 +790,7 @@ export class ClaudeAgent {
     const decided = await this.ask(
       "form",
       `elicitation:${requestId}`,
-      `${request.serverName} asks: ${request.message}`.slice(0, 1000),
+      `${request.serverName} asks: ${request.message}`,
       {
         server: request.serverName,
         message: request.message,

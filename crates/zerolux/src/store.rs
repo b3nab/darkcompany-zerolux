@@ -134,6 +134,15 @@ pub(crate) fn owner_name(value: &str) -> Result<String> {
     Ok(name)
 }
 
+/// What a person or a harness says in its own words: all of it, and never empty.
+pub(crate) fn said(value: &str, label: &str) -> Result<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(Error::Invalid(format!("{label} must not be empty")));
+    }
+    Ok(value.to_owned())
+}
+
 pub(crate) fn text(value: &str, label: &str, max: usize, required: bool) -> Result<String> {
     let value = value.trim();
     if (required && value.is_empty()) || value.len() > max {

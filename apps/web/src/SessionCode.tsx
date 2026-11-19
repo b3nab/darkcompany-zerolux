@@ -714,7 +714,6 @@ function PullRequestBox({
         aria-label="Title"
         placeholder="Title"
         value={draft.title}
-        maxLength={1000}
         autoFocus
         onChange={(event) => setDraft({ ...draft, title: event.target.value })}
       />

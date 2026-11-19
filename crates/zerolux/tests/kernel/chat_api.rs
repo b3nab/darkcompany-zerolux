@@ -2874,17 +2874,19 @@ async fn a_sessions_queue_is_kept_by_zerolux_changed_and_never_lost() {
         }
     };
     status("connecting").await;
+    // What is written goes whole, however long it is.
+    let long = "è".repeat(1024 * 1024);
     let early: Value = kernel
         .post(
             &format!("/sessions/{id}/input"),
             None,
-            json!({ "text": "early" }),
+            json!({ "text": long }),
         )
         .await
         .json()
         .await
         .unwrap();
-    assert_eq!(early["queued"]["text"], "early");
+    assert_eq!(early["queued"]["text"], long);
     let early = early["queued"]["id"].as_str().unwrap().to_owned();
     assert_eq!(
         kernel

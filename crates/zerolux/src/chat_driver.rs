@@ -3,7 +3,6 @@ use anyhow::{Context, Result, anyhow, ensure};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::time::Duration;
-pub(crate) const MAX_TEXT: usize = 64 * 1024;
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Deserialize)]

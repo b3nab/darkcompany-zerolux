@@ -15,7 +15,6 @@ use std::{
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
-const MAX_OUTPUT: u64 = 4 * 1024 * 1024;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DiscoveredSession {
@@ -142,13 +141,8 @@ async fn command_json(program: &str, args: &[&str]) -> Result<Value> {
             .stdout
             .take()
             .context("Metadata stdout unavailable")?
-            .take(MAX_OUTPUT + 1)
             .read_to_end(&mut bytes)
             .await?;
-        ensure!(
-            bytes.len() as u64 <= MAX_OUTPUT,
-            "Native metadata exceeds the discovery response limit"
-        );
         ensure!(
             child.wait().await?.success(),
             "Native metadata command failed"
@@ -167,9 +161,6 @@ async fn command_json(program: &str, args: &[&str]) -> Result<Value> {
         }
     }
 }
-
-/// The session catalogue of a machine: metadata only, but every session of every project.
-const CATALOGUE_LIMIT: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Deserialize)]
 pub(crate) struct PiDescriptor {
@@ -203,13 +194,13 @@ pub(crate) async fn descriptor(path: &Path) -> Result<PiDescriptor> {
 }
 
 /// A control exchange with a live pi. Pairing and takeover may wait for the extension;
-/// the SDK's session catalogue can be large; other messages are small and quick.
+/// the SDK's session catalogue takes a while; other messages are quick.
 pub(crate) async fn control(record: &PiDescriptor, mut request: Value) -> Result<Value> {
-    let (deadline, limit) = match request["method"].as_str() {
-        Some("pair" | "bind" | "takeover") => (Duration::from_secs(60), 64 * 1024),
-        Some("sessions") => (Duration::from_secs(15), CATALOGUE_LIMIT),
-        Some("settings") => (Duration::from_secs(10), 2 * 1024 * 1024),
-        _ => (Duration::from_secs(5), 64 * 1024),
+    let deadline = match request["method"].as_str() {
+        Some("pair" | "bind" | "takeover") => Duration::from_secs(60),
+        Some("sessions") => Duration::from_secs(15),
+        Some("settings") => Duration::from_secs(10),
+        _ => Duration::from_secs(5),
     };
     request["nonce"] = Value::String(record.nonce.clone());
     let exchange = async {
@@ -218,11 +209,7 @@ pub(crate) async fn control(record: &PiDescriptor, mut request: Value) -> Result
             .context("Pi control endpoint unavailable")?;
         stream.write_all(format!("{request}\n").as_bytes()).await?;
         let mut bytes = Vec::new();
-        stream
-            .take(limit as u64 + 1)
-            .read_to_end(&mut bytes)
-            .await?;
-        ensure!(bytes.len() <= limit, "Pi control response too large");
+        stream.read_to_end(&mut bytes).await?;
         let response: Value =
             serde_json::from_slice(&bytes).context("Invalid pi control response")?;
         if response["ok"] != true && response["code"] == "pi_runtime_unavailable" {

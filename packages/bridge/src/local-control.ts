@@ -110,10 +110,6 @@ export class LocalControl {
         return;
       }
       buffer += chunk;
-      if (Buffer.byteLength(buffer) > 64 * 1024) {
-        socket.destroy();
-        return;
-      }
       const end = buffer.indexOf("\n");
       if (end < 0) return;
       handled = true;
@@ -135,7 +131,7 @@ export class LocalControl {
               : {}),
             error: `The ${this.label} link request failed: ${
               error instanceof Error ? error.message : String(error)
-            }`.slice(0, 1000),
+            }`,
           }),
         )
         .then(

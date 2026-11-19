@@ -17,7 +17,6 @@ const IMAGE_TYPES: [(&str, &str); 4] = [
     ("image/gif", "gif"),
     ("image/webp", "webp"),
 ];
-const IMAGE_BYTES: usize = 15 * 1024 * 1024;
 const COMPACT: &str = "compact-v1";
 
 impl ChatRuntime {
@@ -85,8 +84,8 @@ impl ChatRuntime {
             }
             // Queued, it waits in ZeroLux, never in the harness: unless nothing runs and nothing
             // waits, when it starts the next turn at once.
-            if (text.trim().is_empty() && images.is_empty()) || text.len() > 64 * 1024 {
-                return Err(Error::Invalid("Write up to 64 KiB, or send an image".into()).into());
+            if text.trim().is_empty() && images.is_empty() {
+                return Err(Error::Invalid("Write something, or send an image".into()).into());
             }
             decode_images(images)?;
             let busy = connecting
@@ -253,9 +252,6 @@ impl ChatRuntime {
             return Err(Error::Forbidden.into());
         }
         let instructions = instructions.map(str::trim).filter(|text| !text.is_empty());
-        if instructions.is_some_and(|text| text.len() > 16 * 1024) {
-            return Err(Error::Invalid("Instructions up to 16 KiB".into()).into());
-        }
         let session = self
             .store
             .sessions(who)
@@ -315,8 +311,8 @@ impl ChatRuntime {
             if !who.is_person() {
                 return Err(Error::Forbidden.into());
             }
-            if text.is_some_and(|text| text.trim().is_empty() || text.len() > 64 * 1024) {
-                return Err(Error::Invalid("Write from 1 byte to 64 KiB".into()).into());
+            if text.is_some_and(|text| text.trim().is_empty()) {
+                return Err(Error::Invalid("Write something".into()).into());
             }
             if self.store.is_queued(id, item).await? {
                 match text {
@@ -365,9 +361,9 @@ impl ChatRuntime {
                 if change
                     .objective
                     .as_ref()
-                    .is_some_and(|text| text.trim().is_empty() || text.len() > 64 * 1024)
+                    .is_some_and(|text| text.trim().is_empty())
                 {
-                    return Err(Error::Invalid("Write the goal in 1 byte to 64 KiB".into()).into());
+                    return Err(Error::Invalid("Write the goal".into()).into());
                 }
                 if change
                     .status
@@ -477,8 +473,8 @@ impl ChatRuntime {
         if !who.is_person() {
             return Err(Error::Forbidden.into());
         }
-        if (text.trim().is_empty() && images.is_empty()) || text.len() > 64 * 1024 {
-            return Err(Error::Invalid("Write up to 64 KiB, or send an image".into()).into());
+        if text.trim().is_empty() && images.is_empty() {
+            return Err(Error::Invalid("Write something, or send an image".into()).into());
         }
         let session = self
             .store
@@ -686,9 +682,6 @@ pub(crate) fn localize_images(
 
 fn decode_images(images: &[InputImage]) -> Result<Vec<(&'static str, Vec<u8>)>, Error> {
     use base64::Engine;
-    if images.len() > 10 {
-        return Err(Error::Invalid("Send up to 10 images at a time".into()));
-    }
     let mut decoded = Vec::with_capacity(images.len());
     for image in images {
         let extension = IMAGE_TYPES
@@ -700,9 +693,6 @@ fn decode_images(images: &[InputImage]) -> Result<Vec<(&'static str, Vec<u8>)>, 
             .decode(image.data.trim())
             .map_err(|_| Error::Invalid("An image is not valid base64".into()))?;
         decoded.push((extension, bytes));
-    }
-    if decoded.iter().map(|(_, bytes)| bytes.len()).sum::<usize>() > IMAGE_BYTES {
-        return Err(Error::Invalid("Images up to 15 MiB in all".into()));
     }
     Ok(decoded)
 }
@@ -726,11 +716,12 @@ mod tests {
         );
         assert!(decode_images(&[image("image/svg+xml", "AQID")]).is_err());
         assert!(decode_images(&[image("image/png", "not base64!")]).is_err());
-        assert!(decode_images(&vec![image("image/png", "AQID"); 11]).is_err());
-        let big = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            vec![0u8; IMAGE_BYTES + 1],
+        // As many as are sent, each as large as it is.
+        assert_eq!(
+            decode_images(&vec![image("image/png", "AQID"); 40])
+                .unwrap()
+                .len(),
+            40
         );
-        assert!(decode_images(&[image("image/png", &big)]).is_err());
     }
 }

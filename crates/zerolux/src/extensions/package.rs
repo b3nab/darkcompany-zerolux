@@ -27,8 +27,6 @@ pub const SKIPPED: &[&str] = &[
     "dist",
     ".DS_Store",
 ];
-/// The most a package may hold, unpacked.
-const LARGEST: u64 = 1024 * 1024 * 1024;
 const FILES: &str = "files.json";
 const SIGNATURE: &str = "SIGNATURE";
 
@@ -203,7 +201,6 @@ pub fn unpack(package: &[u8], public: &str, into: &Path) -> Result<Manifest> {
         .map_err(|_| anyhow::anyhow!("Not a publisher's public key"))?;
     let public = ed25519_dalek::VerifyingKey::from_bytes(&public)?;
     let mut entries = BTreeMap::new();
-    let mut total = 0u64;
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(package));
     for entry in archive.entries()? {
         let mut entry = entry?;
@@ -217,8 +214,6 @@ pub fn unpack(package: &[u8], public: &str, into: &Path) -> Result<Manifest> {
                 .all(|part| matches!(part, std::path::Component::Normal(_))),
             "A package's file is outside it"
         );
-        total += entry.size();
-        ensure!(total <= LARGEST, "The package is too large");
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes)?;
         let path = path

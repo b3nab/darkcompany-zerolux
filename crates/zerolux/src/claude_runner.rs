@@ -501,11 +501,10 @@ impl Registry {
                 .stdout
                 .take()
                 .context("Missing Claude metadata output")?
-                .take(4 * 1024 * 1024 + 1)
                 .read_to_end(&mut bytes)
                 .await?;
             ensure!(
-                bytes.len() <= 4 * 1024 * 1024 && child.wait().await?.success(),
+                child.wait().await?.success(),
                 "Claude metadata command failed"
             );
             let value: Value = serde_json::from_slice(&bytes)?;
@@ -573,16 +572,7 @@ impl RunnerLink {
             let mut socket = platform::Local::connect(&self.record.endpoint).await?;
             socket.write_all(format!("{request}\n").as_bytes()).await?;
             let mut bytes = Vec::new();
-            let limit = if request["method"] == "settings" {
-                2 * 1024 * 1024
-            } else {
-                64 * 1024
-            };
-            socket.take(limit + 1).read_to_end(&mut bytes).await?;
-            ensure!(
-                bytes.len() as u64 <= limit,
-                "Runner control response too large"
-            );
+            socket.read_to_end(&mut bytes).await?;
             let response: Value = serde_json::from_slice(&bytes)?;
             ensure!(
                 response["ok"] == true,
@@ -698,13 +688,8 @@ pub(crate) async fn catalog_output(
             .stdout
             .take()
             .context("Missing catalog output")?
-            .take(2 * 1024 * 1024 + 1)
             .read_to_end(&mut output)
             .await?;
-        ensure!(
-            output.len() <= 2 * 1024 * 1024,
-            "The native model catalog is too large"
-        );
         ensure!(
             child.wait().await?.success(),
             "The harness could not load its model catalog"

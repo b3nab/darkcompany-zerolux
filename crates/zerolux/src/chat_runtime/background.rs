@@ -19,9 +19,6 @@ use crate::{
     store::{Error, now_ms},
 };
 
-/// Background commands a session may have running at once.
-const RUNNING: usize = 10;
-
 #[derive(Debug, Clone, Serialize)]
 pub struct BackgroundCommand {
     pub id: String,
@@ -118,23 +115,10 @@ impl ChatRuntime {
         let owner = self.store.session_person(session).await?;
         let command = command.trim();
         ensure!(
-            !command.is_empty() && command.len() <= 8 * 1024,
-            Error::Invalid("A background command is 1 to 8192 bytes".into())
+            !command.is_empty(),
+            Error::Invalid("Write the command to run".into())
         );
         let session = self.store.chat_session(&owner, session).await?;
-        let running = commands::Entity::find()
-            .filter(commands::Column::WorkspaceId.eq(self.store.workspace_id()))
-            .filter(commands::Column::SessionId.eq(&session.id))
-            .filter(commands::Column::Status.eq("running"))
-            .all(self.store.db())
-            .await?
-            .len();
-        ensure!(
-            running < RUNNING,
-            Error::Invalid(format!(
-                "A session runs up to {RUNNING} background commands at once"
-            ))
-        );
         let id = uuid::Uuid::new_v4().to_string();
         let pid = match self.remote_host(&session) {
             None => self

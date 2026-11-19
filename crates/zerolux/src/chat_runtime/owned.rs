@@ -6,13 +6,7 @@ use crate::{
 use serde_json::json;
 
 fn connection_reason(error: &anyhow::Error) -> String {
-    let mut reason = format!("The Claude runner could not be connected: {error:#}");
-    let mut end = reason.len().min(2_000);
-    while !reason.is_char_boundary(end) {
-        end -= 1;
-    }
-    reason.truncate(end);
-    reason
+    format!("The Claude runner could not be connected: {error:#}")
 }
 
 // A surviving runner keeps its launch fingerprint; a cold replacement must instead

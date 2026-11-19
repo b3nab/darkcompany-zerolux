@@ -702,18 +702,11 @@ test("a session's output notice is an event even without an ID, and repeats of i
 });
 
 test("images go with an input when the kernel would take them", () => {
-  const png = { type: "image/png", size: 1024 };
-  expect(inputImagesError([png, { type: "image/webp", size: 2048 }])).toBe(
-    undefined,
-  );
-  expect(inputImagesError(Array(11).fill(png))).toBeDefined();
-  expect(inputImagesError([{ type: "image/svg+xml", size: 10 }])).toBeDefined();
-  expect(
-    inputImagesError([
-      { type: "image/jpeg", size: 8 * 1024 * 1024 },
-      { type: "image/jpeg", size: 8 * 1024 * 1024 },
-    ]),
-  ).toBeDefined();
+  const png = { type: "image/png" };
+  expect(inputImagesError([png, { type: "image/webp" }])).toBe(undefined);
+  expect(inputImagesError([{ type: "image/svg+xml" }])).toBeDefined();
+  // As many as are picked.
+  expect(inputImagesError(Array(40).fill(png))).toBe(undefined);
 });
 
 test("a record's time is its hour today, and its day with the hour before", () => {

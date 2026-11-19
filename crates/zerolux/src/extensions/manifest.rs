@@ -156,9 +156,6 @@ pub fn kernel_version() -> semver::Version {
     version
 }
 
-/// The longest an action may take, when it says so; otherwise a minute.
-pub const LONGEST: u64 = 30 * 60;
-
 /// A path within an extension's folder: relative, without `..`.
 pub fn inside(path: &str) -> bool {
     let path = std::path::Path::new(path);
@@ -281,13 +278,9 @@ impl Manifest {
             return Err(invalid("A process part names its command"));
         }
         if let Some(process) = &self.process
-            && process
-                .start_seconds
-                .is_some_and(|seconds| seconds == 0 || seconds > LONGEST)
+            && process.start_seconds == Some(0)
         {
-            return Err(invalid(format!(
-                "A process part starts within {LONGEST} seconds"
-            )));
+            return Err(invalid("A process part takes at least a second to start"));
         }
         if let Some(remote) = &self.remote
             && !remote.url.starts_with("https://")
@@ -504,12 +497,9 @@ impl Contributes {
                     action.name
                 )));
             }
-            if action
-                .seconds
-                .is_some_and(|seconds| seconds == 0 || seconds > LONGEST)
-            {
+            if action.seconds == Some(0) {
                 return Err(invalid(format!(
-                    "`{}` may take up to {LONGEST} seconds",
+                    "`{}` takes at least a second",
                     action.name
                 )));
             }

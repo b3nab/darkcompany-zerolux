@@ -20,7 +20,7 @@ use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 use uuid::Uuid;
 
 use crate::{
-    chat_driver::{Delivery, Kernel, MAX_TEXT, is_loopback, prompt, string},
+    chat_driver::{Delivery, Kernel, is_loopback, prompt, string},
     model::{AgentSettings, CodexApprovalPolicy, CodexSandbox},
 };
 
@@ -1095,10 +1095,6 @@ impl CodexDriver {
                 );
                 delivery.message = serde_json::from_value(dispatch["message"].clone())
                     .context("Invalid dispatch message")?;
-                ensure!(
-                    delivery.message.text.len() <= MAX_TEXT,
-                    "Chat message exceeds the Codex bridge limit"
-                );
                 delivery.status = "uncertain".into();
                 batch.push(delivery);
             }
@@ -1572,7 +1568,6 @@ impl CodexDriver {
             }
         };
         let id = Uuid::new_v4().to_string();
-        let summary: String = summary.chars().take(1000).collect();
         kernel.post("/chat/approvals", json!({"id":id,"delivery_id":delivery,"native_request_id":native_id,"kind":kind,"summary":summary,"details":details})).await?;
         self.approvals.insert(
             native_id,
@@ -1614,13 +1609,10 @@ impl CodexDriver {
             .get(turn_id)
             .and_then(|state| state.delivery(&self.deliveries))
             .map(|d| d.id.clone());
-        let summary: String = match questions.as_slice() {
+        let summary = match questions.as_slice() {
             [one] => one["question"].as_str().unwrap_or_default(),
             _ => "Codex asks you",
-        }
-        .chars()
-        .take(1000)
-        .collect();
+        };
         // Asked again, as when the thread is read anew, it is the same request. One the kernel
         // does not take stays in the session's record, and the session goes on.
         match kernel.post("/chat/approvals", json!({"id":Uuid::new_v4().to_string(),"delivery_id":delivery,"native_request_id":format!("{LEFT_QUESTION}{item_id}"),"kind":"question","summary":summary,"details":{"method":"request_user_input_async","questions":questions}})).await {
@@ -1963,7 +1955,6 @@ fn left_questions(item: &Value) -> Vec<Value> {
         .as_array()
         .into_iter()
         .flatten()
-        .take(16)
         .enumerate()
         .filter_map(|(at, question)| {
             let title = question["title"]
@@ -1974,7 +1965,6 @@ fn left_questions(item: &Value) -> Vec<Value> {
                 .into_iter()
                 .flatten()
                 .filter_map(Value::as_str)
-                .take(64)
                 .map(|label| json!({ "label": label }))
                 .collect();
             Some(json!({

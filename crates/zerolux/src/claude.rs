@@ -25,7 +25,7 @@ use tokio::{
     sync::{mpsc, watch},
 };
 
-use crate::chat_driver::{ChatMessage, Delivery, Kernel, MAX_TEXT, prompt};
+use crate::chat_driver::{ChatMessage, Delivery, Kernel, prompt};
 
 const SOCKETS: &str = "/tmp/cc-socks";
 const LIST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -667,10 +667,6 @@ impl ClaudeSession {
             );
             delivery.message = serde_json::from_value::<ChatMessage>(dispatch["message"].clone())
                 .context("Invalid dispatch message")?;
-            ensure!(
-                delivery.message.text.len() <= MAX_TEXT,
-                "Chat message exceeds the Claude Code bridge limit"
-            );
             match conversations
                 .iter_mut()
                 .find(|batch| batch[0].message.conversation_id == delivery.message.conversation_id)

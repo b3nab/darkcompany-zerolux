@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { localURL } from "./local-url.ts";
 
-const MAX_TEXT = 64 * 1024;
 export interface ChatSession {
   id: string;
   /** The agent the session works for; null for the owner's own session. */
@@ -132,14 +131,7 @@ export function chatRequest(base: string, token: string): ChatRequest {
             return;
           }
           const chunks: Buffer[] = [];
-          let size = 0;
-          response.on("data", (chunk: Buffer) => {
-            size += chunk.length;
-            if (size > 4 * 1024 * 1024) {
-              response.destroy();
-              reject(new Error("Chat response exceeds the receiver limit"));
-            } else chunks.push(chunk);
-          });
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
           response.on("error", () =>
             reject(new Error("Chat response interrupted")),
           );
@@ -234,8 +226,7 @@ const revoked = (error: unknown) =>
   error instanceof ChatHttpError && [401, 403].includes(error.status);
 const suspended = (error: unknown) => error instanceof ChatLinkSuspended;
 function checkedText(text: string) {
-  if (!text.trim() || Buffer.byteLength(text, "utf8") > MAX_TEXT)
-    throw new Error("A chat message must contain text and fit within 64 KiB");
+  if (!text.trim()) throw new Error("A chat message has text");
   return text;
 }
 

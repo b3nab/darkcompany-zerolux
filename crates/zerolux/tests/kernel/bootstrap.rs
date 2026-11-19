@@ -126,13 +126,6 @@ async fn api_rejects_foreign_origins_rebinding_invalid_input_and_unknown_routes(
             .status(),
         StatusCode::BAD_REQUEST
     );
-    assert_eq!(
-        kernel
-            .post("/api/actors", kernel.agent(&"x".repeat(1024 * 1024)))
-            .await
-            .status(),
-        StatusCode::PAYLOAD_TOO_LARGE
-    );
     // A page address gets the web app; an unknown API address stays a JSON 404.
     std::fs::create_dir_all(kernel.dir.path().join("web")).unwrap();
     std::fs::write(kernel.dir.path().join("web/index.html"), "<main>app</main>").unwrap();
