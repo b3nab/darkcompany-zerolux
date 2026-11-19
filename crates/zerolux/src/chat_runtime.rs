@@ -663,8 +663,8 @@ impl ChatRuntime {
         Ok(())
     }
 
-    /// Triggers whose event happened: their session receives what happened, with their words,
-    /// queued after its turn, once. Only this host's running sessions are watched; one that is
+    /// Triggers whose event happened: their session is told what happened, with their words,
+    /// into the turn it is working on or as a turn of its own, once. Only this host's running sessions are watched; one that is
     /// not running is told when it runs again, if its commit's runs are still the latest.
     pub async fn run_triggers(&self) -> Result<()> {
         for trigger in self.store.enabled_triggers().await? {
@@ -713,17 +713,19 @@ impl ChatRuntime {
                     .await?;
                 continue;
             }
+            // What ZeroLux tells the session, as how a background command ended: into the turn
+            // in progress or as a turn of its own, never through its person's queue.
             let text = if trigger.prompt.trim().is_empty() {
-                ended.report.clone()
+                format!("[ZeroLux] {}", ended.report)
             } else {
-                format!("{}\n\n{}", ended.report, trigger.prompt.trim())
+                format!("[ZeroLux] {}\n\n{}", ended.report, trigger.prompt.trim())
             };
             let sent = self
                 .input(
                     &owner,
                     &session.id,
                     &text,
-                    crate::model::InputMode::Queue,
+                    crate::model::InputMode::Steer,
                     &[],
                 )
                 .await;

@@ -2,9 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { errorMessage, kernelUrl, request } from "./client";
 
 /**
- * What a session waits for, to hear it as its input after the turn in progress. `ci`: the CI
- * runs of its folder's current commit have all ended; with `failures_only`, only when one
- * failed. The words heard name the commit and each run, then the prompt.
+ * What a session waits for, to hear it in the turn it is working on, or as a turn of its
+ * own. `ci`: the CI runs of its folder's current commit have all ended; with
+ * `failures_only`, only when one failed. The words heard name the commit and each run, then
+ * the prompt.
  */
 export interface SessionTrigger {
   id: string;
