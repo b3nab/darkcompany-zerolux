@@ -986,10 +986,8 @@ impl ChatRuntime {
             } else {
                 error
             };
-            let note = error
-                .downcast_ref::<crate::pi_runner::PiFailure>()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| crate::chat::LINK_FAILED.into());
+            // Why, as it is: the session waits for its person with the reason in view.
+            let note = format!("{error:#}");
             // Pairing may have reached the external extension even if its ACK
             // was lost. Revoke the issued token; never retry native handoff.
             if self
@@ -1229,18 +1227,13 @@ impl ChatRuntime {
         let target = match self.pi_target(who, &session, live).await {
             Ok(target) => target,
             Err(error) => {
-                if let Some(failure) = error.downcast_ref::<crate::pi_runner::PiFailure>() {
-                    if session.stopped_at.is_some() {
-                        self.store
-                            .note_chat_stop(who, id, &failure.to_string())
-                            .await?;
-                    } else {
-                        self.store
-                            .fail_chat_link(who, id, &failure.to_string())
-                            .await?;
-                    }
-                    self.changed();
+                let why = format!("{error:#}");
+                if session.stopped_at.is_some() {
+                    self.store.note_chat_stop(who, id, &why).await?;
+                } else {
+                    self.store.fail_chat_link(who, id, &why).await?;
                 }
+                self.changed();
                 return Err(error);
             }
         };
@@ -1328,16 +1321,12 @@ impl ChatRuntime {
         live: Option<sessions::NativeSessionTarget>,
     ) -> Result<sessions::NativeSessionTarget> {
         let saved = self.store.chat_session_locator(who, &session.id).await?;
+        // The pi that runs it now, as it is; else it is started again on its saved file.
         let mut target = if let Some(target) = live {
             target
         } else {
-            let locator = crate::pi_runner::recovery_locator(
-                &session.native_session_id,
-                &session.workspace,
-                saved.clone(),
-            )
-            .await
-            .context(crate::pi_runner::PiFailure::ProfileUnavailable)?;
+            let mut locator = saved.clone();
+            locator["cold"] = serde_json::json!(true);
             sessions::NativeSessionTarget {
                 harness: Harness::Pi,
                 native_session_id: session.native_session_id.clone(),
@@ -1346,13 +1335,6 @@ impl ChatRuntime {
                 native_locator: locator,
             }
         };
-        ensure!(target.workspace == session.workspace, "pi's folder changed");
-        if let Some(file) = saved["session_file"].as_str() {
-            ensure!(
-                target.native_locator["session_file"].as_str() == Some(file),
-                "pi's session file changed"
-            );
-        }
         // Still with the person's own pi.
         crate::homes::Homes::of_locator(&saved).record(&mut target.native_locator);
         Ok(target)
@@ -1443,21 +1425,6 @@ impl ChatRuntime {
             .await
             {
                 target if session.harness == "pi" => {
-                    // A native startup nobody confirmed is not started again here, over and
-                    // over: the session waits with its reason for its person to resume it.
-                    if target.is_none()
-                        && let Ok(saved) =
-                            self.store.chat_session_locator(&owner, &session.id).await
-                        && crate::pi_runner::startup_unconfirmed(
-                            &session.native_session_id,
-                            &session.workspace,
-                            &saved,
-                        )
-                        .await
-                    {
-                        self.retried(&session.id, false);
-                        continue;
-                    }
                     match self.pi_target(&owner, &session, target).await {
                         Ok(target) => target,
                         Err(error) => {
@@ -1561,7 +1528,7 @@ impl ChatRuntime {
                         .fail_chat_link(
                             &owner,
                             &session.id,
-                            &format!("The link could not be restored ({error}); retrying."),
+                            &format!("The link could not be restored ({error:#}); retrying."),
                         )
                         .await?;
                     self.changed();
@@ -1866,16 +1833,19 @@ impl ChatRuntime {
         if let Some(host) = &runner {
             let pid = host.bind(self.harness_url(), &token).await?;
             let description = host.describe().await?;
-            let durable = crate::pi_runner::recovery_locator(&session.native_session_id, &session.workspace,
-                serde_json::json!({"session_file":description["session_file"],"profile":description["profile"]})).await?;
-            let agent = std::path::Path::new(
-                durable["agent_dir"]
-                    .as_str()
-                    .context("Missing pi host directory")?,
-            );
-            let mut actual = sessions::running_pi(agent, &session.native_session_id, pid).await?;
-            for key in ["session_file", "profile", "agent_dir"] {
-                actual.native_locator[key] = durable[key].clone();
+            let homes = crate::homes::Homes::of_locator(&target.native_locator);
+            let agent = match (target.native_locator["agent_dir"].as_str(), homes.pi()) {
+                (Some(dir), _) => std::path::PathBuf::from(dir),
+                (None, Some(dir)) => dir,
+                (None, None) => sessions::agent_dir()?,
+            };
+            let mut actual = sessions::running_pi(&agent, &session.native_session_id, pid).await?;
+            actual.native_locator["session_file"] = description["session_file"].clone();
+            // How its terminal started it stays with it, to start it that way again.
+            for key in ["args", "profile"] {
+                if actual.native_locator[key].is_null() {
+                    actual.native_locator[key] = target.native_locator[key].clone();
+                }
             }
             actual.native_locator["runner"] = serde_json::json!(host.path);
             actual.native_locator["kind"] = serde_json::json!("pi-runner");

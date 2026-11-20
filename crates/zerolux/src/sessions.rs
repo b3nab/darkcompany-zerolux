@@ -203,27 +203,31 @@ pub(crate) async fn control(record: &PiDescriptor, mut request: Value) -> Result
         _ => Duration::from_secs(5),
     };
     request["nonce"] = Value::String(record.nonce.clone());
-    let exchange = async {
-        let mut stream = crate::platform::Local::connect(&record.endpoint)
-            .await
-            .context("Pi control endpoint unavailable")?;
-        stream.write_all(format!("{request}\n").as_bytes()).await?;
-        let mut bytes = Vec::new();
-        stream.read_to_end(&mut bytes).await?;
-        let response: Value =
-            serde_json::from_slice(&bytes).context("Invalid pi control response")?;
-        if response["ok"] != true && response["code"] == "pi_runtime_unavailable" {
-            return Err(crate::pi_runner::PiFailure::RuntimeUnavailable.into());
-        }
-        ensure!(
-            response["ok"] == true,
-            "{}",
-            response["error"]
-                .as_str()
-                .unwrap_or("Pi is busy, changed, or unavailable; refresh the session list")
-        );
-        Ok(response)
-    };
+    let exchange =
+        async {
+            let mut stream = crate::platform::Local::connect(&record.endpoint)
+                .await
+                .context("Pi control endpoint unavailable")?;
+            stream.write_all(format!("{request}\n").as_bytes()).await?;
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).await?;
+            let response: Value =
+                serde_json::from_slice(&bytes).context("Invalid pi control response")?;
+            if response["ok"] != true && response["code"] == "pi_runtime_unavailable" {
+                // Why pi could not start, as its host says it.
+                return Err(crate::pi_runner::PiFailure::RuntimeUnavailable.context(
+                    anyhow::anyhow!("{}", response["error"].as_str().unwrap_or_default()),
+                ));
+            }
+            ensure!(
+                response["ok"] == true,
+                "{}",
+                response["error"]
+                    .as_str()
+                    .unwrap_or("Pi is busy, changed, or unavailable; refresh the session list")
+            );
+            Ok(response)
+        };
     tokio::time::timeout(deadline, exchange)
         .await
         .context("Pi control timed out; do not blindly repeat pairing")?
@@ -280,7 +284,8 @@ async fn live_pi_with_descriptors(registry: &Path) -> Result<(Vec<Candidate>, Ve
                 title: title(&actual, "title", "pi session"),
                 workspace,
                 native_locator: json!({"descriptor":path,"instance_id":record.instance_id,
-                    "pid":record.pid,"session_file":actual["session_file"],"profile":actual["profile"],"runner":actual["runner"],
+                    "pid":record.pid,"session_file":actual["session_file"],"agent_dir":actual["agent_dir"],
+                    "args":actual["args"],"profile":actual["profile"],"runner":actual["runner"],
                     "model":actual["model"],"effort":actual["effort"]}),
             },
             None,
@@ -970,52 +975,36 @@ pub async fn resolve_linked(harness: &str, native_session_id: &str) -> Option<Na
         .map(|c| c.target)
 }
 
-pub(crate) async fn ensure_pi_stopped(agent: &Path, native: &str) -> Result<()> {
-    let mut entries = match tokio::fs::read_dir(agent.join("zerolux-links")).await {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.into()),
-    };
-    while let Some(entry) = entries.next_entry().await? {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
-        let record = descriptor(&path).await?;
-        if record.native_session_id != native {
-            continue;
-        }
-        let pid = record
-            .pid
-            .filter(|pid| *pid > 0)
-            .context("Pi discovery cannot establish native process death")?;
-        ensure!(
-            !crate::platform::alive(pid as u32),
-            "pi is still running this session"
-        );
-    }
-    Ok(())
-}
-
+/// The pi that runs this session now, as its extension answers: the one its host just
+/// started, by its process; else, after a moment, the newest one there is.
 pub(crate) async fn running_pi(
     agent: &Path,
     native: &str,
     pid: i32,
 ) -> Result<NativeSessionTarget> {
-    let (candidates, descriptors) = live_pi_with_descriptors(&agent.join("zerolux-links")).await?;
-    let record = descriptors
-        .iter()
-        .find(|d| d.native_session_id == native && d.pid == Some(pid))
-        .context("Native pi has not advertised its verified control")?;
-    candidates
-        .into_iter()
-        .find(|c| {
-            c.resumable
-                && c.target.native_session_id == native
-                && c.target.native_locator["instance_id"] == record.instance_id
-        })
-        .map(|c| c.target)
-        .context("The restored pi context is ambiguous")
+    // Its extension opens its control as pi starts: a moment after its host says it runs.
+    for attempt in 0..100 {
+        let (candidates, _) = live_pi_with_descriptors(&agent.join("zerolux-links")).await?;
+        let running: Vec<_> = candidates
+            .into_iter()
+            .map(|c| c.target)
+            .filter(|target| target.native_session_id == native)
+            .collect();
+        if let Some(target) = running
+            .iter()
+            .find(|target| target.native_locator["pid"] == pid)
+        {
+            return Ok(target.clone());
+        }
+        // Started through a command file, its process is not the one its host knows.
+        if attempt >= 20
+            && let Some(newest) = running.into_iter().next()
+        {
+            return Ok(newest);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    anyhow::bail!("pi started without ZeroLux's extension")
 }
 
 /// Owns the private control link, NOT the externally launched pi process.

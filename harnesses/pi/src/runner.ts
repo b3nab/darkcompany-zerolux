@@ -13,62 +13,63 @@ import {
   settingsPatch,
   type NativeSettingsPatch,
 } from "@zerolux/bridge";
-import { PiExecutionLease, processExists } from "./execution-lease.ts";
-import {
-  loadPiProfile,
-  PI_STARTUP_UNCONFIRMED,
-  savePiProfile,
-  type PiExecutionProfile,
-} from "./execution-profile.ts";
-import {
-  checkSavedPi,
-  readSavedPi,
-  readNewPi,
-  validPiState,
-  type PiHistorySnapshot,
-  type PiInitialState,
-  type SavedPiSession,
-} from "./saved-session.ts";
-import { waitAndExec } from "./exec-gate.ts";
-import { forkPiSession, newPiSession, openPiSession } from "./new-session.ts";
-type Snapshot = PiHistorySnapshot & Partial<PiInitialState>;
+import { chatExtension, forkPiSession, newPiSession } from "./new-session.ts";
 
 export interface PiRunnerConfig {
   nativeSessionId: string;
   workspace: string;
+  /** pi's own file of the session. */
   file: string;
-  profile: string;
-  /** Fixed by the execution host, never by a chat/API payload. */
+  /** The person's pi folder, when it is not pi's default. */
+  agentDir?: string;
+  /**
+   * The native options its terminal started it with, to start it with again. Without them
+   * it is a session of ZeroLux's own, started with ZeroLux's extension.
+   */
+  args?: string[];
   pi: string;
   entry: string;
-  /** Set only by the execution host for one explicit creation request. */
+  /** A new session: started with the settings asked for it, if any. */
   creation?: boolean;
-  /** Set only by the execution host when the owner opens a saved session in ZeroLux. */
-  opening?: boolean;
   initial?: NativeSettingsPatch;
 }
 export interface PiRunnerDeps {
   connect(base: string, token: string): ChatRequest;
-  alive(pid: number): boolean;
   environment(): NodeJS.ProcessEnv;
-  persistProfile(profile: PiExecutionProfile): Promise<string>;
 }
 const defaults: PiRunnerDeps = {
   connect: chatRequest,
-  alive: processExists,
   environment: () => process.env,
-  persistProfile: savePiProfile,
 };
 
-type Child = Bun.Subprocess<"pipe", "pipe", "inherit">;
+type Child = Bun.Subprocess<"pipe", "pipe", "pipe">;
+/** What pi says it runs with, once it has started. */
+interface PiState {
+  model?: { provider: string; id: string };
+  thinking?: string;
+}
 
-const runtimeUnavailable = () =>
+/** pi did not start: why, as the last thing it wrote says. */
+const runtimeUnavailable = (said?: string) =>
   Object.assign(
-    new Error(
-      "The installed pi runtime could not start; its session was not opened",
-    ),
+    new Error(said ? `pi could not start: ${said}` : "pi is not installed"),
     { code: "pi_runtime_unavailable" },
   );
+
+/** The command that starts pi: a command file, as npm installs on Windows, through its interpreter. */
+function nativeCommand(exec: string, args: string[]) {
+  if (process.platform !== "win32" || !/\.(cmd|bat)$/i.test(exec))
+    return [exec, ...args];
+  const line = [exec, ...args].map((part) => `"${part}"`).join(" ");
+  const shell =
+    process.env.ComSpec ??
+    join(
+      process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows",
+      "System32",
+      "cmd.exe",
+    );
+  return [shell, "/d", "/s", "/c", `"${line}"`];
+}
 
 /** Detached host for ONE stock native pi RPC process. No prompts, no automatic replay/retry. */
 /**
@@ -121,16 +122,15 @@ function piRequest(event: Record<string, any>) {
 
 export class PiRunner {
   private readonly initial: NativeSettingsPatch;
-  private lease?: PiExecutionLease;
-  private profile?: PiExecutionProfile;
-  private snapshot?: Snapshot;
+  private state: PiState = {};
+  private lastError = "";
   private child?: Child;
   private inputClosed = false;
-  private verifiedState?: PiInitialState;
   private controlPath?: string;
   private identity?: { actor: string | null; company: string; link: string };
   private phase: "waiting" | "starting" | "running" | "stopping" | "ended" =
     "waiting";
+  /** The links the native extension holds: a pi may serve several workspaces. */
   private links = new Set<string>();
   /** The kernel of the link that bound this host: where its native questions go. */
   private kernel?: ChatRequest;
@@ -154,43 +154,6 @@ export class PiRunner {
     this.initial = settingsPatch(config.initial ?? {}, ["model", "effort"]);
   }
 
-  async prepare() {
-    this.lease = await PiExecutionLease.acquire(this.config, {
-      alive: this.deps.alive,
-    });
-    try {
-      this.profile = await loadPiProfile(
-        this.config.profile,
-        this.lease.identity,
-        this.lease.previousStartupEnded(),
-      );
-      if (
-        !this.config.creation &&
-        !this.config.opening &&
-        !this.lease.previousNativeStopped(this.profile.lastPid) &&
-        this.deps.alive(this.profile.lastPid)
-      )
-        throw new Error(
-          "The previously recorded native pi process is still alive",
-        );
-      this.snapshot = this.config.creation
-        ? await readNewPi(
-            this.config.file,
-            this.config.nativeSessionId,
-            this.config.workspace,
-          )
-        : await readSavedPi(
-            this.config.file,
-            this.config.nativeSessionId,
-            this.config.workspace,
-          );
-    } catch (error) {
-      this.lease.close("exited");
-      this.lease = undefined;
-      throw error;
-    }
-  }
-
   setControl(path: string) {
     this.controlPath = path;
   }
@@ -198,17 +161,14 @@ export class PiRunner {
   describe() {
     return {
       kind: "pi-runner",
-      guard_version: 1,
       creating: Boolean(this.config.creation && this.phase !== "running"),
       native_session_id: this.config.nativeSessionId,
       workspace: this.config.workspace,
       session_file: this.config.file,
-      profile: this.config.profile,
       phase: this.phase,
       native_pid: this.child?.pid,
-      model: this.snapshot?.model,
-      thinking: this.snapshot?.thinking,
-      cli_version: this.profile?.cliVersion,
+      model: this.state.model,
+      thinking: this.state.thinking,
       link_id: this.identity?.link,
       // This host routes pi's `confirm` dialogs to the owner as approvals.
       dialogs: 1,
@@ -225,87 +185,46 @@ export class PiRunner {
       if (released) this.end();
       return Promise.resolve({ released });
     }
-    if (method === "verify") {
-      const state = {
-        model: request.model as PiInitialState["model"],
-        thinking: request.thinking as string,
-      };
-      if (
-        this.phase !== "starting" ||
-        request.native_pid !== this.child?.pid ||
-        request.session_file !== this.config.file ||
-        request.auth_configured !== true ||
-        !validPiState(state) ||
-        (!this.config.creation &&
-          (state.model.provider !== this.snapshot?.model?.provider ||
-            state.model.id !== this.snapshot?.model?.id ||
-            state.thinking !== this.snapshot?.thinking))
-      )
-        return Promise.reject(
-          new Error("The native pi startup guard did not verify its context"),
-        );
-      this.verifiedState = state;
-      return Promise.resolve({});
-    }
+    // The native extension says which links it holds, and where this host may ask it
+    // whose turn it is.
     if (method === "links") {
-      if (
-        request.native_pid !== this.child?.pid ||
-        !Array.isArray(request.link_ids) ||
-        request.link_ids.length > 100 ||
-        request.link_ids.some(
-          (id) => typeof id !== "string" || !id || id.length > 200,
-        ) ||
-        (request.control !== undefined &&
-          (typeof request.control !== "string" || !isAbsolute(request.control)))
-      )
-        return Promise.reject(new Error("Invalid native pi link report"));
-      this.links = new Set(request.link_ids as string[]);
-      this.extensionControl = request.control as string | undefined;
+      if (Array.isArray(request.link_ids))
+        this.links = new Set(
+          request.link_ids.filter((id) => typeof id === "string"),
+        );
+      if (typeof request.control === "string" && isAbsolute(request.control))
+        this.extensionControl = request.control;
       return Promise.resolve({});
     }
+    // An extension of an earlier ZeroLux asks this of its host: nothing to verify.
+    if (method === "verify") return Promise.resolve({});
     if (method === "stop") {
+      // A pi two workspaces share ends with its last link: the extension ends the others.
+      const link = request.link_id;
       if (
-        typeof request.link_id !== "string" ||
-        !request.link_id ||
         this.links.size > 1 ||
         (this.child &&
           (this.links.size
-            ? !this.links.has(request.link_id)
-            : request.link_id !== this.identity?.link))
+            ? !this.links.has(link as string)
+            : link !== this.identity?.link))
       )
-        return Promise.reject(new Error("Unknown pi runner link"));
-      // Stop is not queued behind a blocked startup operation.
+        return Promise.reject(new Error("Another link still runs this pi"));
       return this.stop().then(() => ({}));
     }
     if (method !== "bind")
       return Promise.reject(new Error("Unknown pi runner operation"));
-    if (this.operation)
-      return Promise.reject(
-        new Error("Pi startup is already in progress; inspect its state"),
-      );
-    this.operation = this.bind(request).finally(() => {
+    // A bind that comes while pi starts gets the same start.
+    this.operation ??= this.bind(request).finally(() => {
       this.operation = undefined;
       if (this.phase === "waiting" && !this.child) this.end();
     });
     return this.operation;
   }
 
+  /** The session this token is for, as its kernel says: whose questions go where. */
   private async wanted(request: ChatRequest): Promise<Inbox> {
-    this.cancelled.signal.throwIfAborted();
     const inbox = await request<Inbox>("/chat/inbox");
-    this.cancelled.signal.throwIfAborted();
     const { session, workspace } = inbox;
-    if (
-      session.harness !== "pi" ||
-      session.native_session_id !== this.config.nativeSessionId ||
-      session.workspace !== this.config.workspace ||
-      session.status === "stopped" ||
-      !workspace?.id ||
-      (this.identity &&
-        (session.actor_id !== this.identity.actor ||
-          workspace.id !== this.identity.company))
-    )
-      throw new Error("The token does not name this entrusted pi session");
     // Another link: the kernel closed the previous session's approvals with it, so the
     // questions they carried are withdrawn from pi, never answered or asked again by us.
     if (this.identity && this.identity.link !== session.id) {
@@ -314,7 +233,7 @@ export class PiRunner {
     }
     this.identity = {
       actor: session.actor_id,
-      company: workspace.id,
+      company: workspace?.id ?? "",
       link: session.id,
     };
     return inbox;
@@ -329,230 +248,96 @@ export class PiRunner {
     await this.wanted(request);
     this.kernel = request;
     if (this.phase === "running") return { native_pid: this.child!.pid };
-    if (
-      this.phase !== "waiting" ||
-      !this.lease ||
-      !this.profile ||
-      !this.snapshot ||
-      !this.controlPath
-    )
-      throw new Error("The pi runner cannot start another native process");
-    const profile = this.profile;
-    const snapshot = this.snapshot;
     const executable = Bun.which(this.config.pi);
     if (!executable) throw runtimeUnavailable();
     this.phase = "starting";
-    let touchedProfile = false;
-    let execSent = false;
     try {
-      this.cancelled.signal.throwIfAborted();
-      await this.checkSnapshot(snapshot);
-      this.cancelled.signal.throwIfAborted();
       const env = Object.fromEntries(
         Object.entries(this.deps.environment()).filter(
-          ([key]) => !key.startsWith("ZEROLUX_") && !key.startsWith("PI_"),
+          ([key]) =>
+            !key.startsWith("ZEROLUX_") &&
+            (!key.startsWith("PI_") ||
+              key === "PI_CODING_AGENT_SESSION_DIR" ||
+              key === "PI_OFFLINE"),
         ),
       );
-      env.PI_CODING_AGENT_DIR = profile.agentDir;
-      if (profile.sessionDir)
-        env.PI_CODING_AGENT_SESSION_DIR = profile.sessionDir;
-      if (profile.offline !== undefined) env.PI_OFFLINE = profile.offline;
-      env.ZEROLUX_PI_RUNNER = this.controlPath;
-      // The installed launcher and its interpreter must work in this exact environment.
-      // --version opens no session. Its value is metadata, never an upgrade restriction.
-      const cliVersion = await this.installedVersion(executable, env);
-      this.cancelled.signal.throwIfAborted();
-      this.profile = { ...profile, cliVersion };
-      const child = Bun.spawn([process.execPath, this.config.entry, "exec"], {
-        cwd: snapshot.workspace,
-        env,
-        stdin: "pipe",
-        stdout: "pipe",
-        stderr: "inherit",
-      });
+      if (this.config.agentDir) env.PI_CODING_AGENT_DIR = this.config.agentDir;
+      if (this.controlPath) env.ZEROLUX_PI_RUNNER = this.controlPath;
+      const child = Bun.spawn(
+        nativeCommand(executable, [
+          ...(this.config.args ?? [
+            "--extension",
+            await chatExtension(this.config.entry),
+          ]),
+          "--session",
+          this.config.file,
+          "--mode",
+          "rpc",
+          ...(this.config.creation && this.initial.model
+            ? ["--model", this.initial.model]
+            : []),
+          ...(this.config.creation && this.initial.effort
+            ? ["--thinking", this.initial.effort]
+            : []),
+        ]),
+        {
+          cwd: this.config.workspace,
+          env,
+          stdin: "pipe",
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
       this.child = child;
-      this.lease.setNativeProcess(child.pid);
+      void this.errors(child);
       const stateId = randomUUID();
-      const ready = this.readState(child, stateId, snapshot);
-      void ready.catch(() => {}); // It can fail while the final owner-intent read is pending.
+      const ready = this.read(child, stateId);
       void child.exited.then(async () => {
-        // Keep stdout drained even while exiting. Do not release a lease merely because
-        // the kernel disappeared or a control exchange timed out.
         await ready.catch(() => {});
-        // Startup owns its profile writes until bind settles. Never release the lease
-        // early and then overwrite a successor's profile with a late startup result.
         await this.operation?.catch(() => {});
         this.end();
       });
-      // Owner Stop observed here prevents exec, even if preflight/version discovery blocked.
-      await this.wanted(request);
-      await this.checkSnapshot(snapshot);
-      touchedProfile = true;
-      await this.deps.persistProfile({
-        ...profile,
-        cliVersion,
-        unavailable: PI_STARTUP_UNCONFIRMED,
-      });
-      await this.wanted(request);
-      this.cancelled.signal.throwIfAborted();
-      execSent = true;
-      child.stdin.write(
-        JSON.stringify({
-          exec: executable,
-          args: [
-            ...profile.args,
-            "--session",
-            snapshot.file,
-            "--mode",
-            "rpc",
-            ...(this.config.creation
-              ? [
-                  ...(this.initial.model
-                    ? ["--model", this.initial.model]
-                    : []),
-                  ...(this.initial.effort
-                    ? ["--thinking", this.initial.effort]
-                    : []),
-                ]
-              : [
-                  "--provider",
-                  snapshot.model!.provider,
-                  "--model",
-                  snapshot.model!.id,
-                  "--thinking",
-                  snapshot.thinking!,
-                ]),
-          ],
-        }) + "\n",
-      );
       child.stdin.write(
         JSON.stringify({ id: stateId, type: "get_state" }) + "\n",
       );
       await child.stdin.flush();
-      const state = await ready;
-      if (this.config.creation) {
-        if (
-          (this.initial.model &&
-            `${state.model.provider}/${state.model.id}` !==
-              this.initial.model) ||
-          (this.initial.effort && state.thinking !== this.initial.effort)
-        )
-          throw new Error(
-            "Native pi did not confirm the requested startup settings; no chat input was dispatched",
-          );
-        // Native pi persists model/thinking in this SDK-generated file. A private
-        // sidecar must never mask lost/missing native history with a fallback.
-        const saved = await readSavedPi(
-          this.config.file,
-          this.config.nativeSessionId,
-          this.config.workspace,
-        );
-        if (
-          saved.model.provider !== state.model.provider ||
-          saved.model.id !== state.model.id ||
-          saved.thinking !== state.thinking
-        )
-          throw new Error(
-            "Native pi did not persist its confirmed model and thinking",
-          );
-        this.snapshot = saved;
-      }
-      this.cancelled.signal.throwIfAborted();
-      // Only a verified startup can clear the durable pending/refusal marker. Native
-      // extension profile capture must not clear it while this host is still starting.
-      await this.deps.persistProfile({
-        ...profile,
-        cliVersion,
-        lastPid: child.pid,
-        unavailable: undefined,
-      });
+      this.state = await ready;
       this.cancelled.signal.throwIfAborted();
       this.phase = "running";
       return { native_pid: child.pid };
     } catch (error) {
-      if (touchedProfile && !execSent) {
-        // No native context was opened. Restore only our own pre-exec metadata while
-        // still holding the lease; inability to restore leaves a conservative refusal.
-        await this.deps.persistProfile(profile).catch(() => {});
-      }
       await this.stopNative();
       throw error;
     }
   }
 
-  private async installedVersion(executable: string, env: NodeJS.ProcessEnv) {
-    let child: Bun.Subprocess<"ignore", "pipe", "ignore"> | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      child = Bun.spawn([executable, "--version"], {
-        cwd: this.config.workspace,
-        env,
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "ignore",
-      });
-      // This child only reads --version, never a session. End a stalled launcher even
-      // when it handles SIGTERM; native execution below retains its orderly shutdown.
-      const stop = () => child?.kill("SIGKILL");
-      this.cancelled.signal.addEventListener("abort", stop, { once: true });
-      timer = setTimeout(stop, 10_000);
-      try {
-        const reader = child.stdout.getReader();
-        let text = "";
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          text += new TextDecoder().decode(value);
-          if (text.length > 4096)
-            throw new Error("Invalid pi version metadata");
-        }
-        if ((await child.exited) !== 0 || !text.trim())
-          throw new Error("pi launcher could not start");
-        return text.trim();
-      } finally {
-        this.cancelled.signal.removeEventListener("abort", stop);
-      }
-    } catch {
-      this.cancelled.signal.throwIfAborted();
-      throw runtimeUnavailable();
-    } finally {
-      clearTimeout(timer);
-      if (child?.exitCode === null) child.kill("SIGKILL");
-      await child?.exited;
+  /** What pi writes of its errors goes to this host's log; its last line says why it ended. */
+  private async errors(child: Child) {
+    const decoder = new TextDecoder();
+    for await (const bytes of child.stderr) {
+      const text = decoder.decode(bytes, { stream: true });
+      process.stderr.write(text);
+      const line = text
+        .split("\n")
+        .filter((line) => line.trim())
+        .at(-1);
+      if (line) this.lastError = line.trim();
     }
   }
 
-  private async checkSnapshot(snapshot: Snapshot) {
-    if (this.config.creation) {
-      if (
-        JSON.stringify(
-          await readNewPi(
-            snapshot.file,
-            snapshot.nativeSessionId,
-            snapshot.workspace,
-          ),
-        ) !== JSON.stringify(snapshot)
-      )
-        throw new Error("New pi history changed before native startup");
-    } else await checkSavedPi(snapshot as SavedPiSession);
-  }
-
-  private readState(
-    child: Child,
-    id: string,
-    expected: Snapshot,
-  ): Promise<PiInitialState> {
-    let resolve!: (state: PiInitialState) => void;
+  /**
+   * Reads what pi writes for as long as it runs, so its output never fills up: its dialogs go
+   * to the owner, and its answer to `id` says it has started and what it runs with.
+   */
+  private read(child: Child, id: string): Promise<PiState> {
+    let resolve!: (state: PiState) => void;
     let reject!: (error: Error) => void;
-    const ready = new Promise<PiInitialState>((yes, no) => {
+    const ready = new Promise<PiState>((yes, no) => {
       resolve = yes;
       reject = no;
     });
-    // Consume all native output for the process lifetime. Never persist/forward native
-    // message content, and never leave a full stdout pipe blocking its execution.
     void (async () => {
-      let buffer = "",
-        confirmed = false;
+      let buffer = "";
       const decoder = new TextDecoder();
       try {
         const reader = child.stdout.getReader();
@@ -597,49 +382,33 @@ export class PiRunner {
                   : nativeFingerprint(event.message);
               this.inputGeneration++;
             }
-            if (confirmed) continue;
-            if (event.type !== "response" || event.id !== id) continue;
-            const state = event.data;
-            const confirmedState = {
-              model: { provider: state?.model?.provider, id: state?.model?.id },
-              thinking: state?.thinkingLevel,
-            };
-            if (
-              !event.success ||
-              state?.sessionId !== expected.nativeSessionId ||
-              state?.sessionFile !== expected.file ||
-              !validPiState(confirmedState) ||
-              JSON.stringify(confirmedState) !==
-                JSON.stringify(this.verifiedState) ||
-              (!this.config.creation &&
-                (state?.model?.provider !== expected.model?.provider ||
-                  state?.model?.id !== expected.model?.id ||
-                  state?.thinkingLevel !== expected.thinking))
-            ) {
-              // The durable pre-exec marker already prevents a later attempt from
-              // treating this startup's changed metadata as a newly selected profile.
-              confirmed = true; // Continue draining native output during orderly shutdown.
-              reject(
-                new Error(
-                  "Native pi did not confirm the saved identity and profile",
-                ),
-              );
-              continue;
+            if (event.type === "response" && event.id === id) {
+              if (event.success === false)
+                reject(new Error(String(event.error ?? "pi did not start")));
+              else
+                resolve({
+                  model: event.data?.model && {
+                    provider: event.data.model.provider,
+                    id: event.data.model.id,
+                  },
+                  thinking: event.data?.thinkingLevel,
+                });
             }
-            confirmed = true;
-            resolve(confirmedState);
           }
         }
-        if (!confirmed)
-          reject(
-            new Error("Native pi exited without confirming its saved context"),
-          );
+        // Its last words come a moment after its output ends.
+        await child.exited;
+        await Bun.sleep(50);
+        reject(
+          runtimeUnavailable(this.lastError || `it ended (${child.exitCode})`),
+        );
       } catch (error) {
         reject(
           error instanceof Error ? error : new Error("Native pi RPC failed"),
         );
       }
     })();
+    void ready.catch(() => {});
     return ready;
   }
 
@@ -648,15 +417,14 @@ export class PiRunner {
    * this host had seen the turn take when pi asked; the extension's answer must be about
    * that very input, and nothing may have changed meanwhile: otherwise nothing is routed.
    */
-  private async turnDelivery(
-    child: Child,
-    input: { fingerprint: string | undefined; generation: number },
-  ): Promise<string | null> {
+  private async turnDelivery(input: {
+    fingerprint: string | undefined;
+    generation: number;
+  }): Promise<string | null> {
     if (!this.extensionControl || !this.identity || !input.fingerprint)
       return null;
     try {
       const descriptor = await readControlDescriptor(this.extensionControl);
-      if (descriptor.pid !== child.pid) return null;
       const turn = await controlRequest(descriptor, "turn", {
         native_session_id: this.config.nativeSessionId,
         workspace: this.config.workspace,
@@ -736,7 +504,7 @@ export class PiRunner {
           ).unref();
         return;
       }
-      const delivery = await this.turnDelivery(child, input);
+      const delivery = await this.turnDelivery(input);
       if (stopped()) return;
       const approval = randomUUID();
       try {
@@ -825,8 +593,6 @@ export class PiRunner {
 
   private end() {
     this.phase = "ended";
-    this.lease?.close("exited");
-    this.lease = undefined;
     this.finish();
   }
 
@@ -835,20 +601,28 @@ export class PiRunner {
       new Error("The pi execution was stopped before startup completed"),
     );
     if (this.phase !== "ended") this.phase = "stopping";
-    if (this.child) {
-      if (!this.inputClosed) {
-        for (const withdraw of this.pendingDialogs.values()) withdraw();
-        this.pendingDialogs.clear();
-        this.inputClosed = true;
-        this.child.stdin.end();
-      }
+    if (this.child && !this.inputClosed) {
+      for (const withdraw of this.pendingDialogs.values()) withdraw();
+      this.pendingDialogs.clear();
+      this.inputClosed = true;
+      this.child.stdin.end();
     }
   }
 
+  /** pi ends when its input does; one that does not is ended. */
   private async stopNative() {
     this.cancelNative();
-    // No force-kill or timeout-based claim that native execution died.
-    await this.child?.exited;
+    const child = this.child;
+    if (child && child.exitCode === null) {
+      const ended = child.exited.then(() => true);
+      const waited = (ms: number) =>
+        Promise.race([ended, Bun.sleep(ms).then(() => false)]);
+      if (!(await waited(5000))) {
+        child.kill("SIGTERM");
+        if (!(await waited(3000))) child.kill("SIGKILL");
+        await child.exited;
+      }
+    }
     this.end();
   }
 
@@ -860,10 +634,6 @@ export class PiRunner {
 }
 
 async function main() {
-  if (process.argv[2] === "exec") {
-    waitAndExec();
-    return;
-  }
   if (process.argv[2] === "fork") {
     const [file, upTo] = process.argv.slice(3);
     console.log(
@@ -887,16 +657,8 @@ async function main() {
       config.pi,
       config.initial,
     );
-  else if (config.opening)
-    config = await openPiSession(
-      config.file,
-      config.workspace,
-      config.entry,
-      config.pi,
-    );
   await mkdir(registry, { recursive: true, mode: 0o700 });
   const runner = new PiRunner(config);
-  await runner.prepare();
   const control = new LocalControl(
     registry,
     {

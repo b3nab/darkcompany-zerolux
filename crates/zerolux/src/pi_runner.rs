@@ -19,8 +19,6 @@ use std::{
 pub(crate) enum PiFailure {
     #[error("pi could not start with the available runtime.")]
     RuntimeUnavailable,
-    #[error("pi could not verify this session's saved identity and launch settings.")]
-    ProfileUnavailable,
     #[error("pi did not confirm that this session started.")]
     StartUnconfirmed,
     #[error("pi did not confirm it stopped; the session remains stopped in ZeroLux.")]
@@ -31,7 +29,6 @@ impl PiFailure {
     pub(crate) fn code(self) -> &'static str {
         match self {
             Self::RuntimeUnavailable => "pi_runtime_unavailable",
-            Self::ProfileUnavailable => "pi_resume_profile_unavailable",
             Self::StartUnconfirmed => "pi_start_unconfirmed",
             Self::StopUnconfirmed => "pi_stop_unconfirmed",
         }
@@ -45,10 +42,6 @@ impl PiFailure {
         }
     }
 }
-
-// Older hosts persisted this checkpoint before exec. Only the execution host may clear it,
-// after acquiring its lease and verifying the same saved session and previous process exit.
-const STARTUP_UNCONFIRMED: &str = "Native pi startup has not confirmed the saved identity/profile; inspect it in native pi before recovery";
 
 pub(crate) struct Registry {
     path: PathBuf,
@@ -96,43 +89,35 @@ impl Registry {
     fn directory(&self) -> Result<()> {
         platform::private_dir(&self.path).context("Pi runner registry must be private")
     }
-    pub(crate) async fn find(&self, native: &str, workspace: &str) -> Result<Option<RunnerLink>> {
+    /// The host that runs this session now: the one that answers. What a host that is gone
+    /// left behind is cleared away.
+    pub(crate) async fn find(&self, native: &str, _workspace: &str) -> Result<Option<RunnerLink>> {
         self.directory()?;
         let mut entries = tokio::fs::read_dir(&self.path).await?;
-        let mut found = None;
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            let record = sessions::descriptor(&path).await?;
+            let Ok(record) = sessions::descriptor(&path).await else {
+                continue;
+            };
             if record.native_session_id != native {
                 continue;
             }
-            let pid = record
-                .pid
-                .filter(|p| *p > 0)
-                .context("Pi runner has no process identity")?;
-            if !platform::alive(pid as u32) {
-                continue;
-            }
-            ensure!(
-                record.workspace == workspace,
-                "The pi runner workspace changed"
-            );
             let link = RunnerLink { record, path };
-            let description = link.describe().await?; // Unreachable is not dead.
-            if description["phase"] == "ended" {
-                continue;
+            match link.describe().await {
+                Ok(description) if description["phase"] != "ended" => return Ok(Some(link)),
+                Ok(_) => {}
+                Err(_) => {
+                    let _ = tokio::fs::remove_file(&link.path).await;
+                }
             }
-            ensure!(
-                found.is_none(),
-                "Several pi hosts claim this native session"
-            );
-            found = Some(link);
         }
-        Ok(found)
+        Ok(None)
     }
+    /// The session's host: the one that runs it now, else a new one that starts pi on its
+    /// saved file.
     pub(crate) async fn get_or_launch(
         &self,
         native: &str,
@@ -142,18 +127,20 @@ impl Registry {
         if let Some(link) = self.find(native, workspace).await? {
             return Ok(link);
         }
-        let file = locator["session_file"]
-            .as_str()
-            .context("The entrusted pi session has no saved file locator")?;
-        let profile = locator["profile"]
-            .as_str()
-            .context("The entrusted pi launch profile is missing")?;
-        let agent_dir = locator["agent_dir"]
-            .as_str()
-            .context("The pi execution host configuration is missing")?;
-        sessions::ensure_pi_stopped(Path::new(agent_dir), native).await?;
         let homes = crate::homes::Homes::of_locator(locator);
-        self.launch(workspace, json!({"nativeSessionId":native,"workspace":workspace,"file":file,"profile":profile,"pi":"pi"}), Some(native), &homes).await
+        let file = match locator["session_file"].as_str() {
+            Some(file) => file.to_owned(),
+            None => saved_file(native, locator, &homes).await?,
+        };
+        let mut config =
+            json!({"nativeSessionId":native,"workspace":workspace,"file":file,"pi":"pi"});
+        if let Some(agent_dir) = locator["agent_dir"].as_str() {
+            config["agentDir"] = json!(agent_dir);
+        }
+        if let Some(args) = launch_args(locator).await {
+            config["args"] = args;
+        }
+        self.launch(workspace, config, Some(native), &homes).await
     }
     /// pi's own fork of a saved session, in its folder: all of it, or the path up to one of
     /// its entries. The new session's identity and file.
@@ -197,14 +184,9 @@ impl Registry {
         if let Some(link) = self.find(native, workspace).await? {
             return Ok(link);
         }
-        let agent_dir = match homes.pi() {
-            Some(dir) => dir,
-            None => sessions::agent_dir()?,
-        };
-        sessions::ensure_pi_stopped(&agent_dir, native).await?;
         self.launch(
             workspace,
-            json!({"nativeSessionId":native,"workspace":workspace,"file":file,"pi":"pi","opening":true}),
+            json!({"nativeSessionId":native,"workspace":workspace,"file":file,"pi":"pi"}),
             Some(native),
             homes,
         )
@@ -245,12 +227,9 @@ impl Registry {
             "{:x}",
             Sha256::digest(native.unwrap_or(&request_id).as_bytes())
         );
-        let log = platform::private(OpenOptions::new().create(true).append(true))
-            .open(self.path.join(format!("{key}.log")))?;
-        ensure!(
-            log.metadata()?.is_file() && platform::is_private(&log.metadata()?),
-            "Pi runner log must be private"
-        );
+        let log_path = self.path.join(format!("{key}.log"));
+        let log =
+            platform::private(OpenOptions::new().create(true).append(true)).open(&log_path)?;
         let mut command = tokio::process::Command::new(&self.program.bun);
         // A guest's harness, with their folders and accounts: never the computer's.
         homes.apply(&mut command);
@@ -275,10 +254,9 @@ impl Registry {
             .context("Could not start the pi execution host")?;
         let ready = tokio::time::timeout(Duration::from_secs(20), async {
             loop {
-                ensure!(
-                    child.try_wait()?.is_none(),
-                    "The pi host refused restoration; inspect its private log"
-                );
+                if child.try_wait()?.is_some() {
+                    anyhow::bail!("pi did not start: {}", last_line(&log_path).await);
+                }
                 let link = if let Some(native) = native {
                     self.find(native, workspace).await?
                 } else {
@@ -313,28 +291,23 @@ impl Registry {
             }
         }
     }
-    async fn created_host(&self, pid: u32, workspace: &str) -> Result<Option<RunnerLink>> {
+    async fn created_host(&self, pid: u32, _workspace: &str) -> Result<Option<RunnerLink>> {
         let mut entries = tokio::fs::read_dir(&self.path).await?;
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
             }
-            let record = sessions::descriptor(&path).await?;
+            let Ok(record) = sessions::descriptor(&path).await else {
+                continue;
+            };
             if record.pid.and_then(|p| u32::try_from(p).ok()) != Some(pid) {
                 continue;
             }
-            ensure!(
-                record.workspace == workspace,
-                "Pi creation workspace changed"
-            );
             let link = RunnerLink { record, path };
-            let description = link.describe().await?;
-            ensure!(
-                description["creating"] == true && description["phase"] == "waiting",
-                "Pi creation was not prepared by this host"
-            );
-            return Ok(Some(link));
+            if link.describe().await.is_ok() {
+                return Ok(Some(link));
+            }
         }
         Ok(None)
     }
@@ -354,19 +327,13 @@ impl RunnerLink {
             native_session_id: self.record.native_session_id.clone(),
             workspace: self.record.workspace.clone(),
             title: "pi".into(),
-            native_locator: json!({"kind":"pi-runner","session_file":description["session_file"],"profile":description["profile"],"runner":self.path,
+            native_locator: json!({"kind":"pi-runner","session_file":description["session_file"],"runner":self.path,
                 "model":description["model"]["id"],"effort":description["thinking"]}),
         })
     }
     pub(crate) async fn describe(&self) -> Result<Value> {
         let value = sessions::control(&self.record, json!({"method":"describe"})).await?;
-        ensure!(
-            value["instance_id"] == self.record.instance_id
-                && value["kind"] == "pi-runner"
-                && value["native_session_id"] == self.record.native_session_id
-                && value["workspace"] == self.record.workspace,
-            "Pi host identity changed"
-        );
+        ensure!(value["kind"] == "pi-runner", "Not a pi host");
         Ok(value)
     }
     pub(crate) async fn bind(&self, base: &str, token: &str) -> Result<i32> {
@@ -383,150 +350,54 @@ impl RunnerLink {
     }
 }
 
-/// Host-only durable metadata. Nothing from this profile's private CLI args leaves the host.
-pub(crate) async fn recovery_locator(native: &str, workspace: &str, saved: Value) -> Result<Value> {
-    let path = saved_profile(native, workspace, &saved).await?;
-    let locator = profile_locator(&path, native, workspace).await?;
-    if saved["session_file"].is_string() && saved["profile"].is_string() {
-        ensure!(
-            locator["session_file"] == saved["session_file"],
-            "pi's session file changed"
-        );
-    }
-    Ok(locator)
-}
-
-/// Whether the session's last native startup was never confirmed: its profile still holds
-/// the checkpoint written before exec. Its person starts it again by resuming it; the
-/// relinker never does, so a pi that cannot start is not started over and over.
-pub(crate) async fn startup_unconfirmed(native: &str, workspace: &str, saved: &Value) -> bool {
-    let Ok(path) = saved_profile(native, workspace, saved).await else {
-        return false;
+/// pi's own file of a session whose locator does not name it: the one pi names after it,
+/// among its sessions.
+async fn saved_file(native: &str, locator: &Value, homes: &crate::homes::Homes) -> Result<String> {
+    let agent = match (locator["agent_dir"].as_str(), homes.pi()) {
+        (Some(dir), _) => PathBuf::from(dir),
+        (None, Some(dir)) => dir,
+        (None, None) => sessions::agent_dir()?,
     };
-    private_profile(&path)
+    let mut folders = tokio::fs::read_dir(agent.join("sessions"))
         .await
-        .is_ok_and(|profile| profile["unavailable"].as_str() == Some(STARTUP_UNCONFIRMED))
-}
-
-/// The session's saved profile: the one its locator names, else the one that claims it.
-async fn saved_profile(native: &str, workspace: &str, saved: &Value) -> Result<PathBuf> {
-    if saved["session_file"].is_string()
-        && let Some(profile) = saved["profile"].as_str()
-    {
-        return Ok(PathBuf::from(profile));
-    }
-    let root = sessions::agent_dir()?.join("zerolux-profiles");
-    let mut entries = tokio::fs::read_dir(root)
-        .await
-        .context("The entrusted pi execution profile has not been captured")?;
-    let mut found = None;
-    while let Some(entry) = entries.next_entry().await? {
-        if entry.path().extension().and_then(|e| e.to_str()) != Some("json") {
+        .context("pi has no saved sessions here")?;
+    while let Some(folder) = folders.next_entry().await? {
+        let Ok(mut files) = tokio::fs::read_dir(folder.path()).await else {
             continue;
-        }
-        let path = entry.path();
-        let value = private_profile(&path).await?;
-        if value["nativeSessionId"] == native && value["workspace"] == workspace {
-            ensure!(
-                found.is_none(),
-                "Several native profiles claim this pi session"
-            );
-            found = Some(path);
+        };
+        while let Some(file) = files.next_entry().await? {
+            if file
+                .file_name()
+                .to_string_lossy()
+                .ends_with(&format!("_{native}.jsonl"))
+            {
+                return Ok(file.path().to_string_lossy().into_owned());
+            }
         }
     }
-    found.context("pi's saved launch settings are missing")
-}
-async fn private_profile(path: &Path) -> Result<Value> {
-    let info = tokio::fs::symlink_metadata(path).await?;
-    ensure!(
-        info.is_file()
-            && !info.file_type().is_symlink()
-            && info.len() <= 64 * 1024
-            && platform::is_private(&info),
-        "Pi profile must be a bounded private file"
-    );
-    Ok(serde_json::from_slice(&tokio::fs::read(path).await?)?)
-}
-async fn profile_locator(path: &Path, native: &str, workspace: &str) -> Result<Value> {
-    let value = private_profile(path).await?;
-    ensure!(
-        value["version"] == 1
-            && value["nativeSessionId"] == native
-            && value["workspace"] == workspace
-            && (value["unavailable"].is_null()
-                || value["unavailable"].as_str() == Some(STARTUP_UNCONFIRMED)),
-        PiFailure::ProfileUnavailable
-    );
-    let file = value["file"].as_str().context("Missing native pi file")?;
-    let agent_dir = value["agentDir"]
-        .as_str()
-        .context("Missing native pi configuration directory")?;
-    ensure!(
-        Path::new(file).is_absolute() && Path::new(agent_dir).is_absolute(),
-        "Pi native paths must be absolute"
-    );
-    Ok(
-        json!({"session_file":file,"profile":path,"agent_dir":agent_dir,"pid":value["lastPid"],"cold":true}),
-    )
+    anyhow::bail!("pi's saved session was not found")
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-
-    #[tokio::test]
-    async fn startup_checkpoint_keeps_the_same_locator_without_clearing_the_profile() {
-        let root = tempfile::tempdir().unwrap();
-        let profile = root.path().join("profile.json");
-        let workspace = root.path().to_str().unwrap();
-        let file = root.path().join("native.jsonl");
-        let value = json!({"version":1,"nativeSessionId":"native-id","workspace":workspace,
-            "file":file,"agentDir":root.path(),"lastPid":1234,"unavailable":STARTUP_UNCONFIRMED});
-        let bytes = serde_json::to_vec(&value).unwrap();
-        platform::private(OpenOptions::new().create_new(true).write(true))
-            .open(&profile)
-            .unwrap()
-            .write_all(&bytes)
-            .unwrap();
-        let saved = json!({"session_file":file,"profile":profile});
-        let locator = recovery_locator("native-id", workspace, saved.clone())
-            .await
-            .unwrap();
-        assert_eq!(locator["session_file"], saved["session_file"]);
-        assert_eq!(locator["profile"], saved["profile"]);
-        assert_eq!(locator["cold"], true);
-        assert_eq!(tokio::fs::read(&profile).await.unwrap(), bytes);
-        assert!(
-            recovery_locator("another-id", workspace, saved.clone())
-                .await
-                .is_err()
-        );
-        assert!(
-            recovery_locator("native-id", "another-workspace", saved.clone())
-                .await
-                .is_err()
-        );
-        // Only that checkpoint says the startup was never confirmed.
-        assert!(startup_unconfirmed("native-id", workspace, &saved).await);
-        let mut unavailable = value;
-        unavailable["unavailable"] = json!("fixture-unverified-context");
-        tokio::fs::write(&profile, serde_json::to_vec(&unavailable).unwrap())
-            .await
-            .unwrap();
-        let error = recovery_locator("native-id", workspace, saved.clone())
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            error.downcast_ref::<PiFailure>(),
-            Some(PiFailure::ProfileUnavailable)
-        ));
-        assert!(!startup_unconfirmed("native-id", workspace, &saved).await);
-        let mut confirmed = unavailable;
-        confirmed["unavailable"] = Value::Null;
-        tokio::fs::write(&profile, serde_json::to_vec(&confirmed).unwrap())
-            .await
-            .unwrap();
-        assert!(!startup_unconfirmed("native-id", workspace, &saved).await);
+/// The native options the session's terminal started it with, to start it with again: as
+/// its pi said them, or as a host of an earlier ZeroLux saved them. None for a session of
+/// ZeroLux's own.
+async fn launch_args(locator: &Value) -> Option<Value> {
+    if locator["args"].is_array() {
+        return Some(locator["args"].clone());
     }
+    let saved = tokio::fs::read(locator["profile"].as_str()?).await.ok()?;
+    let profile: Value = serde_json::from_slice(&saved).ok()?;
+    profile["args"].is_array().then(|| profile["args"].clone())
+}
+
+/// Why a host ended, as the last thing it wrote says.
+async fn last_line(log: &Path) -> String {
+    let bytes = tokio::fs::read(log).await.unwrap_or_default();
+    let text = String::from_utf8_lossy(&bytes);
+    text.lines()
+        .rev()
+        .find(|line| line.starts_with("error: ") || line.starts_with("env: "))
+        .or_else(|| text.lines().rev().find(|line| !line.trim().is_empty()))
+        .map(|line| line.trim_start_matches("error: ").to_owned())
+        .unwrap_or_else(|| "its host ended without a word".into())
 }

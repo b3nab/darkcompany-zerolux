@@ -346,9 +346,8 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     assert_eq!(resumed.len(), 2);
     assert_eq!(resumed[1]["native"], native);
     assert_eq!(resumed[1]["file"], original[0]["file"]);
-    assert_eq!(resumed[1]["explicit_model"], true);
-    assert_eq!(resumed[1]["model"], "fixture/native-alternate");
-    assert_eq!(resumed[1]["effort"], "low");
+    // pi resumes its session with its own model and effort: nothing chooses them for it.
+    assert_eq!(resumed[1]["explicit_model"], false);
     assert!(
         fs::read(resumed[1]["file"].as_str().unwrap())
             .unwrap()
@@ -370,23 +369,8 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     ready(&client, &base).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(starts(&root).len(), 2, "owner Stop was undone by recovery");
-    // A previous release could leave this checkpoint after exec failed. Recovery keeps it
-    // until the execution host confirms the same saved session, even if preflight fails.
-    let profile_path = fs::read_dir(root.join("home/.pi/agent/zerolux-profiles"))
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.path())
-        .find(|path| {
-            path.extension().is_some_and(|extension| extension == "json")
-                && serde_json::from_slice::<Value>(&fs::read(path).unwrap()).unwrap()["nativeSessionId"] == native
-        })
-        .unwrap();
-    let mut profile: Value = serde_json::from_slice(&fs::read(&profile_path).unwrap()).unwrap();
-    profile["unavailable"] = json!(
-        "Native pi startup has not confirmed the saved identity/profile; inspect it in native pi before recovery"
-    );
-    let checkpoint = serde_json::to_vec(&profile).unwrap();
-    fs::write(&profile_path, &checkpoint).unwrap();
+    // A pi that cannot start says so, and the session waits for its person; once pi is
+    // there again, Resume starts it, whatever was left behind.
     let launcher = fs::read(root.join("bin/pi")).unwrap();
     script(&root.join("bin/pi"), "#!/bin/sh\nexit 127\n");
     let failed = client
@@ -416,7 +400,6 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
             .is_some_and(|reason| !reason.is_empty())
     );
     assert_eq!(starts(&root).len(), 2);
-    assert_eq!(fs::read(&profile_path).unwrap(), checkpoint);
     assert_eq!(
         fs::read(root.join("home/native-inputs.jsonl")).unwrap(),
         inputs
@@ -447,11 +430,6 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
     assert_eq!(starts(&root).len(), 3);
     assert_eq!(starts(&root)[2]["native"], native);
     assert_eq!(starts(&root)[2]["file"], original[0]["file"]);
-    assert_eq!(starts(&root)[2]["model"], "fixture/native-alternate");
-    assert_eq!(starts(&root)[2]["effort"], "low");
-    let recovered_profile: Value =
-        serde_json::from_slice(&fs::read(&profile_path).unwrap()).unwrap();
-    assert!(recovered_profile["unavailable"].is_null());
     assert_eq!(
         fs::read(root.join("home/native-inputs.jsonl")).unwrap(),
         inputs
@@ -589,27 +567,6 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
         Some(json!({})),
     )
     .await;
-
-    // A native guard failure retains the known identity, rather than minting/retrying another.
-    fs::write(root.join("home/no-auth"), "fixture").unwrap();
-    let failure = client
-        .post(format!("{base}/api/sessions"))
-        .json(&json!({"harness":"pi","name":"Unavailable auth", "workspace":root.join("work")}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(failure.status(), 502);
-    let failure: Value = failure.json().await.unwrap();
-    let failed_starts = starts(&root);
-    assert_eq!(failed_starts.len(), 7);
-    assert_eq!(failure["native_session_id"], failed_starts[6]["native"]);
-    assert!(failure["native_session_id"].is_string());
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    assert_eq!(starts(&root).len(), 7, "{:#?}", starts(&root));
-    assert_eq!(
-        fs::read(root.join("home/native-inputs.jsonl")).unwrap(),
-        inputs
-    );
 }
 
 /// A pi session on a person's computer joined to the workspace: that computer starts pi under

@@ -1195,14 +1195,11 @@ fn said(error: anyhow::Error) -> ApiFailure {
 
 fn runtime_error(error: anyhow::Error) -> ApiFailure {
     if let Some(failure) = error.downcast_ref::<crate::pi_runner::PiFailure>() {
-        let status = match failure {
-            crate::pi_runner::PiFailure::ProfileUnavailable => StatusCode::CONFLICT,
-            _ => StatusCode::SERVICE_UNAVAILABLE,
-        };
+        // With why: the person at their computer is the one who can do something about it.
         return ApiFailure(Box::new(
             (
-                status,
-                Json(json!({ "error": failure.to_string(), "code": failure.code() })),
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": format!("{error:#}"), "code": failure.code() })),
             )
                 .into_response(),
         ));
@@ -4507,18 +4504,13 @@ mod tests {
     use crate::agent_settings::SettingsFailure;
 
     #[tokio::test]
-    async fn pi_lifecycle_failures_have_codes_without_exposing_private_diagnostics() {
+    async fn pi_lifecycle_failures_have_codes_and_say_why() {
         use crate::pi_runner::PiFailure;
         for (failure, status, code) in [
             (
                 PiFailure::RuntimeUnavailable,
                 StatusCode::SERVICE_UNAVAILABLE,
                 "pi_runtime_unavailable",
-            ),
-            (
-                PiFailure::ProfileUnavailable,
-                StatusCode::CONFLICT,
-                "pi_resume_profile_unavailable",
             ),
             (
                 PiFailure::StartUnconfirmed,
@@ -4531,10 +4523,9 @@ mod tests {
                 "pi_stop_unconfirmed",
             ),
         ] {
-            let private = "fixture-private-token-and-native-stack";
-            let error = failure.context(anyhow::anyhow!(private));
-            let response =
-                runtime_error(error.context("fixture-private-host-context")).into_response();
+            let why = "fixture: env: node: No such file or directory";
+            let error = failure.context(anyhow::anyhow!(why));
+            let response = runtime_error(error).into_response();
             assert_eq!(response.status(), status);
             let bytes = axum::body::to_bytes(response.into_body(), 4096)
                 .await
@@ -4544,10 +4535,8 @@ mod tests {
             assert!(
                 body["error"]
                     .as_str()
-                    .is_some_and(|message| !message.is_empty())
+                    .is_some_and(|said| said.contains(why))
             );
-            assert!(!body.to_string().contains(private));
-            assert!(!body.to_string().contains("fixture-private-host-context"));
         }
     }
 

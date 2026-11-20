@@ -406,21 +406,9 @@ impl HostRuntime {
             .as_str()
             .unwrap_or_default()
             .to_owned();
-        let durable = crate::pi_runner::recovery_locator(
-            &native,
-            &folder,
-            json!({"session_file":description["session_file"],"profile":description["profile"]}),
-        )
-        .await?;
-        let agent = std::path::Path::new(
-            durable["agent_dir"]
-                .as_str()
-                .context("Missing pi host directory")?,
-        );
-        let mut actual = sessions::running_pi(agent, &native, pid).await?;
-        for key in ["session_file", "profile", "agent_dir"] {
-            actual.native_locator[key] = durable[key].clone();
-        }
+        let _ = folder;
+        let mut actual = sessions::running_pi(&sessions::agent_dir()?, &native, pid).await?;
+        actual.native_locator["session_file"] = description["session_file"].clone();
         actual.native_locator["runner"] = json!(link.path);
         actual.native_locator["kind"] = json!("pi-runner");
         let paired =

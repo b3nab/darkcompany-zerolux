@@ -79,6 +79,8 @@ impl LocalWorkspace {
 
 /// Unix GUI launches lack version managers initialized by the user's login shell.
 /// Resolve only PATH once, before threads start; Windows inherits its system environment.
+/// A shell slow to answer, as right after the computer starts, is asked again with more
+/// time: without its PATH a harness that needs a runtime of the person's cannot start.
 pub fn runtime_path(path: Option<OsString>, home: Option<OsString>) -> Option<OsString> {
     let path = desktop_path(path, home.clone());
     #[cfg(unix)]
@@ -95,13 +97,15 @@ pub fn runtime_path(path: Option<OsString>, home: Option<OsString>) -> Option<Os
                     }
                     .into()
                 });
-            shell_path(
-                &shell,
-                std::path::Path::new(home),
-                path.as_deref(),
-                std::time::Duration::from_secs(10),
-            )
-            .ok()
+            [10, 20, 40].into_iter().find_map(|seconds| {
+                shell_path(
+                    &shell,
+                    std::path::Path::new(home),
+                    path.as_deref(),
+                    std::time::Duration::from_secs(seconds),
+                )
+                .ok()
+            })
         })
         .or(path);
     desktop_path(path, home)
@@ -218,6 +222,29 @@ pub fn desktop_path(path: Option<OsString>, home: Option<OsString>) -> Option<Os
             // pi's own installer puts its launcher here.
             home.join(".pi/agent/bin"),
         ]);
+        // Where version managers keep the person's Node: found even when their shell did
+        // not say, since pi and others start with it.
+        additions.extend([
+            home.join(".local/share/fnm/aliases/default/bin"),
+            home.join("Library/Application Support/fnm/aliases/default/bin"),
+            home.join(".volta/bin"),
+            home.join(".local/share/mise/shims"),
+            home.join(".asdf/shims"),
+            home.join(".nodenv/shims"),
+        ]);
+        // nvm keeps each version in a folder of its own: the newest one.
+        if let Ok(versions) = fs::read_dir(home.join(".nvm/versions/node")) {
+            let mut versions: Vec<PathBuf> = versions.flatten().map(|entry| entry.path()).collect();
+            versions.sort_by_key(|path| {
+                path.file_name().and_then(|name| name.to_str()).map(|name| {
+                    name.trim_start_matches('v')
+                        .split('.')
+                        .filter_map(|part| part.parse::<u64>().ok())
+                        .collect::<Vec<_>>()
+                })
+            });
+            additions.extend(versions.pop().map(|newest| newest.join("bin")));
+        }
     }
     if cfg!(windows) {
         // npm's global commands: Claude Code, Codex or pi installed with npm.
@@ -412,6 +439,21 @@ mod tests {
         let bun = home.join(".bun/bin");
         assert_eq!(entries.iter().filter(|p| **p == bun).count(), 1);
         assert!(entries.contains(&home.join(".pi/agent/bin")));
+    }
+
+    #[test]
+    fn desktop_path_finds_the_persons_node_where_version_managers_keep_it() {
+        let home = tempfile::tempdir().unwrap();
+        for version in ["v9.11.2", "v22.20.0", "v20.1.0"] {
+            fs::create_dir_all(home.path().join(".nvm/versions/node").join(version)).unwrap();
+        }
+        let result = desktop_path(None, Some(home.path().into())).unwrap();
+        let entries: Vec<_> = std::env::split_paths(&result).collect();
+        assert!(entries.contains(&home.path().join(".local/share/fnm/aliases/default/bin")));
+        assert!(entries.contains(&home.path().join(".volta/bin")));
+        // The newest version nvm has, by its number.
+        assert!(entries.contains(&home.path().join(".nvm/versions/node/v22.20.0/bin")));
+        assert!(!entries.contains(&home.path().join(".nvm/versions/node/v9.11.2/bin")));
     }
 
     #[cfg(unix)]

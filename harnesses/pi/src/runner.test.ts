@@ -20,8 +20,7 @@ import {
   type ChatRequest,
   type Inbox,
 } from "@zerolux/bridge";
-import { PI_STARTUP_UNCONFIRMED, savePiProfile } from "./execution-profile.ts";
-import { PiExecutionLease, processExists } from "./execution-lease.ts";
+import { processExists } from "@zerolux/bridge/process-state";
 import { PiRunner, type PiRunnerConfig, type PiRunnerDeps } from "./runner.ts";
 
 async function fixture(
@@ -29,7 +28,6 @@ async function fixture(
   options: {
     extensionControl?: boolean;
     envNode?: boolean;
-    unconfirmed?: boolean;
   } = {},
 ) {
   const root = await realpath(
@@ -49,14 +47,6 @@ async function fixture(
     FAKE_PI_FAULT: fault,
     ...(options.extensionControl ? { FAKE_PI_EXTENSION_CONTROL: "1" } : {}),
   };
-  // A real, certainly exited fixture PID, never a personal harness.
-  const old = Bun.spawn([process.execPath, "-e", ""], {
-    env,
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: "ignore",
-  });
-  await old.exited;
   const manager = SessionManager.create(root, join(root, "sessions"));
   if (!fault.startsWith("create")) {
     manager.appendModelChange("fixture", "native-model");
@@ -68,17 +58,6 @@ async function fixture(
       .map((entry) => JSON.stringify(entry))
       .join("\n") + "\n";
   await writeFile(file, bytes, { flag: "wx", mode: 0o600 });
-  const profile = await savePiProfile({
-    version: 1,
-    nativeSessionId: manager.getSessionId(),
-    file,
-    workspace: root,
-    agentDir: agent,
-    cliVersion: "0.87.1",
-    lastPid: old.pid,
-    args: [],
-    ...(options.unconfirmed ? { unavailable: PI_STARTUP_UNCONFIRMED } : {}),
-  });
   const script = join(root, "pi-fixture");
   await writeFile(
     script,
@@ -176,23 +155,15 @@ setInterval(() => {
     nativeSessionId: manager.getSessionId(),
     workspace: root,
     file,
-    profile,
+    agentDir: agent,
+    // As a session its terminal started: with its own options, here none.
+    args: [],
     pi,
     entry: join(import.meta.dir, "runner.ts"),
     creation: fault.startsWith("create"),
   };
-  if (options.unconfirmed) {
-    const previous = await PiExecutionLease.acquire(config);
-    previous.setNativeProcess(old.pid);
-    previous.close("exited");
-  }
   const deps: PiRunnerDeps = {
-    alive: processExists,
     environment: () => env,
-    persistProfile: (profile) =>
-      fault === "persistence"
-        ? Promise.reject(new Error("Fixture profile storage is unavailable"))
-        : savePiProfile(profile),
     connect: (_base, token) =>
       (async (path: string, body?: unknown) => {
         // A token the kernel revoked (a rebind issued another) is refused everywhere.
@@ -231,7 +202,6 @@ setInterval(() => {
       }) as ChatRequest,
   };
   let runner = new PiRunner(config, deps);
-  await runner.prepare();
   const control = new LocalControl(
     join(root, "control"),
     {
@@ -246,7 +216,6 @@ setInterval(() => {
     root,
     file,
     bytes,
-    profile,
     inbox,
     get runner() {
       return runner;
@@ -255,7 +224,6 @@ setInterval(() => {
     async restart() {
       await runner.stop();
       runner = new PiRunner(config, deps);
-      await runner.prepare();
       runner.setControl(join(root, "control", `${control.instanceId}.json`));
     },
     approvals,
@@ -321,64 +289,34 @@ test("a failed creation can release only a host which never started native execu
   }
 });
 
-test("creation records native defaults without selectors or an initial prompt", async () => {
+test("a new session starts with pi's own defaults, without a prompt, and says what it runs with", async () => {
   const f = await fixture("create");
   try {
     await f.bind();
-    expect(f.runner.describe().model).toEqual({
-      provider: "fixture",
-      id: "native-model",
+    expect(f.runner.describe()).toMatchObject({
+      phase: "running",
+      model: { provider: "fixture", id: "native-model" },
+      thinking: "high",
     });
-    const profile = JSON.parse(await readFile(f.profile, "utf8"));
-    expect(profile.initialState).toBeUndefined();
-    expect(profile.unavailable).toBeUndefined();
-    expect((await readFile(f.file, "utf8")).startsWith(f.bytes)).toBe(true);
     expect(await readFile(join(f.root, "commands"), "utf8")).toBe(
       "get_state\n",
     );
-    await f.runner.stop();
-    const { readSavedPi } = await import("./saved-session.ts");
-    expect(
-      (await readSavedPi(f.file, f.inbox.session.native_session_id, f.root))
-        .model,
-    ).toEqual({ provider: "fixture", id: "native-model" });
   } finally {
     await f.close();
   }
 });
 
-test("creation cannot mask missing native model history with sidecar defaults", async () => {
-  const f = await fixture("create-unflushed");
-  try {
-    await expect(f.bind()).rejects.toThrow();
-    expect(JSON.parse(await readFile(f.profile, "utf8")).unavailable).toEqual(
-      expect.any(String),
-    );
-    expect(await readFile(f.file, "utf8")).toBe(f.bytes);
-  } finally {
-    await f.close();
-  }
-});
-
-test("an RPC state response without the native extension guard cannot start a chat", async () => {
-  const f = await fixture("unguarded");
-  try {
-    await expect(f.bind()).rejects.toThrow();
-    expect(JSON.parse(await readFile(f.profile, "utf8")).unavailable).toEqual(
-      expect.any(String),
-    );
-  } finally {
-    await f.close();
-  }
-});
-
-test("native startup is gated, prompt-free and keeps the exact saved identity/profile/history", async () => {
+test("pi starts on its saved session without a prompt, and binding again starts no other", async () => {
   const f = await fixture();
   try {
     const result = await f.bind();
     const pid = result.native_pid as number;
     expect(processExists(pid)).toBe(true);
-    expect(f.runner.describe().phase).toBe("running");
+    expect(f.runner.describe()).toMatchObject({
+      phase: "running",
+      native_session_id: f.inbox.session.native_session_id,
+      session_file: f.file,
+    });
     expect(await f.runner.handle("discard_unstarted", {})).toEqual({
       released: false,
     });
@@ -387,7 +325,7 @@ test("native startup is gated, prompt-free and keeps the exact saved identity/pr
       "get_state\n",
     );
     expect(await readFile(f.file, "utf8")).toBe(f.bytes);
-    // Rebinding the controller does not start another native process or input.
+    // Another link of the same session binds the pi that runs.
     f.inbox.session.id = "next-link";
     expect((await f.bind()).native_pid).toBe(pid);
     expect(await readFile(join(f.root, "starts"), "utf8")).toBe(`${pid}\n`);
@@ -398,113 +336,46 @@ test("native startup is gated, prompt-free and keeps the exact saved identity/pr
   }
 }, 15_000);
 
-for (const unconfirmed of [false, true]) {
-  test.skipIf(process.platform === "win32")(
-    `a launcher without its interpreter can resume after recovery (pending startup: ${unconfirmed})`,
-    async () => {
-      const f = await fixture("", { envNode: true, unconfirmed });
-      try {
-        const before = JSON.parse(await readFile(f.profile, "utf8"));
-        await expect(f.bind()).rejects.toMatchObject({
-          code: "pi_runtime_unavailable",
-        });
-        expect(JSON.parse(await readFile(f.profile, "utf8"))).toEqual(before);
-        expect(await Bun.file(join(f.root, "starts")).exists()).toBe(false);
-        expect(await Bun.file(join(f.root, "commands")).exists()).toBe(false);
-        expect(await readFile(f.file, "utf8")).toBe(f.bytes);
-        await f.installRuntime();
-        await f.restart();
-        const result = await f.bind();
-        expect(processExists(result.native_pid as number)).toBe(true);
-        expect(f.runner.describe()).toMatchObject({
-          phase: "running",
-          native_session_id: f.inbox.session.native_session_id,
-          session_file: f.file,
-        });
-        expect(
-          JSON.parse(await readFile(f.profile, "utf8")).unavailable,
-        ).toBeUndefined();
-        expect(await readFile(f.file, "utf8")).toBe(f.bytes);
-        expect(
-          (await readFile(join(f.root, "starts"), "utf8")).trim().split("\n"),
-        ).toHaveLength(1);
-        expect(
-          (await readFile(join(f.root, "commands"), "utf8")).trim().split("\n"),
-        ).toEqual(["get_state"]);
-      } finally {
-        await f.close();
-      }
-    },
-    15_000,
-  );
-}
-
-test("observable owner Stop during final intent validation prevents native exec", async () => {
-  const f = await fixture();
-  let entered!: () => void, release!: () => void;
-  const blocked = new Promise<void>((resolve) => (entered = resolve));
-  const resume = new Promise<void>((resolve) => (release = resolve));
-  f.beforeRead(async (call) => {
-    if (call === 2) {
-      entered();
-      await resume;
-    }
-  });
-  try {
-    const bind = f.bind();
-    const outcome = bind.catch((error: Error) => error);
-    await blocked;
-    f.inbox.session.status = "stopped";
-    release();
-    expect(await outcome).toBeInstanceOf(Error);
-    expect(await readFile(join(f.root, "starts"), "utf8").catch(() => "")).toBe(
-      "",
-    );
-    expect(
-      await readFile(join(f.root, "commands"), "utf8").catch(() => ""),
-    ).toBe("");
-    expect(await readFile(f.file, "utf8")).toBe(f.bytes);
-    expect(f.runner.describe().phase).toBe("ended");
-  } finally {
-    release();
-    await f.close();
-  }
-}, 15_000);
-
-test("wrong native profile is refused durably, without accepting input or substituting defaults", async () => {
+test("a session starts with whatever model pi resumes it with", async () => {
+  // pi answers another model than the one the session was saved with.
   const f = await fixture("model");
   try {
-    await expect(f.bind()).rejects.toThrow();
-    expect(JSON.parse(await readFile(f.profile, "utf8")).unavailable).toEqual(
-      expect.any(String),
-    );
-    expect(await readFile(join(f.root, "commands"), "utf8")).toBe(
-      "get_state\n",
-    );
-    expect(await readFile(f.file, "utf8")).toBe(f.bytes);
-    expect(f.runner.describe().phase).toBe("ended");
+    await f.bind();
+    expect(f.runner.describe()).toMatchObject({
+      phase: "running",
+      model: { provider: "fixture", id: "wrong-model" },
+    });
   } finally {
     await f.close();
   }
 }, 15_000);
 
-test("failure to persist the startup marker prevents native exec entirely", async () => {
-  const f = await fixture("persistence");
-  try {
-    await expect(f.bind()).rejects.toThrow();
-    expect(await readFile(join(f.root, "starts"), "utf8").catch(() => "")).toBe(
-      "",
-    );
-    expect(await readFile(f.file, "utf8")).toBe(f.bytes);
-    expect(f.runner.describe().phase).toBe("ended");
-    const lease = await PiExecutionLease.acquire(f.runner.config);
-    lease.close("exited");
-  } finally {
-    await f.close();
-  }
-}, 15_000);
+test.skipIf(process.platform === "win32")(
+  "a pi whose runtime is missing says so, and starts once it is there",
+  async () => {
+    const f = await fixture("", { envNode: true });
+    try {
+      // Why it could not start is said as pi's own last words, not guessed.
+      const failure = await f.bind().catch((error: Error) => error);
+      expect(failure).toMatchObject({ code: "pi_runtime_unavailable" });
+      expect((failure as Error).message).toContain("node");
+      expect(await Bun.file(join(f.root, "commands")).exists()).toBe(false);
+      await f.installRuntime();
+      await f.restart();
+      const result = await f.bind();
+      expect(processExists(result.native_pid as number)).toBe(true);
+      expect(f.runner.describe()).toMatchObject({
+        phase: "running",
+        session_file: f.file,
+      });
+    } finally {
+      await f.close();
+    }
+  },
+  15_000,
+);
 
-test("Stop interrupts a startup awaiting native acknowledgement, without another execution", async () => {
+test("Stop ends a pi that has not answered yet, and starts no other", async () => {
   const f = await fixture("silent");
   try {
     const bind = f.bind();
@@ -519,7 +390,7 @@ test("Stop interrupts a startup awaiting native acknowledgement, without another
     expect(
       (await readFile(join(f.root, "starts"), "utf8")).trim().split("\n"),
     ).toHaveLength(1);
-    expect(await readFile(f.file, "utf8")).toBe(f.bytes);
+    expect(f.runner.describe().phase).toBe("ended");
   } finally {
     await f.close();
   }
@@ -532,9 +403,6 @@ test("a host shared by two workspaces ends only when the last link stops", async
     // The native extension reports the links of both workspaces, A (the binder) and B.
     const report = (ids: string[]) =>
       f.runner.handle("links", { native_pid: pid, link_ids: ids });
-    await expect(
-      f.runner.handle("links", { native_pid: pid + 1, link_ids: ["link"] }),
-    ).rejects.toThrow();
     await report(["link", "link-b"]);
     // A Stop of either link alone is not a Stop of the shared pi: the extension ends
     // that link only, and the host refuses to end the process for it.

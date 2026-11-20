@@ -32,8 +32,7 @@ import { listMetadata } from "./discover.ts";
 import { checkTerminalTakeover } from "./terminal-takeover.ts";
 import { installWake } from "./wake.ts";
 import {
-  verifyManaged,
-  canPairManaged,
+  managedHost,
   reportManagedLinks,
   nativeMetadata,
   type NativeMetadata,
@@ -169,19 +168,10 @@ export default function chatExtension(pi: ExtensionAPI) {
   let context: ExtensionContext | undefined;
   let pendingUpdate: { linkId: string; revision: string } | undefined;
   let updateQueued = false;
-  let managed: Awaited<ReturnType<typeof verifyManaged>>;
+  let managed: Awaited<ReturnType<typeof managedHost>>;
   let metadata: NativeMetadata = { pid: process.pid };
   pi.on("session_start", async (_event, ctx) => {
-    try {
-      managed = await verifyManaged(pi, ctx);
-    } catch {
-      // Only the newly launched, explicitly marked RPC process. An ordinary hook throw
-      // is swallowed by pi and would let startup work continue under the wrong profile.
-      console.error(
-        "ZeroLux refused native pi startup: entrusted identity/profile was not verified",
-      );
-      process.exit(3);
-    }
+    managed = await managedHost();
     metadata = await nativeMetadata(ctx, managed);
   });
   const leaveWake = installWake(pi, join(getAgentDir(), "zerolux-wake"));
@@ -345,7 +335,6 @@ export default function chatExtension(pi: ExtensionAPI) {
     ctx: ExtensionContext,
     workspace: string,
   ): Promise<string> {
-    await canPairManaged(managed);
     if (takingOver) throw new Error("Native pi is handing over its execution");
     const origin = localURL(init.base_url);
     // A kernel names its workspace; one that does not (older) gets the single legacy slot,
@@ -1104,7 +1093,7 @@ export default function chatExtension(pi: ExtensionAPI) {
             // An inbox read may finish, but cannot admit input during handover.
             await link!.bridge.pauseInput();
           }
-          await checkTerminalTakeover(pi, ctx, metadata);
+          checkTerminalTakeover(ctx, metadata);
           if ((!paused && takingOver) || !idle()) return { accepted: false };
           if (request.check) return { accepted: true };
           // The kernel must durably request recovery before the old writer exits.
@@ -1127,7 +1116,7 @@ export default function chatExtension(pi: ExtensionAPI) {
           await stop(key);
           // Native private input may have arrived during asynchronous cleanup. Never
           // close a now-busy terminal, migrate it, or substitute another saved context.
-          await checkTerminalTakeover(pi, ctx, metadata);
+          checkTerminalTakeover(ctx, metadata);
           if (uiPrompts > 0) return { accepted: false };
           ctx.shutdown();
           closing = true;

@@ -1,9 +1,14 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtemp, mkdir, realpath, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadPiProfile } from "./execution-profile.ts";
-import { forkPiSession, openPiSession } from "./new-session.ts";
+import { chatExtension, forkPiSession, newPiSession } from "./new-session.ts";
 
 const agentDir = process.env.PI_CODING_AGENT_DIR;
 afterAll(() => {
@@ -31,31 +36,25 @@ async function fixture() {
   return { root, work, host, file, entry: join(host, "runner.ts") };
 }
 
-test("a saved session opens with its own identity, file and folder, and the chat extension", async () => {
+test("a new session gets pi's own identity and file, in its folder, to start pi on", async () => {
   const f = await fixture();
-  const config = await openPiSession(f.file, f.work, f.entry, "pi");
+  const config = await newPiSession(f.work, f.entry, "pi", { effort: "low" });
   expect(config).toMatchObject({
-    nativeSessionId: "saved-id",
-    file: f.file,
     workspace: f.work,
     pi: "pi",
-    opening: true,
+    creation: true,
+    initial: { effort: "low" },
   });
-  expect(config.creation).toBeUndefined();
-  const profile = await loadPiProfile(config.profile, {
-    nativeSessionId: "saved-id",
-    file: f.file,
-    workspace: f.work,
+  const header = JSON.parse(
+    (await readFile(config.file, "utf8")).split("\n")[0]!,
+  );
+  expect(header).toMatchObject({
+    type: "session",
+    id: config.nativeSessionId,
+    cwd: f.work,
   });
-  expect(profile.args).toEqual([
-    "--extension",
-    join(f.host, "chat-extension.ts"),
-  ]);
-});
-
-test("a saved session of another folder is not opened", async () => {
-  const f = await fixture();
-  await expect(openPiSession(f.file, f.root, f.entry, "pi")).rejects.toThrow();
+  // The host starts it with ZeroLux's extension, found beside itself.
+  expect(await chatExtension(f.entry)).toBe(join(f.host, "chat-extension.ts"));
 });
 
 test("a saved session forks whole, or up to one of its entries, into a session of its own", async () => {

@@ -16,30 +16,23 @@ import {
 
 const extension = resolve(import.meta.dir, "../../harnesses/pi");
 
-/** A saved pi session and launch profile, written by pi's own SDK as a terminal would. */
+/** A saved pi session, written by pi's own SDK as a terminal would. */
 async function fixture(
   root: string,
   agent: string,
-  options: { thinking?: string; args?: string[] } = {},
+  options: { thinking?: string } = {},
 ) {
   const thinking = options.thinking ?? "high";
-  const args = options.args ?? [];
   const script = `
     import { SessionManager } from "@earendil-works/pi-coding-agent";
     import { writeFile } from "node:fs/promises";
-    import { savePiProfile } from "./src/execution-profile.ts";
-    // A native process that ran and ended: the host must see it as gone.
-    const old = Bun.spawn([process.execPath, "-e", ""]);
-    await old.exited;
     const manager = SessionManager.create(${JSON.stringify(root)}, ${JSON.stringify(join(agent, "sessions"))});
     manager.appendModelChange("fixture", "native-model");
     manager.appendThinkingLevelChange(${JSON.stringify(thinking)});
     const file = manager.getSessionFile();
     const bytes = [manager.getHeader(), ...manager.getEntries()].map((e) => JSON.stringify(e)).join("\\n") + "\\n";
     await writeFile(file, bytes, { flag: "wx", mode: 0o600 });
-    const profile = await savePiProfile({ version: 1, nativeSessionId: manager.getSessionId(), file,
-      workspace: ${JSON.stringify(root)}, agentDir: ${JSON.stringify(agent)}, cliVersion: "0.87.1", lastPid: old.pid, args: ${JSON.stringify(args)} });
-    console.log(JSON.stringify({ id: manager.getSessionId(), file, profile }));
+    console.log(JSON.stringify({ id: manager.getSessionId(), file }));
   `;
   const child = Bun.spawn([process.execPath, "-e", script], {
     cwd: extension,
@@ -52,11 +45,11 @@ async function fixture(
     new Response(child.stderr).text(),
   ]);
   expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
-  return JSON.parse(stdout) as { id: string; file: string; profile: string };
+  return JSON.parse(stdout) as { id: string; file: string };
 }
 
 test.skipIf(process.platform === "win32")(
-  "the bundled pi host verifies a saved session outside the source tree and starts nothing",
+  "the bundled pi host stands outside the source tree, and starts nothing before it is bound",
   async () => {
     // Canonical, as the host records paths (`/var` is a link on macOS).
     const dir = await realpath(
@@ -89,7 +82,7 @@ test.skipIf(process.platform === "win32")(
             nativeSessionId: saved.id,
             workspace,
             file: saved.file,
-            profile: saved.profile,
+            agentDir: agent,
             pi: "pi",
             entry: "unused",
           }),
@@ -99,7 +92,7 @@ test.skipIf(process.platform === "win32")(
       });
       const timeout = setTimeout(() => child.kill(), 15_000);
       try {
-        // Ready: the host verified file and profile and published its private control.
+        // Ready: the host published its control.
         let descriptor: string | undefined;
         for (let i = 0; i < 100 && !descriptor; i++) {
           await Bun.sleep(100);
@@ -163,7 +156,7 @@ const stockPi = Bun.which("pi");
 const node = Bun.which("node");
 
 test.skipIf(process.platform === "win32" || !stockPi || !node)(
-  "the bundled host starts stock pi with the bundled extension, verifies it and stops it",
+  "the bundled host starts stock pi with the bundled extension, and stops it",
   async () => {
     // A short path: Unix sockets under it are limited to about 100 bytes on macOS.
     const dir = await realpath(await mkdtemp("/tmp/zl-pi-"));
@@ -214,10 +207,7 @@ test.skipIf(process.platform === "win32" || !stockPi || !node)(
         join(agent, "trust.json"),
         JSON.stringify({ [workspace]: true }),
       );
-      const saved = await fixture(workspace, agent, {
-        thinking: "off",
-        args: ["--extension", join(dir, "chat-extension.js")],
-      });
+      const saved = await fixture(workspace, agent, { thinking: "off" });
       // The owner's intent, as the host reads it before starting anything native.
       kernel.reload({
         fetch(request) {
@@ -251,7 +241,7 @@ test.skipIf(process.platform === "win32" || !stockPi || !node)(
             nativeSessionId: saved.id,
             workspace,
             file: saved.file,
-            profile: saved.profile,
+            agentDir: agent,
             pi: stockPi,
             entry: "unused",
           }),
@@ -295,12 +285,10 @@ test.skipIf(process.platform === "win32" || !stockPi || !node)(
         }
         expect(state).toMatchObject({
           kind: "pi-runner",
-          guard_version: 1,
           phase: "running",
           native_session_id: saved.id,
           workspace,
           session_file: saved.file,
-          profile: saved.profile,
           link_id: "link",
           model: { provider: "fixture", id: "native-model" },
           thinking: "off",
@@ -309,8 +297,7 @@ test.skipIf(process.platform === "win32" || !stockPi || !node)(
         expect(Number(state.native_pid)).toBeGreaterThan(0);
         if ("value" in binding)
           expect(binding.value.native_pid).toBe(state.native_pid);
-        // The native file, not just the host's remembered configuration, records pi's
-        // confirmed model and thinking after loading the bundled extension.
+        // pi went on from its own saved file, as it was.
         const history = (await readFile(saved.file, "utf8"))
           .split("\n")
           .filter(Boolean)
@@ -320,10 +307,8 @@ test.skipIf(process.platform === "win32" || !stockPi || !node)(
           id: saved.id,
           cwd: workspace,
         });
-        expect(history.map((entry) => entry.type)).toEqual([
+        expect(history.slice(0, 3).map((entry) => entry.type)).toEqual([
           "session",
-          "model_change",
-          "thinking_level_change",
           "model_change",
           "thinking_level_change",
         ]);
