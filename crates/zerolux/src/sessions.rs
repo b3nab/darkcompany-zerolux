@@ -1017,13 +1017,14 @@ impl PiLink {
     pub async fn control(&self, request: Value) -> Result<Value> {
         control(&self.descriptor, request).await
     }
-    pub async fn shutdown(self) -> Result<()> {
-        control(
+    /// Close this link and say whether the native process serves no other workspace.
+    pub async fn shutdown(self, runner_stops: bool) -> Result<bool> {
+        let reply = control(
             &self.descriptor,
-            json!({"method":"stop","link_id":self.link_id}),
+            json!({"method":"stop","link_id":self.link_id,"runner_stops":runner_stops}),
         )
         .await?;
-        Ok(())
+        Ok(reply["remaining"].as_u64().unwrap_or(0) == 0)
     }
 }
 pub async fn pair_pi(

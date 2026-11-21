@@ -225,10 +225,14 @@ impl HostRuntime {
             }
             "pi.stop" => {
                 let session = params["session_id"].as_str().unwrap_or_default();
-                if let Some(paired) = self.pi_links.lock().await.remove(session) {
-                    paired.shutdown().await?;
+                let link = self.pi_links.lock().await.remove(session);
+                let last = match link {
+                    Some(paired) => paired.shutdown(true).await?,
+                    None => true,
+                };
+                if last {
+                    self.pi_link(&params).await?.stop(session).await?;
                 }
-                self.pi_link(&params).await?.stop(session).await?;
                 Ok(json!({"stopped": true}))
             }
             "claude.launch" => self.claude_launch(params).await,

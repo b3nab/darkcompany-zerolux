@@ -45,7 +45,7 @@ export interface ControlHost {
   /** Every pi session on this machine, from the pi SDK: what ZeroLux may offer to hire. */
   sessions(): Promise<unknown[]>;
   pair(request: PairRequest): Promise<string>;
-  stop(linkId: string): Promise<void>;
+  stop(linkId: string, runnerStops?: boolean): Promise<number | void>;
   update?(linkId: string, revision: string): Promise<{ pending: boolean }>;
   settings?(
     linkId: string | undefined,
@@ -185,8 +185,11 @@ export class ChatControl extends LocalControl {
             return host.interrupt(request.link_id);
           }
           if (method === "stop" && typeof request.link_id === "string") {
-            await host.stop(request.link_id);
-            return {};
+            const remaining = await host.stop(
+              request.link_id,
+              request.runner_stops === true,
+            );
+            return typeof remaining === "number" ? { remaining } : {};
           }
           if (method === "takeover" && host.takeover) {
             if (

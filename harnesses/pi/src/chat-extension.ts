@@ -1148,7 +1148,7 @@ export default function chatExtension(pi: ExtensionAPI) {
           }
         }
       },
-      stop: async (id) => {
+      stop: async (id, runnerStops) => {
         let matched = false;
         for (const [key, link] of links)
           if (link.linkId === id) {
@@ -1162,13 +1162,23 @@ export default function chatExtension(pi: ExtensionAPI) {
           ),
           join(getAgentDir(), "zerolux-links", `${current.instanceId}.json`),
         ).catch(() => {});
-        if (matched && managed && links.size === 0)
+        // A kernel that owns the runner closes RPC stdin after this acknowledgement.
+        // Exiting here as well would race the runner's Stop and lose its reply.
+        if (matched && managed && links.size === 0 && !runnerStops)
           setTimeout(() => ctx.shutdown(), 0);
+        return links.size;
       },
     });
     control = current;
     try {
       await current.start();
+      if (managed && process.platform === "win32") {
+        await reportManagedLinks(
+          managed,
+          bridges().flatMap((b) => (b.sessionId ? [b.sessionId] : [])),
+          join(getAgentDir(), "zerolux-links", `${current.instanceId}.json`),
+        );
+      }
     } catch {
       if (!disposed)
         ctx.ui.notify(

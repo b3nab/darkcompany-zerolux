@@ -1880,8 +1880,8 @@ impl ChatRuntime {
         let session_id = session.id.clone();
         let task = tokio::spawn(async move {
             let _ = stop.wait_for(|stopped| *stopped).await;
-            link.shutdown().await?;
-            if let Some(host) = runner {
+            let last = link.shutdown(owned).await?;
+            if last && let Some(host) = runner {
                 host.stop(&session_id).await?;
             }
             Ok(())

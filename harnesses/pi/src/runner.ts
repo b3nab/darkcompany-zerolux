@@ -132,6 +132,9 @@ export class PiRunner {
   private state: PiState = {};
   private lastError = "";
   private child?: Child;
+  // A command-file launcher is a different process from pi on Windows. Only the child
+  // handle is ever signalled; the reported PID identifies pi for discovery.
+  private reportedPid?: number;
   private inputClosed = false;
   private controlPath?: string;
   private identity?: { actor: string | null; company: string; link: string };
@@ -173,7 +176,7 @@ export class PiRunner {
       workspace: this.config.workspace,
       session_file: this.config.file,
       phase: this.phase,
-      native_pid: this.child?.pid,
+      native_pid: this.reportedPid ?? this.child?.pid,
       model: this.state.model,
       thinking: this.state.thinking,
       link_id: this.identity?.link,
@@ -194,6 +197,15 @@ export class PiRunner {
     }
     // The native extension says which links it holds, and where this host may ask it
     // whose turn it is.
+    if (
+      (method === "links" || method === "verify") &&
+      this.phase === "starting" &&
+      this.child &&
+      typeof request.native_pid === "number" &&
+      Number.isSafeInteger(request.native_pid) &&
+      request.native_pid > 0
+    )
+      this.reportedPid = request.native_pid;
     if (method === "links") {
       if (Array.isArray(request.link_ids))
         this.links = new Set(
@@ -254,7 +266,8 @@ export class PiRunner {
     const request = this.deps.connect(localURL(input.base_url), input.token);
     await this.wanted(request);
     this.kernel = request;
-    if (this.phase === "running") return { native_pid: this.child!.pid };
+    if (this.phase === "running")
+      return { native_pid: this.reportedPid ?? this.child!.pid };
     const executable = Bun.which(this.config.pi);
     if (!executable) throw runtimeUnavailable();
     this.phase = "starting";
@@ -322,7 +335,7 @@ export class PiRunner {
       this.state = await ready;
       this.cancelled.signal.throwIfAborted();
       this.phase = "running";
-      return { native_pid: child.pid };
+      return { native_pid: this.reportedPid ?? child.pid };
     } catch (error) {
       await this.stopNative();
       throw error;
