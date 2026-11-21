@@ -1,9 +1,40 @@
 import { useEffect, useRef, useState } from "react";
+import { MicrophoneAccessBlocked } from "@zerolux/chat";
 
 /** Whether this page may record: a browser with a microphone API, on a secure origin. */
 export const canRecord = () =>
   typeof MediaRecorder !== "undefined" &&
   !!globalThis.navigator?.mediaDevices?.getUserMedia;
+
+/** Only the user's record gesture opens the microphone; no capture or permission prompt on mount. */
+async function microphone() {
+  if (!canRecord())
+    throw new Error(
+      globalThis.isSecureContext === false
+        ? "Use HTTPS or localhost to record audio."
+        : "Audio recording is not available in this window.",
+    );
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (error) {
+    const name =
+      error && typeof error === "object" && "name" in error
+        ? error.name
+        : undefined;
+    switch (name) {
+      case "NotAllowedError":
+        throw new MicrophoneAccessBlocked(error);
+      case "NotFoundError":
+        throw new Error("No microphone was found.", { cause: error });
+      case "NotReadableError":
+        throw new Error("The microphone could not be opened.", {
+          cause: error,
+        });
+      default:
+        throw error;
+    }
+  }
+}
 
 /** Records from the microphone: one recording at a time, kept until stopped or dropped. */
 export function useRecorder() {
@@ -38,19 +69,24 @@ export function useRecorder() {
     seconds:
       since === undefined ? 0 : Math.max(0, Math.floor((now - since) / 1000)),
     async start() {
-      if (!canRecord()) throw new Error("this page has no access to it");
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      const chunks: Blob[] = [];
-      recorder.ondataavailable = (e) => chunks.push(e.data);
-      recorder.start();
-      // What it hears, to draw: the stream's level, read as it goes.
-      const context = new AudioContext();
-      const analyser = context.createAnalyser();
-      analyser.fftSize = 1024;
-      context.createMediaStreamSource(stream).connect(analyser);
-      current.current = { recorder, chunks, context, analyser };
-      setSince(Date.now());
+      const stream = await microphone();
+      let context: AudioContext | undefined;
+      try {
+        const recorder = new MediaRecorder(stream);
+        const chunks: Blob[] = [];
+        recorder.ondataavailable = (e) => chunks.push(e.data);
+        context = new AudioContext();
+        const analyser = context.createAnalyser();
+        analyser.fftSize = 1024;
+        context.createMediaStreamSource(stream).connect(analyser);
+        recorder.start();
+        current.current = { recorder, chunks, context, analyser };
+        setSince(Date.now());
+      } catch (error) {
+        for (const track of stream.getTracks()) track.stop();
+        if (context) void context.close().catch(() => {});
+        throw error;
+      }
       setNow(Date.now());
     },
     /** Ends the recording and gives its audio. */

@@ -97,6 +97,12 @@ export async function openLink(url: string) {
   await invoke("open_link", { url });
 }
 
+/** Only on a click: open the microphone pane, without changing any permission. */
+export async function openMicrophoneSettings() {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("open_microphone_settings");
+}
+
 /** Where this page's kernel is: the desktop names it, a browser uses the page's own origin. */
 export const kernelAddress = () => desktopConnection()?.kernelUrl ?? "";
 

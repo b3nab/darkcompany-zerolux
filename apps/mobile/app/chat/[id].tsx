@@ -736,7 +736,7 @@ export default function ChatScreen() {
         </Text>
       ) : (
         <Composer
-          error={error || chat.error || storage.error || voice.error}
+          error={error || chat.error || storage.error}
           chips={chips}
           removeChip={(key) =>
             setChips((now) => now.filter((chip) => chip.key !== key))
@@ -752,6 +752,7 @@ export default function ChatScreen() {
           }}
           add={storage.available ? { onPress: add, busy: picking } : undefined}
           voice={{
+            issue: voice.issue,
             use: voice.use,
             transcribing: voice.transcribing,
             seconds: recorder.seconds,

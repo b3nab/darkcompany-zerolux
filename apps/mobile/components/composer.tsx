@@ -16,6 +16,8 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode, Ref } from "react";
 import {
   ActivityIndicator,
+  Alert,
+  Linking,
   Image,
   Pressable,
   ScrollView,
@@ -41,7 +43,7 @@ import type { SharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCSSVariable } from "uniwind";
 import { HOLD_MS } from "@zerolux/chat";
-import type { ComposerAction, VoiceUse } from "@zerolux/chat";
+import type { ComposerAction, VoiceIssue, VoiceUse } from "@zerolux/chat";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 
@@ -55,6 +57,7 @@ export interface Chip {
 
 /** The microphone as the composer shows it. */
 export interface ComposerVoice {
+  issue?: VoiceIssue;
   /** What it records for now. */
   use?: VoiceUse;
   transcribing: boolean;
@@ -243,6 +246,42 @@ export function Composer({
         style={{ paddingBottom: 8 + insets.bottom }}
       >
         {above}
+        {voice.issue && (
+          <View className="flex-row flex-wrap items-center gap-x-2 gap-y-1 px-1.5">
+            <Text
+              accessibilityRole="alert"
+              className="grow text-sm text-destructive"
+            >
+              {voice.issue.message}
+            </Text>
+            {voice.issue.microphoneBlocked && (
+              <Pressable
+                accessibilityRole="button"
+                className="p-2"
+                onPress={() =>
+                  void Linking.openSettings().catch(() =>
+                    Alert.alert(
+                      "Open Settings",
+                      "Open your phone’s settings for ZeroLux.",
+                    ),
+                  )
+                }
+              >
+                <Text className="text-sm font-medium">Open Settings</Text>
+              </Pressable>
+            )}
+            {voice.issue.retry && input.editable !== false && (
+              <Pressable
+                accessibilityRole="button"
+                className="p-2"
+                onPress={voice.issue.retry}
+              >
+                <Text className="text-sm font-medium">Try again</Text>
+              </Pressable>
+            )}
+            {tool(XIcon, "Dismiss voice error", voice.issue.dismiss)}
+          </View>
+        )}
         {error ? (
           <Text className="px-1.5 text-sm text-destructive">{error}</Text>
         ) : null}

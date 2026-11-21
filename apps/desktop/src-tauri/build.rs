@@ -6,6 +6,7 @@ fn main() {
             "workspace_action",
             "workspace_adoption_preview",
             "open_link",
+            "open_microphone_settings",
             "choose_folder",
             "window_control",
             "read_workspace_credential",

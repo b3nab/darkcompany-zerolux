@@ -10,7 +10,12 @@ import {
 } from "expo-audio";
 import type { AudioPlayer } from "expo-audio";
 import { File as Saved, Paths } from "expo-file-system";
-import { audioLevel, errorMessage, readAloud } from "@zerolux/chat";
+import {
+  audioLevel,
+  errorMessage,
+  MicrophoneAccessBlocked,
+  readAloud,
+} from "@zerolux/chat";
 import type { Recorder } from "@zerolux/chat";
 
 /** A file on this phone as the `File` Storage takes. */
@@ -36,7 +41,7 @@ export function useRecorder(): Recorder & {
     level: () => audioLevel(recorder.getStatus().metering ?? -160),
     async start() {
       if (!(await requestRecordingPermissionsAsync()).granted)
-        throw new Error("allow it for ZeroLux in Settings");
+        throw new MicrophoneAccessBlocked();
       await setAudioModeAsync({
         playsInSilentMode: true,
         allowsRecording: true,

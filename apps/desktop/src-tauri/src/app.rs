@@ -514,6 +514,19 @@ pub(crate) fn open_external(handle: &tauri::AppHandle, url: &tauri::Url) {
     }
 }
 
+// Opens the system's Microphone pane. Only the person can change the permission there.
+#[tauri::command]
+fn open_microphone_settings(app: tauri::AppHandle) -> Result<(), String> {
+    let pane = match std::env::consts::OS {
+        "macos" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+        "windows" => "ms-settings:privacy-microphone",
+        _ => return Err("Check microphone access in system settings.".into()),
+    };
+    app.opener()
+        .open_url(pane, None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
 // A web address a workspace's view asks for opens in the system browser, never in the app.
 #[tauri::command]
 fn open_link(app: tauri::AppHandle, url: String) -> Result<(), String> {
@@ -2486,6 +2499,7 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
             workspace_action,
             workspace_adoption_preview,
             open_link,
+            open_microphone_settings,
             choose_folder,
             crate::chrome::window_control,
             crate::credentials::read_workspace_credential,

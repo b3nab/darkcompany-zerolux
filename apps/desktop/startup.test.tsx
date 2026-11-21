@@ -113,6 +113,8 @@ test("registry commands are restricted to the packaged manager, not workspace pa
     "allow-window-control",
     // Web links only, to the system browser: extensions' pages open them too.
     "allow-open-link",
+    // Opens the microphone pane when requested; cannot change its permission.
+    "allow-open-microphone-settings",
     // A folder chosen in the system's panel: only its path comes back.
     "allow-choose-folder",
     // Its own sign-in only: the desktop finds the connection from the calling window.

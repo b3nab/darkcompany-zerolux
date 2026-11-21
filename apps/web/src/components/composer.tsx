@@ -19,7 +19,8 @@ import {
   HOLD_MS,
   useVoiceInput,
 } from "@zerolux/chat";
-import type { VoiceTargets, VoiceUse } from "@zerolux/chat";
+import type { VoiceIssue, VoiceTargets, VoiceUse } from "@zerolux/chat";
+import { desktopConnection, openMicrophoneSettings } from "../desktop";
 import { cn } from "cn";
 import { useRecorder } from "../recorder";
 import { useNavigationGuard } from "../navigation-guard";
@@ -30,6 +31,67 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+
+function VoiceNotice({
+  issue,
+  canRetry,
+  platform,
+  openSettings,
+  onDismiss,
+}: {
+  issue: VoiceIssue;
+  canRetry: boolean;
+  platform?: "macos" | "windows" | "linux";
+  openSettings: () => Promise<void>;
+  onDismiss: () => void;
+}) {
+  const [settingsFailed, setSettingsFailed] = useState(false);
+  const pane = platform === "macos" || platform === "windows";
+  const hint = !issue.microphoneBlocked
+    ? undefined
+    : !platform
+      ? "Check this site's microphone permission in your browser."
+      : !pane || settingsFailed
+        ? "Check microphone access in system settings."
+        : undefined;
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border bg-card py-1 pl-3 pr-1">
+      <p role="alert" className="min-w-0 flex-1 text-sm">
+        {issue.message}
+        {hint && <> {hint}</>}
+      </p>
+      {issue.microphoneBlocked && pane && (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() =>
+            void openSettings().catch(() => setSettingsFailed(true))
+          }
+        >
+          Microphone settings
+        </Button>
+      )}
+      {issue.retry && canRetry && (
+        <Button type="button" size="sm" variant="ghost" onClick={issue.retry}>
+          Try again
+        </Button>
+      )}
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="ghost"
+        aria-label="Dismiss voice error"
+        onClick={() => {
+          issue.dismiss();
+          onDismiss();
+        }}
+      >
+        <XIcon />
+      </Button>
+    </div>
+  );
+}
 
 /** What "+" adds to what goes: files, images. */
 export interface ComposerAdd {
@@ -330,10 +392,19 @@ export function Composer({
     >
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
         {above}
-        {(error || speech.error) && (
+        {error && (
           <p role="alert" className="text-xs text-destructive">
-            {error || speech.error}
+            {error}
           </p>
+        )}
+        {speech.issue && (
+          <VoiceNotice
+            issue={speech.issue}
+            canRetry={open && !busy}
+            platform={desktopConnection()?.platform}
+            openSettings={openMicrophoneSettings}
+            onDismiss={() => field.current?.focus()}
+          />
         )}
         <div className="flex flex-col rounded-xl border border-input bg-background shadow-xs transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/20">
           {chips && !speech.use && !binned && (

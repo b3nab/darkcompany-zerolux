@@ -167,6 +167,53 @@ test("voice blocks restart from microphone startup through saving and sending wi
   expect(state().canLeave).toBe(true);
 });
 
+test("a refused microphone leaves the draft alone and does not start the voice engine; the next press can dictate", async () => {
+  const access = Promise.withResolvers<void>();
+  const actions: string[] = [];
+  let draft = "fixture draft";
+  let opens = 0;
+  let stops = 0;
+  setKernelFetch(async (url) => {
+    actions.push(new URL(url).pathname.split("/").pop()!);
+    return Response.json({ result: { text: "fixture words" } });
+  });
+  const speech = voiceFixture(
+    {
+      start: async () => {
+        if (++opens === 1) await access.promise;
+      },
+      stop: async () => {
+        stops++;
+        return new Blob(["fixture audio"]);
+      },
+      cancel: () => {},
+    },
+    {
+      transcription: true,
+      write: (words) => {
+        draft += ` ${words}`;
+      },
+      send: async () => {
+        throw new Error("unexpected send");
+      },
+    },
+  );
+  const initial = draft;
+  const opening = speech.start("dictation");
+  await speech.finish(); // The pointer was released while opening the microphone.
+  access.reject(new DOMException("", "NotAllowedError"));
+  await opening;
+  expect(speech.pending()).toBe(false);
+  expect(actions).toEqual([]);
+  expect(stops).toBe(0);
+  expect(draft).toBe(initial);
+  await speech.start("dictation");
+  await speech.finish();
+  expect(actions).toEqual(["prepare", "transcribe"]);
+  expect(stops).toBe(1);
+  expect(draft).toBe(`${initial} fixture words`);
+});
+
 test("voice stays protected while transcribing, then releases on success or error", async () => {
   let response = Promise.withResolvers<Response>();
   setKernelFetch(async (url) =>

@@ -839,7 +839,7 @@ function Composer({
     <>
       <ComposerBox
         above={above}
-        error={notice || error || stop.error || voice.error}
+        error={notice || error || stop.error}
         chips={photos.map((photo, i) => ({
           key: photo.uri,
           uri: photo.uri,
@@ -878,6 +878,7 @@ function Composer({
         }
         trailing={<ContextRing usage={usage} onPress={() => setSheet(true)} />}
         voice={{
+          issue: voice.issue,
           use: voice.use,
           transcribing: voice.transcribing,
           seconds: recorder.seconds,

@@ -110,6 +110,20 @@ export interface Recorder {
 /** What the microphone takes: words for the box, or a message sent as said. */
 export type VoiceUse = "dictation" | "message";
 
+export class MicrophoneAccessBlocked extends Error {
+  constructor(cause?: unknown) {
+    super("Microphone access is blocked for ZeroLux.", { cause });
+  }
+}
+
+/** Only a failure before recording can be retried without replaying work. */
+export interface VoiceIssue {
+  message: string;
+  microphoneBlocked?: boolean;
+  retry?: () => void;
+  dismiss: () => void;
+}
+
 export interface VoiceTargets {
   /** What was dictated, for the box. */
   write: (said: string) => void;
@@ -190,7 +204,12 @@ export function useVoiceInput(
 ) {
   const [use, setUse] = useState<VoiceUse>();
   const [transcribing, setTranscribing] = useState(false);
-  const [error, setError] = useState("");
+  const [failure, setFailure] = useState<{
+    message: string;
+    blocked?: boolean;
+    mode?: VoiceUse;
+  }>();
+  const dismiss = () => setFailure(undefined);
   // What records now, for a release that comes before the next render.
   const recording = useRef<VoiceUse | "starting">(undefined);
   const processing = useRef(0);
@@ -198,21 +217,28 @@ export function useVoiceInput(
   // Ended while the microphone was still starting: it ends as soon as it records.
   const ending = useRef(false);
   const start = async (next: VoiceUse) => {
-    setError("");
+    if (recording.current || processing.current) return;
+    dismiss();
     recording.current = "starting";
     ending.current = false;
-    // The model loads while the person speaks.
-    if (targets.transcription) void prepareVoice(kernel);
     try {
       await recorder.start();
     } catch (e) {
-      recording.current = undefined;
-      setError(`The microphone is not available: ${errorMessage(e)}`);
+      if (recording.current === "starting") {
+        recording.current = undefined;
+        setFailure({
+          message: errorMessage(e),
+          blocked: e instanceof MicrophoneAccessBlocked,
+          mode: next,
+        });
+      }
       return;
     }
     // Dropped while starting: nothing is kept.
     if (recording.current !== "starting") return void recorder.cancel();
     recording.current = next;
+    // Warm the model while recording, never for a microphone that could not open.
+    if (targets.transcription) void prepareVoice(kernel);
     setUse(next);
     if (ending.current) void finish();
   };
@@ -229,17 +255,24 @@ export function useVoiceInput(
       const audio = await recorder.stop();
       if (audio) await spoken(now, audio, targets, kernel);
     } catch (e) {
-      setError(errorMessage(e));
+      setFailure({ message: errorMessage(e) });
     } finally {
       processing.current--;
       processingVoiceInputs--;
       setTranscribing(false);
     }
   };
+  const retryMode = failure?.mode;
+  const issue: VoiceIssue | undefined = failure && {
+    message: failure.message,
+    microphoneBlocked: failure.blocked,
+    dismiss,
+    retry: retryMode && (() => void start(retryMode)),
+  };
   return {
     use,
     transcribing,
-    error,
+    issue,
     /** Includes opening the microphone, saving audio and sending without transcription. */
     pending: () => !!recording.current || processing.current > 0,
     start,
