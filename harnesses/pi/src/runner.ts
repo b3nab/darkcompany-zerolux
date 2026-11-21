@@ -60,7 +60,14 @@ const runtimeUnavailable = (said?: string) =>
 function nativeCommand(exec: string, args: string[]) {
   if (process.platform !== "win32" || !/\.(cmd|bat)$/i.test(exec))
     return [exec, ...args];
-  const line = [exec, ...args].map((part) => `"${part}"`).join(" ");
+  // As in the original command-file launcher: quotes delimit each argument, and
+  // cmd.exe must not interpret an embedded quote, expansion or extra command line.
+  const parts = [exec, ...args];
+  if (parts.some((part) => /["%\r\n]/.test(part)))
+    throw new Error(
+      "This argument cannot be passed through a Windows command file",
+    );
+  const line = parts.map((part) => `"${part}"`).join(" ");
   const shell =
     process.env.ComSpec ??
     join(
@@ -68,7 +75,7 @@ function nativeCommand(exec: string, args: string[]) {
       "System32",
       "cmd.exe",
     );
-  return [shell, "/d", "/s", "/c", `"${line}"`];
+  return [shell, "/d", "/v:off", "/s", "/c", `"${line}"`];
 }
 
 /** Detached host for ONE stock native pi RPC process. No prompts, no automatic replay/retry. */
@@ -283,24 +290,35 @@ export class PiRunner {
         {
           cwd: this.config.workspace,
           env,
+          windowsVerbatimArguments:
+            process.platform === "win32" && /\.(cmd|bat)$/i.test(executable),
           stdin: "pipe",
           stdout: "pipe",
           stderr: "pipe",
         },
       );
       this.child = child;
-      void this.errors(child);
+      const diagnostics = this.errors(child).catch(() => {});
       const stateId = randomUUID();
-      const ready = this.read(child, stateId);
+      const ready = this.read(child, stateId, diagnostics);
       void child.exited.then(async () => {
         await ready.catch(() => {});
         await this.operation?.catch(() => {});
         this.end();
       });
-      child.stdin.write(
-        JSON.stringify({ id: stateId, type: "get_state" }) + "\n",
-      );
-      await child.stdin.flush();
+      try {
+        child.stdin.write(
+          JSON.stringify({ id: stateId, type: "get_state" }) + "\n",
+        );
+        await child.stdin.flush();
+      } catch (error) {
+        // The launcher can exit before the first write, rather than while reading stdout.
+        await this.stopNative();
+        await diagnostics;
+        throw runtimeUnavailable(
+          this.lastError || `it ended (${child.exitCode ?? error})`,
+        );
+      }
       this.state = await ready;
       this.cancelled.signal.throwIfAborted();
       this.phase = "running";
@@ -329,7 +347,11 @@ export class PiRunner {
    * Reads what pi writes for as long as it runs, so its output never fills up: its dialogs go
    * to the owner, and its answer to `id` says it has started and what it runs with.
    */
-  private read(child: Child, id: string): Promise<PiState> {
+  private read(
+    child: Child,
+    id: string,
+    diagnostics: Promise<void>,
+  ): Promise<PiState> {
     let resolve!: (state: PiState) => void;
     let reject!: (error: Error) => void;
     const ready = new Promise<PiState>((yes, no) => {
@@ -396,9 +418,8 @@ export class PiRunner {
             }
           }
         }
-        // Its last words come a moment after its output ends.
-        await child.exited;
-        await Bun.sleep(50);
+        // stdout, stderr and process exit can arrive in either order.
+        await Promise.all([child.exited, diagnostics]);
         reject(
           runtimeUnavailable(this.lastError || `it ended (${child.exitCode})`),
         );
@@ -605,7 +626,14 @@ export class PiRunner {
       for (const withdraw of this.pendingDialogs.values()) withdraw();
       this.pendingDialogs.clear();
       this.inputClosed = true;
-      this.child.stdin.end();
+      // An already-closed stdin must not replace the launcher's own exit reason.
+      if (this.child.exitCode === null) {
+        try {
+          void Promise.resolve(this.child.stdin.end()).catch(() => {});
+        } catch {
+          /* The pipe closed before end(). */
+        }
+      }
     }
   }
 

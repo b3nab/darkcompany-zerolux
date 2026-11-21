@@ -20,7 +20,6 @@ import {
   type ChatRequest,
   type Inbox,
 } from "@zerolux/bridge";
-import { processExists } from "@zerolux/bridge/process-state";
 import { PiRunner, type PiRunnerConfig, type PiRunnerDeps } from "./runner.ts";
 
 async function fixture(
@@ -274,6 +273,15 @@ setInterval(() => {
       await rm(root, { recursive: true, force: true });
     },
   };
+}
+
+function processExists(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 test("a failed creation can release only a host which never started native execution", async () => {
