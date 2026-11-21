@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["ZeroluxDiscoveryModule"]
+  },
+  "android": {
+    "modules": ["os.darkcompany.zerolux.discovery.ZeroluxDiscoveryModule"]
+  }
+}

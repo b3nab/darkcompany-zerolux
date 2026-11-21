@@ -15,7 +15,8 @@
           "NSAllowsLocalNetworking": true,
           "NSAllowsArbitraryLoadsInWebContent": true
         },
-        "NSLocalNetworkUsageDescription": "ZeroLux talks to the kernel on your network."
+        "NSLocalNetworkUsageDescription": "ZeroLux talks to the kernel on your network.",
+        "NSBonjourServices": ["_zerolux._tcp"]
       },
       "icon": {
         "light": "./assets/icon.png",
