@@ -189,6 +189,81 @@ for (const event of ["reconnecting", "signalReconnecting"])
     stop();
   });
 
+test("successive signal and transport retries cannot postpone recovery indefinitely", async () => {
+  jest.useFakeTimers();
+  const { log, stop } = start();
+  await flush();
+  const old = rooms[0]!;
+  for (let i = 0; i < 4; i++) {
+    old.emit(i % 2 ? "reconnecting" : "signalReconnecting");
+    jest.advanceTimersByTime(12_000);
+    await flush();
+  }
+  expect(old.disconnected).toBe(true);
+  expect(rooms.length).toBe(2);
+  expect(log.at(-1)).toBe("sync");
+  stop();
+});
+
+test("a delayed packet from an abandoned room cannot overwrite the current snapshot", async () => {
+  jest.useFakeTimers();
+  const { log, stop } = start();
+  await flush();
+  const old = rooms[0]!;
+  old.emit("disconnected");
+  jest.advanceTimersByTime(1000);
+  await flush();
+  const before = log.length;
+  const event = packet({
+    type: "approval.changed",
+    event_id: "unique",
+    approval_id: "a",
+  });
+  old.emit("dataReceived", event, undefined, 0, "chat");
+  expect(log.length).toBe(before);
+  rooms[1]!.emit("dataReceived", event, undefined, 0, "chat");
+  expect(log.length).toBe(before + 1);
+  stop();
+});
+
+test("a slow HTTP read while the room is down never piles up, and recovery stops the fallback", async () => {
+  jest.useFakeTimers();
+  stuck = true;
+  let reads = 0,
+    joined = 0;
+  const pending = Promise.withResolvers<void>();
+  const stop = connectRealtime({
+    event: () => {},
+    status: () => {},
+    sync: () => {
+      joined++;
+    },
+    readWhileDisconnected: async () => {
+      reads++;
+      await pending.promise;
+    },
+  });
+  await flush();
+  jest.advanceTimersByTime(3000);
+  await flush();
+  expect(reads).toBe(1);
+  expect(joined).toBe(0);
+  jest.advanceTimersByTime(12000);
+  await flush();
+  expect(reads).toBe(1);
+  stuck = false;
+  rooms[0]!.emit("disconnected");
+  jest.advanceTimersByTime(1000);
+  await flush();
+  expect(joined).toBe(1);
+  pending.resolve();
+  await flush();
+  jest.advanceTimersByTime(30000);
+  await flush();
+  expect(reads).toBe(1);
+  stop();
+});
+
 test("a room that reconnects in time is kept", async () => {
   jest.useFakeTimers();
   const { stop } = start();

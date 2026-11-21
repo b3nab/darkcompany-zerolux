@@ -675,7 +675,9 @@ export async function recordEdited(sessionId: string) {
 
 /** After a reconnection, every record on screen is read to its end: notices may have been missed. */
 export function recordsResync() {
-  reading.forEach((reader) => void reader.grow(Number.MAX_SAFE_INTEGER));
+  return Promise.all(
+    [...reading].map((reader) => reader.grow(Number.MAX_SAFE_INTEGER)),
+  );
 }
 
 export function sessionReader(

@@ -185,6 +185,8 @@ function Hear({
     let stopped = false;
     let state: Heard = { live: false, actors: [], sessions: [], approvals: [] };
     let me: string | undefined;
+    let snapshotReady = false;
+    let latestRead = 0;
     const set = (next: Partial<Heard>) => {
       state = { ...state, ...next };
       if (!stopped) heard(key, state);
@@ -237,6 +239,7 @@ function Hear({
           notFound(error) && set({ subscriptions: undefined }),
       );
     async function readAll() {
+      const sequence = ++latestRead;
       try {
         const [identity, { actors }, sessions, approvals] = await Promise.all([
           signIn ? connection.identity(kernel) : null,
@@ -244,7 +247,9 @@ function Hear({
           readSessions(),
           readApprovals(),
         ]);
+        if (stopped || sequence !== latestRead) return;
         me = whoAmI(identity, actors, signIn).me?.id;
+        snapshotReady = true;
         set({
           me,
           actors,
@@ -254,16 +259,19 @@ function Hear({
         });
         sessionsRead(sessions);
       } catch (error) {
-        set({ error: errorMessage(error) });
+        if (sequence === latestRead) set({ error: errorMessage(error) });
       }
-      await readPlans();
+      if (!stopped) await readPlans();
     }
     async function readRequests() {
+      if (!snapshotReady) return readAll();
+      const sequence = ++latestRead;
       try {
         const [sessions, approvals] = await Promise.all([
           readSessions(),
           readApprovals(),
         ]);
+        if (stopped || sequence !== latestRead) return;
         set({
           sessions,
           approvals: mine(approvals, sessions),
@@ -271,7 +279,7 @@ function Hear({
         });
         sessionsRead(sessions);
       } catch (error) {
-        set({ error: errorMessage(error) });
+        if (sequence === latestRead) set({ error: errorMessage(error) });
       }
     }
     void readAll();
@@ -304,6 +312,7 @@ function Hear({
         }
       },
       sync: () => void readAll(),
+      readWhileDisconnected: readRequests,
       status: (status) => set({ live: status === "live" }),
     });
     return () => {
@@ -717,7 +726,8 @@ export function TrayPanel() {
       ) && state.claude === false
     );
   });
-  const live = ordered.some((w) => heard[w.key]?.live);
+  // The header names the active workspace, so its dot must describe that workspace too.
+  const live = !!active && heard[active.key]?.live === true;
   const focused = Math.min(focus, Math.max(0, waiting.length - 1));
 
   async function answer(item: Waiting, choice: string) {
@@ -977,6 +987,13 @@ export function TrayPanel() {
                 <span className="min-w-0 flex-1 truncate">
                   {workspace.name}
                 </span>
+                <span
+                  className={cn(
+                    "size-1.5 shrink-0 rounded-full",
+                    heard[workspace.key]?.live ? "bg-success" : "bg-faint",
+                  )}
+                  aria-label={heard[workspace.key]?.live ? "Live" : "Not live"}
+                />
                 {workspace.active && <CheckIcon />}
               </DropdownMenuItem>
             ))}

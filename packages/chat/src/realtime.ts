@@ -36,6 +36,8 @@ export function connectRealtime(handlers: {
   kernel?: string;
   event: (event: ChatEvent) => void;
   sync: () => void;
+  /** Refresh visible data over HTTP until the notice room is back. Never resends input. */
+  readWhileDisconnected?: () => Promise<void>;
   status: (status: RealtimeStatus) => void;
 }): () => void {
   const seen = new Set<string>();
@@ -44,36 +46,85 @@ export function connectRealtime(handlers: {
   let patience: ReturnType<typeof setTimeout> | undefined;
   let attempt = 0;
   let stopped = false;
+  let live = false;
+  let ticket: AbortController | undefined;
+  let fallback: ReturnType<typeof setTimeout> | undefined;
+  let reading = false;
 
-  function reconnect() {
+  function keepReading() {
+    if (
+      live ||
+      stopped ||
+      reading ||
+      fallback !== undefined ||
+      !handlers.readWhileDisconnected
+    )
+      return;
+    fallback = setTimeout(async () => {
+      fallback = undefined;
+      if (live || stopped) return;
+      reading = true;
+      try {
+        await handlers.readWhileDisconnected!();
+      } catch {
+        /* Retry the read, not a send. */
+      } finally {
+        reading = false;
+        keepReading();
+      }
+    }, 3000);
+  }
+  function clearDeadline() {
     clearTimeout(patience);
+    patience = undefined;
+  }
+  function joined() {
+    clearDeadline();
+    clearTimeout(fallback);
+    fallback = undefined;
+    attempt = 0;
+    live = true;
+    handlers.status("live");
+    handlers.sync();
+  }
+  function reconnect() {
+    const old = room;
     room = undefined;
+    clearDeadline();
+    ticket?.abort();
+    ticket = undefined;
+    void old?.disconnect().catch(() => {});
     if (stopped) return;
+    live = false;
     handlers.status("offline");
+    keepReading();
     retry = setTimeout(start, Math.min(10_000, 1000 * 2 ** attempt++));
   }
   // The connection never rests on a room's word alone: one that neither gets live in time
   // nor says it failed is left, and a new one joins with a fresh token.
   function expect(current: Room) {
-    clearTimeout(patience);
+    if (patience !== undefined) return;
     patience = setTimeout(() => {
-      if (room !== current) return;
-      reconnect();
-      void current.disconnect().catch(() => {});
+      if (room === current) reconnect();
     }, PATIENCE);
   }
   async function start() {
     // Resume in place only briefly: after a kernel restart the old URL and
     // keys are gone, and rejoining with a fresh token is what recovers.
+    retry = undefined;
+    if (stopped) return;
     const current = new Room({
       reconnectPolicy: new DefaultReconnectPolicy([0, 300, 1200, 2700]),
       webAudioMix: { audioContext: SILENT },
     });
     room = current;
+    const controller = new AbortController();
+    ticket = controller;
     expect(current);
+    keepReading();
     current.on(RoomEvent.DataReceived, (payload, participant, _, topic) => {
       // Only the kernel publishes chat events; participants cannot.
-      if (topic !== "chat" || participant) return;
+      if (room !== current || topic !== "chat" || participant) return;
       const event = parseEvent(payload);
       if (!event || seen.has(event.event_id)) return;
       seen.add(event.event_id);
@@ -81,19 +132,18 @@ export function connectRealtime(handlers: {
       handlers.event(event);
     });
     // A room already left no longer speaks for the connection.
-    current.on(RoomEvent.SignalReconnecting, () => {
-      if (room === current) expect(current);
-    });
-    current.on(RoomEvent.Reconnecting, () => {
+    const recovering = () => {
       if (room !== current) return;
+      live = false;
       handlers.status("connecting");
       expect(current);
-    });
+      keepReading();
+    };
+    current.on(RoomEvent.SignalReconnecting, recovering);
+    current.on(RoomEvent.Reconnecting, recovering);
     current.on(RoomEvent.Reconnected, () => {
       if (room !== current) return;
-      clearTimeout(patience);
-      handlers.status("live");
-      handlers.sync();
+      joined();
     });
     current.on(RoomEvent.Disconnected, () => {
       if (room === current) reconnect();
@@ -103,14 +153,13 @@ export function connectRealtime(handlers: {
       const { url, token } = await request<{ url: string; token: string }>(
         handlers.kernel ?? "",
         "/livekit/token",
+        undefined,
+        controller.signal,
       );
       if (room !== current) return;
       await current.connect(url, token, { autoSubscribe: false });
       if (room !== current) return void current.disconnect().catch(() => {});
-      clearTimeout(patience);
-      attempt = 0;
-      handlers.status("live");
-      handlers.sync();
+      joined();
     } catch {
       if (room === current) reconnect();
     }
@@ -119,9 +168,7 @@ export function connectRealtime(handlers: {
   return () => {
     stopped = true;
     clearTimeout(retry);
-    clearTimeout(patience);
-    const current = room;
-    room = undefined;
-    void current?.disconnect();
+    clearTimeout(fallback);
+    reconnect();
   };
 }

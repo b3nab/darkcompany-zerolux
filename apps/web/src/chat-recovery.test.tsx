@@ -25,6 +25,7 @@ for (const [key, value] of Object.entries(globals))
   });
 // The connection joins and stays live; the test speaks for the kernel through it.
 type Heard = {
+  readWhileDisconnected: () => Promise<void>;
   event: (event: ChatEvent) => void;
   sync: () => void;
   status: (status: "connecting" | "live" | "offline") => void;
@@ -40,7 +41,8 @@ mock.module("../../../packages/chat/src/realtime", () => ({
 }));
 
 const { createRoot } = await import("react-dom/client");
-const { setKernelFetch, useChat } = await import("@zerolux/chat");
+const { setKernelFetch, useChat, useSessionEvents, sessionBlocks } =
+  await import("@zerolux/chat");
 
 afterAll(() => {
   jest.useRealTimers();
@@ -48,6 +50,76 @@ afterAll(() => {
   for (const [key, descriptor] of previous)
     if (descriptor) Object.defineProperty(globalThis, key, descriptor);
     else delete (globalThis as Record<string, unknown>)[key];
+});
+
+test("without LiveKit notices the Console observes the accepted input and turn over HTTP, without posting it again", async () => {
+  const sessionId = crypto.randomUUID(),
+    text = crypto.randomUUID();
+  let posts = 0,
+    advanced = false;
+  setKernelFetch(async (url, init) => {
+    const path = new URL(url, "https://fixture.example.test").pathname;
+    if (init?.method === "POST") {
+      if (!path.endsWith(`/sessions/${sessionId}/input`))
+        throw new Error("Unexpected fixture write");
+      posts++;
+      return Response.json({});
+    }
+    if (path.endsWith("/events"))
+      return Response.json({
+        first: 0,
+        next: advanced ? 100 : 0,
+        end: advanced ? 100 : 0,
+        events: advanced
+          ? [
+              {
+                type: "input",
+                at: 1,
+                time: null,
+                text,
+                chat: null,
+                delivery: null,
+              },
+            ]
+          : [],
+      });
+    return Response.json({
+      conversations: [],
+      approvals: [],
+      sessions: [
+        {
+          id: sessionId,
+          status: "connected",
+          activity: advanced ? "working" : "idle",
+        },
+      ],
+    });
+  });
+  let chat!: Chat, blocks!: ReturnType<typeof sessionBlocks>;
+  function Probe() {
+    chat = useChat(true, "https://fixture.example.test");
+    blocks = sessionBlocks(useSessionEvents(sessionId).events);
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  try {
+    await act(async () => root.render(<Probe />));
+    await act(async () => {
+      heard!.status("offline");
+      await chat.input(sessionId, text);
+    });
+    expect(chat.sentInputs(sessionId, blocks, [])).toHaveLength(1);
+    advanced = true;
+    await act(async () => {
+      await heard!.readWhileDisconnected();
+    });
+    expect(chat.realtime).toBe("offline");
+    expect(chat.sessions[0]?.activity).toBe("working");
+    expect(chat.sentInputs(sessionId, blocks, [])).toHaveLength(0);
+    expect(posts).toBe(1);
+  } finally {
+    await act(async () => root.unmount());
+  }
 });
 
 test("a read the kernel did not answer is tried again by itself, and its error goes with the answer", async () => {

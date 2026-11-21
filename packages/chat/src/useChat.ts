@@ -260,8 +260,11 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       () => api<{ approvals: Approval[] }>("/chat/approvals"),
       ({ approvals }) => setApprovals(approvals),
     );
-  async function sync() {
-    void outgoing.flush(); // The kernel is back: what it missed goes first.
+  function sync() {
+    void outgoing.flush(); // A reconnection may also unblock the chat outbox.
+    return readSnapshot();
+  }
+  async function readSnapshot() {
     const [current] = await Promise.all([
       listConversations(),
       listSessions(),
@@ -373,6 +376,14 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       kernel: server,
       event: onEvent,
       sync: resyncAll,
+      readWhileDisconnected: async () => {
+        if (!isLooking()) return;
+        // Read what this window shows even if no notice can reach it. In particular,
+        // never call input(), retryInput() or flush the outbox to reconcile a lost event.
+        liveResync();
+        queueResync(server);
+        await Promise.all([background(readSnapshot()), recordsResync()]);
+      },
       status: setRealtime,
     });
     // Handlers only use refs and state setters.
