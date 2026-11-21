@@ -297,7 +297,6 @@ async fn entrusted_terminal_is_resumed_after_exit_without_changing_context() {
         trace(&root).is_empty(),
         "Hire must not launch a managed session"
     );
-    assert!(!root.join(format!("links/claude/{native}.lock")).exists());
     let chat = api(&client, &base, "/conversations", Some(json!({"kind":"dm","title":"Terminal continuity","members":[{"actor_id":actor,"session_id":original}]}))).await;
     let messages = format!(
         "/conversations/{}/messages",

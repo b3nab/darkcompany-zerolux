@@ -123,6 +123,70 @@ impl ChatRuntime {
         }
     }
 
+    /// Replace an input in the original session. Never substitute a fork or restore files.
+    pub async fn edit_input(
+        &self,
+        who: &ChatIdentity,
+        id: &str,
+        at: u64,
+        text: &str,
+    ) -> Result<()> {
+        if !who.is_person() {
+            return Err(Error::Forbidden.into());
+        }
+        ensure!(
+            !text.trim().is_empty(),
+            Error::Invalid("Write something to send".into())
+        );
+        let gate = self.settings_gate(id).await;
+        let _editing = gate.lock().await;
+        let session = self.store.chat_session(who, id).await?;
+        let (harness, record) = self.record_at(who, id, at).await?;
+        let events = crate::native_events::project(
+            &harness,
+            &[crate::native_output::Record {
+                at,
+                record: record.clone(),
+            }],
+        );
+        ensure!(events.iter().any(|item| matches!(&item.event, crate::native_events::Event::Input { chat: None, text, .. } if !text.starts_with("[ZeroLux] "))), Error::Invalid("Choose an input from this session".into()));
+        let control = self.native_control(who, &session, "edit-input-v1").await?;
+        let request = serde_json::json!({"method":"edit_input","link_id":id,"text":text,"at":at});
+        match control {
+            super::settings::Control::Pi(link) => {
+                let mut request = request;
+                request["entry"] = record["id"].clone();
+                link.control(request).await?;
+            }
+            super::settings::Control::Claude(link) => {
+                let mut request = request;
+                request["before"] = record["parentUuid"].clone();
+                request["entry"] = record["uuid"].clone();
+                link.request(request).await?;
+            }
+            super::settings::Control::Codex(link) => {
+                let row = self.store.observed_session(who, id).await?;
+                let reference = crate::host_ops::RecordRef::of(&row);
+                let params = serde_json::json!({"at":at});
+                let target = if let Some(host) = self.remote_host(&session) {
+                    self.hosts.call(&host, "record", serde_json::json!({"op":"input_turn", "record":reference, "params":params})).await?
+                } else {
+                    crate::host_ops::record("input_turn", &reference, &params).await?
+                };
+                let mut request = request;
+                request["turn"] = target;
+                link.request(request).await?;
+            }
+        }
+        self.changed();
+        // The old cursor may point into the abandoned suffix on another open client.
+        // A notification failure must not turn an accepted edit into a second send.
+        if let Ok(readers) = self.store.readers(id).await {
+            let _ = self.livekit.notify(&serde_json::json!({"type":"session.edited", "session_id": id, "event_id":uuid::Uuid::new_v4().to_string()}), &readers).await;
+        }
+        Ok(())
+    }
+
     /// What comes before the input at `at` in the session's native record, as its harness
     /// names it: Claude Code's previous message, pi's previous entry, Codex's turn.
     async fn before(&self, who: &ChatIdentity, id: &str, at: u64) -> Result<String> {

@@ -796,6 +796,7 @@ impl CodexDriver {
             expected.is_none_or(|id| id == thread_id),
             "Codex returned a different thread"
         );
+        crate::native_output::codex_record(&thread_id, &settings["thread"]["path"]);
         settings["thread"]["turns"] = json!([]);
         let native_settings = crate::codex_settings::CodexSettings {
             rpc: rpc.clone(),

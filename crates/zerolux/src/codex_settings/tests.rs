@@ -64,6 +64,21 @@ impl Fixture {
                         json!({})
                     }
                     "turn/settings/update" => json!({"status":turn_status}),
+                    "thread/revert" if request["params"]["beforeTurnId"] == "edited" => {
+                        json!({"thread":{"id":"thread"}})
+                    }
+                    "thread/revert" => {
+                        socket
+                            .send(Message::Text(
+                                json!({"id":id,"error":{"code":-32602,"message":"no such turn"}})
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await
+                            .unwrap();
+                        continue;
+                    }
+                    "turn/start" => json!({"turn":{"id":"correction"}}),
                     "turn/interrupt" => json!({}),
                     "thread/compact/start" => json!({}),
                     "turn/steer" => json!({"turnId":"turn"}),
@@ -123,6 +138,46 @@ impl Fixture {
             .cloned()
             .collect()
     }
+}
+
+#[tokio::test]
+async fn editing_a_codex_input_reverts_its_own_thread_before_starting_one_corrected_turn() {
+    let f = Fixture::new(true, false, "applied").await;
+    let correction = uuid::Uuid::new_v4().to_string();
+    let request = |turn: &str| json!({"method":"edit_input", "turn":turn, "text":correction});
+    assert!(f.control.request(&request("missing")).await.is_err());
+    assert!(f.calls("turn/start").is_empty());
+    f.control.request(&request("edited")).await.unwrap();
+    let calls: Vec<_> = f
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| {
+            matches!(
+                r["method"].as_str(),
+                Some("thread/revert" | "turn/start" | "thread/fork")
+            )
+        })
+        .map(|r| (r["method"].clone(), r["params"].clone()))
+        .collect();
+    assert_eq!(
+        calls,
+        vec![
+            (
+                json!("thread/revert"),
+                json!({"threadId":"thread","beforeTurnId":"missing"})
+            ),
+            (
+                json!("thread/revert"),
+                json!({"threadId":"thread","beforeTurnId":"edited"})
+            ),
+            (
+                json!("turn/start"),
+                json!({"threadId":"thread","input":[{"type":"text","text":correction}]})
+            )
+        ]
+    );
 }
 
 #[tokio::test]

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { cn } from "cn";
 import { GitForkIcon, HistoryIcon, PencilIcon } from "lucide-react";
@@ -18,20 +18,20 @@ import { Textarea } from "@/components/ui/textarea";
 export type Fork = (at?: number, text?: string) => Promise<boolean>;
 
 /**
- * What the owner does from one of the session's inputs: write it again in a new session that
- * goes on from before it, this one left as it is; or, where the harness keeps checkpoints, put
+ * What the owner does from one of the session's inputs: edit it in place and continue from
+ * that point; or, where the harness keeps checkpoints, put
  * the files back as they were before it, after seeing what that changes.
  */
 export function InputActions({
   input,
-  fork,
+  edit,
   rewind,
   busy,
   perform,
 }: {
   input: InputBlock;
-  /** Writing it again in a fork: its person's. */
-  fork?: Fork;
+  /** Continue from this input in the same session. */
+  edit?: (at: number, text: string) => Promise<unknown>;
   /** The files as they were before the input; with `dryRun`, only what that would change. */
   rewind?: (at: number, dryRun: boolean) => Promise<FilesRewind>;
   busy: boolean;
@@ -39,6 +39,21 @@ export function InputActions({
 }) {
   const [editing, setEditing] = useState<string>();
   const [rewinding, setRewinding] = useState<FilesRewind>();
+  const sending = useRef(false);
+  const submit = async () => {
+    if (!edit || !editing?.trim() || sending.current || busy) return;
+    sending.current = true;
+    try {
+      if (
+        await perform(async () => {
+          await edit(input.at, editing.trim());
+        })
+      )
+        setEditing(undefined);
+    } finally {
+      sending.current = false;
+    }
+  };
   if (editing !== undefined)
     return (
       <Below>
@@ -47,7 +62,7 @@ export function InputActions({
           className="flex w-full max-w-[min(40rem,85%)] flex-col gap-2"
           onSubmit={(event) => {
             event.preventDefault();
-            if (editing.trim()) void fork?.(input.at, editing.trim());
+            void submit();
           }}
         >
           <Textarea
@@ -56,6 +71,16 @@ export function InputActions({
             rows={3}
             autoFocus
             onChange={(event) => setEditing(event.target.value)}
+            onKeyDown={(event) => {
+              if (
+                event.key !== "Enter" ||
+                event.shiftKey ||
+                event.nativeEvent.isComposing
+              )
+                return;
+              event.preventDefault();
+              void submit();
+            }}
             className="text-sm"
           />
           <div className="flex justify-end gap-2">
@@ -68,7 +93,7 @@ export function InputActions({
               Cancel
             </Button>
             <Button type="submit" size="sm" disabled={busy || !editing.trim()}>
-              Send in a new session
+              Send
             </Button>
           </div>
         </form>
@@ -131,7 +156,7 @@ export function InputActions({
     );
   return (
     <>
-      {fork && (
+      {edit && (
         <BarButton
           label="Edit"
           busy={busy}

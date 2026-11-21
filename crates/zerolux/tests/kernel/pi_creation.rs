@@ -192,8 +192,7 @@ async fn connected(client: &reqwest::Client, base: &str, native: &str) -> Value 
     panic!("pi reconnect did not complete");
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn creation_and_both_restart_paths_keep_one_native_identity_without_replaying_input() {
+fn fixture_workspace() -> (tempfile::TempDir, PathBuf) {
     // macOS sockaddr_un is short; even a canonicalized TMPDIR must fit its socket path.
     let temporary = tempfile::Builder::new()
         .prefix("zpi-")
@@ -219,6 +218,93 @@ async fn creation_and_both_restart_paths_keep_one_native_identity_without_replay
             fixture.display()
         ),
     );
+    (temporary, root)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn editing_through_the_console_api_continues_before_the_input_in_the_same_pi() {
+    let (_temp, root) = fixture_workspace();
+    let _hosts = Hosts(root.join("links/pi"));
+    let _diagnostics = Diagnostics(root.clone());
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let origin = format!("http://127.0.0.1:{port}");
+    let _kernel = start(&root, port);
+    ready(&reqwest::Client::new(), &origin).await;
+    let base = owner::workspace(&origin, &root).await;
+    let client = owner::client(&base, Duration::from_secs(65)).await;
+    let created = api(
+        &client,
+        &base,
+        "/sessions",
+        Some(json!({"harness":"pi","name":"Fixture pi","workspace":root.join("work")})),
+    )
+    .await;
+    let id = created["session"]["id"].as_str().unwrap();
+    let route = format!("/sessions/{id}");
+    let native = created["session"]["native_session_id"].clone();
+    let [kept, original, later, edited] =
+        std::array::from_fn::<_, 4, _>(|_| uuid::Uuid::new_v4().to_string());
+    for text in [&kept, &original, &later] {
+        api(
+            &client,
+            &base,
+            &format!("{route}/input"),
+            Some(json!({"mode":"steer","text":text})),
+        )
+        .await;
+    }
+    let events = api(&client, &base, &format!("{route}/events?after=0"), None).await;
+    let at = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["type"] == "input" && e["text"] == original)
+        .unwrap()["at"]
+        .as_u64()
+        .unwrap();
+    api(
+        &client,
+        &base,
+        &format!("{route}/edit-input"),
+        Some(json!({"at":at,"text":edited})),
+    )
+    .await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let events = api(&client, &base, &format!("{route}/events?after=0"), None).await;
+        let rows = events["events"].as_array().unwrap();
+        if let Some(last) = rows.iter().rev().find(|e| e["type"] == "text")
+            && let Some(answer) = last["text"]
+                .as_str()
+                .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+            && answer.last() == Some(&edited)
+        {
+            assert_eq!(answer, [kept, edited]);
+            assert!(
+                rows.iter()
+                    .any(|e| e["type"] == "input_edited" && e["before"] == at)
+            );
+            break;
+        }
+        assert!(Instant::now() < deadline, "corrected turn was not recorded");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    let sessions = api(&client, &base, "/sessions", None).await;
+    let sessions = sessions["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0]["id"], id);
+    assert_eq!(sessions[0]["native_session_id"], native);
+    assert_eq!(starts(&root).len(), 1);
+    api(&client, &base, &format!("{route}/stop"), Some(json!({}))).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn creation_and_both_restart_paths_keep_one_native_identity_without_replaying_input() {
+    let (_temp, root) = fixture_workspace();
     let _hosts = Hosts(root.join("links/pi"));
     let _diagnostics = Diagnostics(root.clone());
     let port = std::net::TcpListener::bind("127.0.0.1:0")

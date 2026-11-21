@@ -44,7 +44,7 @@ import type { SessionBlock } from "./session-events";
 import { backgroundNotice, backgroundResync } from "./background";
 import { uiNotice, uiResync } from "./extension-ui";
 import { terminalNotice, terminalResync } from "./terminals";
-import { recordsResync } from "./session-events";
+import { recordEdited, recordsResync } from "./session-events";
 import { accountsNotice } from "./accounts";
 import {
   clearQueue,
@@ -334,6 +334,8 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       case "extension.event":
       case "extension.view":
         return uiNotice(event);
+      case "session.edited":
+        return recordEdited(event.session_id);
       case "session.output": {
         const { session_id, end, type: _, event_id: __, ...tail } = event;
         setOutputs((all) => ({
@@ -580,6 +582,12 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       await listSessions();
       return forked;
     },
+    /** Replace a previous input in the same native session. No fork, file rewind, or replay. */
+    editInput: (sessionId: string, at: number, text: string) =>
+      api(`/sessions/${encodeURIComponent(sessionId)}/edit-input`, {
+        at,
+        text,
+      }).then(() => recordEdited(sessionId)),
     /** The session's files as they were before its input at `at`; `dryRun` only says what. */
     rewindFiles: (sessionId: string, at: number, dryRun = false) =>
       api<{ result: FilesRewind }>(`/sessions/${sessionId}/rewind-files`, {

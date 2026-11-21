@@ -1,4 +1,9 @@
 import { expect, test } from "bun:test";
+import { inputEditor } from "./edit-input.ts";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+} from "@earendil-works/pi-coding-agent";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -167,6 +172,8 @@ async function fixture() {
   });
   return {
     session,
+    calls,
+    releaseFirst: release.resolve,
     async installProjectSettings() {
       await writeFile(
         join(cwd, ".pi", "settings.json"),
@@ -247,6 +254,55 @@ async function fixture() {
     },
   };
 }
+
+test("editing returns to the chosen input in the same pi session, including its first input", async () => {
+  const f = await fixture();
+  try {
+    f.releaseFirst();
+    const { session } = f;
+    const id = session.sessionId;
+    const manager = session.sessionManager;
+    const ctx = {
+      sessionManager: manager,
+      isIdle: () => !session.isStreaming,
+      navigateTree: session.navigateTree.bind(session),
+    } as unknown as ExtensionCommandContext;
+    let submitted: Promise<void> | undefined;
+    const { edit: editor, dispatch } = inputEditor({
+      appendEntry(type: string, data: unknown) {
+        manager.appendCustomEntry(type, data);
+      },
+      sendUserMessage(text: string) {
+        if (text.startsWith("/zerolux-chat edit-input "))
+          void dispatch(text.slice("/zerolux-chat edit-input ".length), ctx);
+        else submitted = session.prompt(text);
+      },
+    } as unknown as ExtensionAPI);
+    const first = crypto.randomUUID(),
+      second = crypto.randomUUID(),
+      later = crypto.randomUUID();
+    const correction = crypto.randomUUID(),
+      replacement = crypto.randomUUID();
+    await session.prompt(first!);
+    await session.prompt(second!);
+    await session.prompt(later!);
+    const inputs = manager
+      .getBranch()
+      .filter((e) => e.type === "message" && e.message.role === "user");
+    await editor(ctx, inputs[1]!.id, 200, correction!, () => true);
+    await submitted;
+    expect(f.calls.at(-1)).toEqual([first, correction]);
+    await expect(
+      editor(ctx, inputs[2]!.id, 300, later!, () => true),
+    ).rejects.toThrow();
+    await editor(ctx, inputs[0]!.id, 100, replacement!, () => true);
+    await submitted;
+    expect(f.calls.at(-1)).toEqual([replacement]);
+    expect(session.sessionId).toBe(id);
+  } finally {
+    await f.close();
+  }
+});
 
 test("native Escape silently drops custom steers, but returns text steers intact to the editor", async () => {
   for (const text of [false, true]) {

@@ -111,17 +111,14 @@ impl ChatRuntime {
             session.stopped_at.is_some() || session.status == "attention",
             "Stop the running session before resuming it"
         );
-        ensure!(
-            self.runners
-                .find(&session.native_session_id, &session.workspace, mode)
-                .await?
-                .is_none()
-                && !self.runners.is_leased(&session.native_session_id)?,
-            "The runner is still alive; reconnect it or Stop first"
-        );
-        self.runners
-            .check_native_stopped(&session.native_session_id, &session.workspace)
-            .await?;
+        // A runner still there is ended first: Resume starts the session anew.
+        if let Some(link) = self
+            .runners
+            .find(&session.native_session_id, &session.workspace, mode)
+            .await?
+        {
+            link.stop(id).await?;
+        }
         if session.stopped_at.is_none() {
             self.store.stop_chat_session(who, id).await?;
         }
@@ -157,9 +154,6 @@ impl ChatRuntime {
         actor_id: Option<String>,
         homes: &crate::homes::Homes,
     ) -> Result<(Option<Actor>, ChatSession)> {
-        self.runners
-            .check_native_stopped(&target.native_session_id, &target.workspace)
-            .await?;
         let mode =
             crate::claude::ClaudeSession::saved_permission_mode(&target.native_session_id, homes)
                 .await
@@ -311,19 +305,12 @@ impl ChatRuntime {
         let mut agents = self.agents.lock().await;
         ensure!(!*self.stop.borrow(), "The kernel is stopping");
         let executable = self.runners.executable()?;
-        // Rebind a surviving query; only a verified absence permits cold recovery.
+        // The runner that still runs it is bound again; without one, it is started again.
         let Some(link) = self
             .runners
             .find(&session.native_session_id, &session.workspace, mode)
             .await?
         else {
-            ensure!(
-                !self.runners.is_leased(&session.native_session_id)?,
-                "The Claude runner is still running"
-            );
-            self.runners
-                .check_native_stopped(&session.native_session_id, &session.workspace)
-                .await?;
             let mut locator = self.store.chat_session_locator(who, &session.id).await?;
             let mode = restored_mode(&mut locator, mode)?;
             drop(agents);
@@ -365,21 +352,13 @@ impl ChatRuntime {
         who: &ChatIdentity,
         session: &ChatSession,
     ) -> Result<()> {
-        let locator = self.store.chat_session_locator(who, &session.id).await?;
-        let pid = locator["pid"]
-            .as_i64()
-            .and_then(|pid| i32::try_from(pid).ok())
-            .context("The entrusted Claude terminal has no saved process ID")?;
-        self.runners
-            .check_terminal_stopped(&session.native_session_id, pid)
-            .await?;
+        // With the permissions its terminal had, as Claude Code saved them.
         let mode = crate::claude::ClaudeSession::saved_permission_mode(
             &session.native_session_id,
             &crate::homes::Homes::own(),
         )
-        .await?;
-        // Preserve the native resume mode. Missing/unsupported metadata never becomes
-        // a default permission choice, and the terminal is never killed here.
+        .await
+        .unwrap_or_default();
         self.restore_claude(
             who,
             session,
@@ -509,13 +488,6 @@ impl ChatRuntime {
             .await?
         {
             link.stop(id).await?;
-        } else {
-            ensure!(
-                !self.runners.is_leased(&session.native_session_id)?,
-                "The owned runner's exit could not be confirmed"
-            );
-            self.runners
-                .check_native_exit(&session.native_session_id, &session.workspace)?;
         }
         Ok(true)
     }

@@ -63,8 +63,8 @@ test.skipIf(process.platform === "win32")(
       ).toBe(false);
       child.kill("SIGTERM");
       expect(await child.exited).toBe(0);
-      // The descriptor goes with it; the lock file stays (released by the system).
-      expect((await readdir(registry)).sort()).toEqual([`${native}.lock`]);
+      // The descriptor goes with it: nothing of the runner is left behind.
+      expect(await readdir(registry)).toEqual([]);
     } finally {
       child.kill();
       await rm(root, { recursive: true, force: true });

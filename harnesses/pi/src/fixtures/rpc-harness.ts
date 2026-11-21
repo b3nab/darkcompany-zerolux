@@ -7,6 +7,7 @@ import {
   SessionManager,
   VERSION,
   type ExtensionAPI,
+  type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import chatExtension from "../chat-extension.ts";
@@ -63,6 +64,10 @@ appendFileSync(
 );
 const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
 const tools = new Map<string, any>();
+const commands = new Map<
+  string,
+  (args: string, ctx: ExtensionCommandContext) => Promise<void>
+>();
 const events = new EventEmitter();
 let idle = true,
   closing = false;
@@ -99,7 +104,18 @@ const pi = {
   },
   getActiveTools: () => [],
   setActiveTools() {},
-  registerCommand() {},
+  registerCommand(
+    name: string,
+    command: {
+      handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+    },
+  ) {
+    commands.set(name, command.handler);
+  },
+  appendEntry(type: string, data: unknown) {
+    manager.appendCustomEntry(type, data);
+  },
+  getCommands: () => [],
   getThinkingLevel: () => thinking,
   setModel: async (next: typeof model) => {
     if (existsSync(join(root, "no-auth"))) return false;
@@ -121,13 +137,74 @@ const pi = {
       events.emit(name, data);
     },
   },
-  sendUserMessage(content: string) {
+  sendUserMessage(
+    content: string,
+    options?: { expandPromptTemplates?: boolean },
+  ) {
+    if (
+      options?.expandPromptTemplates &&
+      content.startsWith("/zerolux-chat ")
+    ) {
+      const command = commands.get("zerolux-chat")!;
+      void command(content.slice("/zerolux-chat ".length), {
+        ...ctx,
+        navigateTree: async (entry: string) => {
+          const target = manager.getEntry(entry)!;
+          if (target.parentId) manager.branch(target.parentId);
+          else manager.resetLeaf();
+          return { cancelled: false };
+        },
+      } as ExtensionCommandContext);
+      return;
+    }
     idle = false;
     setTimeout(() => {
       void (async () => {
-        const [_, chat, reply] = /^Chat: (\S+); delivery: (\S+)$/m.exec(
-          content,
-        )!;
+        const envelope = /^Chat: (\S+); delivery: (\S+)$/m.exec(content);
+        if (!envelope) {
+          await emit("agent_start");
+          manager.appendMessage({
+            role: "user",
+            content,
+            timestamp: Date.now(),
+          });
+          await emit("message_start", { message: { role: "user", content } });
+          const inputs = manager
+            .getBranch()
+            .flatMap((e) =>
+              e.type === "message" && e.message.role === "user"
+                ? [e.message.content]
+                : [],
+            );
+          const reply = {
+            role: "assistant",
+            api: "anthropic-messages",
+            provider: "fixture",
+            model: model.id,
+            stopReason: "stop",
+            timestamp: Date.now(),
+            content: [{ type: "text", text: JSON.stringify(inputs) }],
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                total: 0,
+              },
+            },
+          } as const;
+          manager.appendMessage({ ...reply, content: [...reply.content] });
+          idle = true;
+          await emit("agent_settled");
+          return;
+        }
+        const [, chat, reply] = envelope;
         appendFileSync(
           join(root, "native-inputs.jsonl"),
           JSON.stringify({ reply }) + "\n",

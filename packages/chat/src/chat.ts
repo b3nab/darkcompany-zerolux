@@ -209,6 +209,7 @@ export type ChatEvent = { event_id: string } & (
   | { type: "conversation.changed"; conversation_id: string }
   | { type: "session.changed"; session_id: string }
   | { type: "session.queue"; session_id: string }
+  | { type: "session.edited"; session_id: string }
   | { type: "delivery.changed"; conversation_id: string; message_id: string }
   | { type: "approval.changed"; approval_id: string }
   | { type: "subscriptions.changed"; subscriptions: Subscription[] }
@@ -578,6 +579,7 @@ const eventTypes = new Set<string>([
   "accounts.changed",
   "read.changed",
   "session.output",
+  "session.edited",
   "session.live",
   "session.queue",
   "terminal.output",

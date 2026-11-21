@@ -254,10 +254,6 @@ impl HostRuntime {
                     }
                     return Ok(json!({"ready":waiting || rebind, "rebind":rebind}));
                 }
-                if self.claude.is_leased(native)? {
-                    return Ok(json!({"ready":false}));
-                }
-                self.claude.check_native_stopped(native, workspace).await?;
                 self.claude_launch(params).await?;
                 Ok(json!({"ready":true}))
             }

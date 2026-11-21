@@ -226,6 +226,7 @@ function fakeChat(overrides: Partial<Chat> = {}): Chat {
       actor: null,
       session: session("s-new", ASPEN),
     }),
+    editInput: nothing,
     forkSession: async () => ({
       actor: null,
       session: session("s-fork", ASPEN),

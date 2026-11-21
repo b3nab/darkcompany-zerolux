@@ -618,9 +618,7 @@ impl ChatRuntime {
                 }
             } else if let Some(host) = host {
                 let _ = self.restore_claude_on(who, &current, &host).await;
-            } else if (actual.is_some() || !self.runners.is_leased(&current.native_session_id)?)
-                && self.reconnect_owned(who, &current, mode).await.is_ok()
-            {
+            } else if self.reconnect_owned(who, &current, mode).await.is_ok() {
                 self.store
                     .clear_integration_update(
                         &current.id,

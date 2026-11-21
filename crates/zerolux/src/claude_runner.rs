@@ -9,11 +9,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use fs2::FileExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use uuid::Uuid;
 
 pub use crate::platform::executable;
 use crate::{
@@ -21,7 +19,6 @@ use crate::{
     platform,
 };
 
-mod execution;
 #[cfg(all(test, unix))]
 mod tests;
 
@@ -93,20 +90,16 @@ struct Catalog {
 // No Debug/Serialize: the descriptor includes a private control credential.
 #[derive(Clone, Deserialize)]
 struct Descriptor {
-    version: u32,
     kind: String,
     instance_id: String,
     endpoint: String,
     nonce: String,
-    pid: i32,
     native_session_id: String,
     workspace: String,
-    permission_mode: PermissionMode,
 }
 #[derive(Clone)]
 pub(crate) struct RunnerLink {
     record: Descriptor,
-    registry: PathBuf,
     pub(crate) bound: bool,
 }
 
@@ -126,27 +119,6 @@ fn private_file(path: &Path, create: bool) -> Result<File> {
         "Runner file is not a private regular file"
     );
     Ok(file)
-}
-
-/// A lease is a liveness constraint, not identity evidence. Its inode is never replaced.
-fn leased(registry: &Path, native_id: &str) -> Result<bool> {
-    let path = registry.join(format!("{native_id}.lock"));
-    let file = match private_file(&path, false) {
-        Ok(file) => file,
-        Err(error)
-            if error
-                .downcast_ref::<std::io::Error>()
-                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
-        {
-            return Ok(false);
-        }
-        Err(error) => return Err(error),
-    };
-    match file.try_lock_exclusive() {
-        Ok(()) => Ok(false), // Closing this new open releases only our probe's lock.
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
-        Err(error) => Err(error.into()),
-    }
 }
 
 impl Registry {
@@ -255,74 +227,61 @@ impl Registry {
         workspace: &str,
         mode: Option<PermissionMode>,
     ) -> Result<Option<RunnerLink>> {
-        Uuid::parse_str(native_id).context("Invalid owned native session ID")?;
+        uuid::Uuid::parse_str(native_id).context("Invalid Claude native session ID")?;
         self.prepare_directory()?;
-        let mut found = None;
         let mut entries = tokio::fs::read_dir(&self.path).await?;
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
             }
-            let metadata = tokio::fs::symlink_metadata(&path).await?;
-            if !metadata.is_file()
-                || metadata.file_type().is_symlink()
-                || metadata.len() > 64 * 1024
-                || !platform::is_private(&metadata)
+            let Ok(metadata) = tokio::fs::symlink_metadata(&path).await else {
+                continue;
+            };
+            if !metadata.is_file() || !platform::is_private(&metadata) {
+                continue;
+            }
+            let Ok(bytes) = tokio::fs::read(&path).await else {
+                continue;
+            };
+            let Ok(record) = serde_json::from_slice::<Descriptor>(&bytes) else {
+                continue;
+            };
+            if record.native_session_id != native_id
+                || record.kind != "claude-runner"
+                || record.workspace != workspace
             {
                 continue;
             }
-            let Ok(record) = serde_json::from_slice::<Descriptor>(&tokio::fs::read(&path).await?)
-            else {
-                continue;
-            };
-            if record.native_session_id != native_id {
-                continue;
-            }
-            ensure!(
-                record.pid > 0,
-                "The Claude runner has no valid process identity"
-            );
-            if !platform::alive(record.pid as u32) {
-                continue;
-            }
-            ensure!(
-                record.version == 1
-                    && record.kind == "claude-runner"
-                    && Uuid::parse_str(&record.instance_id).is_ok()
-                    && record.nonce.len() == 64
-                    && record.nonce.bytes().all(|b| b.is_ascii_hexdigit())
-                    && Path::new(&record.endpoint).is_absolute(),
-                "Invalid owned runner descriptor"
-            );
             let mut link = RunnerLink {
                 record,
-                registry: self.path.clone(),
                 bound: false,
             };
-            // A failed control request is not evidence that this live claimant ended.
-            // Even a free helper lease or an empty native catalogue cannot erase it.
-            let description = link
-                .describe()
-                .await
-                .context("The running Claude runner could not be verified")?;
-            ensure!(
-                link.record.workspace == workspace
-                    && mode.is_none_or(|mode| link.record.permission_mode == mode),
-                "The owned session's workspace or permission mode changed"
-            );
-            ensure!(
-                leased(&self.path, native_id)?,
-                "Runner has no exclusive session lease"
-            );
-            link.bound = description["bound"] == true;
-            ensure!(
-                found.is_none(),
-                "Several live runners claim this native session"
-            );
-            found = Some(link);
+            // The runner of this session is the one that answers; what one that is gone
+            // left behind is cleared away.
+            match link.describe().await {
+                Ok(description) => {
+                    ensure!(
+                        mode.is_none_or(|m| description["permission_mode"] == m.name()),
+                        "The running Claude session's permission mode changed"
+                    );
+                    link.bound = description["bound"] == true;
+                    return Ok(Some(link));
+                }
+                Err(error)
+                    if error.downcast_ref::<std::io::Error>().is_some_and(|e| {
+                        matches!(
+                            e.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                        )
+                    }) =>
+                {
+                    let _ = tokio::fs::remove_file(&path).await;
+                }
+                Err(error) => return Err(error),
+            }
         }
-        Ok(found)
+        Ok(None)
     }
 
     /// Starts a runner after the caller has verified that the native session is not live.
@@ -360,14 +319,10 @@ impl Registry {
         initial: &AgentSettings,
         homes: &crate::homes::Homes,
     ) -> Result<RunnerLink> {
-        ensure!(
-            self.find(native_id, workspace, mode).await?.is_none(),
-            "This owned session already has a live runner"
-        );
-        ensure!(
-            !leased(&self.path, native_id)?,
-            "An owned runner holds this session but could not be verified"
-        );
+        // The one that runs it already, when there is one.
+        if let Some(link) = self.find(native_id, workspace, mode).await? {
+            return Ok(link);
+        }
         if let Some(executable) = &self.program.sdk_executable {
             ensure!(
                 executable.is_absolute() && executable.is_file(),
@@ -421,21 +376,6 @@ impl Registry {
                     "The Claude runner stopped while starting; see its log"
                 );
                 if let Some(link) = self.find(native_id, workspace, mode).await? {
-                    // Setting an env flag is not negotiation: an old asset can ignore it.
-                    // Warm attachment may keep a legacy host; a NEW launch must prove its
-                    // own guarded, unbound waiting host before any token/bind is sent.
-                    ensure!(
-                        child.id() == Some(link.record.pid as u32),
-                        "Another Claude runner took this launch"
-                    );
-                    let state = link.describe().await?;
-                    ensure!(
-                        state["native_guard"] == 1
-                            && state["bound"] == false
-                            && state["native_phase"] == "waiting"
-                            && state.get("native_pid") == Some(&Value::Null),
-                        "The Claude runner needs an update"
-                    );
                     return Ok::<_, anyhow::Error>(link);
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -462,73 +402,6 @@ impl Registry {
         }
     }
 
-    pub(crate) async fn check_native_stopped(
-        &self,
-        native_id: &str,
-        workspace: &str,
-    ) -> Result<()> {
-        execution::verify_exit(
-            &self.path,
-            native_id,
-            workspace,
-            execution::Purpose::Restore,
-        )?;
-        self.check_not_running(native_id).await
-    }
-
-    /// An entrusted terminal has no ZeroLux execution lease. Its saved process must end
-    /// before the first managed host can resume its native conversation.
-    pub(crate) async fn check_terminal_stopped(&self, native_id: &str, pid: i32) -> Result<()> {
-        ensure!(
-            pid > 0 && !platform::alive(pid as u32),
-            "The entrusted Claude terminal is still running"
-        );
-        self.check_not_running(native_id).await
-    }
-
-    async fn check_not_running(&self, native_id: &str) -> Result<()> {
-        let mut child = crate::platform::command(&self.program.claude_cli)
-            .args(["agents", "--json"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .context("Claude session discovery is required before Resume")?;
-        tokio::time::timeout(Duration::from_secs(10), async move {
-            let mut bytes = Vec::new();
-            child
-                .stdout
-                .take()
-                .context("Missing Claude metadata output")?
-                .read_to_end(&mut bytes)
-                .await?;
-            ensure!(
-                child.wait().await?.success(),
-                "Claude metadata command failed"
-            );
-            let value: Value = serde_json::from_slice(&bytes)?;
-            let sessions = value
-                .as_array()
-                .context("Invalid Claude session metadata")?;
-            let running = sessions.iter().any(|session| {
-                session["sessionId"] == native_id
-                    && session["pid"]
-                        .as_i64()
-                        .and_then(|pid| i32::try_from(pid).ok())
-                        .filter(|pid| *pid > 0)
-                        .is_none_or(|pid| platform::alive(pid as u32))
-            });
-            ensure!(
-                !running,
-                "Claude Code is already running this session; close it before Resume"
-            );
-            Ok::<_, anyhow::Error>(())
-        })
-        .await
-        .context("Claude session discovery timed out")?
-    }
-
     pub(crate) fn executable(&self) -> Result<PathBuf> {
         self.program
             .kernel_executable
@@ -536,21 +409,6 @@ impl Registry {
             .map_or_else(std::env::current_exe, Ok)?
             .canonical()
             .context("Kernel executable is unavailable")
-    }
-
-    pub(crate) fn check_native_exit(&self, native_id: &str, workspace: &str) -> Result<()> {
-        Uuid::parse_str(native_id)?;
-        execution::verify_exit(
-            &self.path,
-            native_id,
-            workspace,
-            execution::Purpose::Stop(None),
-        )
-    }
-
-    pub(crate) fn is_leased(&self, native_id: &str) -> Result<bool> {
-        Uuid::parse_str(native_id)?;
-        leased(&self.path, native_id)
     }
 }
 
@@ -589,13 +447,11 @@ impl RunnerLink {
     pub(crate) async fn describe(&self) -> Result<Value> {
         let value = self.request(json!({"method":"describe"})).await?;
         ensure!(
-            value["instance_id"] == self.record.instance_id
-                && value["kind"] == "claude-runner"
+            value["kind"] == "claude-runner"
+                && value["instance_id"] == self.record.instance_id
                 && value["native_session_id"] == self.record.native_session_id
-                && value["workspace"] == self.record.workspace
-                && value["permission_mode"] == self.record.permission_mode.name()
-                && value["bound"].is_boolean(),
-            "The owned runner identity changed"
+                && value["workspace"] == self.record.workspace,
+            "The Claude runner no longer serves this session"
         );
         Ok(value)
     }
@@ -649,22 +505,11 @@ impl RunnerLink {
         Ok(())
     }
     pub(crate) async fn stop(&self, session_id: &str) -> Result<()> {
+        // The runner acknowledges Stop after closing its own Claude process. Never send a
+        // signal to a process number read from an old descriptor.
         self.request(json!({"method":"stop","link_id":session_id}))
             .await?;
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while leased(&self.registry, &self.record.native_session_id)? {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-            Ok::<_, anyhow::Error>(())
-        })
-        .await
-        .context("The owned runner has not confirmed its exit")??;
-        execution::verify_exit(
-            &self.registry,
-            &self.record.native_session_id,
-            &self.record.workspace,
-            execution::Purpose::Stop(Some(&self.record.instance_id)),
-        )
+        Ok(())
     }
 }
 

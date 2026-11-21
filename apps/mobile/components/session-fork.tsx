@@ -1,7 +1,7 @@
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   ActionSheetIOS,
   Alert,
@@ -44,7 +44,7 @@ const fileList = (rewind: FilesRewind) => {
 
 /**
  * What the owner does with a message of the session, on a long press. With one of their inputs:
- * resend it, edited, in a new session that goes on from before it, this one staying as it is;
+ * edit it and continue from that point in the same session;
  * put the folder's files back as they were before it, where the harness keeps checkpoints. With
  * one of the agent's: a new session that goes on from after it (`keep`, from `forkAfter`).
  * Either is copied. `open` shows the choices; `sheet` is the editor, to render once.
@@ -54,7 +54,6 @@ export function useInputActions(session: ChatSession | undefined) {
   // A fork is its person's; putting files back is working in it; copying is reading.
   const { mine, write } = useAccess(session);
   const router = useRouter();
-  const forkWith = useForkWith();
   const [editing, setEditing] = useState<{ block: InputBlock; text: string }>();
   const failed = (title: string) => (e: unknown) =>
     Alert.alert(title, errorMessage(e));
@@ -124,7 +123,7 @@ export function useInputActions(session: ChatSession | undefined) {
             copy,
           ]
         : [
-            ...(mine
+            ...(write && !block.chat
               ? [
                   {
                     label: "Edit and resend",
@@ -166,14 +165,14 @@ export function useInputActions(session: ChatSession | undefined) {
   const sheet = (
     <ForkEditor
       title="Edit and resend"
+      sendOnEnter
       text={editing?.text}
       setText={(text) =>
         setEditing((current) => current && { ...current, text })
       }
       send={async (text) => {
-        const id = await forkWith(session!, { at: editing!.block.at }, text);
+        await chat.editInput(session!.id, editing!.block.at, text);
         setEditing(undefined);
-        router.push(`/session/${id}`);
       }}
       close={() => setEditing(undefined)}
     />
@@ -202,9 +201,11 @@ function ForkEditor({
   setText,
   send,
   close,
+  sendOnEnter = false,
 }: {
   title: string;
   placeholder?: string;
+  sendOnEnter?: boolean;
   text: string | undefined;
   setText: (text: string) => void;
   send: (text: string) => Promise<void>;
@@ -213,6 +214,21 @@ function ForkEditor({
   const faint = String(useCSSVariable("--color-faint"));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const sending = useRef(false);
+  const submit = async () => {
+    if (sending.current || !text?.trim()) return;
+    sending.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await send(text);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      sending.current = false;
+      setBusy(false);
+    }
+  };
   const cancel = () => {
     setError("");
     close();
@@ -227,13 +243,7 @@ function ForkEditor({
         <Pressable
           accessibilityRole="button"
           disabled={busy || !text?.trim()}
-          onPress={() => {
-            setBusy(true);
-            setError("");
-            send(text!.trim())
-              .catch((e: unknown) => setError(errorMessage(e)))
-              .finally(() => setBusy(false));
-          }}
+          onPress={() => void submit()}
           hitSlop={12}
           className="disabled:opacity-40"
         >
@@ -247,6 +257,9 @@ function ForkEditor({
           value={text ?? ""}
           onChangeText={setText}
           multiline
+          submitBehavior={sendOnEnter ? "submit" : "newline"}
+          returnKeyType={sendOnEnter ? "send" : undefined}
+          onSubmitEditing={sendOnEnter ? () => void submit() : undefined}
           autoFocus
           editable={!busy}
           placeholder={placeholder}

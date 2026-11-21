@@ -128,6 +128,91 @@ async function render(node: ReactNode) {
   await act(async () => root!.render(node));
 }
 
+test("editing an input submits once to its own session on Enter and keeps the draft on failure", async () => {
+  const { InputActions } = await import("./SessionFork");
+  const id = crypto.randomUUID(),
+    at = 412,
+    original = crypto.randomUUID(),
+    corrected = crypto.randomUUID();
+  const sent: { url: string; body: unknown }[] = [];
+  let refuse = true;
+  setKernelFetch(async (url, init) => {
+    sent.push({
+      url: new URL(url, "https://fixture.invalid").pathname,
+      body: JSON.parse(String(init?.body)),
+    });
+    return refuse
+      ? Response.json({ error: "fixture" }, { status: 409 })
+      : Response.json({});
+  });
+  function Probe() {
+    const chat = useChat(false, "https://fixture.example.test");
+    return (
+      <InputActions
+        input={{
+          kind: "input",
+          at,
+          text: original,
+          chat: null,
+          time: null,
+          key: `${at}.0`,
+        }}
+        busy={false}
+        edit={(offset, text) => chat.editInput(id, offset, text)}
+        perform={async (op) => {
+          try {
+            await op();
+            return true;
+          } catch {
+            return false;
+          }
+        }}
+      />
+    );
+  }
+  await render(<Probe />);
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>("button")!.click(),
+  );
+  const field = document.querySelector("textarea")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      Object.getPrototypeOf(field),
+      "value",
+    )!.set!.call(field, corrected);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    field.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        shiftKey: true,
+        bubbles: true,
+      }),
+    );
+  });
+  expect(sent).toHaveLength(0);
+  const enter = () =>
+    act(async () => {
+      field.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+  await enter();
+  expect(document.querySelector("textarea")?.value).toBe(corrected);
+  refuse = false;
+  await enter();
+  expect(sent).toEqual(
+    Array.from({ length: 2 }, () => ({
+      url: `/api/sessions/${id}/edit-input`,
+      body: { at, text: corrected },
+    })),
+  );
+  expect(document.querySelector("textarea")).toBeNull();
+});
+
 for (const action of ["stop", "resume"] as const) {
   test(`${action} failure refreshes authoritative session state without replaying the action`, async () => {
     let chat!: Chat;

@@ -33,7 +33,6 @@ mod internal_notifications;
 mod livekit;
 mod onboarding;
 mod owned_chat;
-mod owned_runner;
 mod pi_chat;
 mod pi_creation;
 mod postgres;

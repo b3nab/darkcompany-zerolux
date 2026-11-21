@@ -25,8 +25,6 @@ import {
   type Inbox,
 } from "@zerolux/bridge";
 import { ClaudeAgent, type StartQuery } from "./agent.ts";
-import { acquireSessionLock } from "@zerolux/bridge/session-lock";
-import { waitAndExec } from "@zerolux/bridge/exec-gate";
 import { ClaudeExecution } from "./execution.ts";
 import { modelOptions, PERMISSION_MODES } from "./settings.ts";
 
@@ -125,6 +123,7 @@ export class Runner {
         "usage-v1",
         "images-v1",
         "rewind-files-v1",
+        "edit-input-v1",
         ...(this.config.managed && this.deps.code && this.deps.execution
           ? ["integration-update-v1", "integration-target-v1"]
           : []),
@@ -240,6 +239,16 @@ export class Runner {
       )
         throw new Error("Invalid input request");
       await this.agent.say(request.text, mode, images);
+      return {};
+    }
+    if (method === "edit_input") {
+      if (this.stopRequested || !this.transport.bound)
+        throw new Error("The session is not connected");
+      if (typeof request.before !== "string" || !request.before)
+        throw new Error("Claude did not record a parent for this input");
+      if (typeof request.text !== "string" || !request.text.trim())
+        throw new Error("Write something to send");
+      await this.agent.editInput(request.before, request.text);
       return {};
     }
     if (method === "rewind_files") {
@@ -558,14 +567,13 @@ export class Runner {
     return {};
   }
 
-  /** Host shutdown/disposal is not a Store Stop. Retain the lease through actual exit. */
+  /** Close the SDK query and wait for its native child to exit. */
   closeNative(): Promise<void> {
     this.stopRequested = true;
     this.deps.execution?.requestStop();
     return (this.nativeClosing ??= (async () => {
       this.agent.close();
-      await this.nativeRun;
-      await this.deps.execution?.waitForExit();
+      await Promise.all([this.nativeRun, this.deps.execution?.waitForExit()]);
     })());
   }
 
@@ -634,48 +642,21 @@ export async function launch(
     "claude",
   );
   await mkdir(registry, { recursive: true, mode: 0o700 });
-  const lock = acquireSessionLock(join(registry, `${nativeSessionId}.lock`));
-  if (!lock) {
-    console.error("Another runner already holds this session");
-    return 3;
-  }
   // SIGTERM (the machine shutting down) ends the process cleanly; Stop is the kernel's `stop`.
   const terminated = new Promise<void>((resolve) =>
     process.once("SIGTERM", () => resolve()),
   );
-  let execution: ClaudeExecution | undefined;
+  const execution = managed ? new ClaudeExecution() : undefined;
+  runnerDeps.execution = execution;
   try {
-    if (managed) {
-      execution = new ClaudeExecution(
-        lock,
-        {
-          nativeSessionId,
-          workspace,
-          instanceId: control.instanceId,
-        },
-        import.meta.path,
-      );
-      runnerDeps.execution = execution;
-    } else {
-      // Exact legacy lease and launch behavior for kernels without this protocol.
-      lock.write(
-        JSON.stringify({ pid: process.pid, instance_id: control.instanceId }),
-      );
-    }
     ready?.(runner);
     await control.start();
     await Promise.race([runner.finished, terminated]);
   } finally {
     try {
-      try {
-        if (execution) await runner.closeNative();
-      } finally {
-        await control.close();
-      }
-      execution?.release(true);
+      if (execution) await runner.closeNative();
     } finally {
-      execution?.release(); // If cleanup failed, retain unreleased evidence.
-      lock.release();
+      await control.close();
     }
   }
   return 0;
@@ -812,8 +793,7 @@ export async function fork(session: string, folder: string, upTo?: string) {
   return sessionId;
 }
 
-if (import.meta.main && process.argv[2] === "exec") waitAndExec("Claude Code");
-else if (import.meta.main && process.argv[2] === "catalog") {
+if (import.meta.main && process.argv[2] === "catalog") {
   catalog(query, process.cwd(), resolveClaudeExecutable()).then(
     (models) => console.log(JSON.stringify(models)),
     (error: unknown) => {

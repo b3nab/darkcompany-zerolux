@@ -1,5 +1,6 @@
 use super::*;
 use crate::platform::Canonical;
+use uuid::Uuid;
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -19,13 +20,9 @@ impl Fixture {
         let entry = root.path().join("fixture.ts");
         std::fs::write(&entry, format!(r#"
 import {{ LocalControl }} from {control};
-import {{ acquireSessionLock }} from {lock};
 import {{ join }} from 'node:path';
 const native = process.env.ZEROLUX_NATIVE_SESSION;
 const registry = process.env.ZEROLUX_RUNNER_REGISTRY;
-const lease = acquireSessionLock(join(registry, `${{native}}.lock`));
-if (!lease) process.exit(3);
-lease.write(JSON.stringify({{pid:process.pid}}));
 const control = new LocalControl(registry, {{
   describe: () => ({{kind:'claude-runner', native_session_id:native,
     workspace:process.env.ZEROLUX_WORKSPACE, permission_mode:'default', bound:false, ...{description}}}),
@@ -41,7 +38,7 @@ const control = new LocalControl(registry, {{
 }}, 'guard');
 await control.start();
 setTimeout(() => process.exit(0), 20000); // Only this disposable fake host; no native/model is spawned.
-"#, control=serde_json::to_string(&code.join("local-control.ts")).unwrap(), lock=serde_json::to_string(&code.join("session-lock.ts")).unwrap())).unwrap();
+"#, control=serde_json::to_string(&code.join("local-control.ts")).unwrap())).unwrap();
         let bun = std::env::split_paths(&std::env::var_os("PATH").unwrap())
             .map(|dir| dir.join("bun"))
             .find(|file| file.is_file())
@@ -72,63 +69,29 @@ setTimeout(() => process.exit(0), 20000); // Only this disposable fake host; no 
         link.request(json!({"method":"fixture-exit"}))
             .await
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while self.registry.is_leased(&self.native).unwrap() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
     }
 }
 
 #[tokio::test]
-async fn only_its_own_guarded_waiting_host_can_satisfy_a_new_launch() {
-    let guarded = json!({"native_guard":1,"native_phase":"waiting","native_pid":null});
-    for (description, accepted) in [
-        (json!({}), false), // An old asset silently ignores MANAGED=1.
-        (
-            json!({"native_guard":2,"native_phase":"waiting","native_pid":null}),
-            false,
-        ),
-        (json!({"native_guard":1,"native_phase":"waiting"}), false), // Unknown is not null.
-        (
-            json!({"native_guard":1,"native_phase":"running","native_pid":123}),
-            false,
-        ),
-        (
-            json!({"native_guard":1,"native_phase":"waiting","native_pid":null,"bound":true}),
-            false,
-        ),
-        (
-            json!({"native_guard":1,"native_phase":"waiting","native_pid":null,"pid":std::process::id()}),
-            false,
-        ),
-        (guarded, true),
-    ] {
-        let f = Fixture::new(description.clone());
-        let result = f
-            .registry
-            .launch(
-                &f.native,
-                f.workspace(),
-                PermissionMode::Default,
-                None,
-                &AgentSettings::default(),
-                &crate::homes::Homes::own(),
-            )
-            .await;
-        // Even the red test cleans up ONLY its authenticated fixture, not descriptor PID.
-        if let Ok(link) = &result {
-            f.exit(link).await;
-        }
-        assert_eq!(
-            result.is_ok(),
-            accepted,
-            "Unexpected launch result for {description}"
-        );
-        assert!(!f.registry.is_leased(&f.native).unwrap());
-    }
+async fn a_launch_gives_the_runner_it_started_and_the_one_that_runs_already_after() {
+    let f = Fixture::new(json!({}));
+    let own = crate::homes::Homes::own();
+    let settings = AgentSettings::default();
+    let launch = || {
+        f.registry.launch(
+            &f.native,
+            f.workspace(),
+            PermissionMode::Default,
+            None,
+            &settings,
+            &own,
+        )
+    };
+    let first = launch().await.unwrap();
+    // Asked again while it runs, the same runner: no other is started beside it.
+    let again = launch().await.unwrap();
+    assert_eq!(again.record.instance_id, first.record.instance_id);
+    f.exit(&first).await;
 }
 
 #[tokio::test]

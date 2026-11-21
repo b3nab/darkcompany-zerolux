@@ -1578,8 +1578,12 @@ export function SessionView({
                       ? (input) => (
                           <InputActions
                             input={input}
-                            // A fork is its person's; rewinding works the session's files.
-                            fork={access.mine ? fork : undefined}
+                            edit={
+                              !input.chat
+                                ? (at, text) =>
+                                    chat.editInput(session.id, at, text)
+                                : undefined
+                            }
                             // Claude Code keeps checkpoints of the files; the others do not.
                             rewind={
                               session.harness === "claude-code"

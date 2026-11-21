@@ -24,6 +24,31 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
+test("repeated edits show just the retained prefix and corrected turn, including after earlier pages arrive", () => {
+  const input = (offset: number) =>
+    at(
+      { type: "input", text: crypto.randomUUID(), chat: null, delivery: null },
+      offset,
+    );
+  const prefix = input(11),
+    original = input(22),
+    correction = input(55),
+    final = input(88);
+  const older = [prefix, original, at({ type: "text", text: "abandoned" }, 33)];
+  const newer = [
+    at({ type: "input_edited", before: 22 }, 44),
+    correction,
+    at({ type: "text", text: "superseded" }, 66),
+    at({ type: "input_edited", before: 55 }, 77),
+    final,
+  ];
+  expect(sessionBlocks(newer).map((b) => b.key)).toEqual(["88.0"]);
+  expect(sessionBlocks([...older, ...newer]).map((b) => b.key)).toEqual([
+    "11.0",
+    "88.0",
+  ]);
+});
+
 test("a session's events become blocks: a tool joins its result, a turn's start draws nothing", () => {
   const blocks = sessionBlocks([
     at({ type: "turn_started" }, 0),

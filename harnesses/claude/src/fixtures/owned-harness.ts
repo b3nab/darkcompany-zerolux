@@ -67,7 +67,7 @@ function scripted(
   let effort = options.effort ?? "high";
   let permissionMode = options.permissionMode ?? "default";
   // The model remains scripted in this fixture. A real, isolated child exercises the
-  // SDK spawn contract/lease, with no Claude binary, credentials or model requests.
+  // SDK spawn contract, with no Claude binary, credentials or model requests.
   const native = options.spawnClaudeCodeProcess?.({
     command: process.execPath,
     args: [
@@ -107,6 +107,10 @@ function scripted(
       session_id: sessionId,
     });
   trace("start", {
+    native_pid:
+      native && "pid" in native && typeof native.pid === "number"
+        ? native.pid
+        : null,
     resume: Boolean(options.resume),
     mode: options.permissionMode,
     session: sessionId,

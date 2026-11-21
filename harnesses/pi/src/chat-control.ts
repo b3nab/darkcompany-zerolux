@@ -64,6 +64,12 @@ export interface ControlHost {
   ): Promise<void>;
   /** The commands and skills pi offers, as the owner types them. */
   commands?(linkId: string): Promise<SessionCommand[]>;
+  editInput?(
+    linkId: string,
+    entry: string,
+    at: number,
+    text: string,
+  ): Promise<void>;
   /** Starts pi's own compaction of a link's session; the session records how it went. */
   compact?(linkId: string, instructions?: string): Promise<void>;
   /**
@@ -137,6 +143,21 @@ export class ChatControl extends LocalControl {
               (request.mode as InputMode | undefined) ?? "steer",
               images,
             );
+            return {};
+          }
+          if (method === "edit_input" && host.editInput) {
+            const { link_id, entry, at, text } = request;
+            if (
+              typeof link_id !== "string" ||
+              typeof entry !== "string" ||
+              typeof at !== "number" ||
+              !Number.isSafeInteger(at) ||
+              at < 0 ||
+              typeof text !== "string" ||
+              !text.trim()
+            )
+              throw new Error("Invalid input edit");
+            await host.editInput(link_id, entry, at, text);
             return {};
           }
           if (method === "commands" && host.commands) {

@@ -50,6 +50,10 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         code: Option<String>,
     },
+    /// The active branch now continues before the input at this record offset.
+    InputEdited {
+        before: u64,
+    },
     /// The harness compacted its context.
     Compacted {
         summary: Option<String>,
@@ -334,6 +338,11 @@ fn pi(record: &Value) -> Vec<Event> {
             summary: record["summary"].as_str().map(str::to_owned),
         }],
         // ZeroLux's extension keeps the compaction asked of pi, which pi does not record.
+        Some("custom") if record["customType"] == "zerolux-input-edited" => record["data"]["at"]
+            .as_u64()
+            .map(|before| Event::InputEdited { before })
+            .into_iter()
+            .collect(),
         Some("custom") if record["customType"] == "zerolux-compaction-requested" => {
             vec![compact_command(
                 record["data"]["instructions"].as_str().unwrap_or_default(),

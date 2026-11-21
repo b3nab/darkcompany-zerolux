@@ -1,6 +1,8 @@
 import { realpath } from "node:fs/promises";
 import {
   getAgentDir,
+  VERSION,
+  type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -32,7 +34,10 @@ const key = Symbol.for("zerolux.pi.managed-host");
 const globals = globalThis as typeof globalThis & { [key]?: Host };
 
 /** The host this pi runs under, when ZeroLux started it: none in a terminal. */
-export async function managedHost(): Promise<Host | undefined> {
+export async function managedHost(
+  pi: Pick<ExtensionAPI, "getThinkingLevel">,
+  ctx: ExtensionContext,
+): Promise<Host | undefined> {
   const path = process.env.ZEROLUX_PI_RUNNER;
   if (!path) return undefined;
   const old = globals[key];
@@ -40,6 +45,22 @@ export async function managedHost(): Promise<Host | undefined> {
   try {
     const descriptor = await readControlDescriptor(path);
     const actual = await controlRequest(descriptor, "describe");
+    // Released hosts wait for the extension to report the native state before accepting RPC.
+    // New hosts read it from pi itself; they need no acknowledgement.
+    if (actual.guard_version === 1 && actual.phase === "starting") {
+      const file = ctx.sessionManager.getSessionFile();
+      if (!file || !ctx.model) return undefined;
+      await controlRequest(descriptor, "verify", {
+        native_session_id: ctx.sessionManager.getSessionId(),
+        workspace: await realpath(ctx.cwd),
+        native_pid: nativeProcess().pid,
+        session_file: await realpath(file),
+        cli_version: VERSION,
+        model: { provider: ctx.model.provider, id: ctx.model.id },
+        thinking: pi.getThinkingLevel(),
+        auth_configured: ctx.modelRegistry.hasConfiguredAuth(ctx.model),
+      });
+    }
     return (globals[key] = {
       descriptor,
       path,

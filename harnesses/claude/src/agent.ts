@@ -110,8 +110,13 @@ class Input implements AsyncIterable<SDKUserMessage> {
  */
 export class ClaudeAgent {
   readonly bridge: ChatBridge;
-  private readonly input = new Input();
+  private input = new Input();
   private query?: Query;
+  private replacing?: {
+    before: string;
+    ready: ReturnType<typeof Promise.withResolvers<void>>;
+  };
+  private closing = false;
   /** The last rate-limit event of the session's account. */
   private rateLimit?: SDKMessage;
   private dispatchEnabled = true;
@@ -152,29 +157,96 @@ export class ClaudeAgent {
    * gives an agent's session its chat tools.
    */
   async run(start: StartQuery, options: Options, resume: boolean, chat = true) {
-    this.query = start({
-      prompt: this.input,
-      options: {
+    let before: string | undefined;
+    for (;;) {
+      const replacement = this.replacing;
+      try {
+        this.query = start({
+          prompt: this.input,
+          options: {
+            ...options,
+            cwd: this.session.workspace,
+            ...(resume
+              ? { resume: this.session.nativeSessionId }
+              : { sessionId: this.session.nativeSessionId }),
+            ...(before ? { resumeSessionAt: before } : {}),
+            canUseTool: this.canUseTool,
+            onElicitation: this.onElicitation,
+            includePartialMessages: true,
+            // A checkpoint of the files before each of the owner's messages, to rewind them.
+            enableFileCheckpointing: true,
+            mcpServers: { zerolux: this.tools(chat) },
+            // ZeroLux's own tools: never held for a permission check.
+            allowedTools: [
+              ...(options.allowedTools ?? []),
+              ...BACKGROUND_TOOLS,
+              ...(chat ? CHAT_TOOLS : []),
+            ],
+          },
+        });
+        if (replacement) {
+          await this.query.initializationResult();
+          this.replacing = undefined;
+          replacement.ready.resolve();
+        }
+        for await (const message of this.query) this.handle(message);
+      } catch (error) {
+        if (replacement && this.replacing === replacement) {
+          this.replacing = undefined;
+          replacement.ready.reject(error);
+          throw error;
+        }
+        if (!this.replacing) throw error;
+      }
+      if (this.closing || !this.replacing) return;
+      before = this.replacing.before;
+      resume = true;
+      this.input = new Input();
+      this.state = "idle";
+      this.turnDelivery = undefined;
+      this.streaming = undefined;
+      this.invalidateUsage();
+      const live = this.settings.values();
+      options = {
         ...options,
-        cwd: this.session.workspace,
-        ...(resume
-          ? { resume: this.session.nativeSessionId }
-          : { sessionId: this.session.nativeSessionId }),
-        canUseTool: this.canUseTool,
-        onElicitation: this.onElicitation,
-        includePartialMessages: true,
-        // A checkpoint of the files before each of the owner's messages, to rewind them.
-        enableFileCheckpointing: true,
-        mcpServers: { zerolux: this.tools(chat) },
-        // ZeroLux's own tools: never held for a permission check.
-        allowedTools: [
-          ...(options.allowedTools ?? []),
-          ...BACKGROUND_TOOLS,
-          ...(chat ? CHAT_TOOLS : []),
-        ],
-      },
-    });
-    for await (const message of this.query) this.handle(message);
+        ...(live.model ? { model: live.model } : {}),
+        ...(live.effort ? { effort: live.effort as Options["effort"] } : {}),
+        ...(live.permission_mode
+          ? {
+              permissionMode: live.permission_mode as Options["permissionMode"],
+            }
+          : {}),
+      };
+    }
+  }
+
+  /** Reopen the same native ID at its retained parent, then send the edited input once. */
+  async editInput(before: string, text: string) {
+    if (!this.query || this.closing || this.replacing)
+      throw new Error("Claude is not ready to edit this input");
+    if (!before)
+      throw new Error("Claude did not record a parent for this input");
+    await this.bridge.pauseInput();
+    try {
+      // Accepted queued work and pending approvals must not be silently lost by closing the query.
+      if (
+        this.ownerQueue.length ||
+        this.written.length ||
+        !this.input.empty ||
+        this.waiting.size
+      )
+        throw new Error("Claude still has pending input or approvals");
+      const ready = Promise.withResolvers<void>();
+      this.replacing = { before, ready };
+      this.input.close();
+      this.query.close();
+      await ready.promise;
+      if (this.closing)
+        throw new Error("Claude stopped before the correction could be sent");
+      await this.say(text);
+    } finally {
+      if (!this.closing) this.bridge.resumeInput();
+    }
   }
 
   /** Working on a turn, or input still waiting for one. */
@@ -222,6 +294,9 @@ export class ClaudeAgent {
   }
 
   close() {
+    this.closing = true;
+    this.replacing?.ready.reject(new Error("Claude stopped during the edit"));
+    this.replacing = undefined;
     this.invalidateUsage();
     this.input.close();
     this.query?.close();

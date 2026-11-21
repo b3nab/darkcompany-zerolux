@@ -118,6 +118,11 @@ pub async fn record(op: &str, record: &RecordRef, params: &Value) -> Result<Valu
                 end,
             })
         }
+        "input_turn" => {
+            let at: u64 = param(params, "at")?;
+            let path = path.context("The session's native record is unavailable")?;
+            json!(codex_input_turn(&path, at).await?)
+        }
         "at" => {
             let at: u64 = param(params, "at")?;
             let path = path.context("The session's native record is not there yet")?;
@@ -143,6 +148,43 @@ pub async fn record(op: &str, record: &RecordRef, params: &Value) -> Result<Valu
         ),
         other => bail!("This computer's ZeroLux does not know `record.{other}`; update it"),
     })
+}
+
+/// Codex's message records do not always repeat the turn ID. Walk backwards from the
+/// selected record to its opening task_started, never to an unrelated earlier turn.
+async fn codex_input_turn(path: &Path, at: u64) -> Result<String> {
+    let mut before = at;
+    while before > 0 {
+        let (rows, first, _, _) =
+            crate::native_output::read_back(path, before, crate::native_output::PAGE_BYTES).await?;
+        for row in rows.into_iter().rev() {
+            // thread/revert excludes the entire turn. Do not discard another, earlier
+            // user input when the selected input was steered into that same turn.
+            if crate::native_events::project("codex", std::slice::from_ref(&row))
+                .iter()
+                .any(|item| matches!(item.event, crate::native_events::Event::Input { .. }))
+            {
+                bail!("Codex can rewind to the start of this turn, not between two inputs in it");
+            }
+            let p = &row.record["payload"];
+            if row.record["type"] == "event_msg" {
+                match p["type"].as_str() {
+                    Some("task_started") => {
+                        return Ok(p["turn_id"]
+                            .as_str()
+                            .context("Codex did not name this turn")?
+                            .to_owned());
+                    }
+                    Some("task_complete" | "turn_aborted") => {
+                        bail!("This input has no open Codex turn")
+                    }
+                    _ => (),
+                }
+            }
+        }
+        before = first;
+    }
+    bail!("The input's Codex turn was not found")
 }
 
 /// What the session's folder holds: its git state, changes, files and pull request.

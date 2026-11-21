@@ -28,6 +28,8 @@ use crate::{
     store::{Error, Result, Store},
 };
 
+mod lineage;
+
 /// A page reads up to this many bytes, but never splits a record.
 pub const PAGE_BYTES: u64 = 512 * 1024;
 /// How much of a record a page of earlier events reads: its long tool outputs travel cut,
@@ -92,6 +94,17 @@ pub fn with_tails(mut sessions: Vec<ChatSession>) -> Vec<ChatSession> {
     sessions
 }
 
+/// Codex returns the active rollout on attach and revert. Reverting leaves the old file
+/// in place, so its mere existence does not mean it remains the thread's current record.
+pub(crate) fn codex_record(thread: &str, path: &Value) {
+    if let Some(path) = path.as_str().map(PathBuf::from).filter(|p| p.is_absolute()) {
+        FOUND
+            .lock()
+            .expect("record paths")
+            .insert(format!("codex:{thread}"), path);
+    }
+}
+
 /// Where the session's native record is. None until the harness has written it.
 pub fn locate(session: &sessions::Model) -> Option<PathBuf> {
     let locator: Value = serde_json::from_str(&session.native_locator_json).ok()?;
@@ -149,13 +162,21 @@ fn find(dir: &Path, suffix: &str, depth: u8) -> Option<PathBuf> {
 /// Complete records from `after`, up to `PAGE_BYTES`. A line still being written is left
 /// for the next read.
 pub async fn read(path: &Path, after: u64) -> std::io::Result<(Vec<Record>, u64, u64)> {
+    lineage::forward(path, after).await
+}
+
+async fn read_file(
+    path: &Path,
+    after: u64,
+    cutoff: Option<u64>,
+) -> std::io::Result<(Vec<Record>, u64, u64)> {
     let mut file = tokio::fs::File::open(path).await?;
-    let end = file.metadata().await?.len();
+    let end = cutoff.unwrap_or(file.metadata().await?.len());
     if after > end {
         return Err(std::io::Error::other("cursor past the end"));
     }
     file.seek(SeekFrom::Start(after)).await?;
-    let mut reader = BufReader::new(file);
+    let mut reader = BufReader::new(file.take(end - after));
     let (mut records, mut next, mut line) = (Vec::new(), after, Vec::new());
     while next < end && next - after < PAGE_BYTES {
         line.clear();
@@ -183,6 +204,14 @@ fn record(at: u64, line: &[u8]) -> Option<Record> {
 /// never splitting a record; a line still being written is left out. Returns them in order,
 /// with the offset where they start, where the last one ends, and the file's size.
 pub async fn read_back(
+    path: &Path,
+    before: u64,
+    budget: u64,
+) -> std::io::Result<(Vec<Record>, u64, u64, u64)> {
+    lineage::backward(path, before, budget).await
+}
+
+async fn back_file(
     path: &Path,
     before: u64,
     budget: u64,
@@ -511,7 +540,9 @@ async fn watch_once(
         let Ok(meta) = tokio::fs::metadata(&path).await else {
             continue;
         };
-        let end = meta.len();
+        let Ok(end) = lineage::len(&path, meta.len()).await else {
+            continue;
+        };
         let last = sizes.get(&session.id).copied();
         let current = TAILS.lock().ok().and_then(|t| t.get(&session.id).cloned());
         let ending = match current {

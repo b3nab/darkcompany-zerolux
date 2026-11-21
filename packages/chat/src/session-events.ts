@@ -34,6 +34,7 @@ export type SessionEvent = {
       /** A long output travels cut, its beginning as `output`: the whole one's size in bytes. */
       truncated?: number;
     }
+  | { type: "input_edited"; before: number }
   | { type: "turn_started" }
   | { type: "turn_ended"; status: string }
   /** `code` `signed_out`: the harness's sign-in is gone and must be made again. */
@@ -240,6 +241,16 @@ const between = new Set<SessionEvent["type"]>([
 
 /** The blocks of a session, in order: each tool result joins its call; a turn's start draws nothing. */
 export function sessionBlocks(events: SessionEvent[]): SessionBlock[] {
+  if (events.some((event) => event.type === "input_edited")) {
+    const active: SessionEvent[] = [];
+    for (const event of events) {
+      if (event.type === "input_edited") {
+        while (active.length && active[active.length - 1]!.at >= event.before)
+          active.pop();
+      } else active.push(event);
+    }
+    events = active;
+  }
   const blocks: SessionBlock[] = [];
   const calls = new Map<string, ToolBlock>();
   let record = -1;
@@ -647,7 +658,20 @@ export interface SessionRecord {
  * work, or with `chat` only the turns that chat's messages opened. One read at a time.
  */
 // Every record read on screen, read to its end when notices may have been missed.
-const reading = new Set<{ grow: (end: number) => Promise<void> }>();
+const reading = new Set<{
+  sessionId: string;
+  reset: () => Promise<void>;
+  grow: (end: number) => Promise<void>;
+}>();
+
+/** A rewind can replace the record with a shorter one. Its old byte cursor no longer applies. */
+export async function recordEdited(sessionId: string) {
+  await Promise.all(
+    [...reading]
+      .filter((reader) => reader.sessionId === sessionId)
+      .map((reader) => reader.reset()),
+  );
+}
 
 /** After a reconnection, every record on screen is read to its end: notices may have been missed. */
 export function recordsResync() {
@@ -707,6 +731,17 @@ export function sessionReader(
   let wanted = 0;
   let owed: { since?: number } | undefined;
   const reader = {
+    sessionId,
+    reset: () =>
+      run(async () => {
+        const fresh = await page(`before=${LATEST}`);
+        record.events = fresh.events;
+        record.first = fresh.first;
+        record.next = fresh.next;
+        wanted = fresh.end;
+        owed = undefined;
+        shown = "";
+      }),
     /** Earlier events: one page, or with `since` (ms) back to an event at or before it. */
     earlier: (since?: number) =>
       run(async () => {

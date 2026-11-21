@@ -1,6 +1,7 @@
 use std::os::unix::fs::PermissionsExt;
 
 use super::*;
+use uuid::Uuid;
 
 mod startup;
 
@@ -110,16 +111,16 @@ async fn catalog_reads_native_helper_metadata_and_rejects_failed_commands() {
     );
 }
 
-// No harness is started: this test process is the live claimant, its socket is missing,
-// and its helper lease is free. Neither absence can authorize a replacement writer.
+// No harness is started: a runner that is gone left its record behind, and the process
+// number in it is now another process's (this test's own).
 #[tokio::test]
-async fn a_live_claimant_with_unreachable_control_is_not_absent() {
+async fn what_a_runner_that_is_gone_left_behind_is_cleared_away_whoever_has_its_number_now() {
     let root = tempfile::tempdir().unwrap();
     let registry = Registry::new(root.path().join("runners"), RunnerProgram::default());
     registry.prepare_directory().unwrap();
     let native = Uuid::new_v4().to_string();
     let workspace = root.path().to_str().unwrap();
-    let mut record = json!({
+    let record = json!({
         "version": 1,
         "kind": "claude-runner",
         "instance_id": Uuid::new_v4().to_string(),
@@ -133,124 +134,12 @@ async fn a_live_claimant_with_unreachable_control_is_not_absent() {
     let path = registry.path.join("claim.json");
     std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    assert!(!registry.is_leased(&native).unwrap());
-    let result = registry
+    let found = registry
         .find(&native, workspace, PermissionMode::Default)
-        .await;
-    assert!(
-        result.is_err(),
-        "An unreachable live claimant is not absent"
-    );
-    for pid in [0, -1] {
-        record["pid"] = json!(pid);
-        std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
-        let result = registry
-            .find(&native, workspace, PermissionMode::Default)
-            .await;
-        assert!(
-            result.is_err(),
-            "An invalid process identity proves no death"
-        );
-    }
-}
-
-#[test]
-fn a_free_lease_requires_native_child_exit_evidence() {
-    let root = tempfile::tempdir().unwrap();
-    let native = Uuid::new_v4().to_string();
-    let instance = Uuid::new_v4().to_string();
-    let workspace = root.path().to_str().unwrap();
-    let path = root.path().join(format!("{native}.lock"));
-    let write = |value: &Value| {
-        std::fs::write(&path, serde_json::to_vec(value).unwrap()).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    };
-    let verify =
-        || execution::verify_exit(root.path(), &native, workspace, execution::Purpose::Restore);
-    let verify_stop = || {
-        execution::verify_exit(
-            root.path(),
-            &native,
-            workspace,
-            execution::Purpose::Stop(None),
-        )
-    };
-    assert!(verify().is_err());
-    let running = json!({"version":1,"kind":"claude-execution", "nativeSessionId":native,
-        "workspace":workspace,"instanceId":instance, "holderPid":std::process::id(),
-        "nativePid":std::process::id(),"phase":"running","started":true,"released":false});
-    write(&running);
-    assert!(
-        verify_stop().is_err(),
-        "A missing host does not confirm its child's Stop"
-    );
-    assert!(verify().is_err());
-    for patch in [
-        json!({"nativePid":null,"phase":"starting"}),
-        json!({"nativePid":0}),
-        json!({"workspace":"/another"}),
-        json!({"version":2}),
-    ] {
-        let mut value = running.clone();
-        value
-            .as_object_mut()
-            .unwrap()
-            .extend(patch.as_object().unwrap().clone());
-        write(&value);
-        let before = std::fs::read(&path).unwrap();
-        assert!(verify().is_err());
-        assert_eq!(std::fs::read(&path).unwrap(), before);
-    }
-    write(&json!({"pid":std::process::id(),"instance_id":instance})); // Legacy has no native PID.
-    assert!(verify().is_err());
-    assert!(verify_stop().is_err());
-    let mut waiting = running.clone();
-    waiting["phase"] = json!("waiting");
-    waiting["started"] = json!(false);
-    waiting["nativePid"] = Value::Null;
-    waiting["released"] = json!(true);
-    write(&waiting);
-    assert!(verify_stop().is_ok());
-    assert!(
-        verify().is_ok(),
-        "The SDK checks saved history; a terminal conversation can predate its managed host"
-    );
-    waiting.as_object_mut().unwrap().remove("nativePid");
-    write(&waiting);
-    assert!(
-        verify_stop().is_err(),
-        "Missing nativePid is not explicit null"
-    );
-    let mut exited = running;
-    exited["phase"] = json!("exited");
-    exited["released"] = json!(true);
-    write(&exited);
-    assert!(verify_stop().is_ok());
-    assert!(verify().is_ok(), "Positive exit/release survives PID reuse");
-    assert!(
-        execution::verify_exit(
-            root.path(),
-            &native,
-            workspace,
-            execution::Purpose::Stop(Some(&instance))
-        )
-        .is_ok()
-    );
-    assert!(
-        execution::verify_exit(
-            root.path(),
-            &native,
-            workspace,
-            execution::Purpose::Stop(Some("other"))
-        )
-        .is_err()
-    );
-    let lease = private_file(&path, false).unwrap();
-    lease.try_lock_exclusive().unwrap();
-    assert!(
-        verify().is_err(),
-        "The proof must be read under the same exclusive lease"
-    );
+        .await
+        .unwrap();
+    assert!(found.is_none());
+    assert!(!path.exists());
 }
 
 #[tokio::test]

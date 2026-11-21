@@ -274,6 +274,37 @@ impl CodexSettings {
                 self.input(&text("text"), mode, &images).await?;
                 json!({})
             }
+            "edit_input" => {
+                let turn = request["turn"]
+                    .as_str()
+                    .context("Choose a Codex turn to edit")?;
+                let input = request["text"]
+                    .as_str()
+                    .filter(|s| !s.trim().is_empty())
+                    .context("Write something to send")?;
+                // Revert itself interrupts an active turn. Only an acknowledged revert may start
+                // replacement work; a missing reply is never grounds to issue either call again.
+                let reverted = self
+                    .rpc
+                    .request(
+                        "thread/revert",
+                        json!({"threadId":self.thread_id, "beforeTurnId":turn}),
+                    )
+                    .await?;
+                ensure!(
+                    reverted["thread"]["id"] == self.thread_id,
+                    "Codex did not confirm the edited thread"
+                );
+                crate::native_output::codex_record(&self.thread_id, &reverted["thread"]["path"]);
+                self.rpc
+                    .request(
+                        "turn/start",
+                        json!({"threadId":self.thread_id, "input":[{"type":"text","text":input}]}),
+                    )
+                    .await
+                    .context("The thread was rewound; Codex did not confirm the corrected input")?;
+                reverted
+            }
             "interrupt" => json!({"interrupted": self.interrupt().await?}),
             "compact" => {
                 self.compact().await?;

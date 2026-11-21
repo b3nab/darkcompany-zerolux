@@ -744,23 +744,12 @@ async fn managed_claude_bootstrap_lifecycle() {
     );
     assert_eq!(count(&fixture.trace(), "close"), 1);
     std::fs::remove_file(workspace.join("legacy-description")).unwrap();
-    // Exercise an existing bootstrap session's old lease format during explicit Resume.
-    let lease = fixture
-        .dir
-        .path()
-        .join(format!("links/claude/{}.lock", native.as_str().unwrap()));
-    let record: Value = serde_json::from_slice(&std::fs::read(&lease).unwrap()).unwrap();
     tokio::time::timeout(Duration::from_secs(60), async {
         while kill(Pid::from_raw(pid), None) != Err(nix::errno::Errno::ESRCH) {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .unwrap();
-    std::fs::write(
-        &lease,
-        serde_json::to_vec(&json!({"pid":pid,"instance_id":record["instanceId"]})).unwrap(),
-    )
     .unwrap();
     let resumed = kernel
         .api(&format!("/sessions/{session}/resume"), Some(json!({})))
@@ -782,9 +771,8 @@ async fn managed_claude_bootstrap_lifecycle() {
     );
     let next = resumed["session"]["id"].as_str().unwrap();
     // Crash the fixture host AND its child, then resume their saved native identity.
-    let record: Value = serde_json::from_slice(&std::fs::read(&lease).unwrap()).unwrap();
     let host_pid = last["pid"].as_i64().unwrap() as i32;
-    let child_pid = record["nativePid"].as_i64().unwrap() as i32;
+    let child_pid = last["native_pid"].as_i64().unwrap() as i32;
     killpg(Pid::from_raw(host_pid), Signal::SIGKILL).unwrap();
     tokio::time::timeout(Duration::from_secs(60), async {
         while [host_pid, child_pid]
@@ -903,17 +891,13 @@ async fn a_native_crash_is_restored_without_replay_or_duplicate_processes() {
         .await;
     let trace = fixture.trace();
     assert_eq!(count(&trace, "input"), 1);
-    let record: Value = serde_json::from_slice(
-        &std::fs::read(
-            fixture
-                .dir
-                .path()
-                .join(format!("links/claude/{}.lock", native.as_str().unwrap())),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    let pid = record["nativePid"].as_i64().unwrap() as i32;
+    let pid = trace
+        .iter()
+        .rev()
+        .find(|row| row["event"] == "start")
+        .unwrap()["native_pid"]
+        .as_i64()
+        .unwrap() as i32;
     // Kill ONLY this fixture's native child.
     kill(Pid::from_raw(pid), Signal::SIGKILL).unwrap();
     kernel
@@ -999,7 +983,7 @@ async fn a_native_crash_is_restored_without_replay_or_duplicate_processes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_dead_host_and_free_lease_do_not_confirm_stop_of_its_live_native_child() {
+async fn a_session_starts_again_whatever_its_dead_host_left_running() {
     let fixture = Fixture::new();
     let workspace = fixture.dir.path().join("workspace");
     std::fs::write(workspace.join("keep-native"), "fixture").unwrap();
@@ -1032,7 +1016,7 @@ async fn a_dead_host_and_free_lease_do_not_confirm_stop_of_its_live_native_child
         .unwrap()["pid"]
         .as_i64()
         .unwrap() as i32;
-    // Kill ONLY this fake helper, not its group. The fixture child ignores EOF.
+    // Kill ONLY this fake helper, not its group. The fixture child ignores EOF and lives on.
     kill(Pid::from_raw(host_pid), Signal::SIGKILL).unwrap();
     tokio::time::timeout(Duration::from_secs(60), async {
         while kill(Pid::from_raw(host_pid), None) != Err(nix::errno::Errno::ESRCH) {
@@ -1043,38 +1027,27 @@ async fn a_dead_host_and_free_lease_do_not_confirm_stop_of_its_live_native_child
     .unwrap();
     assert!(kill(Pid::from_raw(native_pid), None).is_ok());
     kernel.shutdown().await;
-    let kernel = Kernel::start(&fixture, 0).await; // No tracked adapter; cold restore must refuse.
-    assert_eq!(count(&fixture.trace(), "start"), 1);
-    assert!(kill(Pid::from_raw(native_pid), None).is_ok());
-    let response = kernel
-        .client
-        .post(format!("{}/api/sessions/{session}/stop", kernel.url))
-        .json(&json!({}))
-        .send()
-        .await
-        .unwrap();
-    let status = response.status();
-    let state = kernel.api("/sessions", None).await;
-    let stopped = state["sessions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["id"] == session)
-        .unwrap();
-    assert!(
-        kill(Pid::from_raw(native_pid), None).is_ok(),
-        "The orphan must remain untouched"
-    );
-    assert_eq!(count(&fixture.trace(), "start"), 1);
+    // The kernel starting again brings the session back, whatever was left behind.
+    let kernel = Kernel::start(&fixture, 0).await;
+    kernel
+        .wait("/sessions", |v| {
+            v["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["id"] == session && s["status"] == "connected")
+        })
+        .await;
+    assert_eq!(count(&fixture.trace(), "start"), 2);
+    // And it stops when asked.
+    let stopped = kernel
+        .api(&format!("/sessions/{session}/stop"), Some(json!({})))
+        .await;
+    assert_eq!(stopped["session"]["status"], "stopped");
+    assert!(stopped["session"]["attention_reason"].is_null());
     kernel.shutdown().await;
-    // Fixture Drop closes only the detached process group this fixture created.
-    assert_eq!(
-        status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Native cancellation is uncertain"
-    );
-    assert_eq!(stopped["status"], "stopped", "Owner Stop remains durable");
-    assert!(stopped["attention_reason"].is_string());
+    // The child the first host left is this test's own to end.
+    let _ = kill(Pid::from_raw(native_pid), Signal::SIGKILL);
 }
 
 #[tokio::test(flavor = "multi_thread")]

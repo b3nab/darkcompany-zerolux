@@ -3,10 +3,7 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./session-lock": "./src/session-lock.ts",
-    "./exec-gate": "./src/exec-gate.ts",
-    "./process-state": "./src/process-state.ts"
+    ".": "./src/index.ts"
   },
   "scripts": {
     "typecheck": "bun x --bun tsc --noEmit"

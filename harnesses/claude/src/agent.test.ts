@@ -128,6 +128,7 @@ function fixture(
       }
     }
     return Object.assign(stream(), {
+      initializationResult: async () => ({}),
       rewindFiles: async (id: string, options: { dryRun?: boolean }) => ({
         canRewind: true,
         filesChanged: [`${id}.txt`],
@@ -227,6 +228,23 @@ function fixture(
       calls.filter((c) => c.path.endsWith("/activity")).map((c) => c.body),
   };
 }
+
+test("editing starts the corrected input on the same Claude ID at the retained message", async () => {
+  const f = fixture();
+  await f.start();
+  try {
+    const parent = crypto.randomUUID(),
+      correction = crypto.randomUUID();
+    await f.agent.editInput(parent, correction);
+    await tick();
+    expect(f.options().resume).toBe("native");
+    expect(f.options().resumeSessionAt).toBe(parent);
+    expect(f.options().forkSession).not.toBe(true);
+    expect(f.inputs.map((i) => i.message.content)).toEqual([correction]);
+  } finally {
+    f.agent.close();
+  }
+});
 
 test("every message is a user turn at once, its envelope naming its author and chat", async () => {
   const f = fixture();

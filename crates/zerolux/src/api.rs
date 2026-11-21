@@ -684,6 +684,7 @@ fn app_router(state: AppState, web_dir: PathBuf) -> Router {
             axum::routing::patch(change_schedule).delete(delete_schedule),
         )
         .route("/sessions/{id}/rewind-files", post(rewind_files))
+        .route("/sessions/{id}/edit-input", post(edit_input))
         .route("/sessions/{id}/takeover", post(takeover_pi_session))
         .route("/sessions/{id}/stop", post(stop_session))
         .route("/sessions/{id}/output", get(session_output))
@@ -1570,6 +1571,27 @@ async fn fork_session(
     let mut session = session;
     state.store.mark_created(&mut session).await?;
     Ok(Json(json!({ "actor": actor, "session": session })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditInput {
+    at: u64,
+    text: String,
+}
+
+async fn edit_input(
+    State(state): State<AppState>,
+    Extension(who): Extension<ChatIdentity>,
+    Path(id): Path<String>,
+    ChatJson(input): ChatJson<EditInput>,
+) -> Result<Json<Value>, ApiFailure> {
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
+    runtime(&state)?
+        .edit_input(&who, &id, input.at, &input.text)
+        .await
+        .map_err(runtime_error)?;
+    Ok(Json(json!({})))
 }
 
 #[derive(Deserialize)]

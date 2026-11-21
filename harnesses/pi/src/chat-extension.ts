@@ -28,6 +28,7 @@ import {
 } from "@zerolux/bridge";
 import { ChatControl, type PairRequest } from "./chat-control.ts";
 import { PiSettings } from "./settings.ts";
+import { inputEditor } from "./edit-input.ts";
 import { listMetadata } from "./discover.ts";
 import { checkTerminalTakeover } from "./terminal-takeover.ts";
 import { installWake } from "./wake.ts";
@@ -144,6 +145,7 @@ export default function chatExtension(pi: ExtensionAPI) {
     },
   });
   if (installed) return;
+  const editor = inputEditor(pi);
   let control: ChatControl | undefined;
   /** By workspace ID. Each link has its own kernel, token, deliveries and replies. */
   const links = new Map<string, Link>();
@@ -171,7 +173,7 @@ export default function chatExtension(pi: ExtensionAPI) {
   let managed: Awaited<ReturnType<typeof managedHost>>;
   let metadata: NativeMetadata = { pid: process.pid };
   pi.on("session_start", async (_event, ctx) => {
-    managed = await managedHost();
+    managed = await managedHost(pi, ctx);
     metadata = await nativeMetadata(ctx, managed);
   });
   const leaveWake = installWake(pi, join(getAgentDir(), "zerolux-wake"));
@@ -760,6 +762,10 @@ export default function chatExtension(pi: ExtensionAPI) {
     description:
       "ZeroLux chat: status | off | reload (pair from the ZeroLux Team page)",
     handler: async (args, ctx) => {
+      if (args.startsWith("edit-input ")) {
+        await editor.dispatch(args.slice("edit-input ".length), ctx);
+        return;
+      }
       if (args.trim() === "off") {
         await stop();
         return;
@@ -840,6 +846,7 @@ export default function chatExtension(pi: ExtensionAPI) {
           "input-v1",
           "input-v2",
           "commands-v1",
+          "edit-input-v1",
           "images-v1",
           "compact-v1",
           ...(installedCode ? ["integration-update-v1"] : []),
@@ -923,6 +930,14 @@ export default function chatExtension(pi: ExtensionAPI) {
           cancelUpdate();
           throw error;
         }
+      },
+      editInput: (linkId, entry, at, text) => {
+        const linked = () =>
+          [...links.values()].some(
+            (link) => link.bridge.connected && link.bridge.sessionId === linkId,
+          );
+        if (!linked()) throw new Error("Unknown or disconnected link");
+        return editor.edit(ctx, entry, at, text, linked);
       },
       input: async (linkId, text, mode, images) => {
         if (
