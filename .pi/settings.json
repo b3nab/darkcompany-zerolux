@@ -1,6 +1,7 @@
 {
   "steeringMode": "all",
   "compaction": {
+    "enabled": false,
     "reserveTokens": 131072
   }
 }
