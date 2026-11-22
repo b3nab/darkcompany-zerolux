@@ -607,6 +607,42 @@ const settingsSession = {
   activity: "idle",
 } as ChatSession;
 
+test("the Composer changes Claude permissions in place with a single settings request", async () => {
+  const changes: unknown[] = [];
+  let mode = "auto";
+  setKernelFetch(async (url, init) => {
+    if (init?.method === "PATCH") {
+      const body = JSON.parse(String(init.body));
+      changes.push([new URL(url, "https://fixture.invalid").pathname, body]);
+      mode = body.permission_mode;
+    }
+    return Response.json({
+      ...snapshot("native-known"),
+      values: { model: "native-known", permission_mode: mode },
+      editable: ["permission_mode"],
+    });
+  });
+  await render(<SessionSettings session={settingsSession} />);
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>("button")!.click(),
+  );
+  const select = document.querySelector<HTMLSelectElement>(
+    'select[aria-label="Permissions"]',
+  )!;
+  expect(select.value).toBe("auto");
+  await act(async () => {
+    select.value = "bypassPermissions";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(changes).toEqual([
+    [
+      `/api/sessions/${settingsSession.id}/settings`,
+      { permission_mode: "bypassPermissions" },
+    ],
+  ]);
+  expect(select.value).toBe("bypassPermissions");
+});
+
 test("a refused change is shown in its settings panel without retrying the PATCH", async () => {
   const calls: string[] = [];
   setKernelFetch(async (_url, init) => {

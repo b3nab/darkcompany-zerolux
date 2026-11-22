@@ -950,6 +950,32 @@ impl Kernel {
     }
 }
 
+#[tokio::test]
+async fn delegated_work_does_not_grant_itself_bypass_permissions() {
+    let kernel = Kernel::start().await;
+    let parent = kernel.agent("Parent", None).await;
+    let child = kernel.agent("", None).await;
+    kernel
+        .store
+        .delegate(&child.session.id, &parent.session.id)
+        .await
+        .unwrap();
+    let token = Some(parent.token.as_str());
+    let create = kernel.post("/sessions", token, json!({"harness":"claude-code", "workspace":kernel._dir.path(), "permission_mode":"bypassPermissions"})).await;
+    assert_eq!(create.status(), StatusCode::FORBIDDEN);
+    let patch = kernel
+        .request(
+            Method::PATCH,
+            &format!("/sessions/{}/settings", child.session.id),
+            token,
+        )
+        .json(&json!({"permission_mode":" bypassPermissions "}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(patch.status(), StatusCode::FORBIDDEN);
+}
+
 impl Drop for Kernel {
     fn drop(&mut self) {
         self.server.abort();

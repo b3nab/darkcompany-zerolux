@@ -470,6 +470,11 @@ export class Runner {
           );
         const options: Options = {
           permissionMode: this.config.mode,
+          // Make the native mode selectable, not active. In a privileged process don't
+          // request the startup capability implicitly; Claude decides on an explicit launch.
+          allowDangerouslySkipPermissions:
+            this.config.mode === "bypassPermissions" ||
+            (this.config.managed === true && process.getuid?.() !== 0),
           extraArgs: { chrome: null },
           env: { ...process.env, CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1" },
           ...(this.initial.model ? { model: this.initial.model } : {}),
@@ -512,9 +517,16 @@ export class Runner {
             ),
           )
           .finally(this.ended);
-        if (Object.keys(this.initial).length) {
+        const startup = {
+          ...this.initial,
+          ...(this.config.mode === "bypassPermissions" ||
+          this.config.mode === "dontAsk"
+            ? { permission_mode: this.config.mode }
+            : {}),
+        };
+        if (Object.keys(startup).length) {
           try {
-            await this.agent.settings.verifyStart(this.initial);
+            await this.agent.settings.verifyStart(startup);
           } catch (error) {
             this.startupFailed = true;
             throw error;

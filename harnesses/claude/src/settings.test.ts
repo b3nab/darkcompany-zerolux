@@ -106,6 +106,57 @@ test("Claude applies session-local flags and permission mode without prompts or 
   });
 });
 
+test("the same Claude query enters and leaves bypass only after native acceptance", async () => {
+  const f = fixture();
+  for (const mode of ["bypassPermissions", "dontAsk", "default"]) {
+    const patch = { permission_mode: mode };
+    const previous = f.calls.length;
+    await f.settings.apply(patch, true);
+    expect(f.calls).toHaveLength(previous);
+    expect((await f.settings.apply(patch)).values.permission_mode).toBe(mode);
+  }
+  expect(f.calls).toEqual([
+    ["mode", "bypassPermissions"],
+    ["mode", "dontAsk"],
+    ["mode", "default"],
+  ]);
+  f.reject();
+  await expect(
+    f.settings.apply({ permission_mode: "bypassPermissions" }),
+  ).rejects.toThrow();
+  expect((await f.settings.read()).values.permission_mode).toBe("default");
+});
+
+test("a native status during a permission change takes precedence over the setter ACK", async () => {
+  const f = fixture();
+  f.query.setPermissionMode = async () => {
+    f.settings.observe({
+      type: "system",
+      subtype: "status",
+      status: null,
+      permissionMode: "default",
+    } as SDKMessage);
+  };
+  await expect(
+    f.settings.apply({ permission_mode: "bypassPermissions" }),
+  ).rejects.toThrow();
+  expect((await f.settings.read()).values.permission_mode).toBe("default");
+});
+
+test("a CLI that reports no initial mode confirms an explicit choice through control, not a prompt", async () => {
+  const f = fixture();
+  const settings = new ClaudeSettings(() => f.query as unknown as Query);
+  const patch = { permission_mode: "bypassPermissions" };
+  expect((await settings.verifyStart(patch)).values.permission_mode).toBe(
+    patch.permission_mode,
+  );
+  expect(f.calls).toEqual([["mode", "bypassPermissions"]]);
+  const refused = new ClaudeSettings(() => f.query as unknown as Query);
+  f.reject();
+  await expect(refused.verifyStart(patch)).rejects.toThrow();
+  expect((await refused.read()).values.permission_mode).toBeNull();
+});
+
 test("Claude checks field shape and permission mode before mutation", async () => {
   const f = fixture();
   for (const patch of [

@@ -96,6 +96,8 @@ pub enum ClaudePermissionMode {
     AcceptEdits,
     Plan,
     Auto,
+    DontAsk,
+    BypassPermissions,
 }
 impl ClaudePermissionMode {
     pub(crate) fn name(self) -> &'static str {
@@ -104,6 +106,8 @@ impl ClaudePermissionMode {
             Self::AcceptEdits => "acceptEdits",
             Self::Plan => "plan",
             Self::Auto => "auto",
+            Self::DontAsk => "dontAsk",
+            Self::BypassPermissions => "bypassPermissions",
         }
     }
 }

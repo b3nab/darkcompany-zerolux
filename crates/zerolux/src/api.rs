@@ -1352,6 +1352,11 @@ async fn create_session(
     let parent = who.session_id.clone();
     let acting = if let Some(parent) = &parent {
         match &mut input {
+            NewSession::Claude(input)
+                if input.permission_mode == Some(ClaudePermissionMode::BypassPermissions) =>
+            {
+                return Err(Error::Forbidden.into());
+            }
             NewSession::Claude(input) => (input.name.clear(), input.actor_id = None),
             NewSession::Codex(input) => (input.name.clear(), input.actor_id = None),
             NewSession::Pi(input) => (input.name.clear(), input.actor_id = None),
@@ -1884,10 +1889,14 @@ async fn change_session_settings(
     Path(id): Path<String>,
     ChatJson(input): ChatJson<AgentSettings>,
 ) -> Result<Json<Value>, ApiFailure> {
-    let who = state.store.acting_for(&who, &id, Access::Write).await?;
-    if !who.is_person() {
+    // A session token isn't a person selecting bypass. Check before acting_for maps a
+    // delegate to its person; keep the existing write grant for people collaborating.
+    if !who.is_person()
+        && input.permission_mode.as_deref().map(str::trim) == Some("bypassPermissions")
+    {
         return Err(Error::Forbidden.into());
     }
+    let who = state.store.acting_for(&who, &id, Access::Write).await?;
     let settings = runtime(&state)?
         .change_session_settings(&who, &id, input)
         .await

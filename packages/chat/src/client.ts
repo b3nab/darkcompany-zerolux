@@ -14,6 +14,8 @@ export const claudeModes = {
   acceptEdits: "Accept edits",
   plan: "Plan",
   auto: "Auto",
+  dontAsk: "Deny instead of asking",
+  bypassPermissions: "Bypass permissions",
 } as const;
 export type ClaudeMode = keyof typeof claudeModes;
 /** Codex's approval policies and sandboxes, by their names; unset, Codex uses its own configuration. */

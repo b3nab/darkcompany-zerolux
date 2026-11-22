@@ -1716,11 +1716,12 @@ impl Store {
             update = update.col_expr(actors::Column::Effort, Expr::value(effort));
             changed = true;
         }
-        if let Some(mode) = value(
-            input.permission_mode,
-            "Permission mode",
-            &["default", "acceptEdits", "plan", "auto"],
-        )? {
+        if let Some(mode) = value(input.permission_mode, "Permission mode", &[])? {
+            // Validate defaults with the same native mode type used to launch a session.
+            if let Some(name) = &mode {
+                serde_json::from_value::<ClaudePermissionMode>(json!(name))
+                    .map_err(|_| Error::Invalid("Unknown Claude permission mode".into()))?;
+            }
             if harness != "claude-code" && mode.is_some() {
                 return Err(Error::Invalid(
                     "Permission mode is Claude Code's setting".into(),

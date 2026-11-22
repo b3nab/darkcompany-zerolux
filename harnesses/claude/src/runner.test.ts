@@ -35,6 +35,8 @@ function fixture(
   saved = false,
   options: {
     systemPrompt?: "claude_code";
+    mode?: Options["permissionMode"];
+    effectiveMode?: Options["permissionMode"];
     execution?: ClaudeExecution;
     managed?: boolean;
     initial?: { model: string; effort: string };
@@ -135,6 +137,7 @@ function fixture(
   const reportedModel = options.appliedModel;
   const context = options.context;
   const rejectEffort = options.rejectEffort;
+  const effectiveMode = options.effectiveMode;
   const start: StartQuery = ({ prompt, options }) => {
     starts.push(options);
     let model = options.model ?? "native-model";
@@ -159,7 +162,7 @@ function fixture(
     }
     return Object.assign(stream(), {
       initializationResult: async () => ({
-        current_permission_mode: "default",
+        current_permission_mode: effectiveMode ?? options.permissionMode,
       }),
       supportedModels: async () =>
         ["native-model", "other-model"].map((value) => ({
@@ -208,7 +211,7 @@ function fixture(
     {
       nativeSessionId: "native",
       workspace: "/work",
-      mode: "default",
+      mode: options.mode ?? "default",
       initial: options.initial,
       ...(options.managed ? { managed: true } : {}),
       ...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
@@ -308,6 +311,35 @@ function fixture(
       }),
   };
 }
+
+test("explicit permission mode starts and native policy refusals need no turn", async () => {
+  for (const mode of ["default", "dontAsk", "bypassPermissions"] as const) {
+    const f = fixture(false, { managed: true, mode });
+    try {
+      await f.bind("t1");
+      expect(f.starts).toHaveLength(1);
+      expect(f.starts[0]?.permissionMode).toBe(mode);
+      if (mode === "bypassPermissions" || process.getuid?.() !== 0)
+        expect(f.starts[0]?.allowDangerouslySkipPermissions).toBe(true);
+      expect(f.inputs).toEqual([]);
+    } finally {
+      f.runner.agent.close();
+    }
+  }
+  const denied = fixture(false, {
+    managed: true,
+    mode: "bypassPermissions",
+    effectiveMode: "default",
+  });
+  denied.message("waiting", "fixture input");
+  try {
+    await expect(denied.bind("t1")).rejects.toThrow();
+    expect(denied.starts).toHaveLength(1);
+    expect(denied.inputs).toEqual([]);
+  } finally {
+    denied.runner.agent.close();
+  }
+});
 
 test("unconfirmed startup settings cannot dispatch queued input or silently start again", async () => {
   const f = fixture(false, {

@@ -17,6 +17,8 @@ export const PERMISSION_MODES: PermissionMode[] = [
   "acceptEdits",
   "plan",
   "auto",
+  "dontAsk",
+  "bypassPermissions",
 ];
 
 /** getSettings is implemented by the pinned SDK but omitted from its public declaration. */
@@ -32,6 +34,7 @@ export function modelOptions(models: ModelInfo[]) {
 }
 
 export class ClaudeSettings {
+  private modeRevision = 0;
   private current: NativeAgentSettings = {
     model: null,
     effort: null,
@@ -48,12 +51,14 @@ export class ClaudeSettings {
     if (message.type !== "system") return;
     if (message.subtype === "init") {
       this.current.model = message.model;
+      this.modeRevision++;
       this.current.permission_mode = message.permissionMode;
       if (message.effort !== undefined) this.current.effort = message.effort;
     } else if (
       message.subtype === "status" &&
       message.permissionMode !== undefined
     ) {
+      this.modeRevision++;
       this.current.permission_mode = message.permissionMode;
     }
   }
@@ -91,8 +96,12 @@ export class ClaudeSettings {
   }
 
   async verifyStart(input: unknown) {
-    const snapshot = await this.read();
-    const patch = settingsPatch(input, ["model", "effort"]);
+    let snapshot = await this.read();
+    const patch = settingsPatch(input, ["model", "effort", "permission_mode"]);
+    // Some CLI versions first emit the mode with the first user turn. Confirm an
+    // explicit mode via the native control instead; never send a turn to discover it.
+    if (patch.permission_mode && snapshot.values.permission_mode == null)
+      snapshot = await this.apply({ permission_mode: patch.permission_mode });
     confirmSettings(snapshot, patch);
     return snapshot;
   }
@@ -116,8 +125,12 @@ export class ClaudeSettings {
         effortLevel: patch.effort as EffortLevel,
       });
     if (patch.permission_mode !== undefined) {
+      const revision = this.modeRevision;
       await query.setPermissionMode(patch.permission_mode as PermissionMode);
-      this.current.permission_mode = patch.permission_mode;
+      // A status delivered during the setter is the effective native mode, even
+      // when it differs from the requested one. Otherwise the native ACK confirms it.
+      if (revision === this.modeRevision)
+        this.current.permission_mode = patch.permission_mode;
     }
     const confirmed = await this.read();
     confirmSettings(confirmed, patch);

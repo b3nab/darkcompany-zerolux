@@ -215,7 +215,9 @@ function scripted(
     }
   }
   return Object.assign(stream(), {
-    initializationResult: async () => ({}),
+    initializationResult: async () => ({
+      current_permission_mode: permissionMode,
+    }),
     accountInfo: async () => ({
       email: "fixture@example.com",
       subscriptionType: "max",
@@ -265,6 +267,11 @@ function scripted(
       trace("settings", { model, effort });
     },
     setPermissionMode: async (mode: NonNullable<Options["permissionMode"]>) => {
+      if (
+        mode === "bypassPermissions" &&
+        !options.allowDangerouslySkipPermissions
+      )
+        throw new Error("Native bypass capability was not enabled");
       permissionMode = mode;
       trace("settings", { permissionMode });
       emit({

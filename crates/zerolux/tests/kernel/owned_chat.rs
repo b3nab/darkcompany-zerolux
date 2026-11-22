@@ -383,16 +383,17 @@ async fn native_settings_are_confirmed_at_start_and_changed_without_new_input() 
             .json(&body)
             .send()
     };
-    let changed: Value =
-        patch(json!({"model":"native-default", "effort":"low", "permission_mode":"auto"}))
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
+    let changed: Value = patch(
+        json!({"model":"native-default", "effort":"low", "permission_mode":"bypassPermissions"}),
+    )
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
     assert_eq!(changed["values"]["model"], "native-default");
     assert_eq!(changed["values"]["effort"], "low");
-    assert_eq!(changed["values"]["permission_mode"], "auto");
+    assert_eq!(changed["values"]["permission_mode"], "bypassPermissions");
     kernel
         .wait(&live, |data| data["usage"]["context_window"] == 200_000)
         .await;
@@ -408,7 +409,7 @@ async fn native_settings_are_confirmed_at_start_and_changed_without_new_input() 
     let agent = kernel
         .api(
             &defaults,
-            Some(json!({"model":"native-default", "effort":"low", "permission_mode":"auto"})),
+            Some(json!({"model":"native-default", "effort":"low", "permission_mode":"dontAsk"})),
         )
         .await;
     assert_eq!(agent["actor"]["model"], "native-default");
@@ -424,7 +425,7 @@ async fn native_settings_are_confirmed_at_start_and_changed_without_new_input() 
     let launched = start(fixture.trace());
     assert_eq!(launched["model"], "native-default");
     assert_eq!(launched["effort"], "low");
-    assert_eq!(launched["mode"], "auto");
+    assert_eq!(launched["mode"], "dontAsk");
     assert_eq!(count(&fixture.trace(), "input"), 0);
     let different = kernel.api("/sessions", Some(json!({"harness":"claude-code",
         "name":"", "actor_id":actor, "workspace":fixture.dir.path().join("workspace"), "model":"native-alternate"
@@ -454,7 +455,7 @@ async fn native_settings_are_confirmed_at_start_and_changed_without_new_input() 
         .find(|row| row["event"] == "start")
         .unwrap();
     assert_eq!(
-        restored["mode"], "auto",
+        restored["mode"], "bypassPermissions",
         "Resume keeps the live permission change, not the original plan mode"
     );
     assert_eq!(restored["resume"], true);
@@ -478,7 +479,7 @@ async fn managed_claude_bootstrap_lifecycle() {
     let workspace = fixture.dir.path().join("workspace");
     for input in [
         json!({"name":"Fixture","workspace":"relative"}),
-        json!({"name":"Fixture","workspace":workspace,"permission_mode":"bypassPermissions"}),
+        json!({"harness":"claude-code","name":"Fixture","workspace":workspace,"permission_mode":"unknown-mode"}),
     ] {
         let response = kernel
             .client

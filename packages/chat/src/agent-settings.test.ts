@@ -101,6 +101,8 @@ test("both clients offer common settings and only the native controls of each ha
     "acceptEdits",
     "plan",
     "auto",
+    "dontAsk",
+    "bypassPermissions",
   ]);
   expect(Object.keys(agentSettingFields("codex")[2]!.options!)).toEqual([
     "untrusted",
