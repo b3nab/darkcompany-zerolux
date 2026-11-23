@@ -110,6 +110,8 @@ test("registry commands are restricted to the packaged manager, not workspace pa
   ]);
   expect(of("workspace-*").local).toBe(true);
   expect(of("workspace-*").permissions).toEqual([
+    "allow-notice-subscribe",
+    "allow-notice-unsubscribe",
     "allow-window-control",
     // Web links only, to the system browser: extensions' pages open them too.
     "allow-open-link",
@@ -154,6 +156,8 @@ test("registry commands are restricted to the packaged manager, not workspace pa
   // it has no registry or window controls.
   expect(of("tray").local).toBe(true);
   expect(of("tray").permissions).toEqual([
+    "allow-notice-subscribe",
+    "allow-notice-unsubscribe",
     "allow-tray-workspaces",
     "allow-tray-credential",
     "allow-tray-report",

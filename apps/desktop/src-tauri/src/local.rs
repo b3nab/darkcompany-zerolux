@@ -24,7 +24,9 @@ pub fn wait_for_previous(root: &std::path::Path, timeout: std::time::Duration) -
     let until = std::time::Instant::now() + timeout;
     loop {
         match file.try_lock_exclusive() {
-            Ok(()) => return Ok(()),
+            // A concurrent fork can still hold a copy of this descriptor until exec.
+            // Release the probe's lock itself before the new desktop attempts to take it.
+            Ok(()) => return FileExt::unlock(&file).context("Release desktop restart probe"),
             Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() && std::time::Instant::now() < until => std::thread::sleep(std::time::Duration::from_millis(50)),
             Err(error) => return Err(error).context("The previous ZeroLux app has not closed; the update did not open another workspace"),
         }

@@ -84,6 +84,7 @@ export type Kernel = {
   tone: Tone;
   label: string;
   host: string;
+  detail?: string;
   version?: string;
 };
 
@@ -626,7 +627,7 @@ export function StatusBar({ kernel }: { kernel: Kernel }) {
     <footer
       role="status"
       data-tone={kernel.tone}
-      title={kernel.host}
+      title={[kernel.host, kernel.detail].filter(Boolean).join(" · ")}
       className="col-span-full flex h-6 shrink-0 items-center gap-3 border-t border-sidebar-border bg-sidebar px-3 text-[11.5px] text-muted-foreground"
     >
       <span className="flex items-center gap-1.5">

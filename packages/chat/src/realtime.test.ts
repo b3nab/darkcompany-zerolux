@@ -41,7 +41,9 @@ mock.module("livekit-client", () => ({
     Disconnected: "disconnected",
   },
 }));
-const { connectRealtime } = await import("./realtime");
+const { connectRealtime, setNativeNotices } = await import("./realtime");
+import type { NativeNotice } from "./realtime";
+import { bindCredential, clearCredential } from "./credentials";
 
 let tokens = 0;
 const realFetch = globalThis.fetch;
@@ -61,6 +63,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   globalThis.fetch = realFetch;
+  setNativeNotices();
   jest.useRealTimers();
 });
 // Microtasks only: timers may be faked.
@@ -79,6 +82,66 @@ function start() {
   });
   return { log, stop };
 }
+
+test("packaged views never open a WebRTC socket, recover reads and ignore notices from an old sign-in", async () => {
+  jest.useFakeTimers();
+  const kernel = "https://fixture.invalid/w/test";
+  const deliveries: ((m: NativeNotice) => void)[] = [];
+  const closed: string[] = [];
+  setNativeNotices(async (_, token, hear) => {
+    deliveries.push(hear);
+    return () => {
+      closed.push(token!);
+    };
+  });
+  bindCredential(kernel, "first");
+  let snapshots = 0,
+    reads = 0,
+    events = 0;
+  const stop = connectRealtime({
+    kernel,
+    sync: () => snapshots++,
+    status: () => {},
+    event: () => events++,
+    readWhileDisconnected: async () => {
+      reads++;
+    },
+  });
+  await flush();
+  deliveries[0]!({ type: "live" });
+  const data: NativeNotice = {
+    type: "packet",
+    data: JSON.stringify({
+      event_id: "fixture",
+      type: "session.changed",
+      session_id: "s",
+    }),
+  };
+  deliveries[0]!(data);
+  deliveries[0]!(data);
+  deliveries[0]!({ type: "offline" });
+  jest.advanceTimersByTime(3000);
+  await flush();
+  expect(reads).toBe(1);
+  bindCredential(kernel, "second");
+  await flush();
+  expect(closed).toEqual(["first"]);
+  deliveries[0]!({ type: "live" });
+  deliveries[0]!(data);
+  expect(snapshots).toBe(1);
+  expect(events).toBe(1);
+  deliveries[1]!({ type: "live" });
+  deliveries[1]!(data);
+  expect(events).toBe(2);
+  jest.advanceTimersByTime(9000);
+  await flush();
+  expect(reads).toBe(1);
+  expect(rooms.length).toBe(0);
+  expect(tokens).toBe(0);
+  stop();
+  clearCredential(kernel);
+  expect(closed).toEqual(["first", "second"]);
+});
 
 test("joins with a kernel token, then refetches the snapshot", async () => {
   const { log, stop } = start();

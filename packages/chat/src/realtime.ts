@@ -1,9 +1,24 @@
 import { DefaultReconnectPolicy, Room, RoomEvent } from "livekit-client";
 import { request } from "./client";
+import { credentialChanged, requestCredential } from "./credentials";
 import { parseEvent } from "./chat";
 import type { ChatEvent } from "./chat";
 
 export type RealtimeStatus = "connecting" | "live" | "offline";
+
+/** Packaged desktop views receive their own native LiveKit subscription over IPC. */
+export type NativeNotice =
+  | { type: "live" | "reconnecting" | "offline" }
+  | { type: "packet"; data: string };
+type NativeNotices = (
+  kernel: string,
+  token: string | null,
+  notice: (message: NativeNotice) => void,
+) => Promise<() => void>;
+let nativeNotices: NativeNotices | undefined;
+export function setNativeNotices(open?: NativeNotices) {
+  nativeNotices = open;
+}
 
 /**
  * The chat room carries data only. LiveKit opens and resumes an audio context on every
@@ -74,6 +89,13 @@ export function connectRealtime(handlers: {
       }
     }, 3000);
   }
+  function receive(payload: Uint8Array) {
+    const event = parseEvent(payload);
+    if (!event || seen.has(event.event_id)) return;
+    seen.add(event.event_id);
+    if (seen.size > 1000) seen.delete(seen.values().next().value!);
+    handlers.event(event);
+  }
   function clearDeadline() {
     clearTimeout(patience);
     patience = undefined;
@@ -125,11 +147,7 @@ export function connectRealtime(handlers: {
     current.on(RoomEvent.DataReceived, (payload, participant, _, topic) => {
       // Only the kernel publishes chat events; participants cannot.
       if (room !== current || topic !== "chat" || participant) return;
-      const event = parseEvent(payload);
-      if (!event || seen.has(event.event_id)) return;
-      seen.add(event.event_id);
-      if (seen.size > 1000) seen.delete(seen.values().next().value!);
-      handlers.event(event);
+      receive(payload);
     });
     // A room already left no longer speaks for the connection.
     const recovering = () => {
@@ -163,6 +181,57 @@ export function connectRealtime(handlers: {
     } catch {
       if (room === current) reconnect();
     }
+  }
+  const open = nativeNotices;
+  if (open) {
+    const kernel = handlers.kernel ?? "";
+    let detach: (() => void) | undefined;
+    let generation = 0;
+    const attach = async () => {
+      if (stopped) return;
+      const current = ++generation;
+      keepReading();
+      try {
+        const close = await open(
+          kernel,
+          requestCredential(kernel)?.token ?? null,
+          (message) => {
+            if (stopped || current !== generation) return;
+            if (message.type === "packet")
+              return receive(new TextEncoder().encode(message.data));
+            if (message.type === "live") return joined();
+            live = false;
+            handlers.status(
+              message.type === "offline" ? "offline" : "connecting",
+            );
+            keepReading();
+          },
+        );
+        if (stopped || current !== generation) close();
+        else detach = close;
+      } catch {
+        if (stopped || current !== generation) return;
+        handlers.status("offline");
+        retry = setTimeout(attach, Math.min(10_000, 1000 * 2 ** attempt++));
+      }
+    };
+    const unbind = credentialChanged(kernel, () => {
+      detach?.();
+      detach = undefined;
+      clearTimeout(retry);
+      seen.clear();
+      live = false;
+      handlers.status("connecting");
+      void attach();
+    });
+    void attach();
+    return () => {
+      stopped = true;
+      unbind();
+      clearTimeout(retry);
+      clearTimeout(fallback);
+      detach?.();
+    };
   }
   void start();
   return () => {

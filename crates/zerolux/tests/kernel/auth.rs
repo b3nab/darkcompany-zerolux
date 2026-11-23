@@ -1118,10 +1118,29 @@ async fn two_kernels_of_one_instance_share_sign_in_and_keep_their_own_sessions()
     }
     a.server.shutdown().await.unwrap();
     let a = Kernel::start(dir_a.path(), database.location().clone()).await;
-    let sessions = store_a.sessions(&owner).await.unwrap();
-    let status = |id: &str| sessions.iter().find(|s| s.id == id).unwrap().status.clone();
-    assert_eq!(status(&on_a.session.id), "attention");
-    assert_eq!(status(&on_b.session.id), "connected");
+    // Server::start does not wait for the relinker. It can already be trying A's
+    // missing native session when we read. B's session must stay connected throughout.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let sessions = store_a.sessions(&owner).await.unwrap();
+            let status = |id: &str| {
+                sessions
+                    .iter()
+                    .find(|s| s.id == id)
+                    .unwrap()
+                    .status
+                    .as_str()
+            };
+            assert_eq!(status(&on_b.session.id), "connected");
+            match status(&on_a.session.id) {
+                "attention" => break,
+                "connecting" => tokio::time::sleep(Duration::from_millis(50)).await,
+                other => panic!("unexpected local session state after restart: {other}"),
+            }
+        }
+    })
+    .await
+    .expect("the missing local session settles after restart");
     a.server.shutdown().await.unwrap();
     b.server.shutdown().await.unwrap();
 }

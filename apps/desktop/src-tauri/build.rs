@@ -11,6 +11,8 @@ fn main() {
             "window_control",
             "read_workspace_credential",
             "write_workspace_credential",
+            "notice_subscribe",
+            "notice_unsubscribe",
             "tray_workspaces",
             "tray_credential",
             "tray_report",

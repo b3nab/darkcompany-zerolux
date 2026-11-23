@@ -4,11 +4,13 @@ import { App } from "./App";
 import { preloadRenderer } from "./components/message-text";
 import { keepDraftsIn, lookWith } from "@zerolux/chat";
 import { WorkspaceRoot } from "./instance";
-import { reportPages } from "./desktop";
+import { desktopConnection, reportPages } from "./desktop";
+import { useDesktopNotices } from "./desktop-notices";
 import { startTheme } from "./theme";
 import { trayPanel } from "./tray";
 import { TrayPanel } from "./TrayPanel";
 
+if (desktopConnection() || trayPanel()) useDesktopNotices();
 startTheme();
 // Unsent messages survive a reload, in this browser only.
 const DRAFTS = "zerolux-drafts";

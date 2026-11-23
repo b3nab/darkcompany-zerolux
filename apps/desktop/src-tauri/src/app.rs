@@ -2491,6 +2491,14 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(crate::extension_ui::Kernels::default())
+        .manage(crate::notices::Rooms::default())
+        .on_page_load(|webview, page| {
+            if page.event() == tauri::webview::PageLoadEvent::Started {
+                webview
+                    .state::<crate::notices::Rooms>()
+                    .detach(webview.label(), None);
+            }
+        })
         .register_asynchronous_uri_scheme_protocol(
             crate::extension_ui::SCHEME,
             crate::extension_ui::serve,
@@ -2498,6 +2506,8 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
         .invoke_handler(tauri::generate_handler![
             workspace_action,
             workspace_adoption_preview,
+            crate::notices::notice_subscribe,
+            crate::notices::notice_unsubscribe,
             open_link,
             open_microphone_settings,
             choose_folder,
@@ -2533,6 +2543,9 @@ pub fn run(launch: LaunchOptions) -> Result<()> {
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::Focused(true) => crate::menu::focused(window),
             tauri::WindowEvent::Destroyed => {
+                window
+                    .state::<crate::notices::Rooms>()
+                    .detach(window.label(), None);
                 crate::menu::closed(window);
                 session_changed(window.app_handle());
             }

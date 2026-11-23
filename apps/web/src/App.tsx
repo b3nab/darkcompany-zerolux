@@ -12,6 +12,7 @@ import { BellIcon, MenuIcon, SearchIcon } from "lucide-react";
 import { usePanelRef } from "react-resizable-panels";
 import {
   requestsFor,
+  kernelUrl,
   startsHere,
   useChat,
   useHosts,
@@ -46,6 +47,11 @@ import {
   SessionView,
 } from "./Console";
 import { MD, useMedia } from "./media";
+import {
+  connectionStatus,
+  reachabilityAfter,
+  type Reachability,
+} from "./connection-status";
 import { Meetings } from "./Meetings";
 import { UpdateButton } from "./Updates";
 import { navigationBlock, useNavigationGuard } from "./navigation-guard";
@@ -90,6 +96,9 @@ export function App({
   );
   const [error, setError] = useState("");
   const [connectionError, setConnectionError] = useState("");
+  const [reach, setReach] = useState<Reachability>(
+    initialWorkspace || initialHealth ? "reachable" : "unknown",
+  );
   const [busy, setBusy] = useState(false);
   const operations = useRef(0);
   useNavigationGuard(() =>
@@ -142,12 +151,24 @@ export function App({
   const requestId = useRef(0);
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const id = ++requestId.current;
-    const data = await api<Workspace>("/workspace", undefined, signal);
+    let data: Workspace;
+    try {
+      data = await api<Workspace>("/workspace", undefined, signal);
+    } catch (error) {
+      if (signal?.aborted || id !== requestId.current) return;
+      const status = await reachabilityAfter(error, kernelUrl(), signal);
+      if (!signal?.aborted && id === requestId.current) {
+        setReach(status);
+        setConnectionError(errorMessage(error));
+      }
+      return;
+    }
     if (!signal?.aborted && id === requestId.current) {
       // Polled every two seconds: the page redraws only when something changed.
       setWorkspace((shown) =>
         shown && JSON.stringify(shown) === JSON.stringify(data) ? shown : data,
       );
+      setReach("reachable");
       setConnectionError("");
     }
   }, []);
@@ -161,11 +182,7 @@ export function App({
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
-      try {
-        await refresh(controller.signal);
-      } catch (error) {
-        if (!controller.signal.aborted) setConnectionError(errorMessage(error));
-      }
+      await refresh(controller.signal);
       if (!controller.signal.aborted) timer = setTimeout(poll, 2000);
     }
     void poll();
@@ -236,13 +253,12 @@ export function App({
   const hire = () => navigate("/team/hire");
   const showChat = (c: Conversation) => navigate(`/chats/${c.id}`);
   const kernel: Kernel = {
-    ...(connectionError
-      ? { tone: "attention", label: "Offline" }
-      : !workspace || needsOnboarding || chat.realtime === "connecting"
-        ? { tone: "connecting", label: "Connecting…" }
-        : chat.realtime === "live"
-          ? { tone: "connected", label: "Live" }
-          : { tone: "stopped", label: "Not live" }),
+    ...connectionStatus(
+      reach,
+      chatReady && workspace && !needsOnboarding
+        ? chat.realtime === "live"
+        : undefined,
+    ),
     host: globalThis.location?.host ?? "",
     version: health?.version,
   };

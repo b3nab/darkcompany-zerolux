@@ -71,10 +71,16 @@ import {
 } from "./components/ui/dropdown-menu";
 import { Kbd } from "./components/ui/kbd";
 import { TrayUpdate } from "./Updates";
+import {
+  connectionStatus,
+  reachabilityAfter,
+  type Reachability,
+} from "./connection-status";
 
 /** A workspace as the panel hears it. */
 interface Heard {
   live: boolean;
+  reach?: Reachability;
   actors: Actor[];
   sessions: ChatSession[];
   /** What its sessions ask of you, oldest first. */
@@ -252,6 +258,7 @@ function Hear({
         snapshotReady = true;
         set({
           me,
+          reach: "reachable",
           actors,
           sessions,
           approvals: mine(approvals, sessions),
@@ -259,7 +266,7 @@ function Hear({
         });
         sessionsRead(sessions);
       } catch (error) {
-        if (sequence === latestRead) set({ error: errorMessage(error) });
+        await failed(error, sequence);
       }
       if (!stopped) await readPlans();
     }
@@ -274,13 +281,20 @@ function Hear({
         if (stopped || sequence !== latestRead) return;
         set({
           sessions,
+          reach: "reachable",
           approvals: mine(approvals, sessions),
           error: undefined,
         });
         sessionsRead(sessions);
       } catch (error) {
-        if (sequence === latestRead) set({ error: errorMessage(error) });
+        await failed(error, sequence);
       }
+    }
+    async function failed(error: unknown, sequence: number) {
+      if (stopped || sequence !== latestRead) return;
+      const reach = await reachabilityAfter(error, kernel);
+      if (!stopped && sequence === latestRead)
+        set({ reach, error: errorMessage(error) });
     }
     void readAll();
     const plans = setInterval(() => void readPlans(), SUBSCRIPTIONS_EVERY);
@@ -727,7 +741,9 @@ export function TrayPanel() {
     );
   });
   // The header names the active workspace, so its dot must describe that workspace too.
-  const live = !!active && heard[active.key]?.live === true;
+  const selected = active ? heard[active.key] : undefined;
+  const live = selected?.live === true;
+  const connection = connectionStatus(selected?.reach ?? "unknown", live);
   const focused = Math.min(focus, Math.max(0, waiting.length - 1));
 
   async function answer(item: Waiting, choice: string) {
@@ -764,7 +780,7 @@ export function TrayPanel() {
 
   // The mark and Linux's menu say what waits.
   const report: TrayReport = {
-    live,
+    live: connection.tone === "connected",
     requests: waiting.map(({ workspace, approval, agent }) => {
       const shown =
         approval.kind === "permission" ? permissionShown(approval) : undefined;
@@ -969,7 +985,12 @@ export function TrayPanel() {
               />
             }
           >
-            <Mark className={cn("size-4 shrink-0", !live && "opacity-50")} />
+            <Mark
+              className={cn(
+                "size-4 shrink-0",
+                connection.tone !== "connected" && "opacity-50",
+              )}
+            />
             <span className="truncate">{active?.name ?? "ZeroLux"}</span>
             <ChevronDownIcon
               aria-hidden
@@ -990,9 +1011,19 @@ export function TrayPanel() {
                 <span
                   className={cn(
                     "size-1.5 shrink-0 rounded-full",
-                    heard[workspace.key]?.live ? "bg-success" : "bg-faint",
+                    connectionStatus(
+                      heard[workspace.key]?.reach ?? "unknown",
+                      heard[workspace.key]?.live === true,
+                    ).tone === "connected"
+                      ? "bg-success"
+                      : "bg-faint",
                   )}
-                  aria-label={heard[workspace.key]?.live ? "Live" : "Not live"}
+                  aria-label={
+                    connectionStatus(
+                      heard[workspace.key]?.reach ?? "unknown",
+                      heard[workspace.key]?.live === true,
+                    ).label
+                  }
                 />
                 {workspace.active && <CheckIcon />}
               </DropdownMenuItem>
@@ -1003,10 +1034,10 @@ export function TrayPanel() {
           <span
             className={cn(
               "size-1.5 rounded-full",
-              live ? "bg-success" : "bg-faint",
+              connection.tone === "connected" ? "bg-success" : "bg-faint",
             )}
           />
-          {live ? "Live" : "Offline"}
+          <span title={connection.detail}>{connection.label}</span>
         </span>
         {active && (
           <Button

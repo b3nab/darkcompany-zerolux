@@ -12,6 +12,7 @@ mod credentials;
 mod extension_ui;
 mod local;
 mod menu;
+mod notices;
 mod notify;
 mod preferences;
 #[cfg(target_os = "macos")]

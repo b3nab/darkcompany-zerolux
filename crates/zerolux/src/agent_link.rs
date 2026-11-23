@@ -1,6 +1,5 @@
-//! The one LiveKit subscriber shared by the harness adapters. It signals an invalidation after
-//! joining the notice room, on every notice and after every reconnection; the consumer re-reads
-//! its own inbox. Notice payloads never leave this module and no model work starts here.
+//! Receive-only LiveKit subscription used by native clients. Harnesses receive invalidations;
+//! desktop listeners receive the kernel's own packets. Neither starts model work here.
 
 use std::time::Duration;
 
@@ -23,41 +22,75 @@ struct Ticket {
     token: String,
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum Notice<'a> {
+    Live,
+    Reconnecting,
+    Offline,
+    Packet(&'a str),
+}
+
 /// Stays subscribed until `stop` turns true. `ticket` yields a fresh LiveKit URL and token for
 /// every connection attempt, so an expired token or a restarted server heals by itself.
 pub async fn run<F, Fut>(
     ticket: F,
     invalidate: mpsc::Sender<()>,
-    mut stop: watch::Receiver<bool>,
+    stop: watch::Receiver<bool>,
 ) -> anyhow::Result<()>
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = anyhow::Result<(String, String)>>,
+{
+    listen(
+        ticket,
+        |event| {
+            if matches!(event, Notice::Live | Notice::Packet(_)) {
+                signal(&invalidate);
+            }
+        },
+        stop,
+    )
+    .await;
+    Ok(())
+}
+
+pub async fn listen<F, Fut>(ticket: F, notify: impl Fn(Notice<'_>), mut stop: watch::Receiver<bool>)
 where
     F: Fn() -> Fut,
     Fut: Future<Output = anyhow::Result<(String, String)>>,
 {
     while !*stop.borrow() {
         // A stop never interrupts the join: a `Room` dropped half-built keeps its sockets, so
-        // every connection is awaited (within `CONNECT_TIMEOUT`) and then closed explicitly.
+        // each join uses the SDK's own timeout and every joined room is closed explicitly.
         let joined = async {
             let (url, token) = ticket().await?;
-            tokio::time::timeout(
-                CONNECT_TIMEOUT,
-                Room::connect(&url, &token, RoomOptions::default()),
-            )
-            .await
-            .context("Joining the LiveKit notice room timed out")?
-            .context("Join the LiveKit notice room")
+            // Let the SDK finish or fail its own join; dropping a half-built room on an
+            // outer timer can strand its peer. The loop below owns the next attempt.
+            let mut options = RoomOptions::default();
+            options.auto_subscribe = false;
+            options.join_retries = 0;
+            options.connect_timeout = CONNECT_TIMEOUT;
+            Room::connect(&url, &token, options)
+                .await
+                .context("Join the LiveKit notice room")
         };
         match joined.await {
             Ok((room, mut events)) => {
                 // Subscribed first, then invalidate: a notice sent in between is never lost.
-                signal(&invalidate);
+                if !*stop.borrow() {
+                    notify(Notice::Live);
+                }
                 let stopped = *stop.borrow()
                     || loop {
                         tokio::select! {
                             event = events.recv() => match event {
-                                Some(RoomEvent::DataReceived { topic, .. })
-                                    if topic.as_deref() == Some(TOPIC) => signal(&invalidate),
-                                Some(RoomEvent::Reconnected) => signal(&invalidate),
+                                Some(RoomEvent::DataReceived { topic, participant: None, payload, .. })
+                                    if topic.as_deref() == Some(TOPIC) => {
+                                        if let Ok(data) = std::str::from_utf8(&payload) { notify(Notice::Packet(data)); }
+                                    },
+                                Some(RoomEvent::Reconnecting) => notify(Notice::Reconnecting),
+                                Some(RoomEvent::Reconnected) => notify(Notice::Live),
                                 Some(RoomEvent::Disconnected { .. }) | None => break false,
                                 Some(_) => {}
                             },
@@ -75,12 +108,12 @@ where
                 "LiveKit subscription failed; retrying"
             ),
         }
+        notify(Notice::Offline);
         tokio::select! {
             _ = tokio::time::sleep(RETRY) => {}
             _ = stop.wait_for(|stopped| *stopped) => break,
         }
     }
-    Ok(())
 }
 
 /// A full channel already holds a pending invalidation: coalescing is the intended behavior.
