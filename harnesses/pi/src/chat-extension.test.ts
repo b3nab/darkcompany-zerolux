@@ -17,8 +17,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import setupChatExtension, { runCommand } from "./chat-extension.ts";
 
 // These lifecycle fixtures have no model configured, but still expose the native SDK accessor.
-const chatExtension = (api: ExtensionAPI) =>
-  setupChatExtension({ ...api, getThinkingLevel: () => "off" });
+const chatExtension = (
+  api: ExtensionAPI,
+  policy?: Parameters<typeof setupChatExtension>[1],
+) => setupChatExtension({ ...api, getThinkingLevel: () => "off" }, policy);
 
 function rpc(endpoint: string, body: unknown): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -1286,6 +1288,44 @@ printf 'closed' > "${root}/$name-closed"
   15000,
 );
 
+test("the project's compaction threshold applies to either bridge load order, not to manual or overflow recovery", () => {
+  for (const projectFirst of [true, false]) {
+    const hooks = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+    const bus = new Map<string, (value: unknown) => void>();
+    const pi = {
+      events: {
+        on: (key: string, f: (v: unknown) => void) => {
+          bus.set(key, f);
+          return () => bus.delete(key);
+        },
+        emit: (key: string, v: unknown) => bus.get(key)?.(v),
+      },
+      on: (key: string, f: (event: unknown, ctx: unknown) => unknown) =>
+        hooks.set(key, f),
+      registerCommand() {},
+      registerTool() {},
+      getActiveTools: () => [],
+      setActiveTools() {},
+    } as unknown as ExtensionAPI;
+    const project = { autoCompactFrom: 0.96 };
+    chatExtension(pi, projectFirst ? project : undefined);
+    chatExtension(pi, projectFirst ? undefined : project);
+    const before = hooks.get("session_before_compact")!;
+    for (const window of [200_000, 1_000_000]) {
+      const ctx = { getContextUsage: () => ({ contextWindow: window }) };
+      const proposal = (reason: string, tokensBefore: number) =>
+        before({ reason, preparation: { tokensBefore } }, ctx);
+      expect(proposal("threshold", window * 0.96 - 1)).toEqual({
+        cancel: true,
+      });
+      expect(proposal("threshold", window * 0.96)).toBeUndefined();
+      expect(proposal("threshold", window)).toBeUndefined();
+      expect(proposal("manual", 2000)).toBeUndefined();
+      expect(proposal("overflow", 2000)).toBeUndefined();
+    }
+  }
+});
+
 test("a failed compaction is kept in the session's record; a cancelled one is not", () => {
   const handlers = new Map<string, (event: any) => unknown>();
   const entries: [string, unknown][] = [];
@@ -1434,6 +1474,12 @@ while IFS= read -r line; do :; done
         executable,
       });
       expect(paired.ok).toBe(true);
+      for (let i = 0; i < 100 && !live.length; i++) await Bun.sleep(20);
+      expect(live.shift()).toMatchObject({
+        type: "usage",
+        context_tokens: 42000,
+        context_window: 200000,
+      });
       expect(active).toEqual(["read", "bash"]);
       const update = (assistantMessageEvent: unknown) =>
         handlers.get("message_update")!({ assistantMessageEvent }, ctx);
@@ -1534,10 +1580,11 @@ while IFS= read -r line; do :; done
         errorMessage: "Auto-compaction failed: token cap",
         aborted: false,
       });
-      for (let i = 0; i < 100 && live.length < 16; i++) await Bun.sleep(20);
+      for (let i = 0; i < 100 && live.length < 17; i++) await Bun.sleep(20);
       expect(live.slice(12)).toEqual([
         { type: "compacting", active: true },
         { type: "compacting", active: false },
+        expect.objectContaining({ type: "usage", context_tokens: 42000 }),
         { type: "compacting", active: true },
         { type: "compacting", active: false },
       ]);

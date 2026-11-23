@@ -31,7 +31,7 @@ import type {
   Outgoing,
   QuestionAnswer,
 } from "./chat";
-import { liveNotice, liveResync } from "./live";
+import { liveNotice, liveResync, resetStream } from "./live";
 import type { LiveRead } from "./live";
 import { connectRealtime } from "./realtime";
 import type { RealtimeStatus } from "./realtime";
@@ -134,15 +134,19 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
 
   async function sendInput(input: SentInput) {
     // In place, in the order they were sent.
-    const now = (status: SentInput["status"], error?: string) => {
+    const now = (
+      status: SentInput["status"],
+      error?: string,
+      queueId?: string,
+    ) => {
       if (status === "sent") waitingInputs.current.delete(input.id);
       else waitingInputs.current.set(input.id, { ...input, status, error });
       setInputs((all) =>
         all.some((i) => i.id === input.id)
           ? all.map((i) =>
-              i.id === input.id ? { ...input, status, error } : i,
+              i.id === input.id ? { ...input, status, error, queueId } : i,
             )
-          : [...all, { ...input, status, error }],
+          : [...all, { ...input, status, error, queueId }],
       );
     };
     now("sending");
@@ -155,12 +159,10 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
           ...(input.images.length ? { images: input.images } : {}),
         },
       );
-      now("sent");
-      // Held in the queue, it shows there from now on.
-      if (queued) {
-        await readQueue(server, input.session_id);
-        setInputs((all) => all.filter((i) => i.id !== input.id));
-      }
+      now("sent", undefined, queued?.id);
+      // A queue snapshot is not an acknowledgement by the native transcript. In
+      // particular, the runner can drain the queue before this GET even starts.
+      if (queued) void readQueue(server, input.session_id);
     } catch (e) {
       now("failed", errorMessage(e));
       throw e;
@@ -338,6 +340,12 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       case "extension.view":
         return uiNotice(event);
       case "session.edited":
+        resetStream(event.session_id);
+        setInputs((all) =>
+          all.filter(
+            (i) => i.session_id !== event.session_id || i.status !== "sent",
+          ),
+        );
         return recordEdited(event.session_id);
       case "session.output": {
         const { session_id, end, type: _, event_id: __, ...tail } = event;
@@ -598,7 +606,13 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       api(`/sessions/${encodeURIComponent(sessionId)}/edit-input`, {
         at,
         text,
-      }).then(() => recordEdited(sessionId)),
+      }).then(() => {
+        resetStream(sessionId);
+        setInputs((all) =>
+          all.filter((i) => i.session_id !== sessionId || i.status !== "sent"),
+        );
+        return recordEdited(sessionId);
+      }),
     /** The session's files as they were before its input at `at`; `dryRun` only says what. */
     rewindFiles: (sessionId: string, at: number, dryRun = false) =>
       api<{ result: FilesRewind }>(`/sessions/${sessionId}/rewind-files`, {
@@ -692,8 +706,16 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       blocks: SessionBlock[],
       queue: QueuedInput[],
       from?: number,
+      waiting: QueueItem[] = [],
     ) => {
-      const unseen = unseenInputs(inputs, sessionId, blocks, queue, from);
+      const unseen = unseenInputs(
+        inputs,
+        sessionId,
+        blocks,
+        queue,
+        from,
+        waiting,
+      );
       // A late native record can prove that an input reported as failed did arrive.
       for (const input of inputs) {
         if (
@@ -716,11 +738,23 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
       setInputs((all) => all.filter((i) => i.id !== id));
     },
     /** Takes an input out of a session's queue before it runs. */
-    removeQueued: (sessionId: string, itemId: string) =>
-      removeQueued(server, sessionId, itemId),
+    removeQueued: async (sessionId: string, itemId: string) => {
+      await removeQueued(server, sessionId, itemId);
+      setInputs((all) =>
+        all.filter((i) => i.session_id !== sessionId || i.queueId !== itemId),
+      );
+    },
     /** Rewrites an input waiting in a session's queue. */
-    editQueued: (sessionId: string, itemId: string, text: string) =>
-      editQueued(server, sessionId, itemId, text),
+    editQueued: async (sessionId: string, itemId: string, text: string) => {
+      await editQueued(server, sessionId, itemId, text);
+      setInputs((all) =>
+        all.map((i) =>
+          i.session_id === sessionId && i.queueId === itemId
+            ? { ...i, text }
+            : i,
+        ),
+      );
+    },
     /** Sends a waiting input now: into the turn in progress, or as a turn at rest. */
     sendQueued: (sessionId: string, itemId: string) =>
       sendQueued(server, sessionId, itemId),
@@ -728,7 +762,19 @@ export function useChat(enabled: boolean, kernel = kernelUrl()) {
     reorderQueue: (sessionId: string, ids: string[]) =>
       reorderQueue(server, sessionId, ids),
     /** Empties a session's queue. */
-    clearQueue: (sessionId: string) => clearQueue(server, sessionId),
+    clearQueue: async (sessionId: string) => {
+      const queue = await api<{ queue: QueueItem[] }>(
+        `/sessions/${sessionId}/queue`,
+      );
+      await clearQueue(server, sessionId);
+      const removed = new Set(queue.queue.map((q) => q.id));
+      setInputs((all) =>
+        all.filter(
+          (i) =>
+            i.session_id !== sessionId || !i.queueId || !removed.has(i.queueId),
+        ),
+      );
+    },
     /**
      * Starts the harness's own compaction of a session's history, to give its context room
      * again, with what the summary should keep. The session's events show the summary, or

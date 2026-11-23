@@ -844,6 +844,7 @@ export function useSessionEvents(
   return {
     events: record.events,
     error: record.error,
+    loading: record.first === undefined && !record.error,
     /** There is earlier work to read. */
     more: !!record.first,
     /** Reads the page before; it resolves once that page is read. */

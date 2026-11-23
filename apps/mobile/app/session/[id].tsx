@@ -68,7 +68,7 @@ import {
   whenLooking,
   withMention,
   contextShare,
-  percent,
+  contextPercent,
   planMode,
   tokenCount,
   usdCost,
@@ -206,6 +206,7 @@ export default function SessionPage() {
   const {
     events,
     error: readError,
+    loading: readingHistory,
     more,
     earlier,
   } = useSessionEvents(id, chat.outputs[id]?.end);
@@ -237,22 +238,23 @@ export default function SessionPage() {
   // Tools run in a row are one list item, as on the web; what arrives live slides in.
   const runs = useMemo(() => blockRuns(items), [items]);
   // What it is producing right now follows its record, until the record has it.
-  const live = useSessionLive(id, chat.live, events.length);
+  const live = useSessionLive(id, chat.live, events);
   // What the owner sent shows at once, until the record or the queue has it; one sent before
   // the work shown is in the record above it.
   const queue = useSessionQueue(id, chat.live);
-  const sent = chat.sentInputs(id, blocks, queue, events[0]?.at);
+  const pendingQueue = useQueue(id, url);
+  const sent = chat.sentInputs(id, blocks, queue, events[0]?.at, pendingQueue);
   const rows: Row[] = [
     ...runs,
-    ...live.map((item) => ({
-      kind: "live" as const,
-      key: `live:${item.id}`,
-      item,
-    })),
     ...sent.map((input) => ({
       kind: "sent" as const,
       key: `sent:${input.id}`,
       input,
+    })),
+    ...live.map((item) => ({
+      kind: "live" as const,
+      key: `live:${item.id}`,
+      item,
     })),
   ];
   const fresh = useArrivals(items);
@@ -483,16 +485,32 @@ export default function SessionPage() {
                 keyboardDismissMode="interactive"
                 keyboardOffset={insets.bottom}
                 onScroll={onScroll}
+                ListFooterComponent={
+                  readingHistory ||
+                  sessionTone(session) === "working" ||
+                  sent.some(
+                    (i) => i.status === "sending" || i.status === "sent",
+                  ) ? (
+                    <ActivityIndicator
+                      accessibilityLabel={
+                        readingHistory ? "Loading session" : "Session working"
+                      }
+                      size="small"
+                    />
+                  ) : null
+                }
                 ListEmptyComponent={
-                  <Text
-                    className={
-                      readError
-                        ? "text-sm text-destructive"
-                        : "text-sm text-faint"
-                    }
-                  >
-                    {readError || "Nothing recorded yet."}
-                  </Text>
+                  readingHistory ? null : (
+                    <Text
+                      className={
+                        readError
+                          ? "text-sm text-destructive"
+                          : "text-sm text-faint"
+                      }
+                    >
+                      {readError || "Nothing recorded yet."}
+                    </Text>
+                  )
                 }
               />
               <ToLatest
@@ -1285,7 +1303,7 @@ function SessionSheet({
             </View>
             <View className="flex-row items-center justify-between">
               <Text className="font-mono text-xs text-muted-foreground">
-                {percent(share)}
+                {contextPercent(share)}%
                 {usage.context_tokens !== null && usage.context_window
                   ? ` · ${tokenCount(usage.context_tokens)} of ${tokenCount(usage.context_window)}`
                   : ""}
@@ -1364,7 +1382,11 @@ function SentInputView({ input }: { input: SentInput }) {
         </View>
       ) : (
         <Text className="self-end font-mono text-[11px] text-faint">
-          {input.status === "sending" ? "Sending…" : "Sent"}
+          {input.status === "sending"
+            ? "Sending…"
+            : input.status === "queued"
+              ? "Queued"
+              : "Sent"}
         </Text>
       )}
     </View>
@@ -1456,7 +1478,7 @@ function ContextRing({
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={`Context ${percent(share)} full`}
+      accessibilityLabel={`Context ${contextPercent(share)}% full`}
       hitSlop={4}
       className="h-10 flex-row items-center gap-1 px-1 active:opacity-70"
     >
@@ -1467,7 +1489,7 @@ function ContextRing({
           share >= 0.95 && "text-destructive",
         )}
       >
-        {percent(share)}
+        {contextPercent(share)}%
       </Text>
       <Svg
         width={20}
@@ -1491,7 +1513,7 @@ function ContextRing({
           strokeWidth={3}
           fill="none"
           strokeLinecap="round"
-          strokeDasharray={`${round * Math.max(share, 0.03)} ${round}`}
+          strokeDasharray={`${round * Math.min(1, share)} ${round}`}
         />
       </Svg>
     </Pressable>
@@ -1519,7 +1541,7 @@ function UsageFacts({ sessionId }: { sessionId: string }) {
             {usage.context_window !== null
               ? ` of ${tokenCount(usage.context_window)}`
               : ""}
-            {share !== undefined ? ` · ${percent(share)}` : ""}
+            {share !== undefined ? ` · ${contextPercent(share)}%` : ""}
           </Text>
         </Fact>
       ) : null}

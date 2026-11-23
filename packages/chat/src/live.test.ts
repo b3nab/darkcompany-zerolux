@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   applyLive,
   contextShare,
+  contextPercent,
   liveNotice,
   liveResync,
   liveState,
@@ -196,7 +197,17 @@ test("the context's share is known only when the harness says both numbers", () 
       total_tokens: null,
       cost_usd: null,
     }),
-  ).toBe(1);
+  ).toBe(1.5);
+  expect(
+    contextShare({
+      context_tokens: 0,
+      context_window: 200,
+      total_tokens: null,
+      cost_usd: null,
+    }),
+  ).toBe(0);
+  expect(contextPercent(0.99999)).toBe(99);
+  expect(contextPercent(1)).toBe(100);
 });
 
 test("fresh usage survives an older live read and duplicate notices", async () => {

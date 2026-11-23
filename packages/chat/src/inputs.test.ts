@@ -46,7 +46,7 @@ test("the same words sent twice need two inputs in the record", () => {
   ).toEqual(["b"]);
 });
 
-test("an input in the queue no longer shows as sent", () => {
+test("the same local row survives an empty queue between delivery and persistence", () => {
   const inputs = [sent("a", "after this", 0)];
   expect(
     unseenInputs(
@@ -55,7 +55,24 @@ test("an input in the queue no longer shows as sent", () => {
       [],
       [{ id: "q1", text: "after this", changeable: false }],
     ),
-  ).toEqual([]);
+  ).toEqual([{ ...inputs[0]!, status: "queued" }]);
+  expect(unseenInputs(inputs, "s1", [], [])).toEqual(inputs);
+  expect(
+    unseenInputs(inputs, "s1", [input(10, "after this")], []),
+  ).toHaveLength(0);
+});
+
+test("one joined native message acknowledges exactly its queued inputs", () => {
+  const inputs = [
+    { ...sent("a", "first", 5), queueId: "1" },
+    { ...sent("b", "second", 5), queueId: "2" },
+    sent("c", "first", 11),
+  ];
+  expect(
+    unseenInputs(inputs, "s1", [input(10, "first\n\nsecond")], []).map(
+      (i) => i.id,
+    ),
+  ).toEqual(["c"]);
 });
 
 test("a failed input stays until the record shows it arrived after all", () => {

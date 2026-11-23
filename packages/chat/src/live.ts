@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { SessionGoal } from "./goal";
+import type { SessionEvent } from "./session-events";
+import { StreamHandoff } from "./stream-handoff";
 
 /** What a session is producing right now, before its harness writes it to the native record. */
 export type LiveKind = "text" | "thinking" | "output";
@@ -81,12 +83,21 @@ const usageOf = (usage: Partial<SessionUsage>): SessionUsage => ({
 
 /** How full the context is, from 0 to 1, when the harness says both how much and of what. */
 export function contextShare(usage: SessionUsage | null): number | undefined {
-  if (!usage?.context_tokens || !usage.context_window) return undefined;
-  return Math.min(1, usage.context_tokens / usage.context_window);
+  if (
+    usage?.context_tokens == null ||
+    !Number.isFinite(usage.context_tokens) ||
+    usage.context_tokens < 0 ||
+    !usage.context_window ||
+    !Number.isFinite(usage.context_window) ||
+    usage.context_window <= 0
+  )
+    return undefined;
+  return usage.context_tokens / usage.context_window;
 }
 
-/** How long a complete item stays, at most, while the record shown catches up. */
-export const SETTLE_MS = 2000;
+/** Never round an almost-full window up to full. Above capacity show the actual count. */
+export const contextPercent = (share: number) =>
+  Math.floor(share * 100 + Number.EPSILON * 100);
 
 /**
  * The state after a notice, its changes applied in order after `seq`; those already in it are
@@ -149,6 +160,7 @@ interface Watched {
   /** Notices that came while the state was being read again; applied after it. */
   waiting?: LiveNotice[];
   listeners: Set<() => void>;
+  handoff: StreamHandoff;
 }
 const watched = new Map<string, Watched>();
 
@@ -173,7 +185,16 @@ function reread(sessionId: string) {
         goal: read.goal ?? null,
         compacting: read.compacting ?? false,
       };
-      for (const notice of waiting) state = state && applyLive(state, notice);
+      entry.handoff.snapshot(state.items);
+      for (const notice of waiting) {
+        if (!state) break;
+        const previous = state.seq;
+        state = applyLive(state, notice);
+        if (state)
+          notice.changes.forEach((c, i) => {
+            if (notice.first + i > previous) entry.handoff.change(c);
+          });
+      }
       if (state) publish(entry, state);
       else reread(sessionId);
     },
@@ -184,14 +205,12 @@ function reread(sessionId: string) {
   );
 }
 
-/** Complete items go: the record shown has them, or has had the time to. */
-function settle(sessionId: string) {
+/** A deliberate history edit invalidates the old branch's live projection. */
+export function resetStream(sessionId: string) {
   const entry = watched.get(sessionId);
-  if (entry?.state.items.some((item) => item.done))
-    publish(entry, {
-      ...entry.state,
-      items: entry.state.items.filter((item) => !item.done),
-    });
+  if (!entry) return;
+  entry.handoff = new StreamHandoff();
+  publish(entry, { ...entry.state, items: [] });
 }
 
 /** A session's live notice, for whoever is following that session. */
@@ -201,9 +220,10 @@ export function liveNotice(notice: LiveNotice) {
   if (entry.waiting) return void entry.waiting.push(notice);
   const state = applyLive(entry.state, notice);
   if (!state) return reread(notice.session_id);
+  notice.changes.forEach((c, i) => {
+    if (notice.first + i > entry.state.seq) entry.handoff.change(c);
+  });
   publish(entry, state);
-  if (notice.changes.some((change) => change.type === "done"))
-    setTimeout(() => settle(notice.session_id), SETTLE_MS);
 }
 
 /** After a reconnection, every followed session is read again: notices may have been missed. */
@@ -215,7 +235,12 @@ export function liveResync() {
 export function watchLive(sessionId: string, read: Read, listener: () => void) {
   let entry = watched.get(sessionId);
   if (!entry) {
-    entry = { state: noLive, read, listeners: new Set() };
+    entry = {
+      state: noLive,
+      read,
+      listeners: new Set(),
+      handoff: new StreamHandoff(),
+    };
     watched.set(sessionId, entry);
   }
   const followed = entry;
@@ -251,10 +276,16 @@ function useLiveState(sessionId: string, read: Read) {
 export function useSessionLive(
   sessionId: string,
   read: Read,
-  record: unknown,
+  record: SessionEvent[],
 ): LiveItem[] {
-  useEffect(() => settle(sessionId), [sessionId, record]);
-  return useLiveState(sessionId, read).items;
+  const state = useLiveState(sessionId, read);
+  const handoff = watched.get(sessionId)?.handoff;
+  const result = handoff?.project(record);
+  useEffect(() => {
+    const shown = watched.get(sessionId)?.handoff;
+    if (shown) shown.observe(record, shown.project(record).accepted);
+  }, [sessionId, record, state, handoff]);
+  return result?.rows ?? [];
 }
 
 /** The owner's inputs waiting in the session's queue, in order, to show above the box. */

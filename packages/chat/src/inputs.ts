@@ -1,65 +1,89 @@
 import type { InputImage, InputMode } from "./chat";
 import type { QueuedInput } from "./live";
 import type { SessionBlock } from "./session-events";
+import type { QueueItem } from "./queue";
 
-/**
- * The owner's input to a session as it travels: shown at the end of the session until its
- * record or its queue has it. A failed one stays, with its error, to send again.
- */
+/** One local row through sending, queuing and recording; its id doesn't change. */
 export interface SentInput {
   id: string;
   session_id: string;
   text: string;
   images: InputImage[];
   mode: InputMode;
-  /** Where the session's native record ended when it was sent: the input comes after. */
   after: number;
-  status: "sending" | "sent" | "failed";
+  status: "sending" | "queued" | "sent" | "failed";
+  queueId?: string;
   error?: string;
 }
-
 const words = (text: string) => text.replace(/\s+/g, " ").trim();
-
-/**
- * The inputs sent to a session that neither its record, from where each was sent, nor its
- * queue show yet, in order. Each input of the record or the queue answers one sent input:
- * those on their way first, then failed ones, which go too once the record shows they arrived
- * after all, as when the harness took one after reporting it lost. With `from`, where the
- * events read start, one sent before it that they do not show was recorded before it: read
- * from its end again, a record shows only its latest work.
- */
 export function unseenInputs(
   sent: SentInput[],
   sessionId: string,
   blocks: SessionBlock[],
   queue: QueuedInput[],
   from?: number,
+  waiting: QueueItem[] = [],
 ) {
+  const mine = sent.filter((i) => i.session_id === sessionId);
   const recorded = new Set<string>();
-  const queued = new Set<string>();
-  const inRecord = (input: SentInput) => {
-    const text = words(input.text);
-    const block = blocks.find(
-      (b) =>
-        b.kind === "input" &&
-        b.at >= input.after &&
-        !recorded.has(b.key) &&
-        // Images alone: the first input after it.
-        (!text || words(b.text) === text),
+  const taken = new Set<string>();
+  // In order, an exact native input accounts for one submission. A batch of queued
+  // inputs is one native message, joined with blank lines by the kernel.
+  for (const block of blocks) {
+    if (block.kind !== "input" || block.chat) continue;
+    const candidates = mine.filter(
+      (i) => !recorded.has(i.id) && i.after <= block.at,
     );
-    if (block) recorded.add(block.key);
-    return !!block;
-  };
-  const mine = sent.filter((input) => input.session_id === sessionId);
-  const unseen = mine.filter((input) => {
-    if (input.status === "failed") return true;
-    if (inRecord(input)) return false;
-    const text = words(input.text);
-    const item = queue.find((q) => !queued.has(q.id) && words(q.text) === text);
-    if (item) queued.add(item.id);
-    return !item && (from === undefined || input.after >= from);
+    const text = words(block.text);
+    const possible = (i: SentInput) =>
+      words(i.text) === text || (!i.text && i.images.length > 0);
+    const single = candidates.find((i) => i.status !== "failed" && possible(i));
+    if (single) {
+      recorded.add(single.id);
+      continue;
+    }
+    const batch = candidates.filter(
+      (i) => i.queueId && i.status !== "failed" && i.text,
+    );
+    let found = false;
+    for (let a = 0; a < batch.length && !found; a++) {
+      let joined = "";
+      for (let b = a; b < batch.length; b++) {
+        joined += (b > a ? " " : "") + words(batch[b]!.text);
+        if (!text.startsWith(joined)) break;
+        if (joined === text) {
+          for (const i of batch.slice(a, b + 1)) recorded.add(i.id);
+          found = true;
+          break;
+        }
+      }
+    }
+    if (!found) {
+      const failed = candidates.find(
+        (i) => i.status === "failed" && possible(i),
+      );
+      if (failed) recorded.add(failed.id);
+    }
+  }
+  return mine.flatMap((input) => {
+    if (recorded.has(input.id)) return [];
+    if (input.status === "failed") return [input];
+    const queued = input.queueId
+      ? waiting.find((q) => q.id === input.queueId)
+      : queue.find(
+          (q) => !taken.has(q.id) && words(q.text) === words(input.text),
+        );
+    if (queued) {
+      taken.add(queued.id);
+      return [{ ...input, text: queued.text, status: "queued" as const }];
+    }
+    if (
+      from !== undefined &&
+      input.after < from &&
+      input.status === "sent" &&
+      !input.queueId
+    )
+      return [];
+    return [input];
   });
-  return unseen.filter(
-    (input) => input.status !== "failed" || !inRecord(input),
-  );
 }

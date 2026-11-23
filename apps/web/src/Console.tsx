@@ -46,6 +46,7 @@ import {
   consoleRows,
   consoleSessions,
   contextShare,
+  contextPercent,
   delegatedBy,
   delegatedTo,
   densityLabels,
@@ -62,7 +63,6 @@ import {
   matchParts,
   mentionAt,
   ownComputers,
-  percent,
   placeApprovals,
   plainLine,
   planMode,
@@ -969,7 +969,7 @@ export function SessionView({
     )
       setTitle(undefined);
   }
-  const { events, error, more, earlier } = useSessionEvents(
+  const { events, error, more, earlier, loading } = useSessionEvents(
     session.id,
     chat.outputs[session.id]?.end,
   );
@@ -985,7 +985,7 @@ export function SessionView({
     [events],
   );
   // What it produces before its record has it, after the recorded work.
-  const live = useSessionLive(session.id, chat.live, events.length);
+  const live = useSessionLive(session.id, chat.live, events);
   // Its context being summarized, asked for or the harness's own.
   const compacting = useSessionCompacting(session.id, chat.live);
   // The inputs ZeroLux keeps for the next turns, one a turn, in order.
@@ -994,7 +994,13 @@ export function SessionView({
   const queue = useSessionQueue(session.id, chat.live);
   // The owner's inputs on their way, until the record or the queue has them; one sent before
   // the work shown is in the record above it.
-  const sent = chat.sentInputs(session.id, blocks, queue, events[0]?.at);
+  const sent = chat.sentInputs(
+    session.id,
+    blocks,
+    queue,
+    events[0]?.at,
+    waiting,
+  );
   // How full its context is and what it has used, as its harness last said.
   const usage = useSessionUsage(session.id, chat.live);
   const plan = latestPlan(blocks);
@@ -1621,7 +1627,30 @@ export function SessionView({
                 ))}
                 <LiveItems items={live} />
                 {compacting && <Compacting />}
-                {!blocks.length &&
+                {!compacting &&
+                  (loading ||
+                    working ||
+                    sent.some(
+                      (i) => i.status === "sending" || i.status === "sent",
+                    )) && (
+                    <p
+                      role="status"
+                      className="flex items-center gap-2 text-xs text-muted-foreground"
+                    >
+                      <LoaderIcon
+                        aria-hidden
+                        className="size-3.5 animate-spin motion-reduce:animate-none"
+                      />
+                      {loading
+                        ? "Loading session…"
+                        : working
+                          ? "Working…"
+                          : "Waiting for the session…"}
+                    </p>
+                  )}
+                {!loading &&
+                  !working &&
+                  !blocks.length &&
                   !live.length &&
                   !sent.length &&
                   !compacting &&
@@ -2039,6 +2068,10 @@ function SessionInput({
     const going = run ? [] : picked;
     // The box empties at once: what is typed next is the next input.
     write("");
+    if (!run && !going.length) {
+      void send(sent.trim(), mode, []).catch(() => {});
+      return;
+    }
     const done = await perform(async () => {
       if (run?.name === "compact") return compact(run.args);
       const images = await Promise.all(going.map(({ file }) => imageOf(file)));
@@ -2251,7 +2284,7 @@ export function ContextMeter({
     <span
       role="meter"
       aria-label="Context"
-      aria-valuenow={Math.round(share * 100)}
+      aria-valuenow={Math.min(100, contextPercent(share))}
       aria-valuemin={0}
       aria-valuemax={100}
       title={`${tokenCount(usage.context_tokens ?? 0)} of ${tokenCount(usage.context_window ?? 0)} tokens`}
@@ -2278,10 +2311,10 @@ export function ContextMeter({
           strokeWidth="2"
           stroke="currentColor"
           pathLength={100}
-          strokeDasharray={`${share * 100} 100`}
+          strokeDasharray={`${Math.min(1, share) * 100} 100`}
         />
       </svg>
-      {percent(share)}
+      {contextPercent(share)}%
     </span>
   );
   return compact ? (
@@ -2507,7 +2540,11 @@ function SentInputBubble({
         </div>
       ) : (
         <span className="font-mono text-[11px] text-faint">
-          {input.status === "sending" ? "Sending…" : "Sent"}
+          {input.status === "sending"
+            ? "Sending…"
+            : input.status === "queued"
+              ? "Queued"
+              : "Sent"}
         </span>
       )}
     </InputBubble>

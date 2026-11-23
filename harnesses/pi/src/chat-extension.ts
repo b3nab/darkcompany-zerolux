@@ -135,14 +135,20 @@ const CHAT_TOOLS = [
 ];
 const installedCode = integrationCode(import.meta.url);
 
-export default function chatExtension(pi: ExtensionAPI) {
+export default function chatExtension(
+  pi: ExtensionAPI,
+  policy?: { autoCompactFrom: number },
+) {
   // An explicit --extension may also be installed in the project. One native
   // runtime gets one bridge, not two competing descriptors/tool registrations.
   let installed = false;
+  // Project and packaged copies may load in either order. Pass the project's
+  // threshold to the bridge that already owns this runtime, if there is one.
   pi.events.emit("zerolux:query-chat", {
     reply: () => {
       installed = true;
     },
+    ...(policy ? { autoCompactFrom: policy.autoCompactFrom } : {}),
   });
   if (installed) return;
   const editor = inputEditor(pi);
@@ -192,8 +198,16 @@ export default function chatExtension(pi: ExtensionAPI) {
       typeof query === "object" &&
       "reply" in query &&
       typeof query.reply === "function"
-    )
+    ) {
+      if (
+        "autoCompactFrom" in query &&
+        typeof query.autoCompactFrom === "number" &&
+        query.autoCompactFrom > 0 &&
+        query.autoCompactFrom <= 1
+      )
+        policy = { autoCompactFrom: query.autoCompactFrom };
       query.reply(active());
+    }
   });
   /**
    * Chat tools belong to an agent's session. With only sessions of the owner's own linked
@@ -429,6 +443,7 @@ export default function chatExtension(pi: ExtensionAPI) {
       await next.ready();
       if (disposed || mine() !== link || !next.connected || !link.linkId)
         throw new Error("Pairing was stopped");
+      reportUsage(ctx, next);
       status();
       await reportManagedLinks(
         managed,
@@ -1188,26 +1203,28 @@ export default function chatExtension(pi: ExtensionAPI) {
     }
   });
   /** How full the context is, and what the session has cost, as pi counts them. */
-  const reportUsage = () => {
+  const reportUsage = (ctx = context, target?: ChatBridge) => {
     // Reading pi's counts never gets in the way of the turn's end.
     try {
-      const usage = context?.getContextUsage();
+      const usage = ctx?.getContextUsage();
       let cost = 0;
       let tokens = 0;
-      for (const entry of context?.sessionManager.getEntries() ?? []) {
+      for (const entry of ctx?.sessionManager.getEntries() ?? []) {
         const message = (entry as { message?: { role?: string; usage?: any } })
           .message;
         if (message?.role !== "assistant") continue;
         cost += Number(message.usage?.cost?.total) || 0;
         tokens += Number(message.usage?.totalTokens) || 0;
       }
-      live({
+      const change: LiveChange = {
         type: "usage",
         context_tokens: usage?.tokens ?? null,
         context_window: usage?.contextWindow ?? null,
         total_tokens: tokens || null,
         cost_usd: cost || null,
-      });
+      };
+      if (target) target.live(change);
+      else live(change);
     } catch {
       /* Without pi's counts there is nothing to show. */
     }
@@ -1278,11 +1295,26 @@ export default function chatExtension(pi: ExtensionAPI) {
     for (const bridge of bridges()) bridge.agentStarted();
   });
   // pi tells only its extensions when a compaction, asked for or its own, starts and ends.
-  pi.on("session_before_compact", () => {
+  pi.on("session_before_compact", (event, ctx) => {
+    // pi owns threshold checks, manual compaction and provider overflow recovery.
+    // Only defer an early threshold proposal; never start another compaction here.
+    if (policy && event.reason === "threshold") {
+      const window =
+        ctx.getContextUsage()?.contextWindow ?? ctx.model?.contextWindow;
+      if (
+        window &&
+        event.preparation.tokensBefore <
+          Math.ceil(window * policy.autoCompactFrom)
+      )
+        return { cancel: true };
+    }
     live({ type: "compacting", active: true });
   });
-  pi.on("session_compact", () => {
+  pi.on("turn_end", (_event, ctx) => reportUsage(ctx));
+  pi.on("model_select", (_event, ctx) => reportUsage(ctx));
+  pi.on("session_compact", (_event, ctx) => {
     live({ type: "compacting", active: false });
+    reportUsage(ctx);
   });
   // Nor why one failed; the session's record keeps it.
   pi.on("session_compact_failed", (event) => {
