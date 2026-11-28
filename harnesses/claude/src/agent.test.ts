@@ -241,6 +241,17 @@ test("editing starts the corrected input on the same Claude ID at the retained m
     expect(f.options().resumeSessionAt).toBe(parent);
     expect(f.options().forkSession).not.toBe(true);
     expect(f.inputs.map((i) => i.message.content)).toEqual([correction]);
+    const queued = f.calls
+      .filter((call) => call.path.endsWith("/live"))
+      .flatMap((call) => call.body.changes)
+      .filter((change) => change.type === "queue")
+      .flatMap((change) => change.items);
+    expect(queued).toHaveLength(0);
+    // Not listed as waiting for a later turn, but still protected until Claude takes it.
+    expect(f.agent.busy).toBe(true);
+    f.consumed(f.inputs[0]!.uuid!);
+    await tick();
+    expect(f.agent.busy).toBe(false);
   } finally {
     f.agent.close();
   }

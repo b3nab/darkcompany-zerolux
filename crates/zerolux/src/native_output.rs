@@ -28,6 +28,7 @@ use crate::{
     store::{Error, Result, Store},
 };
 
+mod claude_edits;
 mod lineage;
 
 /// A page reads up to this many bytes, but never splits a record.
@@ -337,7 +338,13 @@ pub(crate) async fn events_of(
             let after = query.after.unwrap_or(0);
             let (records, next, end) =
                 read(&path, after).await.map_err(|e| unreadable(e, after))?;
-            let mut events = project(harness, &records);
+            let mut events = if harness == "claude-code" && chat.is_none() {
+                claude_edits::page(&path, &records)
+                    .await
+                    .map_err(|e| unreadable(e, after))?
+            } else {
+                project(harness, &records)
+            };
             if let Some(chat) = chat {
                 let opened = opening_chat(&path, harness, after)
                     .await
@@ -404,10 +411,15 @@ async fn back(
 ) -> std::io::Result<(Vec<Item>, u64, u64, u64)> {
     // A page ends where its last whole record does, never inside a line still being written.
     let (records, mut first, stop, end) = read_back(path, before, budget).await?;
-    let mut events = project(harness, &records);
     let Some(chat) = chat else {
+        let events = if harness == "claude-code" {
+            claude_edits::page(path, &records).await?
+        } else {
+            project(harness, &records)
+        };
         return Ok((events, first, stop, end));
     };
+    let mut events = project(harness, &records);
     loop {
         if let Some(index) = events
             .iter()

@@ -243,7 +243,7 @@ export class ClaudeAgent {
       await ready.promise;
       if (this.closing)
         throw new Error("Claude stopped before the correction could be sent");
-      await this.say(text);
+      await this.writeOwnerInput(text, "steer", [], true);
     } finally {
       if (!this.closing) this.bridge.resumeInput();
     }
@@ -337,6 +337,15 @@ export class ClaudeAgent {
     mode: "steer" | "queue" | "interrupt" = "steer",
     images: { path: string; media_type: string }[] = [],
   ) {
+    return this.writeOwnerInput(text, mode, images, false);
+  }
+
+  private async writeOwnerInput(
+    text: string,
+    mode: "steer" | "queue" | "interrupt",
+    images: { path: string; media_type: string }[],
+    replacement: boolean,
+  ) {
     // Read before anything is stopped: an image that cannot be read sends nothing.
     const attached = await Promise.all(
       images.map(async (image) => ({
@@ -357,8 +366,9 @@ export class ClaudeAgent {
     this.ownerQueue.push({
       id: uuid,
       text: text.trim() || attached.map(() => "[image]").join(" "),
+      replacement,
     });
-    this.reportQueue();
+    if (!replacement) this.reportQueue();
     this.input.push({
       type: "user",
       uuid: uuid as SDKUserMessage["uuid"],
@@ -452,10 +462,14 @@ export class ClaudeAgent {
   }
 
   /** The owner's inputs the session has not taken yet, oldest first. */
-  private ownerQueue: { id: string; text: string }[] = [];
+  private ownerQueue: { id: string; text: string; replacement: boolean }[] = [];
 
   private reportQueue() {
-    this.bridge.live({ type: "queue", items: [...this.ownerQueue] });
+    // A replacement is the first input of the resumed branch, not work for a later turn.
+    const items = this.ownerQueue.flatMap(({ id, text, replacement }) =>
+      replacement ? [] : [{ id, text }],
+    );
+    this.bridge.live({ type: "queue", items });
   }
 
   /** The message being streamed, and the kind of each of its blocks. */
